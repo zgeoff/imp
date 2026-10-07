@@ -1035,7 +1035,7 @@ test('it attaches again by itself when the terminal fell behind', async () => {
 
 test('it attaches again by itself when impd restarts under a session', async () => {
   using impd = startStubImpd({
-    rpc: { 'sessions/list': { output: [] } },
+    answers: { 'sessions/list': [] },
     onExec: (peer, message) => {
       if (message.type === 'start') {
         peer.send({ type: 'started', pid: 7, session: 'main', created: true });
@@ -1304,7 +1304,7 @@ test('it exits 254 without attaching again when another client takes the session
 
 test('it doubles the pause before each try, up to 8 s, when impd faults by closing every attach', async () => {
   using impd = startStubImpd({
-    rpc: { 'sessions/list': { output: [] } },
+    answers: { 'sessions/list': [] },
     onExec: (peer, message) => {
       if (message.type === 'start') {
         peer.send({ type: 'started', pid: 7, session: 'main', created: true });
@@ -1351,7 +1351,7 @@ test('it doubles the pause before each try, up to 8 s, when impd faults by closi
 
 test('it fails with the last reason once the window to attach again is over, when impd faults by closing every attach', async () => {
   using impd = startStubImpd({
-    rpc: { 'sessions/list': { output: [] } },
+    answers: { 'sessions/list': [] },
     onExec: (peer, message) => {
       if (message.type === 'start') {
         peer.send({ type: 'started', pid: 7, session: 'main', created: true });

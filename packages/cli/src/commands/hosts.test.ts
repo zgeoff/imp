@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
-import { startStubRpcImpd } from '../test-utils/start-stub-rpc-impd';
+import { startStubImpd } from '../test-utils/start-stub-impd';
 
 // The CLI runs as a user runs it, against an impd it reaches over loopback.
 
@@ -26,7 +26,7 @@ async function setupTest() {
 test('it saves the host as current when impd accepts the token', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'login-token' });
+  using impd = startStubImpd({ token: 'login-token' });
 
   const login = await runCli({
     args: ['login', impd.url, '--name', 'home'],
@@ -70,7 +70,7 @@ test('it lists the saved hosts without their tokens', async () => {
 test('it saves nothing when impd refuses the token', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'login-token' });
+  using impd = startStubImpd({ token: 'login-token' });
 
   const login = await runCli({ args: ['login', impd.url], env: ctx.env, stdin: 'wrong\n' });
 
@@ -86,7 +86,7 @@ test('it saves nothing when impd refuses the token', async () => {
 test('it saves nothing when the token is empty', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'login-token' });
+  using impd = startStubImpd({ token: 'login-token' });
 
   const login = await runCli({ args: ['login', impd.url], env: ctx.env, stdin: '\n' });
 
@@ -145,7 +145,7 @@ test('it saves without asking impd and warns of plain http under --no-verify', a
 test('it leaves a damaged config.json as it was and asks impd nothing on login', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'login-token' });
+  using impd = startStubImpd({ token: 'login-token' });
 
   writeHostConfig(ctx.env, { current: null, hosts: {} });
 
@@ -229,7 +229,7 @@ test('it forgets the current host and clears current on host rm', async () => {
 test('it sends the saved token of --host and names the host in a 401', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'login-token' });
+  using impd = startStubImpd({ token: 'login-token' });
 
   writeHostConfig(ctx.env, { current: null, hosts: { work: { url: impd.url, token: 'stale' } } });
 
@@ -255,7 +255,7 @@ test('it sends the saved token of --host and names the host in a 401', async () 
 test('it carries the saved token of --host on exec’s socket and its follow-up check', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'login-token' });
+  using impd = startStubImpd({ token: 'login-token' });
 
   writeHostConfig(ctx.env, { current: null, hosts: { work: { url: impd.url, token: 'stale' } } });
 

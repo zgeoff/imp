@@ -2,13 +2,14 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { EXEC_CHANNELS, ExecServerMessageSchema, encodeExecFrame } from '@imp/api';
 import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { ORPCError } from '@orpc/client';
 import { createImpClient } from '@zgeoff/imp-client';
 import { startStubImpd } from './start-stub-impd';
 
 test('it answers a procedure with its output as oRPC encodes it', async () => {
   const image = buildMockImage();
 
-  using impd = startStubImpd({ rpc: { 'images/list': { output: [image] } } });
+  using impd = startStubImpd({ answers: { 'images/list': [image] } });
 
   const client = createImpClient({ url: impd.url, token: impd.token });
 
@@ -22,7 +23,7 @@ test('it streams an event iterator’s events and then ends it', async () => {
   const progress = { type: 'progress', phase: 'pull', elapsedMs: 0 } as const;
 
   using impd = startStubImpd({
-    rpc: { 'images/addStream': { events: [progress, { type: 'image', image }] } },
+    streams: { 'images/addStream': [progress, { type: 'image', image }] },
   });
 
   const client = createImpClient({ url: impd.url, token: impd.token });
@@ -33,30 +34,95 @@ test('it streams an event iterator’s events and then ends it', async () => {
   expect(events).toStrictEqual([progress, { type: 'image', image }]);
 });
 
-test('it answers NOT_FOUND for a procedure it was not given', () => {
+test('it answers a date as a date', async () => {
+  using impd = startStubImpd({
+    answers: { 'images/list': [{ name: 'base', createdAt: new Date('2026-10-03T00:00:00.000Z') }] },
+  });
+
+  const client = createImpClient({ url: impd.url, token: impd.token });
+
+  const images: unknown = await client.images.list();
+
+  expect(images).toStrictEqual([{ name: 'base', createdAt: new Date('2026-10-03T00:00:00.000Z') }]);
+});
+
+test('it answers null for a procedure it was not given', async () => {
   using impd = startStubImpd();
 
   const client = createImpClient({ url: impd.url, token: impd.token });
 
-  expect(client.system.info()).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+  const info: unknown = await client.system.info();
+
+  expect(info).toBeNull();
 });
 
-test('it refuses a token that is not its own', () => {
-  using impd = startStubImpd({ rpc: { 'system/info': { output: {} } } });
+test('it takes the token it was given', async () => {
+  using impd = startStubImpd({ token: 'chosen-token', answers: { 'imps/list': [] } });
+
+  const client = createImpClient({ url: impd.url, token: 'chosen-token' });
+
+  const imps = await client.imps.list();
+
+  expect([impd.token, imps]).toStrictEqual(['chosen-token', []]);
+});
+
+test('it refuses a token that is not its own with impd’s 401 and still records the call', () => {
+  using impd = startStubImpd({ answers: { 'system/info': {} } });
 
   const client = createImpClient({ url: impd.url, token: 'another-token' });
 
   expect(client.system.info()).rejects.toMatchObject({ code: 'UNAUTHORIZED', status: 401 });
+
+  expect(impd.calls).toStrictEqual([
+    { path: 'system/info', authorization: 'Bearer another-token', input: undefined },
+  ]);
 });
 
-test('it records each procedure a client called', async () => {
-  using impd = startStubImpd({ rpc: { 'system/info': { output: {} } } });
+test('it records the path, the token and the decoded input of each call', async () => {
+  using impd = startStubImpd({ answers: { 'imps/list': [] } });
 
   const client = createImpClient({ url: impd.url, token: impd.token });
 
-  await client.system.info();
+  await client.imps.list({ builders: true });
 
-  expect(impd.calls).toStrictEqual(['system/info']);
+  expect(impd.calls).toStrictEqual([
+    { path: 'imps/list', authorization: `Bearer ${impd.token}`, input: { builders: true } },
+  ]);
+});
+
+test('it fails a procedure with the oRPC error it was given', () => {
+  using impd = startStubImpd({
+    failures: {
+      'imps/create': {
+        defined: true,
+        code: 'RAM_BUDGET_EXCEEDED',
+        status: 503,
+        message: 'Not enough RAM budget',
+        data: { budgetMib: 8192, usedMib: 8000, requestedMib: 512 },
+      },
+    },
+  });
+
+  const client = createImpClient({ url: impd.url, token: impd.token });
+  const created = client.imps.create({ name: 'dev' });
+
+  expect(created).rejects.toBeInstanceOf(ORPCError);
+
+  expect(created).rejects.toMatchObject({
+    code: 'RAM_BUDGET_EXCEEDED',
+    status: 503,
+    message: 'Not enough RAM budget',
+    data: { budgetMib: 8192, usedMib: 8000, requestedMib: 512 },
+  });
+});
+
+test('it never answers when it is silent', () => {
+  using impd = startStubImpd({ isSilent: true });
+
+  const answer = fetch(`${impd.url}/rpc/system/info`, { signal: AbortSignal.timeout(50) });
+
+  expect(answer).rejects.toThrowWithMessage(DOMException, /timed out/u);
+  expect(impd.calls).toStrictEqual([]);
 });
 
 test('it records each exec message as the protocol parses it', async () => {
@@ -181,7 +247,7 @@ test('it resolves closed once the client closed its exec socket', async () => {
 });
 
 test('it serves the exec socket and the procedures under its prefix', async () => {
-  using impd = startStubImpd({ prefix: '/imp', rpc: { 'system/info': { output: {} } } });
+  using impd = startStubImpd({ prefix: '/imp', answers: { 'system/info': {} } });
 
   const client = createImpClient({ url: impd.url, token: impd.token });
 

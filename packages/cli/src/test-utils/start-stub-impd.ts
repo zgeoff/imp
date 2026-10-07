@@ -1,6 +1,6 @@
 import { EXEC_PATH, ExecClientMessageSchema, decodeExecFrame, encodeExecFrame } from '@imp/api';
 import type { ExecClientMessage, ExecServerMessage } from '@imp/api';
-import { StandardRPCJsonSerializer } from '@orpc/client/standard';
+import { StandardRPCJsonSerializer, StandardRPCSerializer } from '@orpc/client/standard';
 
 // what the client sent over `/exec`: a control message as the protocol
 // parses it, or a stdin frame as text and its byte count
@@ -19,90 +19,132 @@ interface StubImpdPeer {
   readonly close: (code?: number, reason?: string) => void;
 }
 
-// an RPC procedure's answer: a value, or the events of an event iterator
-// and then its end
-type StubRpcAnswer = { readonly output: unknown } | { readonly events: readonly unknown[] };
+// an oRPC error as impd sends it: `defined` for the errors its contract
+// declares, such as RAM_BUDGET_EXCEEDED with its numbers in `data`
+interface StubRpcFailure {
+  readonly code: string;
+  readonly status: number;
+  readonly message: string;
+  readonly defined?: boolean;
+  readonly data?: unknown;
+}
+
+// one procedure call the stub got: its path ('imps/list'), the authorization
+// header it carried, and its input as oRPC decodes it
+interface StubRpcCall {
+  readonly path: string;
+  readonly authorization: string | null;
+  readonly input: unknown;
+}
 
 export interface StubImpdOptions {
+  // the bearer token it takes; any other gets impd's 401
+  readonly token?: string;
+
+  // each procedure's answer, by path such as `system/info`; a procedure
+  // left out of every table answers null
+  readonly answers?: Readonly<Record<string, unknown>>;
+
+  // event-iterator procedures: each event, then the iterator's end
+  readonly streams?: Readonly<Record<string, readonly unknown[]>>;
+
+  // procedures that fail with an oRPC error instead of answering
+  readonly failures?: Readonly<Record<string, StubRpcFailure>>;
+
+  // takes every request and never answers, as an impd behind a stalled path
+  readonly isSilent?: boolean;
+
   // scripts `/exec`: called with each message the client sends
   // oxlint-disable-next-line prefer-readonly-parameter-types -- the protocol's parsed messages are mutable
   readonly onExec?: (peer: StubImpdPeer, message: StubImpdReceived) => void;
-
-  // `/rpc/<procedure>` answers, by procedure path such as `system/info`; a
-  // procedure left out answers NOT_FOUND
-  readonly rpc?: Readonly<Record<string, StubRpcAnswer>>;
 
   // the path impd sits under, as behind a proxy
   readonly prefix?: string;
 }
 
-const TOKEN = 'stub-impd-token';
+const DEFAULT_TOKEN = 'stub-impd-token';
 
-// An impd on a loopback port, speaking the exec protocol and oRPC, for what
-// the real impd never sends: a fault, or an older impd's answers. It takes
-// only its own token, and records `/exec` messages and procedure calls.
+const serializer = new StandardRPCSerializer(new StandardRPCJsonSerializer());
+
+// A loopback impd speaking the exec protocol and oRPC, for what a real impd
+// never sends (a fault, an older impd's answers) or a subprocess CLI's state
+// a real one cannot reach. It records every call and `/exec` message.
 export function startStubImpd(options: Readonly<StubImpdOptions> = {}) {
   const prefix = options.prefix ?? '';
+  const token = options.token ?? DEFAULT_TOKEN;
   const received: StubImpdReceived[] = [];
-  const calls: string[] = [];
+  const calls: StubRpcCall[] = [];
   const paths: string[] = [];
   const closed = Promise.withResolvers<void>();
 
-  const serializer = new StandardRPCJsonSerializer();
-
-  const encodeRpc = (value: unknown) => {
-    const [json, meta] = serializer.serialize(value);
-
-    return { json, meta };
-  };
-
   const buildRpcResponse = (procedure: string): Response => {
-    const answer = options.rpc?.[procedure];
+    const failure = options.failures?.[procedure];
 
-    if (answer === undefined) {
-      const error = { defined: false, code: 'NOT_FOUND', status: 404, message: 'Not found' };
-
-      return Response.json(encodeRpc(error), { status: 404 });
+    if (failure !== undefined) {
+      return Response.json(serializer.serialize({ defined: false, ...failure }), {
+        status: failure.status,
+      });
     }
 
-    if ('output' in answer) {
-      return Response.json(encodeRpc(answer.output));
+    const events = options.streams?.[procedure];
+
+    if (events === undefined) {
+      return Response.json(serializer.serialize(options.answers?.[procedure] ?? null));
     }
 
-    const events = answer.events.map(
-      (event) => `event: message\ndata: ${JSON.stringify(encodeRpc(event))}\n\n`,
+    const lines = events.map(
+      (event) => `event: message\ndata: ${JSON.stringify(serializer.serialize(event))}\n\n`,
     );
 
     return new Response(
-      `${events.join('')}event: done\ndata: ${JSON.stringify(encodeRpc(undefined))}\n\n`,
-      {
-        headers: { 'content-type': 'text/event-stream' },
-      },
+      `${lines.join('')}event: done\ndata: ${JSON.stringify(serializer.serialize(undefined))}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
     );
   };
 
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
-    fetch: (request, bunServer) => {
+    fetch: async (request, bunServer) => {
+      if (options.isSilent === true) {
+        return new Promise<Response>(() => {
+          // never answers
+        });
+      }
+
       const path = new URL(request.url).pathname;
+
+      const authorization = request.headers.get('authorization');
+      const isAuthorized = authorization === `Bearer ${token}`;
 
       paths.push(path);
 
-      if (request.headers.get('authorization') !== `Bearer ${TOKEN}`) {
-        return Response.json(
-          encodeRpc({ defined: false, code: 'UNAUTHORIZED', status: 401, message: 'Unauthorized' }),
-          { status: 401 },
-        );
-      }
-
       if (path === `${prefix}${EXEC_PATH}`) {
+        if (!isAuthorized) {
+          return Response.json({ error: 'unauthorized' }, { status: 401 });
+        }
+
         return bunServer.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 });
       }
 
+      const text = await request.text();
+
+      const body: unknown = text === '' ? undefined : JSON.parse(text);
+      const input = body === undefined ? undefined : serializer.deserialize(body);
       const procedure = path.slice(`${prefix}/rpc/`.length);
 
-      calls.push(procedure);
+      calls.push({ path: procedure, authorization, input });
+
+      if (!isAuthorized) {
+        const error = {
+          defined: false,
+          code: 'UNAUTHORIZED',
+          status: 401,
+          message: 'Unauthorized',
+        };
+
+        return Response.json(serializer.serialize(error), { status: 401 });
+      }
 
       return buildRpcResponse(procedure);
     },
@@ -147,7 +189,7 @@ export function startStubImpd(options: Readonly<StubImpdOptions> = {}) {
 
   return {
     url: `http://127.0.0.1:${String(server.port)}${prefix}`,
-    token: TOKEN,
+    token,
     received,
     calls,
     paths,

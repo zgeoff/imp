@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
-import { startStubRpcImpd } from '../test-utils/start-stub-rpc-impd';
+import { startStubImpd } from '../test-utils/start-stub-impd';
 
 // `ls --all` and `new --place` reach every saved host. The CLI runs as a
 // user runs it, against stand-in impds on loopback, each in the state the
@@ -30,7 +30,7 @@ test('it lists every saved host and exits 3 when one of them fails', async () =>
   await using ctx = await setupTest();
 
   // db is on its way to another host
-  using box = startStubRpcImpd({
+  using box = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [
@@ -40,7 +40,7 @@ test('it lists every saved host and exits 3 when one of them fails', async () =>
     },
   });
 
-  using laptop = startStubRpcImpd({
+  using laptop = startStubImpd({
     token: 'all-hosts-token',
     answers: { 'imps/list': [buildMockImp({ name: 'dev', state: 'sleeping' })] },
   });
@@ -73,14 +73,14 @@ test('it lists every saved host and exits 3 when one of them fails', async () =>
 test('it gives up on a host that never answers after 5 s', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({
+  using box = startStubImpd({
     token: 'all-hosts-token',
     answers: { 'imps/list': [buildMockImp({ name: 'web', state: 'running' })] },
   });
 
   // takes the connection and never answers, as a sleeping laptop's impd
   // does from behind a stalled tailnet path
-  using silent = startStubRpcImpd({ token: 'all-hosts-token', isSilent: true });
+  using silent = startStubImpd({ token: 'all-hosts-token', isSilent: true });
 
   writeHostConfig(ctx.env, {
     current: 'box',
@@ -109,7 +109,7 @@ test('it gives up on a host that never answers after 5 s', async () => {
 test('it never prints a saved token in ls --all', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({
+  using box = startStubImpd({
     token: 'all-hosts-secret-token',
     answers: { 'imps/list': [buildMockImp({ name: 'web' })] },
   });
@@ -136,12 +136,12 @@ test('it writes the imps and the errors of every host as JSON for ls --all --jso
   const db = { ...buildMockImp({ name: 'db' }), host: 'peer' };
   const dev = buildMockImp({ name: 'dev' });
 
-  using box = startStubRpcImpd({
+  using box = startStubImpd({
     token: 'all-hosts-token',
     answers: { 'imps/list': [web, db] },
   });
 
-  using laptop = startStubRpcImpd({
+  using laptop = startStubImpd({
     token: 'all-hosts-token',
     answers: { 'imps/list': [dev] },
   });
@@ -213,8 +213,8 @@ test('it writes an empty JSON list and exits 1 when no host answers ls --all --j
 test('it asks every host for its builders under ls --all --builders', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
-  using laptop = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+  using box = startStubImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+  using laptop = startStubImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
 
   writeHostConfig(ctx.env, {
     current: 'box',
@@ -235,8 +235,8 @@ test('it asks every host for its builders under ls --all --builders', async () =
 test('it asks no host for its builders under plain ls --all', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
-  using laptop = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+  using box = startStubImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+  using laptop = startStubImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
 
   writeHostConfig(ctx.env, {
     current: 'box',
@@ -257,7 +257,7 @@ test('it asks no host for its builders under plain ls --all', async () => {
 test('it refuses ls --all with --host', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({ token: 'all-hosts-token' });
+  using box = startStubImpd({ token: 'all-hosts-token' });
 
   writeHostConfig(ctx.env, {
     current: 'box',
@@ -278,7 +278,7 @@ test('it refuses ls --all with --host', async () => {
 test('it refuses new --place with --host', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({ token: 'all-hosts-token' });
+  using box = startStubImpd({ token: 'all-hosts-token' });
 
   writeHostConfig(ctx.env, {
     current: 'box',
@@ -302,8 +302,8 @@ test('it lists the current host alone under plain ls', async () => {
   // a field this CLI's schema lacks passes through as impd sent it
   const db = { ...buildMockImp({ name: 'db' }), host: 'peer' };
 
-  using box = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [db] } });
-  using laptop = startStubRpcImpd({ token: 'all-hosts-token' });
+  using box = startStubImpd({ token: 'all-hosts-token', answers: { 'imps/list': [db] } });
+  using laptop = startStubImpd({ token: 'all-hosts-token' });
 
   writeHostConfig(ctx.env, {
     current: 'box',
@@ -331,7 +331,7 @@ test('it skips a host without the image and moves past a RAM refusal under new -
   const created = buildMockImp({ name: 'dev' });
 
   // the most RAM, but its governor refuses the create, as a full host's does
-  using big = startStubRpcImpd({
+  using big = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [],
@@ -359,7 +359,7 @@ test('it skips a host without the image and moves past a RAM refusal under new -
     },
   });
 
-  using small = startStubRpcImpd({
+  using small = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [],
@@ -380,7 +380,7 @@ test('it skips a host without the image and moves past a RAM refusal under new -
   });
 
   // the most RAM of all, but not the default image
-  using bare = startStubRpcImpd({
+  using bare = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [],
@@ -439,7 +439,7 @@ test('it skips a host without the image and moves past a RAM refusal under new -
 test('it refuses new --place for a name a saved host has already', async () => {
   await using ctx = await setupTest();
 
-  using box = startStubRpcImpd({
+  using box = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [buildMockImp({ name: 'web' })],
@@ -458,7 +458,7 @@ test('it refuses new --place for a name a saved host has already', async () => {
     },
   });
 
-  using laptop = startStubRpcImpd({
+  using laptop = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [buildMockImp({ name: 'dev' })],
@@ -502,7 +502,7 @@ test('it passes over a host whose token is limited, then exposes, under new --pl
   const created = buildMockImp({ name: 'dev' });
 
   // the most RAM, but its token reaches only some imps
-  using big = startStubRpcImpd({
+  using big = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [],
@@ -521,7 +521,7 @@ test('it passes over a host whose token is limited, then exposes, under new --pl
     },
   });
 
-  using small = startStubRpcImpd({
+  using small = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [],
@@ -603,7 +603,7 @@ test('it names the host of a failure after a placed create, and still writes the
   const created = buildMockImp({ name: 'dev' });
 
   // expose fails, as on an impd without a public IP
-  using box = startStubRpcImpd({
+  using box = startStubImpd({
     token: 'all-hosts-token',
     answers: {
       'imps/list': [],

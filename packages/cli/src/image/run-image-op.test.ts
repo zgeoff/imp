@@ -186,9 +186,9 @@ test('#runImageAdd adds through the call that answers at the end on an older imp
   const image = buildMockImage();
 
   using impd = startStubImpd({
-    rpc: {
-      'system/info': { output: { version: '0.30.0', features: {} } },
-      'images/add': { output: image },
+    answers: {
+      'system/info': { version: '0.30.0', features: {} },
+      'images/add': image,
     },
   });
 
@@ -199,16 +199,16 @@ test('#runImageAdd adds through the call that answers at the end on an older imp
   );
 
   expect(added).toStrictEqual(image);
-  expect(impd.calls).toStrictEqual(['system/info', 'images/add']);
+  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info', 'images/add']);
 });
 
 test('#runOnHostBuild builds through the call that answers at the end on an older impd without the streams', async () => {
   const image = buildMockImage();
 
   using impd = startStubImpd({
-    rpc: {
-      'system/info': { output: { version: '0.30.0', features: {} } },
-      'images/build': { output: image },
+    answers: {
+      'system/info': { version: '0.30.0', features: {} },
+      'images/build': image,
     },
   });
 
@@ -218,15 +218,13 @@ test('#runOnHostBuild builds through the call that answers at the end on an olde
   });
 
   expect(built).toStrictEqual(image);
-  expect(impd.calls).toStrictEqual(['system/info', 'images/build']);
+  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info', 'images/build']);
 });
 
 test('#runImageAdd rejects when impd faults by ending the stream before it answers the image', () => {
   using impd = startStubImpd({
-    rpc: {
-      'system/info': { output: { version: '0.40.0', features: { imageOpStream: true } } },
-      'images/addStream': { events: [{ type: 'progress', phase: 'pull', elapsedMs: 0 }] },
-    },
+    answers: { 'system/info': { version: '0.40.0', features: { imageOpStream: true } } },
+    streams: { 'images/addStream': [{ type: 'progress', phase: 'pull', elapsedMs: 0 }] },
   });
 
   const adding = runImageAdd(

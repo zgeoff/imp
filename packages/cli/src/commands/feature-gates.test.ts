@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli } from '../test-utils/start-cli';
-import { startStubRpcImpd } from '../test-utils/start-stub-rpc-impd';
+import { startStubImpd } from '../test-utils/start-stub-impd';
 
 // Some flags rely on fields an older impd drops unread, and `db copy` on a
 // call it lacks, so the CLI checks impd's features before it writes or runs
@@ -104,7 +104,7 @@ test.each([
 ])('it refuses %p before any call to impd', async (args, stderr) => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({ token: 'feature-gates-token' });
+  using impd = startStubImpd({ token: 'feature-gates-token' });
 
   const result = await runCli({
     args,
@@ -175,7 +175,7 @@ test.each([
 ])('it makes no call past the feature check for %p on an older impd', async (args, reason) => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.26.0', features: { sessionOffsets: true, leases: true } },
@@ -200,7 +200,7 @@ test.each([
 test('it runs nothing for exec --require on an impd older than 0.30.0', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': {
@@ -244,7 +244,7 @@ test.each([
 ])('it creates no token when the feature check finds %s', async (_case, info) => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: { 'system/info': info },
   });
@@ -270,7 +270,7 @@ test.each([
 ])('it replaces no secret when the feature check finds %s', async (_case, info) => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: { 'system/info': info },
   });
@@ -288,7 +288,7 @@ test.each([
 test('it creates no token when the feature check fails', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     failures: {
       'system/info': { code: 'INTERNAL_SERVER_ERROR', status: 500, message: 'boom' },
@@ -312,7 +312,7 @@ test('it creates no token when the feature check fails', async () => {
 test('it creates a grantable token on an impd with the feature', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.27.0', features: { grantableTokens: true } },
@@ -347,7 +347,7 @@ test('it creates a grantable token on an impd with the feature', async () => {
 test('it replaces a secret on an impd with the feature', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.27.0', features: { secretRebind: true } },
@@ -375,7 +375,7 @@ test('it replaces a secret on an impd with the feature', async () => {
 test('it adds a plain secret without a feature check', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'secrets/add': {
@@ -402,7 +402,7 @@ test('it adds a plain secret without a feature check', async () => {
 test('it prints the database copy’s fields in the order a restore script reads them', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.30.0', features: { databaseCopy: true } },
@@ -445,7 +445,7 @@ test('it prints the database copy’s fields in the order a restore script reads
 test('it sends the grantable list on token set to an impd with tokens.update', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.34.0', features: { tokenUpdate: true } },
@@ -495,7 +495,7 @@ test('it sends the grantable list on token set to an impd with tokens.update', a
 test('it clears the grantable list on token set with an empty --grantable', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.34.0', features: { tokenUpdate: true } },
@@ -522,7 +522,7 @@ test('it clears the grantable list on token set with an empty --grantable', asyn
 test('it says until when an added oauth secret’s access token is valid', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
@@ -583,7 +583,7 @@ test('it says until when an added oauth secret’s access token is valid', async
 test('it says why an added oauth secret failed its sign-in', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
@@ -642,7 +642,7 @@ test('it says why an added oauth secret failed its sign-in', async () => {
 test('it prints a refreshed oauth secret that is ready', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
@@ -685,7 +685,7 @@ test('it prints a refreshed oauth secret that is ready', async () => {
 test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
@@ -741,7 +741,7 @@ test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
 test('it shows a state column on secret ls, with a dash for other kinds', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'secrets/list': [
@@ -793,7 +793,7 @@ test('it shows a state column on secret ls, with a dash for other kinds', async 
 test('it sends a secret upstream in the rule to an impd that knows it', async () => {
   await using ctx = await setupTest();
 
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'feature-gates-token',
     answers: {
       'system/info': { version: '0.36.0', features: { secretUpstream: true } },

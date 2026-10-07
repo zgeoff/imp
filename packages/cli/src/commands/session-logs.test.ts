@@ -20,7 +20,7 @@ import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
 import { createImpClient } from '@zgeoff/imp-client';
 import { runCli } from '../test-utils/start-cli';
-import { startStubRpcImpd } from '../test-utils/start-stub-rpc-impd';
+import { startStubImpd } from '../test-utils/start-stub-impd';
 import { UsageError } from '../usage-error';
 import { writeSessionLog } from './session-logs';
 
@@ -386,7 +386,7 @@ test('it deletes the logs of the session it names', async () => {
 });
 
 test('it refuses to read a log from an older impd without session logs before any read', async () => {
-  using impd = startStubRpcImpd({
+  using impd = startStubImpd({
     token: 'stub-token',
     answers: { 'system/info': { features: {} } },
   });
