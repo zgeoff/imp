@@ -353,3 +353,22 @@ test('it rejects tokens.delete of a missing token with NOT_FOUND and keeps the o
 
   expect(stub.state.tokens.map((token) => token.name)).toStrictEqual(['ci']);
 });
+
+test('it names an image that images.add pulls without a name after its repository', async () => {
+  const stub = buildStubImpd();
+
+  await stub.impd.client.images.add({ ref: 'ghcr.io/acme/web-app:1.2' });
+
+  expect(stub.state.images.map((image) => image.name)).toStrictEqual(['web-app']);
+});
+
+test('it finds a checkpoint by its label', async () => {
+  const stub = buildStubImpd();
+
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  stub.state.checkpoints.set('web', [buildMockCheckpoint({ id: 'cp1', label: 'before-upgrade' })]);
+
+  await stub.impd.client.checkpoints.delete({ name: 'web', checkpoint: 'before-upgrade' });
+
+  expect(stub.state.checkpoints.get('web')).toStrictEqual([]);
+});

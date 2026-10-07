@@ -126,6 +126,7 @@
       "devDependencies": {
         "@faker-js/faker": "catalog:",
         "@imp/api": "workspace:*",
+        "@imp/daemon": "workspace:*",
         "@imp/test-utils": "workspace:*",
         "@msw/data": "catalog:",
         "@orpc/server": "catalog:",

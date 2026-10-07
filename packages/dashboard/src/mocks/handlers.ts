@@ -21,19 +21,26 @@ interface SessionRouteContext {
 
 const LoginSchema = z.object({ token: z.string() });
 
-// impd's session routes (packages/daemon auth/session-routes.ts) refuse
-// another site. Bun's fetch sends neither Sec-Fetch-Site nor Origin, so a
-// request without both counts as the page's own.
-function isCrossOrigin(request: Readonly<Request>): boolean {
+// impd's isSameOrigin (packages/daemon auth/authenticate.ts): Sec-Fetch-Site
+// decides when sent, else an Origin with impd's host; neither is refused
+function isSameOrigin(request: Readonly<Request>): boolean {
   const site = request.headers.get('sec-fetch-site');
 
   if (site !== null) {
-    return site !== 'same-origin';
+    return site === 'same-origin';
   }
 
   const origin = request.headers.get('origin');
 
-  return origin !== null && new URL(origin).host !== new URL(request.url).host;
+  if (origin === null) {
+    return false;
+  }
+
+  try {
+    return new URL(origin).host === new URL(request.url).host;
+  } catch {
+    return false;
+  }
 }
 
 function readJson(request: Readonly<Request>): Promise<unknown> {
@@ -58,7 +65,7 @@ function resolveLoginBody(json: unknown): Response {
 }
 
 export function resolveLogin(context: SessionRouteContext): Promise<Response> {
-  if (isCrossOrigin(context.request)) {
+  if (!isSameOrigin(context.request)) {
     return Promise.resolve(HttpResponse.json({ error: 'cross-origin' }, { status: 403 }));
   }
 
@@ -66,7 +73,7 @@ export function resolveLogin(context: SessionRouteContext): Promise<Response> {
 }
 
 export function resolveLogout(context: SessionRouteContext): Response {
-  if (isCrossOrigin(context.request)) {
+  if (!isSameOrigin(context.request)) {
     return HttpResponse.json({ error: 'cross-origin' }, { status: 403 });
   }
 

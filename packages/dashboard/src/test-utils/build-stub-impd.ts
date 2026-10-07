@@ -1,5 +1,6 @@
 import type { Checkpoint, Identity, Image, Imp, ImpEvent, SystemInfo, Token } from '@imp/api';
 import { EVENT_VERSION, impContract } from '@imp/api';
+import { deriveImageName } from '@imp/daemon/src/images/image-naming';
 import { ORPCError, implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { createImpClient } from '@zgeoff/imp-client';
@@ -286,7 +287,7 @@ export function buildStubImpd(): StubImpd {
         const image =
           'imp' in input
             ? buildMockImage({ name: input.name, ref: `imp:${input.imp}`, source: 'imp' })
-            : buildMockImage({ name: input.name ?? 'added', ref: input.ref });
+            : buildMockImage({ name: input.name ?? deriveImageName(input.ref), ref: input.ref });
 
         stub.images.push(image);
 
