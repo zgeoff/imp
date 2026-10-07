@@ -19,13 +19,14 @@ test('#toTerminalConnection merges stdout and stderr into one output that ends w
   expect(output).toBe('out err');
 });
 
-test('#toTerminalConnection fails the output when stdout fails', () => {
+test('#toTerminalConnection fails the output when stdout fails', async () => {
   const stub = buildStubExecHandle({ exit: new Promise(() => {}) });
   const connection = toTerminalConnection(stub.handle);
 
   const reading = new Response(connection.output).text();
 
-  void stub.stdout.abort(new Error('the socket dropped'));
+  await stub.stdout.abort(new Error('the socket dropped'));
+
   expect(reading).rejects.toThrowWithMessage(Error, 'the socket dropped');
 });
 
