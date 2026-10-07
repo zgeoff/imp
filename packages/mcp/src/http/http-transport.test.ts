@@ -6,7 +6,7 @@ import { server } from '@imp/test-utils/mock-server';
 import { implement } from '@orpc/server';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
-import { createImpGuard } from '../imp-guard';
+import { buildMockMcpPrincipal } from '../test-utils/build-mock-mcp-principal';
 import { buildStubImpd } from '../test-utils/build-stub-impd';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
 import { createHttpTransport } from './http-transport';
@@ -15,8 +15,9 @@ import type { McpPrincipal } from './http-transport';
 // A transport whose callers are the principals a test adds, by the
 // Authorization header they send; its timers run only when the test ticks
 // them, and its clock reads `clock.now`.
-function setupTest() {
-  const stack = new AsyncDisposableStack();
+// oxlint-disable-next-line require-await -- `await using` awaits the stack's disposal when setup throws
+async function setupTest() {
+  await using stack = new AsyncDisposableStack();
 
   const timer = buildStubRepeat();
   const clock = { now: 0 };
@@ -51,39 +52,29 @@ function setupTest() {
     readPrincipal,
     transport,
 
-    // a POST of one message as an MCP client sends it, from the caller `key`
-    buildPost: (key: string, body: unknown, headers: Readonly<Record<string, string>> = {}) =>
-      new Request('http://impd.test/mcp', {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${key}`,
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          ...headers,
-        },
-        body: JSON.stringify(body),
-      }),
     [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('it opens a session at initialize and answers with its id', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -106,22 +97,24 @@ test('it opens a session at initialize and answers with its id', async () => {
 });
 
 test('it answers a request in the session that initialize opened', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -130,11 +123,16 @@ test('it answers a request in the session that initialize opened', async () => {
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   const body: unknown = await response.json();
@@ -143,18 +141,20 @@ test('it answers a request in the session that initialize opened', async () => {
 });
 
 test('it refuses a request outside a session with 400', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
-    ctx.buildPost('alice', { jsonrpc: '2.0', id: 1, method: 'ping' }),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   const body: unknown = await response.json();
@@ -169,22 +169,21 @@ test('it refuses a request outside a session with 400', async () => {
 });
 
 test('it refuses a request in an unknown session with 404', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': '00000000-0000-4000-8000-000000000000' },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': '00000000-0000-4000-8000-000000000000',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   const body = await response.text();
@@ -194,30 +193,25 @@ test('it refuses a request in an unknown session with 404', async () => {
 });
 
 test("it refuses a request in another caller's session with 404", async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
-
-  ctx.principals.set('Bearer bob', {
-    key: 'bob',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+  ctx.principals.set('Bearer bob', buildMockMcpPrincipal({ key: 'bob', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -226,29 +220,40 @@ test("it refuses a request in another caller's session with 404", async () => {
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost('bob', { jsonrpc: '2.0', id: 1, method: 'ping' }, { 'mcp-session-id': session }),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer bob',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(response.status).toBe(404);
 });
 
 test('it refuses a protocol version header it does not support with 400', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -257,11 +262,17 @@ test('it refuses a protocol version header it does not support with 400', async 
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session, 'mcp-protocol-version': '2099-01-01' },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+        'mcp-protocol-version': '2099-01-01',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   const body = await response.text();
@@ -271,22 +282,24 @@ test('it refuses a protocol version header it does not support with 400', async 
 });
 
 test('it answers a request that names a protocol version it supports', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -295,33 +308,41 @@ test('it answers a request that names a protocol version it supports', async () 
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session, 'mcp-protocol-version': '2025-06-18' },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+        'mcp-protocol-version': '2025-06-18',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(response.status).toBe(200);
 });
 
 test('it accepts a notification with 202 and no body', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -330,11 +351,16 @@ test('it accepts a notification with 202 and no body', async () => {
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', method: 'notifications/initialized' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    }),
   );
 
   const body = await response.text();
@@ -344,22 +370,27 @@ test('it accepts a notification with 202 and no body', async () => {
 });
 
 test('it lists only the read tools to a read caller', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer reader', {
-    key: 'reader',
-    scope: 'read',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set(
+    'Bearer reader',
+    buildMockMcpPrincipal({ key: 'reader', scope: 'read', client: ctx.client }),
+  );
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('reader', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer reader',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -368,11 +399,16 @@ test('it lists only the read tools to a read caller', async () => {
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'reader',
-      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer reader',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    }),
   );
 
   const json: unknown = await response.json();
@@ -389,7 +425,18 @@ test('it lists only the read tools to a read caller', async () => {
 });
 
 test('it streams a tool call’s progress, keepalives and response as server-sent events', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
+
+  const transport = createHttpTransport({
+    version: '1.2.3',
+    progressIntervalMs: 20,
+    keepaliveMs: 30,
+    repeat: ctx.timer.repeat,
+    authenticate: ctx.readPrincipal,
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
+  });
+
+  onTestFinished(() => transport.close());
 
   const impd = implement(impContract);
   const listed = Promise.withResolvers<void>();
@@ -407,20 +454,22 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
     }),
   );
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
-  const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+  const opened = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -428,23 +477,28 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
 
   invariant(session);
 
-  const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      {
+  const response = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'tools/call',
         params: { name: 'imp_list', arguments: {}, _meta: { progressToken: 'p' } },
-      },
-      { 'mcp-session-id': session },
-    ),
+      }),
+    }),
   );
 
   await listed.promise;
 
-  ctx.timer.tick(15_000);
-  ctx.timer.tick(5000);
+  ctx.timer.tick(20);
+  ctx.timer.tick(30);
   answer.resolve([]);
 
   const text = await response.text();
@@ -480,16 +534,17 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
     {
       jsonrpc: '2.0',
       id: 1,
-      result: expect.objectContaining({
-        isError: false,
+      result: {
+        content: [{ type: 'text', text: '{\n  "imps": []\n}' }],
         structuredContent: { imps: [] },
-      }) as unknown,
+        isError: false,
+      },
     },
   ]);
 });
 
-test('it runs a call on to its end after its stream drops', async () => {
-  await using ctx = setupTest();
+test('it ends a call only once impd answers, after its stream drops', async () => {
+  await using ctx = await setupTest();
 
   const impd = implement(impContract);
   const listed = Promise.withResolvers<void>();
@@ -508,20 +563,22 @@ test('it runs a call on to its end after its stream drops', async () => {
     }),
   );
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -530,16 +587,21 @@ test('it runs a call on to its end after its stream drops', async () => {
   invariant(session);
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      {
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'tools/call',
         params: { name: 'imp_list', arguments: {} },
-      },
-      { 'mcp-session-id': session },
-    ),
+      }),
+    }),
   );
 
   const callEnd = ctx.transport.readCallEnd(response);
@@ -557,12 +619,28 @@ test('it runs a call on to its end after its stream drops', async () => {
 
   await listed.promise;
 
+  // a full round trip through the same session: any cancel the drop set off
+  // has run by the time it answers
+  const ping = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }),
+    }),
+  );
+
   const endedBeforeAnswer = state.ended;
 
   answer.resolve([]);
 
   await expect(tracked).toResolve();
 
+  expect(ping.status).toBe(200);
   expect(endedBeforeAnswer).toBeFalse();
 });
 
@@ -577,7 +655,18 @@ test('it knows no call end for a response that is not a streamed call', () => {
 });
 
 test('it answers a tool call as JSON, without its progress, when the client takes no event stream', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
+
+  const transport = createHttpTransport({
+    version: '1.2.3',
+    progressIntervalMs: 20,
+    keepaliveMs: 30,
+    repeat: ctx.timer.repeat,
+    authenticate: ctx.readPrincipal,
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
+  });
+
+  onTestFinished(() => transport.close());
 
   const impd = implement(impContract);
   const listed = Promise.withResolvers<void>();
@@ -595,20 +684,22 @@ test('it answers a tool call as JSON, without its progress, when the client take
     }),
   );
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
-  const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+  const opened = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -616,22 +707,27 @@ test('it answers a tool call as JSON, without its progress, when the client take
 
   invariant(session);
 
-  const call = ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      {
+  const call = transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        'mcp-session-id': session,
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'tools/call',
         params: { name: 'imp_list', arguments: {}, _meta: { progressToken: 'p' } },
-      },
-      { 'mcp-session-id': session, accept: 'application/json' },
-    ),
+      }),
+    }),
   );
 
   await listed.promise;
 
-  ctx.timer.tick(15_000);
+  ctx.timer.tick(20);
   answer.resolve([]);
 
   const response = await call;
@@ -642,12 +738,16 @@ test('it answers a tool call as JSON, without its progress, when the client take
   expect(body).toStrictEqual({
     jsonrpc: '2.0',
     id: 1,
-    result: expect.objectContaining({ isError: false, structuredContent: { imps: [] } }) as unknown,
+    result: {
+      content: [{ type: 'text', text: '{\n  "imps": []\n}' }],
+      structuredContent: { imps: [] },
+      isError: false,
+    },
   });
 });
 
 test('it ends a cancelled JSON call with 202 and no response', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const impd = implement(impContract);
   const listed = Promise.withResolvers<void>();
@@ -665,20 +765,22 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
     }),
   );
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -687,26 +789,40 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
   invariant(session);
 
   const call = ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      {
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        'mcp-session-id': session,
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'tools/call',
         params: { name: 'imp_list', arguments: {} },
-      },
-      { 'mcp-session-id': session, accept: 'application/json' },
-    ),
+      }),
+    }),
   );
 
   await listed.promise;
 
-  await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } },
-      { 'mcp-session-id': session },
-    ),
+  const cancel = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 1 },
+      }),
+    }),
   );
 
   answer.resolve([]);
@@ -714,19 +830,28 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
   const response = await call;
   const body = await response.text();
 
+  expect(cancel.status).toBe(202);
   expect(response.status).toBe(202);
   expect(body).toBe('');
 });
 
 test('it refuses an unknown caller with 401 and a bearer challenge', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const response = await ctx.transport.handle(
-    ctx.buildPost('mallory', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer mallory',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -735,40 +860,36 @@ test('it refuses an unknown caller with 401 and a bearer challenge', async () =>
 });
 
 test('it refuses a batch of messages with 400', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
-    ctx.buildPost('alice', [
-      {
-        jsonrpc: '2.0',
-        id: 0,
-        method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
       },
-    ]),
+      body: JSON.stringify([
+        {
+          jsonrpc: '2.0',
+          id: 0,
+          method: 'initialize',
+          params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        },
+      ]),
+    }),
   );
 
   expect(response.status).toBe(400);
 });
 
 test('it refuses a body that is not JSON with 400 and a parse error', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -790,15 +911,9 @@ test('it refuses a body that is not JSON with 400 and a parse error', async () =
 });
 
 test('it refuses a POST that is not application/json with 415', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -812,7 +927,7 @@ test('it refuses a POST that is not application/json with 415', async () => {
 });
 
 test('it refuses a GET with 405 and names the methods it allows', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -826,41 +941,48 @@ test('it refuses a GET with 405 and names the methods it allows', async () => {
 });
 
 test('it refuses a page on another origin with 403 before it authenticates', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'mallory',
-      {
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer mallory',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'x-cross-origin': '1',
+      },
+      body: JSON.stringify({
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
         params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
-      },
-      { 'x-cross-origin': '1' },
-    ),
+      }),
+    }),
   );
 
   expect(response.status).toBe(403);
 });
 
 test('it ends a session on DELETE', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -876,11 +998,16 @@ test('it ends a session on DELETE', async () => {
   );
 
   const after = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(ended.status).toBe(204);
@@ -888,15 +1015,9 @@ test('it ends a session on DELETE', async () => {
 });
 
 test('it refuses a DELETE of an unknown session with 404', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -912,24 +1033,29 @@ test('it refuses a DELETE of an unknown session with 404', async () => {
 });
 
 test('it ends a caller’s sessions when what it authenticated with ends', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const ends = new AbortController();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: ends.signal,
-  });
+  ctx.principals.set(
+    'Bearer alice',
+    buildMockMcpPrincipal({ key: 'alice', client: ctx.client, ends: ends.signal }),
+  );
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -940,61 +1066,73 @@ test('it ends a caller’s sessions when what it authenticated with ends', async
   ends.abort();
 
   // a new credential for the same caller, as a token made again under its name
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: new AbortController().signal,
-  });
+  ctx.principals.set(
+    'Bearer alice',
+    buildMockMcpPrincipal({ key: 'alice', client: ctx.client, ends: new AbortController().signal }),
+  );
 
   const response = await ctx.transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(response.status).toBe(404);
 });
 
 test('it keeps another caller’s session when one caller’s credential ends', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const ends = new AbortController();
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: ends.signal,
-  });
+  ctx.principals.set(
+    'Bearer alice',
+    buildMockMcpPrincipal({ key: 'alice', client: ctx.client, ends: ends.signal }),
+  );
 
-  ctx.principals.set('Bearer bob', {
-    key: 'bob',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: new AbortController().signal,
-  });
+  ctx.principals.set(
+    'Bearer bob',
+    buildMockMcpPrincipal({ key: 'bob', client: ctx.client, ends: new AbortController().signal }),
+  );
 
   await ctx.transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
   const opened = await ctx.transport.handle(
-    ctx.buildPost('bob', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer bob',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1005,14 +1143,23 @@ test('it keeps another caller’s session when one caller’s credential ends', 
   ends.abort();
 
   const response = await ctx.transport.handle(
-    ctx.buildPost('bob', { jsonrpc: '2.0', id: 1, method: 'ping' }, { 'mcp-session-id': session }),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer bob',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(response.status).toBe(200);
 });
 
 test('it evicts the least recently used idle session of a caller at its limit', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1025,31 +1172,41 @@ test('it evicts the least recently used idle session of a caller at its limit', 
 
   onTestFinished(() => transport.close());
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const first = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
   ctx.clock.now = 1;
 
   const second = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1062,28 +1219,46 @@ test('it evicts the least recently used idle session of a caller at its limit', 
   invariant(secondSession);
 
   await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
   const evicted = await transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': firstSession },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': firstSession,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   const kept = await transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': secondSession },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': secondSession,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(evicted.status).toBe(404);
@@ -1091,7 +1266,7 @@ test('it evicts the least recently used idle session of a caller at its limit', 
 });
 
 test('it evicts an idle session, never a busy one, when the store is full', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const impd = implement(impContract);
   const listed = Promise.withResolvers<void>();
@@ -1120,37 +1295,29 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
     }),
   );
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+  ctx.principals.set('Bearer bob', buildMockMcpPrincipal({ key: 'bob', client: ctx.client }));
 
-  ctx.principals.set('Bearer bob', {
-    key: 'bob',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
-
-  ctx.principals.set('Bearer reader', {
-    key: 'reader',
-    scope: 'read',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set(
+    'Bearer reader',
+    buildMockMcpPrincipal({ key: 'reader', scope: 'read', client: ctx.client }),
+  );
 
   // bob's session is the older one, and busy with a call
   const bobOpened = await transport.handle(
-    ctx.buildPost('bob', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer bob',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1159,11 +1326,21 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
   invariant(bobSession);
 
   const call = transport.handle(
-    ctx.buildPost(
-      'bob',
-      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'imp_list', arguments: {} } },
-      { 'mcp-session-id': bobSession, accept: 'application/json' },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer bob',
+        'content-type': 'application/json',
+        'mcp-session-id': bobSession,
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'imp_list', arguments: {} },
+      }),
+    }),
   );
 
   await listed.promise;
@@ -1171,11 +1348,19 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
   ctx.clock.now = 1;
 
   const aliceOpened = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1186,11 +1371,19 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
   ctx.clock.now = 2;
 
   const reader = await transport.handle(
-    ctx.buildPost('reader', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer reader',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1199,11 +1392,16 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
   const answered = await call;
 
   const alice = await transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': aliceSession },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': aliceSession,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(reader.status).toBe(200);
@@ -1212,7 +1410,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
 });
 
 test('it refuses a new session with 429 to a caller whose sessions are all busy', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const impd = implement(impContract);
   const listed = Promise.withResolvers<void>();
@@ -1241,20 +1439,22 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
     }),
   );
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1263,21 +1463,39 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
   invariant(session);
 
   const call = transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'imp_list', arguments: {} } },
-      { 'mcp-session-id': session, accept: 'application/json' },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        'mcp-session-id': session,
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'imp_list', arguments: {} },
+      }),
+    }),
   );
 
   await listed.promise;
 
   const refused = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1285,14 +1503,15 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
 
   answer.resolve([]);
 
-  await call;
+  const answered = await call;
 
   expect(refused.status).toBe(429);
+  expect(answered.status).toBe(200);
   expect(body).toBe('too many MCP sessions: end one with a DELETE first\n');
 });
 
 test('it keeps a session used within the idle limit', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1305,20 +1524,22 @@ test('it keeps a session used within the idle limit', async () => {
 
   onTestFinished(() => transport.close());
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1329,18 +1550,23 @@ test('it keeps a session used within the idle limit', async () => {
   ctx.clock.now = 1000;
 
   const response = await transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(response.status).toBe(200);
 });
 
 test('it ends a session idle past the idle limit', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1353,20 +1579,22 @@ test('it ends a session idle past the idle limit', async () => {
 
   onTestFinished(() => transport.close());
 
-  ctx.principals.set('Bearer alice', {
-    key: 'alice',
-    scope: 'manage',
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    ends: null,
-  });
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
-    ctx.buildPost('alice', {
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
     }),
   );
 
@@ -1377,11 +1605,16 @@ test('it ends a session idle past the idle limit', async () => {
   ctx.clock.now = 1001;
 
   const response = await transport.handle(
-    ctx.buildPost(
-      'alice',
-      { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { 'mcp-session-id': session },
-    ),
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
   );
 
   expect(response.status).toBe(404);

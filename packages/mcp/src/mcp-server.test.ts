@@ -3,7 +3,7 @@ import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { createImpGuard } from './imp-guard';
 import { INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR } from './json-rpc';
-import { createMcpServer } from './mcp-server';
+import { PROTOCOL_VERSIONS, createMcpServer } from './mcp-server';
 
 // The server's replies, parsed. The context needs a client, though no test
 // here makes a call that reaches impd.
@@ -18,6 +18,10 @@ function setupTest() {
     client: createImpClient({ url: 'http://impd.test' }),
   };
 }
+
+test('it supports exactly the protocol versions the table below covers', () => {
+  expect(PROTOCOL_VERSIONS).toStrictEqual(['2025-11-25', '2025-06-18', '2025-03-26']);
+});
 
 test.each([['2025-11-25'], ['2025-06-18'], ['2025-03-26']])(
   'it agrees on the protocol version %s',
@@ -106,11 +110,14 @@ test('it names the guard in the instructions it gives at initialize', async () =
     {
       jsonrpc: '2.0',
       id: 1,
-      result: expect.objectContaining({
+      result: {
+        protocolVersion: '2025-11-25',
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: 'imp', title: 'imp', version: '1.2.3' },
         instructions: expect.stringContaining(
           'This server may touch imps named agent-*.',
         ) as unknown,
-      }) as unknown,
+      },
     },
   ]);
 });
