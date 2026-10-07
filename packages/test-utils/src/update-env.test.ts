@@ -8,7 +8,7 @@ test('it sets a variable to the override value', () => {
 });
 
 test('it unsets a variable when the override value is undefined', () => {
-  updateEnv('HOME', undefined);
+  updateEnv('PATH', undefined);
 
-  expect(process.env).not.toContainKey('HOME');
+  expect(process.env).not.toContainKey('PATH');
 });

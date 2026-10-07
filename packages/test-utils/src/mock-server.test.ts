@@ -10,3 +10,9 @@ test('it answers a request with a handler the test adds', async () => {
 
   expect(body).toStrictEqual({ ok: true });
 });
+
+test('it rejects a request to a remote host that no handler matches', () => {
+  const request = fetch('https://unhandled.example.test/v1/info');
+
+  expect(request).rejects.toThrow(/Cannot bypass a request when using the "error" strategy/u);
+});

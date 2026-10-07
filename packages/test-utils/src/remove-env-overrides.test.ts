@@ -13,12 +13,12 @@ test('it puts a set variable back to its value before the first override', () =>
 });
 
 test('it puts back a variable that an override unset', () => {
-  const original = process.env['HOME'];
+  const original = process.env['PATH'];
 
-  updateEnv('HOME', undefined);
+  updateEnv('PATH', undefined);
   removeEnvOverrides();
 
-  expect(process.env['HOME']).toBe(original);
+  expect(process.env['PATH']).toBe(original);
 });
 
 test('it unsets a variable that was unset before its override', () => {

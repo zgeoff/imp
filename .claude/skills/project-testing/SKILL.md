@@ -10,7 +10,8 @@ description:
 # imp test harnesses
 
 This skill lists the runs, harnesses, and stand-ins that exist in this repo today, with the paths
-and variables that drive them. The rules for writing tests live in the testing skill.
+and variables that drive them. It describes the code as it is, not what the testing skill allows;
+the rules for writing tests live in the testing skill.
 
 ## Runs
 
@@ -33,14 +34,13 @@ The root `bunfig.toml`'s `pathIgnorePatterns` skips `packages/dashboard/**`. The
 `bunfig.toml` preloads `packages/dashboard/test-setup.ts`, which registers a DOM, so its tests run
 from the package.
 
-The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`. It
-seeds faker, restores every `updateEnv` override after each test, and runs one MSW server
-(`packages/test-utils/src/mock-server.ts`) for the whole run. While it listens, the global `fetch`
-sends loopback requests and requests with Bun's `unix` or `tls` options to the native fetch
-(`route-fetch.ts`), and every other request to MSW; an unmatched remote request fails its test. The
-global `WebSocket` stays native. The cross-package test utils (`updateEnv`, `invariant`, `waitFor`)
-live in `packages/test-utils/src`; each package keeps its own stand-ins and factories in its
-`src/test-utils/`.
+The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
+`packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores
+every `updateEnv` override after each test, and runs one MSW server
+(`packages/test-utils/src/mock-server.ts`) for the whole run with `onUnhandledRequest: 'error'`.
+While it listens, the global `fetch` sends a request to a loopback host or over a unix socket to the
+native fetch (`route-fetch.ts`), and every other request to MSW. The global `WebSocket` stays
+native. `updateEnv`, `invariant` and `waitFor` live in `packages/test-utils/src`.
 
 Plain `bun test` does not match `*.e2e.ts`, `*.pebble.ts`, or `*.slow.ts`; each of those runs only
 when its `./` path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain

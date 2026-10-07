@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeAll } from 'bun:test';
-import { handleUnhandledRequest } from './handle-unhandled-request';
 import { server } from './mock-server';
 import { removeEnvOverrides } from './remove-env-overrides';
 import { buildRoutedFetch } from './route-fetch';
@@ -10,10 +9,10 @@ const NativeWebSocket = globalThis.WebSocket;
 
 setFakerSeed();
 
-// loopback servers the suites start, unix sockets and test CAs keep the native
-// fetch (buildRoutedFetch); no suite mocks a WebSocket, so it stays native
+// MSW sees only remote requests: loopback servers the suites start and unix
+// sockets keep the native fetch (buildRoutedFetch), and no suite mocks a WebSocket
 beforeAll(() => {
-  server.listen({ onUnhandledRequest: handleUnhandledRequest });
+  server.listen({ onUnhandledRequest: 'error' });
 
   globalThis.fetch = buildRoutedFetch(nativeFetch, globalThis.fetch);
   globalThis.WebSocket = NativeWebSocket;

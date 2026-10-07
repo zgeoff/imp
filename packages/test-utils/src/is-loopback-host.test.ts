@@ -9,6 +9,8 @@ test.each([
   ['https://api.cloudflare.com/client/v4/zones', false],
   ['http://128.0.0.1/', false],
   ['http://localhost.example.test/', false],
+  ['http://127.example.test/', false],
+  ['http://127.0.0.1.example.test/', false],
 ])('it reads %s as loopback: %p', (url, expected) => {
   expect(isLoopbackHost(url)).toBe(expected);
 });
