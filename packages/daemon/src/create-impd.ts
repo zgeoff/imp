@@ -374,7 +374,7 @@ export async function loadImpdAccess(
   return { revocations, tokens, oauth };
 }
 
-export type ImpdAccess = Readonly<Awaited<ReturnType<typeof loadImpdAccess>>>;
+type ImpdAccess = Readonly<Awaited<ReturnType<typeof loadImpdAccess>>>;
 
 // The services over the imps that the API serves
 export function buildImpdServices(
@@ -428,7 +428,7 @@ export function buildImpdServices(
   return { checkpoints, templates, networks, gc, audit };
 }
 
-export type ImpdServices = Readonly<ReturnType<typeof buildImpdServices>>;
+type ImpdServices = Readonly<ReturnType<typeof buildImpdServices>>;
 
 // The moves to and from other hosts
 export function createImpdMoves(
@@ -467,7 +467,7 @@ export function createImpdMoves(
 
 // tailnet identity, when IMP_TAILNET_IDENTITIES has rules; both ask about
 // the node on every request, so they share one cached status
-export function buildTailnetAccess(
+function buildTailnetAccess(
   config: Config,
   deps: Readonly<Pick<ImpdDeps, 'now' | 'whois'>>,
   readStatus: () => Promise<TailscaleStatus>,
@@ -849,5 +849,3 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
     state,
   };
 }
-
-export type Impd = Awaited<ReturnType<typeof createImpd>>;

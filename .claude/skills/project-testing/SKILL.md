@@ -118,9 +118,9 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
 
 ## ZFS
 
-- **The fake.** `packages/daemon/src/storage/zfs/fake-zfs.ts` (`createFakeZfs`) answers impd's `zfs`
-  argv (`run`), send and receive streams (`streams`), and `/proc/self/mounts` (`readMounts`) in
-  memory. It models datasets, snapshots, clones, promote, deferred destroy, legacy mounts, and
+- **The fake.** `packages/daemon/src/test-utils/build-stub-zfs.ts` (`createFakeZfs`) answers impd's
+  `zfs` argv (`run`), send and receive streams (`streams`), and `/proc/self/mounts` (`readMounts`)
+  in memory. It models datasets, snapshots, clones, promote, deferred destroy, legacy mounts, and
   txg-based `creation`, with fixed space numbers. It exposes `blockBefore`, `failOnce`,
   `crashBefore`, and `restart`. `zfs-backend.ts` takes it through those injected deps.
 - **The real-pool tests.** `zfs-backend.real.test.ts`, `zfs-move.real.test.ts`, and
@@ -159,19 +159,22 @@ Paths are under `packages/daemon/src/` unless they start with `test/`.
 
 | Boundary            | Stand-in                                                     | What it replaces                                          |
 | ------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
-| VMM                 | `imps/fake-vmm.ts` (`buildFakeVmm`)                          | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step |
-| Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `buildTestApp`)         | impd: in-memory database, fake VMM, XFS on plain files    |
+| VMM                 | `test-utils/build-stub-vmm.ts` (`buildFakeVmm`)              | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step |
+| impd                | `create-impd.ts` (`createImpd`) with stubs as its deps       | The host: see Booting impd below                          |
+| Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `buildTestApp`)         | A shim over createImpd's parts, without its start steps   |
 | Firecracker API     | `Bun.serve({ unix })` (1); a Bun script (2)                  | Firecracker's HTTP API on its socket                      |
 | Firecracker process | `bash` run under the name `firecracker` (3)                  | A process whose cmdline matches Firecracker's             |
-| Guest agent         | `agent-client/fake-agent.ts` (`startFakeAgent`)              | The agent on the vsock socket: CONNECT and frames         |
-| Builder guest       | `images/fake-guest.ts` (`createFakeGuest`)                   | A builder's agent: output and exit per exec               |
-| zfs                 | `storage/zfs/fake-zfs.ts` (`createFakeZfs`)                  | `zfs`, send and receive, and the mount table              |
+| Guest agent         | `test-utils/start-stub-agent.ts` (`startFakeAgent`)          | The agent on the vsock socket: CONNECT and frames         |
+| Builder guest       | `test-utils/build-stub-guest.ts` (`createFakeGuest`)         | A builder's agent: output and exit per exec               |
+| zfs                 | `test-utils/build-stub-zfs.ts` (`createFakeZfs`)             | `zfs`, send and receive, and the mount table              |
 | Docker engine       | A unix-socket server (4)                                     | The engine API                                            |
 | Docker CLI          | A `docker` script on `PATH` in the images tests              | The `docker` binary                                       |
 | nft                 | `setupImpTest`'s default `runNft`, which records scripts     | `nft` from the egress service                             |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                   | `ip` and `sysctl -n`, as `createTapDevices`'s `run`       |
 | mount               | A `run` with a mount table in `vmm/jail.test.ts`             | `mount` and `umount` for the jailer                       |
 | cgroups and `/proc` | Temp dirs as `root` and `procRoot` (5)                       | The cgroup tree and `/proc`                               |
+| cgroups for impd    | `test-utils/build-stub-cpu-cgroups.ts`                       | `CpuCgroups`: an in-memory tree that records each change  |
+| Imp guest agent     | `test-utils/build-stub-exec-guest.ts`                        | An imp's agent for the MCP tools: files and shell verbs   |
 | tailscale whois     | A `whois` function passed to `createTailnetIdentities`       | `tailscale whois --json` (`runWhois`)                     |
 | Connector upstreams | `Bun.serve` TLS servers (6); `test/e2e/lib/fake-upstream.ts` | github.com, api.github.com, an OAuth token endpoint       |
 
@@ -193,6 +196,22 @@ only when the test says so.
 Host networking runs the real tools: `test/host/setup-net.test.ts` runs `host/scripts/setup-net.sh`
 with `iptables`, and `test/host/egress-ruleset.test.ts` applies impd's ruleset with `nft`, each in a
 fresh network namespace.
+
+### Booting impd
+
+`packages/daemon/src/create-impd.ts` holds impd's wiring, which `main.ts` and the tests share.
+`createImpd(config, deps)` builds every service and runs the boot steps in `main.ts`'s order:
+storage start, firewall start, VM re-adoption, leftover and drive cleanup, move recovery. It opens
+no port: `main.ts` then listens, starts the tickers and owns the stop. `deps` takes the database,
+the root token, an unstarted storage backend and the system files, and optional stand-ins for each
+boundary (`vms`, `taps`, `cgroups`, `broker`, `egress`, `imps`, `readDiskSpace`, `readIdentity`,
+`resolveIpv6`, `readTailscale`, `whois`, `freezer`, `oauthKey`, `now`, `log`); a field left out
+takes the host's real one. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`,
+`startGovernedImps`, `loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are
+exported for `setupImpTest`, which wires them without the start steps.
+`packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
+`IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
+`test-utils/find-free-ports.ts`.
 
 ## Connectors
 
