@@ -23,7 +23,7 @@ Type=exec
 # The image of this unit's own release; an IMP_HOST_IMAGE in the env file,
 # read after it, pins another. release-please bumps the version.
 # x-release-please-start-version
-Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.39.0
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.40.0
 # x-release-please-end
 EnvironmentFile=/etc/imp/imp-host.env
 # A container left over from a crash would hold the name.
