@@ -59,7 +59,6 @@
         "@faker-js/faker": "catalog:",
         "@imp/daemon": "workspace:*",
         "@imp/test-utils": "workspace:*",
-        "@orpc/contract": "catalog:",
         "msw": "catalog:",
       },
     },
