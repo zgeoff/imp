@@ -7,7 +7,7 @@ import { buildMockToken } from '../test-utils/build-mock-token';
 import { buildStubImpd } from '../test-utils/build-stub-impd';
 import { renderApp } from '../test-utils/render-app';
 
-test('it makes a token limited to some imps and shows its secret once', async () => {
+test('it makes a token limited to some imps and shows its secret', async () => {
   const stub = buildStubImpd();
   const user = userEvent.setup();
   const rendered = renderApp(stub, '/tokens');
@@ -47,8 +47,10 @@ test('it deletes a token after a confirm', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
   await waitFor(() => {
-    expect(stub.state.calls).toStrictEqual([{ path: 'tokens.delete', input: { name: 'old' } }]);
+    expect(rendered.queryByRole('row', { name: /old/ })).toBeNull();
   });
+
+  expect(stub.state.calls).toStrictEqual([{ path: 'tokens.delete', input: { name: 'old' } }]);
 });
 
 test('it hides the tokens link from a caller limited to some imps', async () => {

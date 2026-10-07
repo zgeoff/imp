@@ -28,11 +28,13 @@ test('it adds an image from a ref', async () => {
   await user.type(field, 'docker.io/library/node:22');
   await user.click(rendered.getByRole('button', { name: 'Add image' }));
 
-  await waitFor(() => {
-    expect(stub.state.calls).toStrictEqual([
-      { path: 'images.add', input: { ref: 'docker.io/library/node:22' } },
-    ]);
-  });
+  const row = await rendered.findByRole('row', { name: /docker\.io\/library\/node:22/ });
+
+  expect(row).toBeInTheDocument();
+
+  expect(stub.state.calls).toStrictEqual([
+    { path: 'images.add', input: { ref: 'docker.io/library/node:22' } },
+  ]);
 });
 
 test('it deletes an image after a confirm', async () => {
@@ -52,6 +54,8 @@ test('it deletes an image after a confirm', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
   await waitFor(() => {
-    expect(stub.state.calls).toStrictEqual([{ path: 'images.delete', input: { name: 'base' } }]);
+    expect(rendered.queryByRole('row', { name: /base/ })).toBeNull();
   });
+
+  expect(stub.state.calls).toStrictEqual([{ path: 'images.delete', input: { name: 'base' } }]);
 });

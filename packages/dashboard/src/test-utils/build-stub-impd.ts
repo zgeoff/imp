@@ -76,10 +76,23 @@ export function buildStubImpd(): StubImpd {
 
     if (imp === undefined) {
       stub.notFound += 1;
-      throw new ORPCError('NOT_FOUND', { message: `there is no imp named ${name}` });
+      throw buildNotFoundError('imp', name);
     }
 
     return imp;
+  };
+
+  // as impd: the checkpoint's id or its label
+  const findCheckpoint = (name: string, ref: string): Checkpoint => {
+    const checkpoint = (stub.checkpoints.get(name) ?? []).find(
+      (candidate) => candidate.id === ref || candidate.label === ref,
+    );
+
+    if (checkpoint === undefined) {
+      throw buildNotFoundError('checkpoint', ref);
+    }
+
+    return checkpoint;
   };
 
   const setImpState = (path: string, name: string, state: Imp['state']): Imp => {
@@ -175,6 +188,11 @@ export function buildStubImpd(): StubImpd {
       unexpose: os.imps.unexpose.handler((context) => findImp(context.input.name)),
       fork: os.imps.fork.handler((context) => {
         registerCall('imps.fork', context.input);
+        findImp(context.input.source);
+
+        if (context.input.checkpoint !== undefined) {
+          findCheckpoint(context.input.source, context.input.checkpoint);
+        }
 
         const imp = buildMockImp({ name: context.input.name });
 
@@ -187,12 +205,13 @@ export function buildStubImpd(): StubImpd {
       create: os.checkpoints.create.handler((context) => {
         registerCall('checkpoints.create', context.input);
 
+        const imp = findImp(context.input.name);
         const list = stub.checkpoints.get(context.input.name) ?? [];
 
         const checkpoint = {
           id: `cp${String(list.length + 1)}`,
           createdAt: new Date(),
-          diskMib: findImp(context.input.name).diskMib,
+          diskMib: imp.diskMib,
           ...(context.input.label !== undefined && { label: context.input.label }),
         };
 
@@ -200,16 +219,31 @@ export function buildStubImpd(): StubImpd {
 
         return checkpoint;
       }),
-      list: os.checkpoints.list.handler(
-        (context) => stub.checkpoints.get(context.input.name) ?? [],
-      ),
+      list: os.checkpoints.list.handler((context) => {
+        findImp(context.input.name);
+
+        return stub.checkpoints.get(context.input.name) ?? [];
+      }),
       restore: os.checkpoints.restore.handler((context) => {
         registerCall('checkpoints.restore', context.input);
 
-        return findImp(context.input.name);
+        const imp = findImp(context.input.name);
+
+        findCheckpoint(context.input.name, context.input.checkpoint);
+
+        return imp;
       }),
       delete: os.checkpoints.delete.handler((context) => {
         registerCall('checkpoints.delete', context.input);
+        findImp(context.input.name);
+
+        const checkpoint = findCheckpoint(context.input.name, context.input.checkpoint);
+        const list = stub.checkpoints.get(context.input.name) ?? [];
+
+        stub.checkpoints.set(
+          context.input.name,
+          list.filter((candidate) => candidate !== checkpoint),
+        );
 
         return {};
       }),
@@ -249,9 +283,14 @@ export function buildStubImpd(): StubImpd {
 
         const input = context.input;
 
-        return 'imp' in input
-          ? buildMockImage({ name: input.name, ref: `imp:${input.imp}`, source: 'imp' })
-          : buildMockImage({ name: input.name ?? 'added', ref: input.ref });
+        const image =
+          'imp' in input
+            ? buildMockImage({ name: input.name, ref: `imp:${input.imp}`, source: 'imp' })
+            : buildMockImage({ name: input.name ?? 'added', ref: input.ref });
+
+        stub.images.push(image);
+
+        return image;
       }),
       build: os.images.build.handler(() => {
         throw new ORPCError('INVALID_STATE', { message: 'not in the stub' });
@@ -266,6 +305,14 @@ export function buildStubImpd(): StubImpd {
       }),
       delete: os.images.delete.handler((context) => {
         registerCall('images.delete', context.input);
+
+        const index = stub.images.findIndex((image) => image.name === context.input.name);
+
+        if (index === -1) {
+          throw buildNotFoundError('image', context.input.name);
+        }
+
+        stub.images.splice(index, 1);
 
         return {};
       }),
@@ -463,7 +510,7 @@ export function buildStubImpd(): StubImpd {
         const found = stub.tokens[index];
 
         if (found === undefined) {
-          throw new ORPCError('NOT_FOUND', { message: `no token ${context.input.name}` });
+          throw buildNotFoundError('token', context.input.name);
         }
 
         const token: Token = { ...found, grantable: context.input.grantable };
@@ -475,10 +522,13 @@ export function buildStubImpd(): StubImpd {
       delete: os.tokens.delete.handler((context) => {
         registerCall('tokens.delete', context.input);
 
-        stub.tokens.splice(
-          stub.tokens.findIndex((token) => token.name === context.input.name),
-          1,
-        );
+        const index = stub.tokens.findIndex((token) => token.name === context.input.name);
+
+        if (index === -1) {
+          throw buildNotFoundError('token', context.input.name);
+        }
+
+        stub.tokens.splice(index, 1);
 
         return {};
       }),
@@ -572,4 +622,9 @@ async function* openStream(
     unsubscribe();
     signal?.removeEventListener('abort', stopStream);
   }
+}
+
+// impd's NOT_FOUND (packages/daemon api-errors.ts)
+function buildNotFoundError(kind: 'imp' | 'image' | 'checkpoint' | 'token', name: string) {
+  return new ORPCError('NOT_FOUND', { message: `${kind} ${name} not found`, data: { kind, name } });
 }

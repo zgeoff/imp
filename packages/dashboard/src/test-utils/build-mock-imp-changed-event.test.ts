@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import type { Imp } from '@imp/api';
 import { EVENT_VERSION } from '@imp/api';
 import { buildMockImpChangedEvent } from './build-mock-imp-changed-event';
 
@@ -9,7 +8,22 @@ test('it builds a default imp changed event', () => {
     at: expect.toBeValidDate(),
     ev: 'ImpChanged',
     reason: 'updated',
-    imp: expect.toSatisfy((imp: Imp) => imp.state === 'running'),
+    imp: {
+      id: expect.toBeString(),
+      name: expect.toBeString(),
+      image: expect.toBeString(),
+      state: 'running',
+      vcpus: expect.toBeNumber(),
+      memoryMib: expect.toBeNumber(),
+      diskMib: expect.toBeNumber(),
+      ip: expect.toBeString(),
+      slot: expect.toBeNumber(),
+      port: expect.toBeNumber(),
+      httpPort: expect.toBeNumber(),
+      url: expect.toBeString(),
+      createdAt: expect.toBeValidDate(),
+      lastActiveAt: expect.toBeValidDate(),
+    },
   });
 });
 
@@ -24,6 +38,21 @@ test('it applies overrides on top of the defaults', () => {
     at: expect.toBeValidDate(),
     ev: 'ImpChanged',
     reason: 'slept',
-    imp: expect.toSatisfy((imp: Imp) => imp.name === 'web' && imp.state === 'sleeping'),
+    imp: {
+      id: expect.toBeString(),
+      name: 'web',
+      image: expect.toBeString(),
+      state: 'sleeping',
+      vcpus: expect.toBeNumber(),
+      memoryMib: expect.toBeNumber(),
+      diskMib: expect.toBeNumber(),
+      ip: expect.toBeString(),
+      slot: expect.toBeNumber(),
+      port: expect.toBeNumber(),
+      httpPort: expect.toBeNumber(),
+      url: expect.toBeString(),
+      createdAt: expect.toBeValidDate(),
+      lastActiveAt: expect.toBeValidDate(),
+    },
   });
 });

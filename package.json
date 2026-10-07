@@ -13,6 +13,7 @@
       "@balena/dockerignore": "1.0.2",
       "@commitlint/cli": "21.2.0",
       "@faker-js/faker": "10.6.0",
+      "@msw/data": "1.1.8",
       "@mswjs/interceptors": "0.41.9",
       "@opentelemetry/api": "1.9.1",
       "@opentelemetry/exporter-metrics-otlp-proto": "0.222.0",

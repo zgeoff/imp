@@ -122,7 +122,7 @@ test('it says so when the imp does not exist', async () => {
 
   const alert = await rendered.findByRole('alert');
 
-  expect(alert).toHaveTextContent('there is no imp named gone');
+  expect(alert).toHaveTextContent('imp gone not found');
 });
 
 test('it goes back to the list without asking for the imp it destroyed', async () => {

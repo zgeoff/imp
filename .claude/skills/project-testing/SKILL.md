@@ -36,10 +36,10 @@ tests run from the package. Its `bunfig.toml` preloads `@zgeoff/bun-test-extende
 `packages/dashboard/test-setup.ts`. That preload runs the shared run hooks (a seeded faker and env
 restores), sets the page's URL to `http://impd.test/ui/`, restores spies and mocks after each test,
 and runs the dashboard's own MSW server (`src/mocks/node.ts`), whose handlers answer impd's
-`/auth/login` and `/auth/logout` from the `knownTokens` store it clears. The SDK's RPC calls never
-reach MSW: `src/test-utils/build-stub-impd.ts` (`buildStubImpd`) answers them from an in-memory impd
-behind the real contract, through an oRPC handler injected as the client's `fetch`, and
-`render-app.tsx` (`renderApp`) mounts the whole app against it.
+`/auth/login` and `/auth/logout` from the `knownTokens` `@msw/data` collection it clears. The SDK's
+RPC calls never reach MSW: `src/test-utils/build-stub-impd.ts` (`buildStubImpd`) answers them from
+an in-memory impd behind the real contract, through an oRPC handler injected as the client's
+`fetch`, and `render-app.tsx` (`renderApp`) mounts the whole app against it.
 
 The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
 `packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores

@@ -27,6 +27,7 @@
     "@faker-js/faker": "catalog:",
     "@imp/api": "workspace:*",
     "@imp/test-utils": "workspace:*",
+    "@msw/data": "catalog:",
     "@orpc/server": "catalog:",
     "@playwright/test": "catalog:",
     "@testing-library/react": "catalog:",
@@ -36,6 +37,7 @@
     "@vitejs/plugin-react": "catalog:",
     "@zgeoff/bun-test-react": "catalog:",
     "msw": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "zod": "catalog:"
   }
 }
