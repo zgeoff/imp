@@ -1,35 +1,51 @@
 import { expect, test } from 'bun:test';
 import { findDetachKey, parseDetachKey } from './detach-key';
+import { UsageError } from './usage-error';
 
-test('it reads ctrl-<key> as the byte the terminal sends', () => {
-  expect(parseDetachKey('ctrl-]')).toBe(0x1d);
-  expect(parseDetachKey('ctrl-a')).toBe(0x01);
-  expect(parseDetachKey('ctrl-Q')).toBe(0x11);
-  expect(parseDetachKey('ctrl-\\')).toBe(0x1c);
+test.each([
+  ['ctrl-]', 0x1d],
+  ['ctrl-a', 0x01],
+  ['ctrl-Q', 0x11],
+  ['ctrl-\\', 0x1c],
+])('#parseDetachKey reads %p as the byte %p the terminal sends', (text, byte) => {
+  expect(parseDetachKey(text)).toBe(byte);
+});
+
+test('#parseDetachKey reads none as no detach key', () => {
   expect(parseDetachKey('none')).toBeNull();
 });
 
-test('it refuses anything else as a usage error', () => {
-  for (const key of ['ctrl-1', 'ctrl-', 'ctrl-ab', 'esc', '']) {
-    expect(() => parseDetachKey(key)).toThrow('--detach-key takes ctrl-<key>');
-  }
+// the last five are the keys a program needs: Escape, Backspace, Tab, Enter
+// and Return
+test.each([
+  'ctrl-1',
+  'ctrl-',
+  'ctrl-ab',
+  'esc',
+  '',
+  'ctrl-[',
+  'ctrl-h',
+  'ctrl-I',
+  'ctrl-j',
+  'ctrl-m',
+])('#parseDetachKey rejects %p as a usage error', (text) => {
+  expect(() => parseDetachKey(text)).toThrowWithMessage(
+    UsageError,
+    String.raw`--detach-key takes ctrl-<key> (a-z but h, i, j and m; @, \, ], ^ or _) or none, got ` +
+      text,
+  );
 });
 
-test('it refuses the keys a program needs: Escape, Backspace, Tab, Enter and Return', () => {
-  for (const key of ['ctrl-[', 'ctrl-h', 'ctrl-I', 'ctrl-j', 'ctrl-m']) {
-    expect(() => parseDetachKey(key)).toThrow('--detach-key takes ctrl-<key>');
-  }
+test.each([
+  ['the plain byte', 'ls\u001D', 0x1d, { at: 2, length: 1 }],
+  ['the kitty form', 'ls\u001B[93;5u', 0x1d, { at: 2, length: 7 }],
+  ['the modifyOtherKeys form', '\u001B[27;5;93~x', 0x1d, { at: 0, length: 10 }],
+  ['the kitty form of a letter', 'a\u001B[97;5u', 0x01, { at: 1, length: 7 }],
+  ['the earliest of two forms', '\u001B[93;5u then \u001D', 0x1d, { at: 0, length: 7 }],
+])('#findDetachKey finds the key as %s', (_form, text, key, match) => {
+  expect(findDetachKey(new TextEncoder().encode(text), key)).toStrictEqual(match);
 });
 
-test('it finds the key as a byte, in the kitty form and in the modifyOtherKeys form', () => {
-  const encoder = new TextEncoder();
-
-  const find = (text: string, key: number) => findDetachKey(encoder.encode(text), key);
-
-  expect(find('ls\u001D', 0x1d)).toEqual({ at: 2, length: 1 });
-  expect(find('ls\u001B[93;5u', 0x1d)).toEqual({ at: 2, length: 7 });
-  expect(find('\u001B[27;5;93~x', 0x1d)).toEqual({ at: 0, length: 10 });
-  expect(find('a\u001B[97;5u', 0x01)).toEqual({ at: 1, length: 7 });
-  expect(find('\u001B[93;5u then \u001D', 0x1d)).toEqual({ at: 0, length: 7 });
-  expect(find('\u001B[93;3u', 0x1d)).toBeNull();
+test('#findDetachKey finds nothing when the key is held with another modifier', () => {
+  expect(findDetachKey(new TextEncoder().encode('\u001B[93;3u'), 0x1d)).toBeNull();
 });

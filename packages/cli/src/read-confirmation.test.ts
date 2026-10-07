@@ -2,37 +2,35 @@ import { expect, test } from 'bun:test';
 import { PassThrough } from 'node:stream';
 import { readConfirmation } from './read-confirmation';
 
-async function readAnswer(typed: string) {
+test.each(['y\n', 'YES\n', ' yes \n'])('it approves the answer %p', (typed) => {
+  const input = new PassThrough();
+
+  const asked = readConfirmation('Approve? [y/N] ', { input, output: new PassThrough() });
+
+  input.end(typed);
+
+  expect(asked).resolves.toBeTrue();
+});
+
+test.each(['\n', 'n\n', 'yep\n', ''])('it refuses the answer %p', (typed) => {
+  const input = new PassThrough();
+
+  const asked = readConfirmation('Approve? [y/N] ', { input, output: new PassThrough() });
+
+  input.end(typed);
+
+  expect(asked).resolves.toBeFalse();
+});
+
+test('it asks the question on the output it is given', async () => {
   const input = new PassThrough();
   const output = new PassThrough();
 
   const asked = readConfirmation('Approve? [y/N] ', { input, output });
 
-  input.end(typed);
+  input.end('n\n');
 
-  const answer = await asked;
+  await asked;
 
-  const shown = String(output.read() ?? '');
-
-  return { answer, shown };
-}
-
-test('only y or yes approves', async () => {
-  for (const typed of ['y\n', 'YES\n', ' yes \n']) {
-    const result = await readAnswer(typed);
-
-    expect(result.answer).toBeTrue();
-  }
-
-  for (const typed of ['\n', 'n\n', 'yep\n', '']) {
-    const result = await readAnswer(typed);
-
-    expect(result.answer).toBeFalse();
-  }
-});
-
-test('it asks on the output it is given', async () => {
-  const result = await readAnswer('n\n');
-
-  expect(result.shown).toBe('Approve? [y/N] ');
+  expect(String(output.read())).toBe('Approve? [y/N] ');
 });

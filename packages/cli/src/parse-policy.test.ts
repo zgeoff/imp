@@ -1,34 +1,56 @@
 import { expect, test } from 'bun:test';
 import { formatPolicy, parsePolicy } from './parse-policy';
+import { UsageError } from './usage-error';
 
-test('a mode, an allow-list alone as box, or nothing at all', () => {
+test('#parsePolicy leaves the policy unset when neither flag is given', () => {
   expect(parsePolicy(undefined, undefined)).toBeUndefined();
-  expect(parsePolicy('open', undefined)).toEqual({ mode: 'open', allow: [] });
-  expect(parsePolicy('public', undefined)).toEqual({ mode: 'public', allow: [] });
+});
 
-  expect(parsePolicy('box', 'GitHub.com, *.npmjs.org,')).toEqual({
+test.each(['open', 'public', 'box', 'none'])(
+  '#parsePolicy reads the mode %p with an empty allow-list',
+  (mode) => {
+    expect(parsePolicy(mode, undefined)).toStrictEqual({ mode, allow: [] });
+  },
+);
+
+test('#parsePolicy lowercases, trims and drops empty entries of a box allow-list', () => {
+  expect(parsePolicy('box', 'GitHub.com, *.npmjs.org,')).toStrictEqual({
     mode: 'box',
     allow: ['github.com', '*.npmjs.org'],
   });
-
-  expect(parsePolicy(undefined, '9.9.9.9')).toEqual({ mode: 'box', allow: ['9.9.9.9'] });
 });
 
-test('an unknown mode, or a list for open or none, is a usage error', () => {
-  expect(() => parsePolicy('closed', undefined)).toThrow('open, public, box or none, not closed');
+test('#parsePolicy reads an allow-list alone as a box policy', () => {
+  expect(parsePolicy(undefined, '9.9.9.9')).toStrictEqual({ mode: 'box', allow: ['9.9.9.9'] });
+});
 
-  expect(() => parsePolicy('public', '10.0.0.0/8')).toThrow(
-    '--allow is for a box policy, not public',
+test('#parsePolicy rejects an unknown mode as a usage error', () => {
+  expect(() => parsePolicy('closed', undefined)).toThrowWithMessage(
+    UsageError,
+    'the egress policy is open, public, box or none, not closed',
   );
-
-  expect(() => parsePolicy('none', 'github.com')).toThrow('--allow is for a box policy, not none');
 });
 
-test('a box shows its list', () => {
+test.each(['open', 'public', 'none'])(
+  '#parsePolicy rejects an allow-list for the mode %p as a usage error',
+  (mode) => {
+    expect(() => parsePolicy(mode, 'github.com')).toThrowWithMessage(
+      UsageError,
+      `--allow is for a box policy, not ${mode}`,
+    );
+  },
+);
+
+test('#formatPolicy shows a box policy with its allow-list', () => {
   expect(formatPolicy({ mode: 'box', allow: ['github.com', '*.npmjs.org'] })).toBe(
     'box: github.com, *.npmjs.org',
   );
+});
 
+test('#formatPolicy shows a box policy with an empty allow-list as nothing', () => {
   expect(formatPolicy({ mode: 'box', allow: [] })).toBe('box: (nothing)');
+});
+
+test('#formatPolicy shows another policy by its mode alone', () => {
   expect(formatPolicy({ mode: 'none', allow: [] })).toBe('none');
 });
