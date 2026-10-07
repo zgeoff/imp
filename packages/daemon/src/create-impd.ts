@@ -381,7 +381,7 @@ export function buildImpdServices(
   config: Config,
   deps: Readonly<ImpdDeps>,
   parts: Readonly<{
-    storage: ImpdStorage;
+    storage: Pick<ImpdStorage, 'storageGate' | 'diskBudget'>;
     imps: Imps;
     egress: EgressService;
     secretFiles: SecretFiles;
@@ -435,7 +435,7 @@ export function createImpdMoves(
   config: Config,
   deps: Readonly<ImpdDeps>,
   parts: Readonly<{
-    storage: ImpdStorage;
+    storage: Pick<ImpdStorage, 'storageGate' | 'diskBudget'>;
     imps: Imps;
     broker: MoveServiceDeps['grants'];
     egress: EgressService;
@@ -494,7 +494,7 @@ export function buildTailnetAccess(
 }
 
 export interface ImpdAppParts {
-  readonly storage: ImpdStorage;
+  readonly storage: Pick<ImpdStorage, 'images' | 'diskBudget'>;
   readonly access: ImpdAccess;
   readonly services: ImpdServices;
   readonly imps: Imps;

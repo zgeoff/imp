@@ -5,52 +5,47 @@ import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
-import { createApiAudit } from '../audit/api-audit';
-import { createRevocations } from '../auth/revocations';
-import { loadTokenStore } from '../auth/token-store';
-import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
 import type { OAuthFetch } from '../broker/oauth-refresher';
 import { createSecretFiles } from '../broker/secret-files';
 import { TunnelRefusedError } from '../broker/tunnel-target';
-import { buildApp } from '../build-app';
 import type { AppDeps } from '../build-app';
-import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
 import type { Config } from '../config';
+import {
+  buildImpdApp,
+  buildImpdEgress,
+  buildImpdServices,
+  buildImpdStorage,
+  createImpdBroker,
+  createImpdMoves,
+  loadImpdAccess,
+  startGovernedImps,
+  startImpdBuilders,
+} from '../create-impd';
+import type { GovernedParts, ImpdDeps } from '../create-impd';
 import { createImage } from '../db/images';
 import type { ImageRecord } from '../db/images';
 import { listImps } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
-import { createEgressService } from '../egress/egress-service';
-import { createGovernedImps } from '../governor/create-governed-imps';
 import { createDnsToken } from '../https/dns/dns-token';
 import { createPublicRecordsLink } from '../https/public-records-link';
-import { createBuildContextRoute } from '../images/build-context-route';
 import { BUILD_KEEPALIVE_MS } from '../images/build-event-stream';
-import { createBuilders } from '../images/builder-imps';
-import type { Builders } from '../images/builder-imps';
-import { createImageService } from '../images/image-service';
-import { createTemplateService } from '../images/template-service';
-import { createMoveService } from '../moves/move-service';
 import type { MoveServiceDeps } from '../moves/move-service';
 import type { Uplinks } from '../net/host-routes';
 import type { Ipv6Plan } from '../net/ipv6-plan';
-import { createNetworkService } from '../networks/network-service';
-import { createOAuthService } from '../oauth/oauth-service';
+import type { TailscaleStatus } from '../net/tailscale-status';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
-import { createDiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
-import { createStorageGate } from '../storage/storage-gate';
-import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFakeVmm } from '../test-utils/build-stub-vmm';
+import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { KsmHostStats } from '../vmm/ksm';
 import type { ImpService } from './imp-service';
@@ -70,6 +65,15 @@ const FAKE_VM_RSS_MIB = 340;
 // the sha256 of the system drive every test impd starts with
 const TEST_DRIVE = 'd1'.repeat(32);
 
+// the freeze a checkpoint or a template asks of the guest; the fake VMs
+// run no agent to ask
+const NO_FREEZER = { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() };
+
+// tailscaled, as on a host that is not on a tailnet
+function readNoTailscale(): Promise<TailscaleStatus> {
+  return Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] });
+}
+
 // what a host with `drive` installed in `dataDir` boots imps with
 function buildTestIdentity(dataDir: string, drive: string): HostIdentity {
   return {
@@ -81,6 +85,35 @@ function buildTestIdentity(dataDir: string, drive: string): HostIdentity {
     systemDrivePath: buildSystemDrivePath(dataDir, drive),
     cpuModel: 'Test CPU',
     cpuFlags: 'test-flags',
+  };
+}
+
+// The boundaries a test impd reaches through createImpd's deps: the
+// database, the clock, the log, and what the shim's recorders stand in for
+function buildTestDeps(
+  ctx: Readonly<{
+    db: ImpDatabase;
+    dataDir: string;
+    storage: StorageBackend;
+    systemDrivePath: string;
+    now: () => number;
+    log: (message: string) => void;
+  }>,
+): ImpdDeps {
+  return {
+    db: ctx.db,
+    rootToken: TEST_TOKEN,
+    storage: ctx.storage,
+    systemFiles: {
+      kernelPath: `${ctx.dataDir}/system/vmlinux`,
+      systemDrivePath: ctx.systemDrivePath,
+      info: TEST_SYSTEM_FILES,
+    },
+    log: ctx.log,
+    now: ctx.now,
+    readTailscale: readNoTailscale,
+    freezer: NO_FREEZER,
+    oauthKey: Buffer.alloc(32, 7),
   };
 }
 
@@ -154,13 +187,23 @@ export interface ImpTestOptions {
   readonly readKsmHostStats?: () => KsmHostStats | null;
 }
 
-// The governed imp service over an in-memory database, fake VMs and taps, in
-// a fresh data dir. `restartImpd` starts a new impd on the same database, data
-// dir and VMs, as a restart would; given an identity, as an upgrade would.
+// A shim over createImpd's parts, without its start steps, until each test
+// file has its own setupTest. `restartImpd` starts a new impd on the same
+// database, data dir and VMs; given an identity, as an upgrade would.
 export async function setupImpTest(options: ImpTestOptions = {}) {
+  await using stack = new AsyncDisposableStack();
+
   const dataDir = options.dataDir ?? mkdtempSync(`${tmpdir()}/impd-test-`);
 
+  if (options.dataDir === undefined) {
+    stack.defer(() => {
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+  }
+
   const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
 
   // a new disk stays the size of its image: the fake clone copies every byte
   const config: Config = {
@@ -198,105 +241,13 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   const storage =
     options.createStorage?.(dataDir) ?? createXfsBackend({ dataDir, cloneFile: cloneDisk });
 
-  const storageGate = createStorageGate();
-
   // the host's free space as the budget sees it; a test lowers it
   const diskUsage = { usedBytes: 0, availableBytes: 1024 ** 4 };
-
-  const diskBudget = createDiskBudget({
-    storage: { readUsage: () => Promise.resolve({ ...diskUsage }) },
-    reserveBytes: null,
-    log: () => {},
-  });
 
   const printTestLog = (message: string): void => {
     logs.push(message);
     options.onLog?.(message);
   };
-
-  const buildersHolder: { builders: Builders | null } = { builders: null };
-
-  const images = createImageService({
-    config,
-    db,
-    storage,
-    storageGate,
-    diskBudget,
-    readBuilders: () => buildersHolder.builders,
-    log: printTestLog,
-  });
-
-  // the vsock paths the broker installed its CA through
-  const bundleInstalls: string[] = [];
-
-  const broker = await createBroker({
-    config,
-    db,
-    log: printTestLog,
-    installBundle:
-      options.installBundle ??
-      ((vsockPath) => {
-        bundleInstalls.push(vsockPath);
-
-        return Promise.resolve();
-      }),
-    resolveTunnelTarget:
-      options.resolveTunnelTarget ??
-      ((host) => Promise.reject(new TunnelRefusedError(`${host}: no network in tests`))),
-    ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
-    ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
-    ...(options.oauthFetch !== undefined && { oauthFetch: options.oauthFetch }),
-    ...(options.brokerNow !== undefined && { now: options.brokerNow }),
-    runOAuthTimer: false,
-  });
-
-  // every nft script and conntrack flush the egress firewall ran
-  const nftScripts: string[] = [];
-  const flushed: string[] = [];
-  const flushedPairs: string[] = [];
-
-  // each policy change's call to end the broker's tunnels, with its keep
-  const closedTunnels: { impId: string; keep: (host: string) => boolean }[] = [];
-
-  const egress = createEgressService({
-    config,
-    db,
-    log: printTestLog,
-    isGranted: broker.isGranted,
-    closeTunnels: (impId, keep) => {
-      closedTunnels.push({ impId, keep });
-      broker.closeTunnels(impId, keep);
-    },
-    runNft:
-      options.runNft ??
-      ((script) => {
-        nftScripts.push(script);
-
-        return Promise.resolve();
-      }),
-    flushConnections: (guestIp) => {
-      flushed.push(guestIp);
-
-      return Promise.resolve();
-    },
-    readForwardRules: () =>
-      Promise.resolve(
-        options.forwardRules ??
-          '-A FORWARD -i imp+ -o imp+ -m mark --mark 0x1000000/0x1000000 -m comment --comment imp-network -j ACCEPT\n',
-      ),
-    flushPair: (first, second) => {
-      flushedPairs.push(`${first} ${second}`);
-
-      return Promise.resolve();
-    },
-    forward: () => Promise.reject(new Error('no upstream in tests')),
-    resolveExact: () => Promise.resolve([]),
-    now: readClock,
-    ipv6: options.ipv6 ?? null,
-    readConnected6: () => Promise.resolve(['2001:db8:a::/64']),
-    readConnected4: () => Promise.resolve(['172.17.0.0/16', '172.17.0.2/32', '44.0.0.0/24']),
-    readUplinks: options.readUplinks ?? (() => Promise.resolve({ ipv4: ['eth0'], ipv6: ['eth0'] })),
-  });
 
   // a system drive file, as setupSystemFiles installs it
   const createSystemDrive = (drive: string): HostIdentity => {
@@ -310,45 +261,87 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const host = { identity: createSystemDrive(TEST_DRIVE) };
 
+  // the vsock paths the broker installed its CA through
+  const bundleInstalls: string[] = [];
+
+  // every nft script and conntrack flush the egress firewall ran
+  const nftScripts: string[] = [];
+  const flushed: string[] = [];
+  const flushedPairs: string[] = [];
+
+  // each policy change's call to end the broker's tunnels, with its keep
+  const closedTunnels: { impId: string; keep: (host: string) => boolean }[] = [];
+
   // each limit impd sets on an imp's memory, in order
   const memoryLimits: { impId: string; guestMib: number }[] = [];
 
-  const startImpd = (identity: HostIdentity = host.identity) => {
-    host.identity = identity;
+  const deps: ImpdDeps = {
+    ...buildTestDeps({
+      db,
+      dataDir,
+      storage,
+      systemDrivePath: host.identity.systemDrivePath,
+      now: readClock,
+      log: printTestLog,
+    }),
+    readDiskSpace: () => Promise.resolve({ ...diskUsage }),
+    broker: {
+      installBundle:
+        options.installBundle ??
+        ((vsockPath) => {
+          bundleInstalls.push(vsockPath);
 
-    return createGovernedImps({
-      config,
-      identity,
+          return Promise.resolve();
+        }),
+      resolveTunnelTarget:
+        options.resolveTunnelTarget ??
+        ((name) => Promise.reject(new TunnelRefusedError(`${name}: no network in tests`))),
+      ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
+      ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
+      ...(options.oauthFetch !== undefined && { oauthFetch: options.oauthFetch }),
+      ...(options.brokerNow !== undefined && { now: options.brokerNow }),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft:
+        options.runNft ??
+        ((script) => {
+          nftScripts.push(script);
+
+          return Promise.resolve();
+        }),
+      flushConnections: (guestIp) => {
+        flushed.push(guestIp);
+
+        return Promise.resolve();
+      },
+      readForwardRules: () =>
+        Promise.resolve(
+          options.forwardRules ??
+            '-A FORWARD -i imp+ -o imp+ -m mark --mark 0x1000000/0x1000000 -m comment --comment imp-network -j ACCEPT\n',
+        ),
+      flushPair: (first, second) => {
+        flushedPairs.push(`${first} ${second}`);
+
+        return Promise.resolve();
+      },
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      now: readClock,
+      readConnected6: () => Promise.resolve(['2001:db8:a::/64']),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16', '172.17.0.2/32', '44.0.0.0/24']),
+      readUplinks:
+        options.readUplinks ?? (() => Promise.resolve({ ipv4: ['eth0'], ipv6: ['eth0'] })),
+    },
+    imps: {
       readRamMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RAM_MIB : null),
       readRssMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RSS_MIB : null),
-      db,
-      images,
-      vms: fake.startGeneration(),
-      taps: {
-        setupTap: (address) => {
-          taps.push(address.tap);
-
-          return Promise.resolve();
-        },
-        removeTap: (tap) => {
-          removedTaps.push(tap);
-
-          return Promise.resolve();
-        },
-      },
-      log: printTestLog,
-      storage,
       now: readClock,
-      readExecEnv: broker.readExecEnv,
-      storageGate,
-      diskBudget,
       growFilesystem: (disk) => {
         filesystemGrows.push(disk);
 
         return options.growFilesystem?.(disk) ?? Promise.resolve(true);
       },
-      egress,
-      ipv6: options.ipv6 ?? null,
 
       // recorded, then written as main.ts does when a test passes cgroups
       memoryLimit: {
@@ -357,47 +350,71 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
           options.cgroups?.setGuestMib(impId, guestMib);
         },
       },
-      ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
       hostCpus: options.hostCpus ?? 8,
-      ...(options.cgroups !== undefined && { cgroups: options.cgroups }),
       ...(options.readUnsharedRamMib !== undefined && {
         readUnsharedRamMib: options.readUnsharedRamMib,
       }),
       ...(options.checkGuestMerge !== undefined && { checkGuestMerge: options.checkGuestMerge }),
       ...(options.readKsmProfitMib !== undefined && { readKsmProfitMib: options.readKsmProfitMib }),
-    });
+    },
+    taps: {
+      setupTap: (address) => {
+        taps.push(address.tap);
+
+        return Promise.resolve();
+      },
+      removeTap: (tap) => {
+        removedTaps.push(tap);
+
+        return Promise.resolve();
+      },
+    },
+  };
+
+  const stored = buildImpdStorage(config, deps);
+
+  const broker = await createImpdBroker(config, deps, {
+    ipv6: options.ipv6 ?? null,
+    secretFiles: createSecretFiles(dataDir),
+  });
+
+  stack.defer(() => broker.stop());
+
+  const egress = buildImpdEgress(config, deps, {
+    ipv6: options.ipv6 ?? null,
+    broker: {
+      isGranted: broker.isGranted,
+      closeTunnels: (impId, keep) => {
+        closedTunnels.push({ impId, keep });
+        broker.closeTunnels(impId, keep);
+      },
+    },
+  });
+
+  stack.defer(() => {
+    fake.releaseHangs();
+  });
+
+  const governedParts: GovernedParts = {
+    storage: stored,
+    broker,
+    egress,
+    ipv6: options.ipv6 ?? null,
+    cgroups: options.cgroups ?? createCpuCgroups({ root: '/nonexistent', log: printTestLog }),
+    readServiceUrl: options.readServiceUrl ?? (() => null),
+    readTailscale: readNoTailscale,
+  };
+
+  const startImpd = (identity: HostIdentity = host.identity) => {
+    host.identity = identity;
+
+    return startGovernedImps(config, deps, governedParts, identity, fake.startGeneration());
   };
 
   const governed = startImpd();
-  const revocations = createRevocations();
+  const builders = startImpdBuilders(config, deps, stored, governed.imps);
 
-  const builders = createBuilders({
-    config,
-    db,
-    imps: governed.imps,
-    ensureImage: images.ensureBuilderImage,
-    log: printTestLog,
-  });
-
-  buildersHolder.builders = builders;
-
-  const tokens = await loadTokenStore({
-    db,
-    rootToken: TEST_TOKEN,
-    now: readClock,
-    onRemove: revocations.revoke,
-    isFileKey: () => false,
-  });
-
-  const oauth = createOAuthService({
-    db,
-    tokens,
-    revocations,
-    config: config.publicMcp,
-    now: readClock,
-    log: printTestLog,
-    key: Buffer.alloc(32, 7),
-  });
+  const access = await loadImpdAccess(config, deps, () => false);
 
   // an image row whose rootfs is a small file in the data dir
   const createTestImage = async (name: string): Promise<ImageRecord> => {
@@ -406,11 +423,13 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     return createImage(db, { name, ref: `${name}:latest`, digest: `sha256:${name}`, sizeBytes: 6 });
   };
 
+  const owned = stack.move();
+
   return {
     config,
     db,
     dataDir,
-    images,
+    images: stored.images,
     builders,
     fake,
     taps,
@@ -430,12 +449,12 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     closedTunnels,
     bundleInstalls,
     storage,
-    storageGate,
-    diskBudget,
+    storageGate: stored.storageGate,
+    diskBudget: stored.diskBudget,
     diskUsage,
-    tokens,
-    revocations,
-    oauth,
+    tokens: access.tokens,
+    revocations: access.revocations,
+    oauth: access.oauth,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -445,16 +464,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     createSystemDrive,
     readIdentity: () => host.identity,
     createTestImage,
-    async [Symbol.asyncDispose]() {
-      fake.releaseHangs();
-
-      await broker.stop();
-      await db.destroy();
-
-      if (options.dataDir === undefined) {
-        rmSync(dataDir, { recursive: true, force: true });
-      }
-    },
+    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
@@ -506,107 +516,80 @@ export function buildTestApp(
   // the gap between the progress events of a streamed image call
   buildKeepaliveMs = BUILD_KEEPALIVE_MS,
 ) {
-  const imps: ImpService = { ...impd.imps, ...agent };
+  const identity = ctx.readIdentity();
 
-  const checkpoints = createCheckpointService({
-    config: ctx.config,
-    db: ctx.db,
-    imps: impd.imps,
-    storage: ctx.storage,
-    diskBudget: ctx.diskBudget,
-    log: () => {},
-    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
-  });
-
-  const templates = createTemplateService({
-    config: ctx.config,
-    db: ctx.db,
-    imps: impd.imps,
-    storage: ctx.storage,
-    storageGate: ctx.storageGate,
-    diskBudget: ctx.diskBudget,
-    log: () => {},
-    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
-  });
-
-  const peers = createForwardedPeers(ctx.now);
-  const audit = createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} });
-
-  const buildContexts = createBuildContextRoute({
-    config: ctx.config,
-    images: ctx.images,
-    diskBudget: ctx.diskBudget,
-    audit,
-    now: ctx.now,
-    keepaliveMs: buildKeepaliveMs,
-  });
-
-  const moves = createMoveService({
-    audit,
-    config: ctx.config,
+  const deps = buildTestDeps({
     db: ctx.db,
     dataDir: ctx.config.dataDir,
     storage: ctx.storage,
+    systemDrivePath: identity.systemDrivePath,
+    now: ctx.now,
+    log: ctx.log,
+  });
+
+  // the services under the API log nowhere, as before the shim
+  const quiet: ImpdDeps = { ...deps, log: () => {} };
+
+  const storage = {
     storageGate: ctx.storageGate,
     diskBudget: ctx.diskBudget,
+    images: ctx.images,
+  };
+
+  const services = buildImpdServices(ctx.config, quiet, {
+    storage,
     imps: impd.imps,
-    grants: ctx.broker,
     egress: ctx.egress,
-    readIdentity: ctx.readIdentity,
-    readTailnetIp: () => Promise.resolve(null),
-    releaseName: () => Promise.resolve(),
-    onCommitted: () => {},
-    ...moveOptions,
-    now: ctx.now,
-    log: () => {},
+    secretFiles: createSecretFiles(ctx.config.dataDir),
   });
+
+  const peers = createForwardedPeers(ctx.now);
+
+  const moves = createImpdMoves(
+    ctx.config,
+    quiet,
+    {
+      storage,
+      imps: impd.imps,
+      broker: ctx.broker,
+      egress: ctx.egress,
+      audit: services.audit,
+      readIdentity: ctx.readIdentity,
+    },
+    {
+      readTailnetIp: () => Promise.resolve(null),
+      releaseName: () => Promise.resolve(),
+      onCommitted: () => {},
+      ...moveOptions,
+    },
+  );
 
   // the DNS API token as main reads it, for system info
   const dnsTokenSource = ctx.config.https?.dns.token ?? null;
   const dnsToken = dnsTokenSource === null ? null : createDnsToken(dnsTokenSource, ctx.now);
 
-  const built = buildApp({
-    config: ctx.config,
-    db: ctx.db,
-    rootToken: TEST_TOKEN,
-    tokens: ctx.tokens,
-    revocations: ctx.revocations,
-    oauth: ctx.oauth,
-    peers,
-    tailnet,
-    imps,
-    images: ctx.images,
+  const built = buildImpdApp(ctx.config, deps, {
+    storage,
+    access: { tokens: ctx.tokens, revocations: ctx.revocations, oauth: ctx.oauth },
+    services,
+    imps: { ...impd.imps, ...agent },
     governor: impd.governor,
-    ...(ctx.readKsmHostStats !== null && { readKsmHostStats: ctx.readKsmHostStats }),
-    checkpoints,
-    templates,
-    backups: null,
     broker: ctx.broker,
     egress: ctx.egress,
-    networks: createNetworkService({ db: ctx.db, egress: ctx.egress, imps: impd.imps }),
-    firecrackerVersion: 'v1.17.0',
-    systemFiles: TEST_SYSTEM_FILES,
-    storage: ctx.storage,
-    diskBudget: ctx.diskBudget,
-    gc: createStorageGc({
-      db: ctx.db,
-      storage: ctx.storage,
-      storageGate: ctx.storageGate,
-      log: () => {},
-      secretFiles: createSecretFiles(ctx.config.dataDir),
-    }),
-    readTailscale: () =>
-      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
-    readTailnetNames: null,
+
+    // every test VM reports this Firecracker, whatever identity a restart took
+    identity: { ...identity, firecrackerVersion: 'v1.17.0' },
+    peers,
+    tailnet,
+    backups: null,
+    moves,
     publicRecords: createPublicRecordsLink(),
     checkDnsToken: dnsToken?.check ?? null,
+    readTailscale: readNoTailscale,
+    readTailnetNames: null,
     isReady: () => true,
-    now: ctx.now,
-    log: ctx.log,
-    audit,
-    buildContexts,
-    imageKeepaliveMs: buildKeepaliveMs,
-    moves,
+    keepaliveMs: buildKeepaliveMs,
+    ...(ctx.readKsmHostStats !== null && { readKsmHostStats: ctx.readKsmHostStats }),
   });
 
   const link = new RPCLink({
