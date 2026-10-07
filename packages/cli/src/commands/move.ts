@@ -133,9 +133,13 @@ async function waitForSend(run: MoveRun, totalBytes: number): Promise<MoveStatus
   for (;;) {
     const status = await run.from.moves.status({ name: run.name });
 
-    progress.add(status.sentBytes - shown);
+    // the source counts its sent bytes again from 0 once the send is done,
+    // so the line never steps back
+    const sent = Math.max(status.sentBytes, shown);
 
-    shown = status.sentBytes;
+    progress.add(sent - shown);
+
+    shown = sent;
 
     if (status.isDone || status.error !== null) {
       progress.finish();

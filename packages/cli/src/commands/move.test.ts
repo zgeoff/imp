@@ -229,6 +229,15 @@ test('it draws the send’s progress on a terminal and ends the line', async () 
   expect(lines.at(-1)).toBe('\n');
   expect(lines.slice(0, -1)).not.toBeEmpty();
 
+  // the source's count starts over once the send is done; the line keeps
+  // the bytes it showed
+  const percents = lines
+    .slice(0, -1)
+    .map((line) => Number(/(?<percent>\d+)%/u.exec(line)?.groups?.['percent']));
+
+  expect(percents).toStrictEqual(percents.toSorted((a, b) => a - b));
+  expect(percents.at(-1)).toBeGreaterThan(0);
+
   expect(lines.slice(0, -1)).toSatisfyAll(
     (line: string) =>
       line.startsWith('\r') &&
