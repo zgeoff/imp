@@ -1,6 +1,6 @@
 // A terminal's input, as much of it as the prompt needs; process.stdin is
-// one, and a test passes a fake.
-export interface TokenInput {
+// one.
+interface TokenInput {
   readonly isTTY?: boolean;
   readonly setRawMode: (raw: boolean) => unknown;
   readonly on: (event: 'data', listener: (chunk: Uint8Array | string) => void) => unknown;
@@ -31,21 +31,46 @@ interface KeyResult {
   readonly end: 'enter' | 'cancel' | null;
 }
 
+// The signals that cancel a prompt from elsewhere; process is one
+export interface SignalSource {
+  readonly on: (signal: NodeJS.Signals, listener: () => void) => unknown;
+  readonly off: (signal: NodeJS.Signals, listener: () => void) => unknown;
+}
+
+// what a prompt touches: the terminal it reads, where the prompt goes, piped
+// stdin, and the signals that cancel it; the process's own by default
+export interface TokenTerminal {
+  readonly input: TokenInput;
+  readonly write: (text: string) => void;
+  readonly readPiped: () => Promise<string>;
+  readonly signals: SignalSource;
+}
+
+// built per call: touching process.stdin opens it, and an open stdin keeps
+// the process alive
+function buildProcessTerminal(): TokenTerminal {
+  return {
+    input: process.stdin,
+    write: (text) => {
+      process.stderr.write(text);
+    },
+    readPiped: () => Bun.stdin.text(),
+    signals: process,
+  };
+}
+
 // A token for `imp login` or `imp secret add`: the first line of piped
 // stdin, else typed at a prompt that does not echo. Never an argument,
 // which would land in the shell history and in `ps`.
-export async function readToken(prompt = 'token: '): Promise<string> {
-  if (process.stdin.isTTY) {
-    return readHiddenToken(
-      process.stdin,
-      (text) => {
-        process.stderr.write(text);
-      },
-      prompt,
-    );
+export async function readToken(
+  prompt = 'token: ',
+  terminal: TokenTerminal = buildProcessTerminal(),
+): Promise<string> {
+  if (terminal.input.isTTY === true) {
+    return readHiddenToken(terminal, prompt);
   }
 
-  const piped = await Bun.stdin.text();
+  const piped = await terminal.readPiped();
 
   return piped.split('\n')[0]?.trim() ?? '';
 }
@@ -53,11 +78,8 @@ export async function readToken(prompt = 'token: '): Promise<string> {
 // Raw mode turns echo off. Every way out (Enter, Ctrl-C, a signal from
 // elsewhere) puts the terminal back first, so a cancelled prompt never
 // leaves the shell without echo.
-export function readHiddenToken(
-  input: TokenInput,
-  write: (text: string) => void,
-  prompt = 'token: ',
-): Promise<string> {
+function readHiddenToken(terminal: TokenTerminal, prompt: string): Promise<string> {
+  const input = terminal.input;
   const settled = Promise.withResolvers<string>();
   let token = '';
 
@@ -67,10 +89,10 @@ export function readHiddenToken(
     input.pause();
 
     for (const signal of SIGNALS) {
-      process.off(signal, onSignal);
+      terminal.signals.off(signal, onSignal);
     }
 
-    write('\n');
+    terminal.write('\n');
 
     if (end === 'enter') {
       settled.resolve(token.trim());
@@ -94,10 +116,10 @@ export function readHiddenToken(
     }
   };
 
-  write(prompt);
+  terminal.write(prompt);
 
   for (const signal of SIGNALS) {
-    process.on(signal, onSignal);
+    terminal.signals.on(signal, onSignal);
   }
 
   input.setRawMode(true);
