@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { buildMockIdentity } from '@imp/api/test-utils/build-mock-identity';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
+import { buildMockSession } from '@imp/api/test-utils/build-mock-session';
 import {
   formatApiCalls,
   formatBootStatus,
@@ -220,7 +221,7 @@ test('#formatExposeResult prints the user and the password it made', () => {
 
 test('#formatSessions lists sessions with their state, size and command', () => {
   const table = formatSessions([
-    {
+    buildMockSession({
       name: 'main',
       pid: 301,
       argv: ['bash', '-l'],
@@ -229,8 +230,8 @@ test('#formatSessions lists sessions with their state, size and command', () => 
       cols: 120,
       rows: 40,
       startedAt: new Date(0),
-    },
-    {
+    }),
+    buildMockSession({
       name: 'job',
       pid: 302,
       argv: ['make'],
@@ -240,8 +241,8 @@ test('#formatSessions lists sessions with their state, size and command', () => 
       rows: 24,
       startedAt: new Date(0),
       exit: { code: 3, signal: null },
-    },
-    {
+    }),
+    buildMockSession({
       name: 'hung',
       pid: 303,
       argv: ['sleep', '60'],
@@ -251,7 +252,7 @@ test('#formatSessions lists sessions with their state, size and command', () => 
       rows: 24,
       startedAt: new Date(0),
       exit: { code: null, signal: 'SIGKILL' },
-    },
+    }),
   ]);
 
   expect(table.split('\n')).toStrictEqual([
