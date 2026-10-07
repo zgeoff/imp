@@ -31,7 +31,8 @@ async function setupTest() {
     Promise.resolve(principals.get(request.headers.get('authorization') ?? '') ?? null);
 
   const transport = createHttpTransport({
-    version: '1.2.3',
+    // the server's version, which no test that uses this transport reads
+    version: '0.0.0',
     repeat: timer.repeat,
     now: () => clock.now,
     authenticate: readPrincipal,
@@ -59,9 +60,18 @@ async function setupTest() {
 test('it opens a session at initialize and answers with its id', async () => {
   await using ctx = await setupTest();
 
+  const transport = createHttpTransport({
+    version: '1.2.3',
+    repeat: ctx.timer.repeat,
+    authenticate: ctx.readPrincipal,
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
+  });
+
+  onTestFinished(() => transport.close());
+
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
-  const response = await ctx.transport.handle(
+  const response = await transport.handle(
     new Request('http://impd.test/mcp', {
       method: 'POST',
       headers: {
@@ -650,6 +660,8 @@ test('it knows no call end for a response that is not a streamed call', () => {
     authenticate: () => Promise.resolve(null),
     isCrossOrigin: () => false,
   });
+
+  onTestFinished(() => transport.close());
 
   expect(transport.readCallEnd(new Response('x'))).toBeNull();
 });
@@ -1618,4 +1630,74 @@ test('it ends a session idle past the idle limit', async () => {
   );
 
   expect(response.status).toBe(404);
+});
+
+test('it restarts the idle clock of a session each time it is used', async () => {
+  await using ctx = await setupTest();
+
+  const transport = createHttpTransport({
+    version: '1.2.3',
+    limits: { perCaller: 4, total: 4, idleMs: 1000 },
+    repeat: ctx.timer.repeat,
+    now: () => ctx.clock.now,
+    authenticate: ctx.readPrincipal,
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
+  });
+
+  onTestFinished(() => transport.close());
+
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const opened = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      }),
+    }),
+  );
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  ctx.clock.now = 1000;
+
+  await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
+  );
+
+  ctx.clock.now = 2000;
+
+  const response = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }),
+    }),
+  );
+
+  expect(response.status).toBe(200);
 });

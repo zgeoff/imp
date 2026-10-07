@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import { impContract } from '@imp/api';
+import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { server } from '@imp/test-utils/mock-server';
 import { implement } from '@orpc/server';
 import { createImpClient } from '@zgeoff/imp-client';
-import { buildMockImp } from '../../../api/src/test-utils/build-mock-imp';
 import { buildStubImpd } from './build-stub-impd';
 
 test('it answers a procedure its router holds as impd encodes it', async () => {

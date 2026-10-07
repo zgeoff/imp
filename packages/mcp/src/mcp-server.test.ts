@@ -19,7 +19,7 @@ function setupTest() {
   };
 }
 
-test('it supports exactly the protocol versions the table below covers', () => {
+test('it supports protocol versions 2025-11-25, 2025-06-18 and 2025-03-26, newest first', () => {
   expect(PROTOCOL_VERSIONS).toStrictEqual(['2025-11-25', '2025-06-18', '2025-03-26']);
 });
 
