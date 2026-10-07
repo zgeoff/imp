@@ -6,8 +6,8 @@ import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
-import { createFakeGuest } from '../test-utils/build-stub-guest';
-import type { FakeAnswer, FakeRun } from '../test-utils/build-stub-guest';
+import { buildStubGuest } from '../test-utils/build-stub-guest';
+import type { StubAnswer, StubRun } from '../test-utils/build-stub-guest';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { writeGuestTree } from './guest-build';
 
@@ -16,7 +16,7 @@ import { writeGuestTree } from './guest-build';
 // how long opening an exec of each argv takes
 async function setupBuilderTest(
   failedDestroys = 0,
-  answer: (run: FakeRun) => FakeAnswer = () => ({ stdout: 'ok' }),
+  answer: (run: StubRun) => StubAnswer = () => ({ stdout: 'ok' }),
   openDelayMs: (argv: readonly string[]) => number = () => 0,
 ) {
   const ctx = await setupImpTest({ env: { IMP_BUILD_MEMORY_MIB: '512', IMP_BUILD_DISK_GIB: '4' } });
@@ -26,7 +26,7 @@ async function setupBuilderTest(
   // the first `docker info` finds the engine still starting
   let infos = 0;
 
-  const guest = createFakeGuest((run) => {
+  const guest = buildStubGuest((run) => {
     if (run.argv[1] === 'info') {
       infos += 1;
 

@@ -1,13 +1,13 @@
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
 
-export interface FakeRun {
+export interface StubRun {
   readonly argv: readonly string[];
 
   // resolves with all of stdin once the exec closes it
   readonly readStdin: () => Promise<Uint8Array>;
 }
 
-export interface FakeAnswer {
+export interface StubAnswer {
   readonly stdout?: string | readonly Uint8Array[];
   readonly stderr?: string;
   readonly code?: number;
@@ -26,7 +26,7 @@ interface FakeRecord {
 
 // the answer's output, then its exit; nothing once the exec is closed
 async function* readFakeEvents(
-  answering: Promise<FakeAnswer | null>,
+  answering: Promise<StubAnswer | null>,
   closing: Promise<null>,
   isClosed: () => boolean,
 ): AsyncGenerator<ExecEvent, void, undefined> {
@@ -62,7 +62,7 @@ async function* readFakeEvents(
 
 // A builder's agent for tests: each exec gets `answer`'s output, then its
 // exit. Records each exec's argv, the signals it got and when it closed.
-export function createFakeGuest(answer: (run: FakeRun) => Promise<FakeAnswer> | FakeAnswer) {
+export function buildStubGuest(answer: (run: StubRun) => Promise<StubAnswer> | StubAnswer) {
   const runs: FakeRecord[] = [];
 
   const open = (request: AgentExecRequest): Promise<ExecStream> => {

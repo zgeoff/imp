@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImp } from '../db/imps';
-import { setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createDiskUsageCache } from './disk-usage-cache';
 import type { DiskUsageReport, StorageBackend } from './storage-backend';
 
@@ -10,7 +10,7 @@ type MeasureUsage = StorageBackend['measureUsage'];
 type CacheOptions = Pick<Parameters<typeof createDiskUsageCache>[0], 'now' | 'refreshDelayMs'>;
 
 async function setupCache(measureUsage: MeasureUsage, options: CacheOptions = {}) {
-  const ctx = await setupTestDatabase();
+  const ctx = await createTestDatabase();
 
   const logs: string[] = [];
 

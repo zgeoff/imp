@@ -15,7 +15,7 @@ import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client
 import { readErrorMessage } from '../read-error-message';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 import type { Jails } from './jail';
 import { buildTemplateVm, loadTemplateVm } from './template-vm';
 import type { TemplateBuildPlan, TemplateRestorePlan } from './template-vm';
@@ -110,7 +110,7 @@ function setupTemplateTest(apiSocket: (dir: string) => string, status: 'ok' | 'f
 function startParkedAgent(vsockSocket: string) {
   const claimed = { isClaimed: false };
 
-  return startFakeAgent(vsockSocket, (socket, request) => {
+  return startStubAgent(vsockSocket, (socket, request) => {
     const isClaim = JSON.stringify(decodeJsonPayload(request)).includes('"op":"claim"');
 
     claimed.isClaimed ||= isClaim;

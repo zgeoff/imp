@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { FRAME_TYPES, encodeFrame, encodeJsonFrame } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
-import { startFakeAgent } from './start-stub-agent';
+import { startStubAgent } from './start-stub-agent';
 
 async function setupTest() {
   await using stack = new AsyncDisposableStack();
@@ -23,7 +23,7 @@ async function setupTest() {
 test('it answers the CONNECT line with the handshake reply', async () => {
   await using ctx = await setupTest();
 
-  const agent = await startFakeAgent(join(ctx.dir, 'v.sock'), () => {});
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
 
   onTestFinished(() => {
     agent.close();
@@ -57,7 +57,7 @@ test('it hands each frame to the handler with the request and the frames so far'
 
   const calls: { request: AgentFrame; frames: AgentFrame[] }[] = [];
 
-  const agent = await startFakeAgent(join(ctx.dir, 'v.sock'), (_socket, request, frames) => {
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), (_socket, request, frames) => {
     calls.push({ request, frames: [...frames] });
   });
 
@@ -104,7 +104,7 @@ test('it hands each frame to the handler with the request and the frames so far'
 test('it decodes frames sent in the same chunk as the CONNECT line', async () => {
   await using ctx = await setupTest();
 
-  const agent = await startFakeAgent(join(ctx.dir, 'v.sock'), () => {});
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
 
   onTestFinished(() => {
     agent.close();
@@ -137,7 +137,7 @@ test('it keeps the frames of every connection in received', async () => {
 
   const requests: AgentFrame[] = [];
 
-  const agent = await startFakeAgent(join(ctx.dir, 'v.sock'), (_socket, request) => {
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), (_socket, request) => {
     requests.push(request);
   });
 
@@ -186,7 +186,7 @@ test('it keeps the frames of every connection in received', async () => {
 test('it hands the handler the socket that replies to the client', async () => {
   await using ctx = await setupTest();
 
-  const agent = await startFakeAgent(join(ctx.dir, 'v.sock'), (socket) => {
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), (socket) => {
     socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
   });
 
@@ -227,7 +227,7 @@ test('it hands the handler the socket that replies to the client', async () => {
 test('it stops accepting connections once closed', async () => {
   await using ctx = await setupTest();
 
-  const agent = await startFakeAgent(join(ctx.dir, 'v.sock'), () => {});
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
 
   agent.close();
 

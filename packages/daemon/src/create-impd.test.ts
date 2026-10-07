@@ -16,7 +16,7 @@ import { openDatabase } from './db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
-import { buildFakeVmm } from './test-utils/build-stub-vmm';
+import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 
 async function setupTest() {
@@ -45,7 +45,7 @@ async function setupTest() {
   await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
   await writeFile(systemDrivePath, drive);
 
-  const vmm = buildFakeVmm();
+  const vmm = buildStubVmm();
   const cgroups = buildStubCpuCgroups();
   const logs: string[] = [];
 

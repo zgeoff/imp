@@ -30,9 +30,6 @@ interface ImpdTestOptions {
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
 
-  // the server's token is a manage token for these imps, not the root token
-  readonly tokenImps?: readonly string[];
-
   // impd's environment, such as the public route's
   readonly env?: Readonly<Record<string, string>>;
 }
@@ -40,8 +37,11 @@ interface ImpdTestOptions {
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
 // an image, and a client for it
 export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
-  const harness = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
+  await using stack = new AsyncDisposableStack();
 
+  const setup = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
+
+  const harness = stack.use(setup);
   const guest = buildStubExecGuest(options.oldAgent ?? false);
 
   // the fake guest runs no agent, but the imp wakes or boots as for a real one
@@ -60,10 +60,17 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
   );
 
   const server = built.app.listen(0);
+
+  stack.defer(async () => {
+    await server.stop(true);
+  });
+
   const url = `http://127.0.0.1:${String(server.server?.port)}`;
   const client = createImpClient({ url, token: TEST_TOKEN });
 
   await harness.createTestImage('ubuntu');
+
+  const owned = stack.move();
 
   return {
     ...harness,
@@ -74,10 +81,7 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
     peers: built.peers,
     url,
     token: TEST_TOKEN,
-    async [Symbol.asyncDispose]() {
-      await server.stop(true);
-      await harness[Symbol.asyncDispose]();
-    },
+    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
@@ -95,12 +99,18 @@ interface McpTestOptions {
 // an impd as setupImpdTest makes it, and an MCP server in process over its
 // client, as stdio runs it; `sent` holds every message it wrote, parsed
 export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
-  const impd = await setupImpdTest({
+  await using stack = new AsyncDisposableStack();
+
+  const setup = await setupImpdTest({
     ...(options.oldAgent !== undefined && { oldAgent: options.oldAgent }),
   });
 
+  const impd = stack.use(setup);
   const sent: unknown[] = [];
   const server = createMcpServer({ version: '1.2.3', progressIntervalMs: 50, killGraceMs: 50 });
+
+  // its calls in flight end before impd's app and harness close
+  stack.defer(() => server.close());
 
   const scoped =
     options.tokenImps === undefined
@@ -146,5 +156,14 @@ export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
     return ToolResultSchema.parse(response?.result);
   };
 
-  return { ...impd, mcp, sent, sendRequest, runTool };
+  const owned = stack.move();
+
+  return {
+    ...impd,
+    mcp,
+    sent,
+    sendRequest,
+    runTool,
+    [Symbol.asyncDispose]: () => owned.disposeAsync(),
+  };
 }

@@ -1,16 +1,16 @@
 import { expect, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
-import { FAKE_EPOCH_S, FakeZfsCrashError, createFakeZfs } from './build-stub-zfs';
+import { STUB_EPOCH_S, StubZfsCrashError, buildStubZfs } from './build-stub-zfs';
 
 test('it starts with the root dataset mounted on the root dir', () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   expect(fake.readMounts()).toBe('tank/imp /var/lib/imp zfs rw,noatime,xattr,noacl 0 0\n');
   expect(fake.listDatasets()).toStrictEqual(['tank/imp']);
 });
 
 test('it creates a dataset under an existing parent', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'create', 'tank/imp/disks']);
 
@@ -19,7 +19,7 @@ test('it creates a dataset under an existing parent', async () => {
 });
 
 test('it refuses to create a dataset whose parent does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'create', 'tank/imp/disks/a']);
 
@@ -33,7 +33,7 @@ test('it refuses to create a dataset whose parent does not exist', async () => {
 });
 
 test('it refuses to create a dataset that already exists', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/disks']);
 
@@ -47,7 +47,7 @@ test('it refuses to create a dataset that already exists', async () => {
 });
 
 test('it takes a snapshot of a dataset', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -58,7 +58,7 @@ test('it takes a snapshot of a dataset', async () => {
 });
 
 test('it refuses a snapshot of a dataset that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
 
@@ -70,7 +70,7 @@ test('it refuses a snapshot of a dataset that does not exist', async () => {
 });
 
 test('it refuses a snapshot name that is taken', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -85,7 +85,7 @@ test('it refuses a snapshot name that is taken', async () => {
 });
 
 test('it clones a snapshot with the properties given by -o', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -108,7 +108,7 @@ test('it clones a snapshot with the properties given by -o', async () => {
 });
 
 test('it refuses to clone a snapshot that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -122,7 +122,7 @@ test('it refuses to clone a snapshot that does not exist', async () => {
 });
 
 test('it refuses a clone onto a dataset that exists', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'create', 'tank/imp/b']);
@@ -138,7 +138,7 @@ test('it refuses a clone onto a dataset that exists', async () => {
 });
 
 test('it refuses a clone whose parent does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -153,7 +153,7 @@ test('it refuses a clone whose parent does not exist', async () => {
 });
 
 test('it moves the origin snapshot and every older one to the promoted clone', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -170,7 +170,7 @@ test('it moves the origin snapshot and every older one to the promoted clone', a
 });
 
 test('it makes the old parent a clone of the promoted origin', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -182,7 +182,7 @@ test('it makes the old parent a clone of the promoted origin', async () => {
 });
 
 test('it gives the promoted clone the origin its old parent had', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/image']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/image@base']);
@@ -196,7 +196,7 @@ test('it gives the promoted clone the origin its old parent had', async () => {
 });
 
 test('it points other clones of a moved snapshot at its new name', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -208,7 +208,7 @@ test('it points other clones of a moved snapshot at its new name', async () => {
 });
 
 test('it refuses to promote a dataset that is not a clone', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -222,7 +222,7 @@ test('it refuses to promote a dataset that is not a clone', async () => {
 });
 
 test('it refuses a promote whose moving snapshot name the clone already has', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -242,7 +242,7 @@ test('it refuses a promote whose moving snapshot name the clone already has', as
 });
 
 test('it destroys an unmounted dataset with no snapshots or children', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -253,7 +253,7 @@ test('it destroys an unmounted dataset with no snapshots or children', async () 
 });
 
 test('it refuses to destroy a mounted dataset as busy', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/imps/a/disk']);
@@ -268,7 +268,7 @@ test('it refuses to destroy a mounted dataset as busy', async () => {
 });
 
 test('it refuses to destroy a dataset that has a snapshot', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -283,7 +283,7 @@ test('it refuses to destroy a dataset that has a snapshot', async () => {
 });
 
 test('it refuses to destroy a dataset that has a child dataset', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/disks']);
   await fake.run(['zfs', 'create', 'tank/imp/disks/a']);
@@ -298,7 +298,7 @@ test('it refuses to destroy a dataset that has a child dataset', async () => {
 });
 
 test('it refuses to destroy a dataset that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'destroy', 'tank/imp/a']);
 
@@ -310,7 +310,7 @@ test('it refuses to destroy a dataset that does not exist', async () => {
 });
 
 test('it destroys a snapshot with no clones', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -322,7 +322,7 @@ test('it destroys a snapshot with no clones', async () => {
 });
 
 test('it refuses to destroy a snapshot that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -336,7 +336,7 @@ test('it refuses to destroy a snapshot that does not exist', async () => {
 });
 
 test('it refuses to destroy a snapshot that has dependent clones', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -352,7 +352,7 @@ test('it refuses to destroy a snapshot that has dependent clones', async () => {
 });
 
 test('it marks a snapshot with clones for deferred destroy under -d', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -366,7 +366,7 @@ test('it marks a snapshot with clones for deferred destroy under -d', async () =
 });
 
 test('it destroys a snapshot without clones at once under -d', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -376,7 +376,7 @@ test('it destroys a snapshot without clones at once under -d', async () => {
 });
 
 test('it removes a deferred snapshot along with its last clone', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -390,7 +390,7 @@ test('it removes a deferred snapshot along with its last clone', async () => {
 });
 
 test('it keeps a deferred snapshot while a clone of it remains', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -403,7 +403,7 @@ test('it keeps a deferred snapshot while a clone of it remains', async () => {
 });
 
 test('it keeps an unmarked snapshot when its last clone goes', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -414,7 +414,7 @@ test('it keeps an unmarked snapshot when its last clone goes', async () => {
 });
 
 test('it destroys a dataset and every snapshot on it under -r', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -428,7 +428,7 @@ test('it destroys a dataset and every snapshot on it under -r', async () => {
 });
 
 test('it refuses a recursive destroy of a dataset whose snapshot has clones', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -446,7 +446,7 @@ test('it refuses a recursive destroy of a dataset whose snapshot has clones', as
 });
 
 test('it renames a dataset along with its snapshots', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'create', 'tank/imp/retired']);
@@ -460,7 +460,7 @@ test('it renames a dataset along with its snapshots', async () => {
 });
 
 test('it points the clones of a renamed dataset at their origin by its new name', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -471,7 +471,7 @@ test('it points the clones of a renamed dataset at their origin by its new name'
 });
 
 test('it refuses to rename a dataset that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'rename', 'tank/imp/a', 'tank/imp/b']);
 
@@ -483,7 +483,7 @@ test('it refuses to rename a dataset that does not exist', async () => {
 });
 
 test('it refuses a rename onto a dataset that exists', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'create', 'tank/imp/b']);
@@ -498,7 +498,7 @@ test('it refuses a rename onto a dataset that exists', async () => {
 });
 
 test('it refuses a rename whose new parent does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -513,7 +513,7 @@ test('it refuses a rename whose new parent does not exist', async () => {
 });
 
 test('it refuses to rename a mounted dataset', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/imps/a/disk']);
@@ -528,7 +528,7 @@ test('it refuses to rename a mounted dataset', async () => {
 });
 
 test('it refuses to rename a dataset that has children', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'create', 'tank/imp/a/b']);
@@ -543,7 +543,7 @@ test('it refuses to rename a dataset that has children', async () => {
 });
 
 test('it mounts a dataset read-write on a legacy mount', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -560,7 +560,7 @@ test('it mounts a dataset read-write on a legacy mount', async () => {
 });
 
 test('it lists a mount made with -o ro as read-only', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', '-o', 'ro', 'tank/imp/a', '/var/lib/imp/backup']);
@@ -573,7 +573,7 @@ test('it lists a mount made with -o ro as read-only', async () => {
 });
 
 test('it escapes a space in a mount dir as an octal 040', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/with space']);
@@ -584,7 +584,7 @@ test('it escapes a space in a mount dir as an octal 040', async () => {
 });
 
 test('it refuses to mount a dataset that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/a']);
 
@@ -596,7 +596,7 @@ test('it refuses to mount a dataset that does not exist', async () => {
 });
 
 test('it refuses to mount on a dir that already has a mount', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'create', 'tank/imp/b']);
@@ -614,7 +614,7 @@ test('it refuses to mount on a dir that already has a mount', async () => {
 });
 
 test('it unmounts a mounted dir', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', '-o', 'ro', 'tank/imp/a', '/var/lib/imp/a']);
@@ -627,7 +627,7 @@ test('it unmounts a mounted dir', async () => {
 });
 
 test('it refuses to unmount a dir with no mount', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['umount', '/var/lib/imp/a']);
 
@@ -639,7 +639,7 @@ test('it refuses to unmount a dir with no mount', async () => {
 });
 
 test('it lists the tree oldest first in the -H tab format', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -675,7 +675,7 @@ test('it lists the tree oldest first in the -H tab format', async () => {
 });
 
 test('it lists only the tree under the root given', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'create', 'tank/imp/ab']);
@@ -700,7 +700,7 @@ test('it lists only the tree under the root given', async () => {
 });
 
 test('it lists space rows with a creation an hour after the fake epoch per txg', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -735,11 +735,11 @@ test('it lists space rows with a creation an hour after the fake epoch per txg',
 });
 
 test('it sets the fake epoch at midnight UTC on 2026-10-03', () => {
-  expect(new Date(FAKE_EPOCH_S * 1000).toISOString()).toBe('2026-10-03T00:00:00.000Z');
+  expect(new Date(STUB_EPOCH_S * 1000).toISOString()).toBe('2026-10-03T00:00:00.000Z');
 });
 
 test('it reports the used and available bytes of a dataset', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'list', '-Hp', '-o', 'used,available', 'tank/imp']);
 
@@ -747,7 +747,7 @@ test('it reports the used and available bytes of a dataset', async () => {
 });
 
 test('it reports the bytes written to a snapshot', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -758,7 +758,7 @@ test('it reports the bytes written to a snapshot', async () => {
 });
 
 test('it refuses to read the bytes written to a snapshot that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'get', '-Hp', '-o', 'value', 'written', 'tank/imp@one']);
 
@@ -770,7 +770,7 @@ test('it refuses to read the bytes written to a snapshot that does not exist', a
 });
 
 test('it prints the default userland and kernel versions', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'version']);
 
@@ -782,7 +782,7 @@ test('it prints the default userland and kernel versions', async () => {
 });
 
 test('it prints the userland and kernel versions it was given', async () => {
-  const fake = createFakeZfs({
+  const fake = buildStubZfs({
     root: 'tank/imp',
     rootDir: '/var/lib/imp',
     userland: '2.3.1-1',
@@ -795,7 +795,7 @@ test('it prints the userland and kernel versions it was given', async () => {
 });
 
 test('it estimates every send stream at 1 MiB', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -811,7 +811,7 @@ test('it estimates every send stream at 1 MiB', async () => {
 });
 
 test('it refuses a send estimate of a snapshot that does not exist', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'send', '-nP', 'tank/imp@one']);
 
@@ -823,7 +823,7 @@ test('it refuses a send estimate of a snapshot that does not exist', async () =>
 });
 
 test('it fails a command it does not know', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   const result = await fake.run(['zfs', 'upgrade', 'tank/imp']);
 
@@ -835,7 +835,7 @@ test('it fails a command it does not know', async () => {
 });
 
 test('it records each command it runs, streamed ones included', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -850,8 +850,8 @@ test('it records each command it runs, streamed ones included', async () => {
 });
 
 test('it receives a full stream as a new dataset with its snapshot', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/a']);
   await source.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -866,8 +866,8 @@ test('it receives a full stream as a new dataset with its snapshot', async () =>
 });
 
 test('it receives an incremental stream onto the snapshot it is based on', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/a']);
   await source.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -887,8 +887,8 @@ test('it receives an incremental stream onto the snapshot it is based on', async
 });
 
 test('it receives a clone stream as a clone of the origin given', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/image']);
   await source.run(['zfs', 'snapshot', 'tank/imp/image@base']);
@@ -918,8 +918,8 @@ test('it receives a clone stream as a clone of the origin given', async () => {
 });
 
 test('it refuses a full stream onto a dataset that exists', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/a']);
   await source.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -935,8 +935,8 @@ test('it refuses a full stream onto a dataset that exists', async () => {
 });
 
 test('it refuses an incremental stream whose base is not the latest snapshot', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/a']);
   await source.run(['zfs', 'snapshot', 'tank/imp/a@one']);
@@ -959,8 +959,8 @@ test('it refuses an incremental stream whose base is not the latest snapshot', a
 });
 
 test('it refuses a clone stream without an origin', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/image']);
   await source.run(['zfs', 'snapshot', 'tank/imp/image@base']);
@@ -989,8 +989,8 @@ test('it refuses a clone stream without an origin', async () => {
 });
 
 test('it refuses a clone stream whose origin is not the stream base', async () => {
-  const source = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const source = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   await source.run(['zfs', 'create', 'tank/imp/image']);
   await source.run(['zfs', 'snapshot', 'tank/imp/image@base']);
@@ -1019,7 +1019,7 @@ test('it refuses a clone stream whose origin is not the stream base', async () =
 });
 
 test('it refuses to send a snapshot that does not exist', () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   expect(() => fake.streams.readFrom(['zfs', 'send', 'tank/imp@one'])).toThrowWithMessage(
     Error,
@@ -1028,7 +1028,7 @@ test('it refuses to send a snapshot that does not exist', () => {
 });
 
 test('it receives nothing from a stream that ends before its end record', () => {
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   const input = new Response('{"guid":"0199a","baseG').body;
 
@@ -1041,7 +1041,7 @@ test('it receives nothing from a stream that ends before its end record', () => 
 });
 
 test('it commits a receive once the end record is in, though the input fails after', () => {
-  const target = createFakeZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
+  const target = buildStubZfs({ root: 'cold/imp', rootDir: '/mnt/cold' });
 
   // the end record is in the first chunk; the next read fails
   const input = new ReadableStream<Uint8Array>({
@@ -1060,7 +1060,7 @@ test('it commits a receive once the end record is in, though the input fails aft
 });
 
 test('it holds a matching command until it is released', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
   const release = fake.blockBefore((command) => command.startsWith('zfs create'));
   const held = fake.run(['zfs', 'create', 'tank/imp/a']);
 
@@ -1077,7 +1077,7 @@ test('it holds a matching command until it is released', async () => {
 });
 
 test('it fails the next matching command once and changes nothing', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   fake.failOnce((command) => command.startsWith('zfs create'));
 
@@ -1093,7 +1093,7 @@ test('it fails the next matching command once and changes nothing', async () => 
 });
 
 test('it runs a matching command again after its one failure', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   fake.failOnce((command) => command.startsWith('zfs create'));
 
@@ -1105,14 +1105,14 @@ test('it runs a matching command again after its one failure', async () => {
 });
 
 test('it throws a crash error instead of running the matching command', () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   fake.crashBefore((command) => command.startsWith('zfs create'));
 
   const result = fake.run(['zfs', 'create', 'tank/imp/a']);
 
   expect(result).rejects.toThrowWithMessage(
-    FakeZfsCrashError,
+    StubZfsCrashError,
     'crashed before zfs create tank/imp/a',
   );
 
@@ -1120,7 +1120,7 @@ test('it throws a crash error instead of running the matching command', () => {
 });
 
 test('it fails every command after a crash until a restart', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   fake.crashBefore((command) => command.startsWith('zfs create'));
 
@@ -1128,11 +1128,11 @@ test('it fails every command after a crash until a restart', async () => {
 
   const result = fake.run(['zfs', 'version']);
 
-  expect(result).rejects.toThrowWithMessage(FakeZfsCrashError, 'crashed before zfs version');
+  expect(result).rejects.toThrowWithMessage(StubZfsCrashError, 'crashed before zfs version');
 });
 
 test('it runs commands again after a restart', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   fake.crashBefore((command) => command.startsWith('zfs create'));
 
@@ -1146,7 +1146,7 @@ test('it runs commands again after a restart', async () => {
 });
 
 test('it keeps every mount through a restart of impd', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/a']);
@@ -1157,7 +1157,7 @@ test('it keeps every mount through a restart of impd', async () => {
 });
 
 test('it drops every mount but the root on a restart that drops mounts', async () => {
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
   await fake.run(['zfs', 'create', 'tank/imp/a']);
   await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/a']);

@@ -6,7 +6,7 @@ import { createFrameDecoder } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
 
 // gets every frame of a connection in turn: the first is the request
-export type FakeAgentHandler = (
+export type StubAgentHandler = (
   socket: Socket,
   request: AgentFrame,
   frames: readonly AgentFrame[],
@@ -15,7 +15,7 @@ export type FakeAgentHandler = (
 // A unix socket at `path`, where Firecracker would put the guest's vsock,
 // that answers the CONNECT handshake and hands each decoded frame to
 // `agent`. `received` holds every frame of every connection.
-export async function startFakeAgent(path: string, agent: FakeAgentHandler) {
+export async function startStubAgent(path: string, agent: StubAgentHandler) {
   const received: AgentFrame[] = [];
 
   mkdirSync(dirname(path), { recursive: true });

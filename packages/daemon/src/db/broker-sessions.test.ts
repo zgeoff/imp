@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { isBrokerSession, writeBrokerSession } from './broker-sessions';
 import { createImp, removeImp } from './imps';
 
 test('a session run is kept while it runs, and goes with its imp', async () => {
-  await using database = await setupTestDatabase();
+  await using database = await createTestDatabase();
 
   const db = database.db;
 

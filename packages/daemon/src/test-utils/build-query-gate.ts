@@ -2,7 +2,7 @@ import type { KyselyPlugin } from 'kysely';
 
 // Holds the result of the first select that names `name` once armed, until
 // released: a build stops there between finding its rootfs and its row.
-export function createQueryGate(name: string) {
+export function buildQueryGate(name: string) {
   const state = { armed: false, held: new Set<unknown>() };
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();

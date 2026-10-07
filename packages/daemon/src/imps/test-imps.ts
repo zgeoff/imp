@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -44,7 +45,7 @@ import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../st
 import type { ImpPaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { buildFakeVmm } from '../test-utils/build-stub-vmm';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { KsmHostStats } from '../vmm/ksm';
@@ -217,7 +218,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     defaultDiskBytes: 0,
   };
 
-  const fake = buildFakeVmm();
+  const fake = buildStubVmm();
   const taps: string[] = [];
   const removedTaps: string[] = [];
   const logs: string[] = [];
@@ -299,7 +300,10 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
       ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
       ...(options.oauthFetch !== undefined && { oauthFetch: options.oauthFetch }),
-      ...(options.brokerNow !== undefined && { now: options.brokerNow }),
+
+      // on the wall clock unless a test asks, as before the harness's clock
+      // reached createImpd's broker
+      now: options.brokerNow ?? Date.now,
       runOAuthTimer: false,
     },
     egress: {
@@ -327,7 +331,6 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       },
       forward: () => Promise.reject(new Error('no upstream in tests')),
       resolveExact: () => Promise.resolve([]),
-      now: readClock,
       readConnected6: () => Promise.resolve(['2001:db8:a::/64']),
       readConnected4: () => Promise.resolve(['172.17.0.0/16', '172.17.0.2/32', '44.0.0.0/24']),
       readUplinks:
@@ -336,7 +339,6 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     imps: {
       readRamMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RAM_MIB : null),
       readRssMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RSS_MIB : null),
-      now: readClock,
       growFilesystem: (disk) => {
         filesystemGrows.push(disk);
 
@@ -697,14 +699,9 @@ export async function findBrokenInvariants(
   return broken;
 }
 
-// 'done' or 'failed' once the promise settles, 'hung' after `ms`
+// 'done' or 'failed' once the promise settles, 'hung' when it is still
+// pending after `ms` of polling its state
 export async function waitForOutcome(promise: Promise<unknown>, ms: number): Promise<string> {
-  const timer = Promise.withResolvers<string>();
-
-  const timeout = setTimeout(() => {
-    timer.resolve('hung');
-  }, ms);
-
   const settled = (async () => {
     try {
       await promise;
@@ -716,8 +713,17 @@ export async function waitForOutcome(promise: Promise<unknown>, ms: number): Pro
   })();
 
   try {
-    return await Promise.race([settled, timer.promise]);
-  } finally {
-    clearTimeout(timeout);
+    await waitFor(
+      () => {
+        if (Bun.peek.status(settled) === 'pending') {
+          throw new Error('still pending');
+        }
+      },
+      { timeoutMs: ms },
+    );
+  } catch {
+    return 'hung';
   }
+
+  return settled;
 }

@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
-import type { FakeAgentHandler } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
+import type { StubAgentHandler } from '../test-utils/start-stub-agent';
 import { openDialStream } from './dial-stream';
 import type { DialEvent, DialStream } from './dial-stream';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
@@ -14,11 +14,11 @@ const TARGET = { network: 'tcp', address: '127.0.0.1:8080' } as const;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-async function setupFakeVsock(agent: FakeAgentHandler) {
+async function setupFakeVsock(agent: StubAgentHandler) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-dial-'));
   const path = join(dir, 'vsock.sock');
 
-  const fake = await startFakeAgent(path, agent);
+  const fake = await startStubAgent(path, agent);
 
   return {
     path,

@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { createFakeGuest } from './build-stub-guest';
+import { buildStubGuest } from './build-stub-guest';
 
 test('it sends a stdout string then an exit of 0', async () => {
-  const guest = createFakeGuest(() => ({ stdout: 'hello\n' }));
+  const guest = buildStubGuest(() => ({ stdout: 'hello\n' }));
 
   const stream = await guest.open({ argv: ['echo', 'hello'], tty: false });
   const events = await Array.fromAsync(stream.events());
@@ -14,7 +14,7 @@ test('it sends a stdout string then an exit of 0', async () => {
 });
 
 test('it sends each stdout chunk in order', async () => {
-  const guest = createFakeGuest(() => ({
+  const guest = buildStubGuest(() => ({
     stdout: [new Uint8Array([1, 2]), new Uint8Array([3])],
   }));
 
@@ -29,7 +29,7 @@ test('it sends each stdout chunk in order', async () => {
 });
 
 test('it sends stderr after stdout', async () => {
-  const guest = createFakeGuest(() => ({ stdout: 'out', stderr: 'err' }));
+  const guest = buildStubGuest(() => ({ stdout: 'out', stderr: 'err' }));
 
   const stream = await guest.open({ argv: ['run'], tty: false });
   const events = await Array.fromAsync(stream.events());
@@ -42,7 +42,7 @@ test('it sends stderr after stdout', async () => {
 });
 
 test('it exits with the code of the answer', async () => {
-  const guest = createFakeGuest(() => Promise.resolve({ code: 3 }));
+  const guest = buildStubGuest(() => Promise.resolve({ code: 3 }));
 
   const stream = await guest.open({ argv: ['false'], tty: false });
   const events = await Array.fromAsync(stream.events());
@@ -51,7 +51,7 @@ test('it exits with the code of the answer', async () => {
 });
 
 test('it keeps a stalled exec open after its output', async () => {
-  const guest = createFakeGuest((run) => ({ stdout: 'up', stall: run.argv[0] === 'serve' }));
+  const guest = buildStubGuest((run) => ({ stdout: 'up', stall: run.argv[0] === 'serve' }));
 
   const stalled = await guest.open({ argv: ['serve'], tty: false });
 
@@ -70,7 +70,7 @@ test('it keeps a stalled exec open after its output', async () => {
 });
 
 test('it ends a stalled exec with no exit once it is closed', async () => {
-  const guest = createFakeGuest(() => ({ stdout: 'up', stall: true }));
+  const guest = buildStubGuest(() => ({ stdout: 'up', stall: true }));
 
   const stream = await guest.open({ argv: ['serve'], tty: false });
 
@@ -88,7 +88,7 @@ test('it ends a stalled exec with no exit once it is closed', async () => {
 });
 
 test('it sends nothing when the exec closes before the answer', async () => {
-  const guest = createFakeGuest(() => Promise.withResolvers<{ code: number }>().promise);
+  const guest = buildStubGuest(() => Promise.withResolvers<{ code: number }>().promise);
 
   const stream = await guest.open({ argv: ['hang'], tty: false });
 
@@ -100,7 +100,7 @@ test('it sends nothing when the exec closes before the answer', async () => {
 });
 
 test('it stops the output once the exec is closed', async () => {
-  const guest = createFakeGuest(() => ({ stdout: [new Uint8Array([1]), new Uint8Array([2])] }));
+  const guest = buildStubGuest(() => ({ stdout: [new Uint8Array([1]), new Uint8Array([2])] }));
 
   const stream = await guest.open({ argv: ['cat'], tty: false });
 
@@ -116,7 +116,7 @@ test('it stops the output once the exec is closed', async () => {
 });
 
 test('it resolves readStdin with all of stdin once stdin closes', async () => {
-  const guest = createFakeGuest(async (run) => {
+  const guest = buildStubGuest(async (run) => {
     const stdin = await run.readStdin();
 
     return { stdout: new TextDecoder().decode(stdin) };
@@ -139,7 +139,7 @@ test('it resolves readStdin with all of stdin once stdin closes', async () => {
 });
 
 test('it records the signals each run gets', async () => {
-  const guest = createFakeGuest(() => ({ stall: true }));
+  const guest = buildStubGuest(() => ({ stall: true }));
 
   const first = await guest.open({ argv: ['one'], tty: false });
   const second = await guest.open({ argv: ['two'], tty: false });
@@ -152,7 +152,7 @@ test('it records the signals each run gets', async () => {
 });
 
 test('it records the argv of each run and whether it closed', async () => {
-  const guest = createFakeGuest(() => ({}));
+  const guest = buildStubGuest(() => ({}));
 
   const first = await guest.open({ argv: ['ls', '-l'], tty: false });
 

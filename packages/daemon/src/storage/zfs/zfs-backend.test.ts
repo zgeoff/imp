@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { waitWithin } from '../../process/wait-within';
-import { FAKE_EPOCH_S, FakeZfsCrashError, createFakeZfs } from '../../test-utils/build-stub-zfs';
+import { STUB_EPOCH_S, StubZfsCrashError, buildStubZfs } from '../../test-utils/build-stub-zfs';
 import { buildWatchdogSlot } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
 import type { LiveStorage, MoveSource, StorageBackend } from '../storage-backend';
 import { createZfsBackend } from './zfs-backend';
 
-type FakeZfs = ReturnType<typeof createFakeZfs>;
+type StubZfs = ReturnType<typeof buildStubZfs>;
 
 const ROOT = 'tank/imp';
 const DIGEST = 'sha256:9f2c';
@@ -18,7 +18,7 @@ const VERSION = '2.2.2-0ubuntu9';
 
 function setupTest(kernel = VERSION) {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-zfs-test-`);
-  const fake = createFakeZfs({ root: ROOT, rootDir: dataDir, kernel });
+  const fake = buildStubZfs({ root: ROOT, rootDir: dataDir, kernel });
   const logs: string[] = [];
 
   const live = {
@@ -91,8 +91,8 @@ async function setupStarted() {
 }
 
 // the creation `zfs list -p` gives `name` in the fake, as an ISO string
-function readFakeCreation(fake: Readonly<Pick<FakeZfs, 'readTxg'>>, name: string): string {
-  return new Date((FAKE_EPOCH_S + fake.readTxg(name) * 3600) * 1000).toISOString();
+function readFakeCreation(fake: Readonly<Pick<StubZfs, 'readTxg'>>, name: string): string {
+  return new Date((STUB_EPOCH_S + fake.readTxg(name) * 3600) * 1000).toISOString();
 }
 
 async function readFailure(promise: Promise<unknown>): Promise<unknown> {
@@ -503,7 +503,7 @@ for (const swap of SWAP_STEPS) {
       }),
     );
 
-    expect(failure).toBeInstanceOf(FakeZfsCrashError);
+    expect(failure).toBeInstanceOf(StubZfsCrashError);
 
     await ctx.restartImpd(true);
 
@@ -529,7 +529,7 @@ test('a restore cut short before its clone or during the halt leaves the disk', 
     ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve()),
   );
 
-  expect(beforeClone).toBeInstanceOf(FakeZfsCrashError);
+  expect(beforeClone).toBeInstanceOf(StubZfsCrashError);
 
   await ctx.restartImpd(true);
 
@@ -951,7 +951,7 @@ for (const build of IMAGE_BUILD_STEPS) {
 
     const failure = await readFailure(ctx.backend.createImage(DIGEST, () => Promise.resolve()));
 
-    expect(failure).toBeInstanceOf(FakeZfsCrashError);
+    expect(failure).toBeInstanceOf(StubZfsCrashError);
 
     await ctx.restartImpd(true);
 

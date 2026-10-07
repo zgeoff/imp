@@ -11,7 +11,7 @@ import {
 import type { InstallBundle } from '../broker/guest-trust';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 import { setupImpTest } from './test-imps';
 
 // An exec with `require: ['broker']` starts only once impd set the broker's
@@ -94,7 +94,7 @@ async function setupRequireTest(installBundle?: InstallBundle) {
   // The agent: `activity` lists the sessions; an exec answers STARTED. A
   // start with a new session name creates it, one with a known name attaches
   // and takes it over from its viewer, as the real agent does.
-  const agent = await startFakeAgent(paths.vsockSocket, (socket, request, frames) => {
+  const agent = await startStubAgent(paths.vsockSocket, (socket, request, frames) => {
     if (frames.length > 1) {
       return;
     }

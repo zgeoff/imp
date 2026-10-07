@@ -5,13 +5,13 @@ import { createSecret, findSecret } from '../db/secrets';
 import { readRejection } from '../read-rejection';
 import { formatKeyFingerprint } from '../ssh/authorized-keys';
 import { createEd25519Key } from '../ssh/host-key';
-import { setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { ROOT_TOKEN_ID, loadTokenStore, readBearer } from './token-store';
 
 const NOW = 1_800_000_000_000;
 
 async function setupTest() {
-  const database = await setupTestDatabase();
+  const database = await createTestDatabase();
 
   const removed: string[] = [];
 

@@ -2,7 +2,6 @@ import { createImage } from '../db/images';
 import type { ImageRecord } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
-import { readErrorMessage } from '../read-error-message';
 
 interface TestDatabase {
   readonly db: ImpDatabase;
@@ -11,7 +10,7 @@ interface TestDatabase {
 }
 
 // a migrated in-memory database holding one image
-export async function setupTestDatabase(): Promise<TestDatabase> {
+export async function createTestDatabase(): Promise<TestDatabase> {
   const db = await openDatabase(':memory:');
 
   const image = await createImage(db, {
@@ -26,15 +25,4 @@ export async function setupTestDatabase(): Promise<TestDatabase> {
     image,
     [Symbol.asyncDispose]: () => db.destroy(),
   };
-}
-
-// the message the promise rejects with; throws when it resolves instead
-export async function readRejectionMessage(promise: Promise<unknown>): Promise<string> {
-  try {
-    await promise;
-  } catch (error) {
-    return readErrorMessage(error);
-  }
-
-  throw new Error('expected the promise to reject');
 }

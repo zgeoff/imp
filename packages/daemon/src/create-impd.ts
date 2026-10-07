@@ -141,7 +141,8 @@ export interface ImpdDeps {
 
   readonly log?: (message: string) => void;
 
-  // the clock impd's services judge time by; Date.now by default
+  // the clock every service judges time by, leases and the RAM governor
+  // included; Date.now by default
   readonly now?: () => number;
 
   // the host's free space as the disk budget sees it; the storage's own
@@ -251,6 +252,7 @@ export function createImpdBroker(
     log: deps.log ?? printLog,
     ipv6: parts.ipv6,
     secretFiles: parts.secretFiles,
+    ...(deps.now !== undefined && { now: deps.now }),
     ...deps.broker,
   });
 }
@@ -271,6 +273,7 @@ export function buildImpdEgress(
     log: deps.log ?? printLog,
     isGranted: parts.broker.isGranted,
     closeTunnels: parts.broker.closeTunnels,
+    ...(deps.now !== undefined && { now: deps.now }),
     ...deps.egress,
   });
 }
@@ -319,6 +322,7 @@ export function startGovernedImps(
 
       return status.hostname;
     },
+    ...(deps.now !== undefined && { now: deps.now }),
     ...deps.imps,
   });
 }

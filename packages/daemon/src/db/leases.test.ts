@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
-import { setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { BunSqliteDriver } from './bun-sqlite-driver';
 import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
@@ -14,7 +14,7 @@ import type { DatabaseSchema } from './schema';
 const AT = 1_800_000_000_000;
 
 async function setupTest() {
-  const database = await setupTestDatabase();
+  const database = await createTestDatabase();
 
   const imp = await createImp(database.db, {
     name: 'dev',

@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { readRejectionMessage, setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createCheckpoint, findCheckpoint, listCheckpoints, removeCheckpoint } from './checkpoints';
 import { createImp, removeImp } from './imps';
 
 async function setupImp() {
-  const ctx = await setupTestDatabase();
+  const ctx = await createTestDatabase();
 
   const imp = await createImp(ctx.db, {
     name: 'dev',
@@ -66,11 +66,7 @@ test('it rejects a duplicate label on one imp', async () => {
 
   await createCheckpoint(ctx.db, { id: 'cp-1', ...checkpoint });
 
-  const message = await readRejectionMessage(
-    createCheckpoint(ctx.db, { id: 'cp-2', ...checkpoint }),
-  );
-
-  expect(message).toContain('UNIQUE');
+  expect(createCheckpoint(ctx.db, { id: 'cp-2', ...checkpoint })).rejects.toThrow('UNIQUE');
 });
 
 test('it rejects a checkpoint for an imp that does not exist', async () => {
@@ -78,9 +74,7 @@ test('it rejects a checkpoint for an imp that does not exist', async () => {
 
   const orphan = { id: 'cp-x', impId: 'missing', label: null, sizeBytes: null };
 
-  const message = await readRejectionMessage(createCheckpoint(ctx.db, orphan));
-
-  expect(message).toContain('FOREIGN KEY');
+  expect(createCheckpoint(ctx.db, orphan)).rejects.toThrow('FOREIGN KEY');
 });
 
 test('it removes a checkpoint, and removing the imp removes the rest', async () => {

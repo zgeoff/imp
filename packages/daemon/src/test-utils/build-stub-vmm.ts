@@ -9,7 +9,7 @@ import type { TemplateRestorePlan } from '../vmm/template-vm';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
-export const FAKE_AGENT_VERSION = '0.1.0';
+export const STUB_AGENT_VERSION = '0.1.0';
 
 // whom every VM runs as unless a test says otherwise: impd's own uid, as an
 // unjailed Firecracker does
@@ -33,11 +33,11 @@ export type VmStep =
 export type VmOutcome = 'ok' | 'fail' | 'die' | 'hang';
 
 // Every failure the fake makes, so a test can tell it from a real bug.
-export class FakeVmError extends Error {
+export class StubVmError extends Error {
   constructor(message: string) {
     super(message);
 
-    this.name = 'FakeVmError';
+    this.name = 'StubVmError';
   }
 }
 
@@ -48,18 +48,18 @@ interface Hold {
 }
 
 // a boot_id as the kernel writes one, a UUID, here made from the VM's pid
-export function buildFakeBootId(pid: number): string {
+export function buildStubBootId(pid: number): string {
   return `00000000-0000-4000-8000-${String(pid).padStart(12, '0')}`;
 }
 
 // One fake host for every impd the test starts. Firecrackers outlive impd, so
 // `alive` is shared; each impd gets its own runner, and a runner whose impd
 // was replaced never settles a call again, like a process that is gone.
-export function buildFakeVmm() {
+export function buildStubVmm() {
   const alive = new Set<number>();
 
   // the version each boot and wake reports; a test may set it
-  const agent = { version: FAKE_AGENT_VERSION };
+  const agent = { version: STUB_AGENT_VERSION };
 
   // what each VM serves and does, and the pid files starts wrote; only a pid
   // in `alive` counts
@@ -206,7 +206,7 @@ export function buildFakeVmm() {
       const outcome = await pickOutcome(step);
 
       if (outcome === 'fail') {
-        throw new FakeVmError(`${step} failed: no agent\nlog tail`);
+        throw new StubVmError(`${step} failed: no agent\nlog tail`);
       }
 
       const pid = startPid();
@@ -228,7 +228,7 @@ export function buildFakeVmm() {
           const started = await startFakeVm('boot', plan.paths);
 
           // each cold boot is a new guest kernel, with its own boot_id
-          const bootId = guest.hasBootId ? buildFakeBootId(started.pid) : undefined;
+          const bootId = guest.hasBootId ? buildStubBootId(started.pid) : undefined;
           const vm = { ...started, bootId };
 
           if (bootId !== undefined) {
@@ -270,13 +270,13 @@ export function buildFakeVmm() {
               vm.state = 'Running';
             }
 
-            throw new FakeVmError('snapshot failed');
+            throw new StubVmError('snapshot failed');
           }
 
           alive.delete(pid);
 
           if (outcome === 'die') {
-            throw new FakeVmError('snapshot files lost after the kill');
+            throw new StubVmError('snapshot files lost after the kill');
           }
 
           // as Firecracker does: new files, renamed over the old ones
@@ -303,7 +303,7 @@ export function buildFakeVmm() {
           const outcome = await pickOutcome('stop');
 
           if (outcome !== 'ok' && alive.has(pid)) {
-            throw new FakeVmError(`firecracker ${String(pid)} survived SIGKILL`);
+            throw new StubVmError(`firecracker ${String(pid)} survived SIGKILL`);
           }
 
           alive.delete(pid);
@@ -327,7 +327,7 @@ export function buildFakeVmm() {
           }
 
           if (outcome !== 'ok') {
-            throw new FakeVmError('grow failed');
+            throw new StubVmError('grow failed');
           }
 
           grows.push({ disk: paths.disk, diskBytes });
@@ -368,7 +368,7 @@ export function buildFakeVmm() {
           const outcome = await pickOutcome('agentReady');
 
           if (outcome !== 'ok') {
-            throw new FakeVmError('the agent did not answer after the load');
+            throw new StubVmError('the agent did not answer after the load');
           }
 
           return {
@@ -384,7 +384,7 @@ export function buildFakeVmm() {
           const outcome = await pickOutcome('template');
 
           if (outcome !== 'ok') {
-            throw new FakeVmError('template build failed');
+            throw new StubVmError('template build failed');
           }
 
           mkdirSync(plan.snapshotDir, { recursive: true });

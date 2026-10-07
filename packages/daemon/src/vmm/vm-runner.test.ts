@@ -7,7 +7,7 @@ import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { parsePrefix64 } from '../net/addressing6';
 import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 import { isFirecrackerAlive } from './firecracker-process';
 import { buildJailerCommand } from './jail';
 import type { Jails } from './jail';
@@ -179,7 +179,7 @@ test('a wedged agent gives no guest uptime within a short timeout', async () => 
   mkdirSync(paths.runDir, { recursive: true });
 
   // accepts the connection and never answers
-  const agent = await startFakeAgent(paths.vsockSocket, () => {});
+  const agent = await startStubAgent(paths.vsockSocket, () => {});
 
   try {
     const started = performance.now();
@@ -201,7 +201,7 @@ test('an agent that cannot read its clock gives no guest uptime', async () => {
 
   mkdirSync(paths.runDir, { recursive: true });
 
-  const agent = await startFakeAgent(paths.vsockSocket, (socket) => {
+  const agent = await startStubAgent(paths.vsockSocket, (socket) => {
     socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true, version: '0.1.0' }));
   });
 

@@ -1,11 +1,11 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { createQueryGate } from './build-query-gate';
-import { setupTestDatabase } from './create-test-database';
+import { buildQueryGate } from './build-query-gate';
+import { createTestDatabase } from './create-test-database';
 
 test('it holds nothing before it is armed', async () => {
-  await using testDatabase = await setupTestDatabase();
+  await using testDatabase = await createTestDatabase();
 
-  const gate = createQueryGate('images');
+  const gate = buildQueryGate('images');
 
   const rows = await testDatabase.db
     .withPlugin(gate.plugin)
@@ -20,9 +20,9 @@ test('it holds nothing before it is armed', async () => {
 });
 
 test('it holds the first select naming it once armed', async () => {
-  await using testDatabase = await setupTestDatabase();
+  await using testDatabase = await createTestDatabase();
 
-  const gate = createQueryGate('images');
+  const gate = buildQueryGate('images');
 
   onTestFinished(() => {
     gate.release();
@@ -42,9 +42,9 @@ test('it holds the first select naming it once armed', async () => {
 });
 
 test('it lets the held select finish with its rows after release', async () => {
-  await using testDatabase = await setupTestDatabase();
+  await using testDatabase = await createTestDatabase();
 
-  const gate = createQueryGate('images');
+  const gate = buildQueryGate('images');
 
   gate.arm();
 
@@ -62,9 +62,9 @@ test('it lets the held select finish with its rows after release', async () => {
 });
 
 test('it holds only the first matching select', async () => {
-  await using testDatabase = await setupTestDatabase();
+  await using testDatabase = await createTestDatabase();
 
-  const gate = createQueryGate('images');
+  const gate = buildQueryGate('images');
   const gated = testDatabase.db.withPlugin(gate.plugin);
 
   onTestFinished(() => {
@@ -86,9 +86,9 @@ test('it holds only the first matching select', async () => {
 });
 
 test('it ignores a select that does not name it', async () => {
-  await using testDatabase = await setupTestDatabase();
+  await using testDatabase = await createTestDatabase();
 
-  const gate = createQueryGate('imps');
+  const gate = buildQueryGate('imps');
 
   gate.arm();
 
@@ -105,9 +105,9 @@ test('it ignores a select that does not name it', async () => {
 });
 
 test('it stays armed past a select that does not name it', async () => {
-  await using testDatabase = await setupTestDatabase();
+  await using testDatabase = await createTestDatabase();
 
-  const gate = createQueryGate('images');
+  const gate = buildQueryGate('images');
   const gated = testDatabase.db.withPlugin(gate.plugin);
 
   onTestFinished(() => {

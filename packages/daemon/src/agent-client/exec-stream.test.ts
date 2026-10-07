@@ -4,8 +4,8 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
-import type { FakeAgentHandler } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
+import type { StubAgentHandler } from '../test-utils/start-stub-agent';
 import { sendActivity, sendPing, sendSessionKill } from './agent-requests';
 import { openAttachStream, openExecStream, openTapStream } from './exec-stream';
 import type { ExecEvent, ExecStream } from './exec-stream';
@@ -13,11 +13,11 @@ import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './
 import { HOSTILE_BOOT_IDS, HOSTILE_GENERATIONS, HOSTILE_SESSION_NAMES } from './test-agent-ids';
 
 // a fake agent in a fresh directory
-async function setupFakeVsock(agent: FakeAgentHandler) {
+async function setupFakeVsock(agent: StubAgentHandler) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-vsock-'));
   const path = join(dir, 'vsock.sock');
 
-  const fake = await startFakeAgent(path, agent);
+  const fake = await startStubAgent(path, agent);
 
   return {
     path,

@@ -4,7 +4,7 @@ import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
-import { FakeVmError } from '../test-utils/build-stub-vmm';
+import { StubVmError } from '../test-utils/build-stub-vmm';
 import type { VmOutcome, VmStep } from '../test-utils/build-stub-vmm';
 import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
@@ -291,7 +291,7 @@ test(
             // the error the router logged for each internal error
             const realErrors = routerErrors.mock.calls
               .map((call): unknown => call[1])
-              .filter((error) => !(error instanceof FakeVmError));
+              .filter((error) => !(error instanceof StubVmError));
 
             const sleeps = await Promise.all(governorSleeps);
 

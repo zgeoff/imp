@@ -17,7 +17,7 @@ import { updateImpActivity } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 
 const IMAGE_USER = 'dev';
 const LOG_INODE = 7;
@@ -197,7 +197,7 @@ async function setupServiceTest(knowsServices = true) {
   const agent = buildServiceAgent(knowsServices);
   const paths = buildImpPaths(harness.config.dataDir, imp.id);
 
-  const listening = await startFakeAgent(paths.vsockSocket, (socket, request, frames) => {
+  const listening = await startStubAgent(paths.vsockSocket, (socket, request, frames) => {
     if (frames.length === 1) {
       agent.handleRequest(socket, AgentRequestSchema.parse(decodeJsonPayload(request)));
     }

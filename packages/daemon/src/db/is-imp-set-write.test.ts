@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createImp } from './imps';
 import { isImpSetWrite } from './is-imp-set-write';
 
 test('a create, a destroy and a stop resync the proxy and the grants; a sleep does not', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
   const imp = await createImp(ctx.db, {
     name: 'dev',

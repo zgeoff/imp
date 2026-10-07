@@ -8,7 +8,7 @@ import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
-import { startFakeAgent } from '../test-utils/start-stub-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 
 const STARTED_AT = Date.UTC(2026, 9, 2, 12, 0, 0);
 
@@ -82,7 +82,7 @@ async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = t
 
   const agent = buildSessionAgent(sessions, knowsKill);
 
-  const listening = await startFakeAgent(
+  const listening = await startStubAgent(
     buildImpPaths(harness.config.dataDir, imp.id).vsockSocket,
     (socket, request, frames) => {
       if (frames.length === 1) {

@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { readRejectionMessage, setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createImage, findImageById, findImageByName, listImages, removeImage } from './images';
 import { createImp } from './imps';
 
 test('it creates, finds and lists images by name', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
   const dev = await createImage(ctx.db, {
     name: 'dev',
@@ -23,17 +23,15 @@ test('it creates, finds and lists images by name', async () => {
 });
 
 test('it rejects a duplicate image name', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
   const duplicate = { name: 'base', ref: 'x', digest: 'sha256:2222', sizeBytes: 1 };
 
-  const message = await readRejectionMessage(createImage(ctx.db, duplicate));
-
-  expect(message).toContain('images.name');
+  expect(createImage(ctx.db, duplicate)).rejects.toThrow('images.name');
 });
 
 test('it refuses to remove an image an imp still uses', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
   await createImp(ctx.db, {
     name: 'dev',
@@ -44,13 +42,11 @@ test('it refuses to remove an image an imp still uses', async () => {
     ip: '10.66.0.2',
   });
 
-  const message = await readRejectionMessage(removeImage(ctx.db, ctx.image.id));
-
-  expect(message).toContain('FOREIGN KEY');
+  expect(removeImage(ctx.db, ctx.image.id)).rejects.toThrow('FOREIGN KEY');
 });
 
 test('it removes an unused image once', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
   const first = await removeImage(ctx.db, ctx.image.id);
   const second = await removeImage(ctx.db, ctx.image.id);

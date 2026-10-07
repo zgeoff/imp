@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { utils } from 'ssh2';
 import { createEd25519Key } from '../ssh/host-key';
-import { setupTestDatabase } from '../test-utils/create-test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createKnownHosts } from './ambient-request';
 import { isSameOrigin, resolveCaller } from './authenticate';
 import type { CallerSources } from './authenticate';
@@ -42,7 +42,7 @@ function buildTailnet() {
 }
 
 async function setupTest(tailnet = false) {
-  const database = await setupTestDatabase();
+  const database = await createTestDatabase();
 
   const tokens = await loadTokenStore({
     db: database.db,

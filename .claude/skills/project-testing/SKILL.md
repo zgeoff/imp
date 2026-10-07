@@ -118,7 +118,7 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
 
 ## ZFS
 
-- **The fake.** `packages/daemon/src/test-utils/build-stub-zfs.ts` (`createFakeZfs`) answers impd's
+- **The fake.** `packages/daemon/src/test-utils/build-stub-zfs.ts` (`buildStubZfs`) answers impd's
   `zfs` argv (`run`), send and receive streams (`streams`), and `/proc/self/mounts` (`readMounts`)
   in memory. It models datasets, snapshots, clones, promote, deferred destroy, legacy mounts, and
   txg-based `creation`, with fixed space numbers. It exposes `blockBefore`, `failOnce`,
@@ -159,14 +159,14 @@ Paths are under `packages/daemon/src/` unless they start with `test/`.
 
 | Boundary            | Stand-in                                                     | What it replaces                                          |
 | ------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
-| VMM                 | `test-utils/build-stub-vmm.ts` (`buildFakeVmm`)              | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step |
+| VMM                 | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)              | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step |
 | impd                | `create-impd.ts` (`createImpd`) with stubs as its deps       | The host: see Booting impd below                          |
 | Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `buildTestApp`)         | A shim over createImpd's parts, without its start steps   |
 | Firecracker API     | `Bun.serve({ unix })` (1); a Bun script (2)                  | Firecracker's HTTP API on its socket                      |
 | Firecracker process | `bash` run under the name `firecracker` (3)                  | A process whose cmdline matches Firecracker's             |
-| Guest agent         | `test-utils/start-stub-agent.ts` (`startFakeAgent`)          | The agent on the vsock socket: CONNECT and frames         |
-| Builder guest       | `test-utils/build-stub-guest.ts` (`createFakeGuest`)         | A builder's agent: output and exit per exec               |
-| zfs                 | `test-utils/build-stub-zfs.ts` (`createFakeZfs`)             | `zfs`, send and receive, and the mount table              |
+| Guest agent         | `test-utils/start-stub-agent.ts` (`startStubAgent`)          | The agent on the vsock socket: CONNECT and frames         |
+| Builder guest       | `test-utils/build-stub-guest.ts` (`buildStubGuest`)          | A builder's agent: output and exit per exec               |
+| zfs                 | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)              | `zfs`, send and receive, and the mount table              |
 | Docker engine       | A unix-socket server (4)                                     | The engine API                                            |
 | Docker CLI          | A `docker` script on `PATH` in the images tests              | The `docker` binary                                       |
 | nft                 | `setupImpTest`'s default `runNft`, which records scripts     | `nft` from the egress service                             |

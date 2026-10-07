@@ -3,7 +3,7 @@ import type { CommandResult } from '../process/run-command';
 import type { StreamRunner } from '../process/run-stream';
 
 // the `creation` of txg 0: 2026-10-03T00:00:00Z
-export const FAKE_EPOCH_S = 1_790_985_600;
+export const STUB_EPOCH_S = 1_790_985_600;
 
 interface FakeDataset {
   origin: string | null;
@@ -41,8 +41,8 @@ interface FakeZfsOptions {
   readonly kernel?: string;
 }
 
-export class FakeZfsCrashError extends Error {
-  override name = 'FakeZfsCrashError';
+export class StubZfsCrashError extends Error {
+  override name = 'StubZfsCrashError';
 }
 
 function buildFailure(message: string): CommandResult {
@@ -60,7 +60,7 @@ function findParent(name: string): string {
 // An in-memory ZFS: clones, promote, deferred destroy and legacy mounts, with
 // the errors real ZFS gives where impd could trip. It answers impd's argv in
 // the real `-H` format and records each command.
-export function createFakeZfs(options: FakeZfsOptions) {
+export function buildStubZfs(options: FakeZfsOptions) {
   const datasets = new Map<string, FakeDataset>();
   const snapshots = new Map<string, FakeSnapshot>();
   const mounts = new Map<string, string>();
@@ -301,10 +301,10 @@ export function createFakeZfs(options: FakeZfsOptions) {
   };
 
   // every dataset holds 1 MiB of its own and refers to 3; a snapshot holds 64
-  // KiB. Each was created an hour after FAKE_EPOCH_S per txg.
+  // KiB. Each was created an hour after STUB_EPOCH_S per txg.
   const listSpace = (root: string): CommandResult => {
     const isInTree = (name: string) => name === root || name.startsWith(`${root}/`);
-    const readCreation = (txg: number) => String(FAKE_EPOCH_S + txg * 3600);
+    const readCreation = (txg: number) => String(STUB_EPOCH_S + txg * 3600);
 
     const rows = [
       ...[...datasets.entries()]
@@ -541,7 +541,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
 
       if (state.crashed || state.crashAt?.(command) === true) {
         state.crashed = true;
-        throw new FakeZfsCrashError(`crashed before ${command}`);
+        throw new StubZfsCrashError(`crashed before ${command}`);
       }
 
       for (const gate of gates.filter((candidate) => candidate.match(command))) {
@@ -616,4 +616,4 @@ export function createFakeZfs(options: FakeZfsOptions) {
   };
 }
 
-export type FakeZfs = ReturnType<typeof createFakeZfs>;
+export type StubZfs = ReturnType<typeof buildStubZfs>;
