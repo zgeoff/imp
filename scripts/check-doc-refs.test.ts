@@ -185,7 +185,7 @@ test('#checkFile fails a blob URL into this repo whose file does not exist', () 
   ]);
 });
 
-test('#main fails the run when git cannot list the tracked files', () => {
+test('#check-doc-refs fails the run when git cannot list the tracked files', () => {
   using ctx = setupTest();
 
   const result = Bun.spawnSync(['bun', new URL('check-doc-refs.ts', import.meta.url).pathname], {

@@ -28,9 +28,8 @@ function setupTest() {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // upgrade.sh restarts the units, then waits for impd to answer ready
+  // upgrade.sh restarts the units through systemctl
   createStubBin(dir, 'systemctl');
-  createStubBin(dir, 'curl', `echo '{"ready":true}'`);
 
   const owned = stack.move();
 
@@ -55,6 +54,8 @@ test('it installs the unprivileged host unit before the restart, on an upgrade f
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -101,6 +102,8 @@ test('it installs both units, then restarts the proxy before imp-host, on an upg
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -153,6 +156,8 @@ test('it tells how to roll back by restarting both units, on an upgrade between 
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -188,6 +193,8 @@ test('it refuses a rollback past the socket proxy before anything changes', () =
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -232,6 +239,8 @@ test("it starts imp-host alone, with a NOTE, under a compose file that gives imp
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -283,6 +292,8 @@ test('it starts the proxy service with imp-host under a compose file that has it
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -336,6 +347,8 @@ test('it refuses a rollback past the unprivileged host before anything changes',
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
@@ -379,6 +392,8 @@ test('it keeps the compose file, and says it still runs privileged, on an upgrad
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -435,6 +450,8 @@ test('it stops before any imp sleeps when the image cannot give its unit', () =>
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --init --privileged imp-host\n',
@@ -481,6 +498,7 @@ test('it stops before the restart when a unit cannot be installed', () => {
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
   createStubBin(ctx.dir, 'mv', `echo 'mv: cannot move' >&2; exit 1`);
 
   writeFileSync(
@@ -531,6 +549,8 @@ test('it moves to its own release when no image is named', () => {
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -570,6 +590,8 @@ test("it moves to the env file's pin over its own release", () => {
       pulledUnit: `Environment=IMP_HOST_IMAGE=${release}\nExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n`,
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -621,6 +643,8 @@ test('it comments out the old template line, which is no pin, with a .bak of the
       pulledUnit: `Environment=IMP_HOST_IMAGE=${release}\nExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n`,
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -687,6 +711,8 @@ test('it refuses an image from the environment that the units would not run, bef
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -742,6 +768,8 @@ test('it writes the image to the .env beside the compose file, with a .bak', () 
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -814,6 +842,8 @@ test('it writes a .env that names the image beside a compose file without one', 
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -866,6 +896,8 @@ test('it refuses the image of a drop-in for imp-host alone, as the proxy unit wo
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -913,6 +945,8 @@ test("it counts a drop-in's image as its unit's own, for imp-host and the proxy 
       pulledUnit: `Environment=IMP_HOST_IMAGE=${release}\nExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n`,
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -967,6 +1001,8 @@ test('it reads the unit image from a quoted Environment= line that sets several 
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1009,6 +1045,8 @@ test('it takes the release-please marker lines out of the units it installs', ()
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1048,6 +1086,8 @@ test('it migrates the old template line with a CR and blanks around it', () => {
       pulledUnit: `Environment=IMP_HOST_IMAGE=${release}\nExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n`,
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1098,6 +1138,8 @@ test('it migrates a quoted old template line too', () => {
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1143,6 +1185,8 @@ test('it keeps the pin in the compose .env and moves to that image', () => {
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1200,6 +1244,8 @@ test('it still writes the image lines and units, without a restart, on a systemd
       pulledIsRunning: true,
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1262,6 +1308,8 @@ test('it still writes the compose .env, without compose up, on a compose host th
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1313,6 +1361,8 @@ test('it refuses an env file that sets IMP_HOST_IMAGE empty before anything chan
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1362,6 +1412,8 @@ test('it refuses a host that runs the image already when its units would run ano
       pulledIsRunning: true,
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1417,6 +1469,8 @@ test("it reads the compose .env's image through docker compose config, with the 
       composeConfig: 'PATH=/bin\nREGISTRY=imp-host\nIMP_HOST_IMAGE=imp-host:pinned\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1477,6 +1531,8 @@ test('it leaves a trailing comment out of the compose .env image without compose
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1527,6 +1583,8 @@ test('it refuses a compose .env image built from other variables, before any pul
       pulledUnit: 'ExecStart=/usr/bin/docker run --init --cap-drop ALL imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1582,6 +1640,8 @@ test('it gives compose config an IMP_DOCKER_GID when the environment has none', 
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1630,6 +1690,8 @@ test('it never prints the environment that compose config reads', () => {
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1677,6 +1739,8 @@ test('it never prints what a failing compose config prints, and reads the .env i
       composeConfigError: 'SECRET=hunter2\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1732,6 +1796,8 @@ test('it refuses to run on a host without jq', () => {
 
   const docker = createStubBin(ctx.dir, 'docker');
 
+  createStubBin(ctx.dir, 'curl');
+
   const result = Bun.spawnSync(
     [Bun.which('bash') ?? 'bash', new URL('upgrade.sh', import.meta.url).pathname],
     {
@@ -1783,6 +1849,8 @@ test('it sleeps each awake imp before the restart', () => {
     }),
   );
 
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
     'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
@@ -1832,6 +1900,8 @@ test('it stops before anything restarts when an imp does not sleep', () => {
       sleeplessImp: 'db',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1922,6 +1992,8 @@ test('it stops before anything restarts when it cannot rewrite the env file', ()
         'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
     }),
   );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
