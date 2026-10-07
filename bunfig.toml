@@ -7,10 +7,6 @@ exact = true
 
 # supply-chain guard: only install versions published >= 7 days ago
 minimumReleaseAge = 604800
-# source-map-js 1.2.2 fixes GHSA-68fv-2mgg-jv7q and is pinned exactly in
-# package.json overrides. It passes the 7-day gate after 2026-10-07 14:08 UTC;
-# remove this exemption then.
-minimumReleaseAgeExcludes = ["source-map-js"]
 
 [test]
 # registers jest-extended matchers for `bun test`
