@@ -5,17 +5,13 @@
   "ignoreBinaries": ["mkfifo"],
   "workspaces": {
     ".": {
-      "entry": [
-        "test/e2e/main.ts",
-        "test/e2e/suites/*.e2e.ts",
-        "test/integration/*.pebble.ts",
-        "test/integration/*.slow.ts"
-      ],
+      "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts"],
       "project": [
         "test/**/*.ts",
         "scripts/**/*.ts",
         "deploy/**/*.ts",
         "images/**/*.ts",
+        "host/**/*.ts",
         "*.test.ts"
       ]
     },
@@ -23,8 +19,9 @@
       "project": ["src/**/*.ts"]
     },
     "packages/daemon": {
-      // imp-docker-proxy, which host/Dockerfile compiles beside impd
-      "entry": ["src/docker-proxy/main.ts"],
+      // imp-docker-proxy, which host/Dockerfile compiles beside impd, and the
+      // suites only their own scripts run (test:pebble, test:slow)
+      "entry": ["src/docker-proxy/main.ts", "src/**/*.pebble.ts", "src/**/*.slow.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/dashboard": {

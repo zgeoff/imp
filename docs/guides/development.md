@@ -8,6 +8,7 @@ How to check a change before you push it, and what CI and the branch rules do wi
 ```sh
 bun run typecheck && bun run lint && bun test
 bun run test:dashboard            # the dashboard's component tests, in their own run
+bun run test:host                 # nft and iptables in namespaces; IMP_HOST_TESTS=required fails a skip
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run test:slow                 # a build silent past 360 s, through the Docker proxy (6.5 min)
 bun run format:check && bun run deadcode

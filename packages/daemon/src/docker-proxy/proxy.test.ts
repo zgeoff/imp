@@ -262,7 +262,7 @@ test('a build streams its context and forwards no client header', async () => {
 });
 
 // Bun's fetch gives up on an answer silent for 360 s, as a build's quiet RUN
-// step is; the live check is test/integration/docker-idle.slow.ts
+// step is; the live check is images/docker-build.slow.ts
 test('a build, a pull and an export wait past the limit, until the client goes; other calls have a deadline', async () => {
   const sent = spyOn(globalThis, 'fetch');
 
