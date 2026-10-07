@@ -203,6 +203,12 @@ test('#SessionLogListInputSchema accepts an imp and a session', () => {
   expect(SessionLogListInputSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
+test('#SessionLogListInputSchema accepts an imp alone, for the logs of every session', () => {
+  const payload = { name: 'dev' } as const;
+
+  expect(SessionLogListInputSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
 test('#SessionLogListInputSchema rejects an imp name that is not a name', () => {
   const result = SessionLogListInputSchema.safeParse({ name: 'Dev', session: 'main' });
 
@@ -227,6 +233,17 @@ test('#SessionLogReadInputSchema accepts a read of the largest size', () => {
   const result = SessionLogReadInputSchema.safeParse(payload);
 
   expect(result.data).toStrictEqual(payload);
+});
+
+test('#SessionLogReadInputSchema accepts a read without a limit', () => {
+  const payload = {
+    name: 'dev',
+    session: 'main',
+    executionGeneration: '0123456789abcdef0123456789abcdef',
+    from: 0,
+  } as const;
+
+  expect(SessionLogReadInputSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#SessionLogReadInputSchema rejects an imp name that is not a name', () => {
@@ -325,6 +342,26 @@ test('#SessionLogReadSchema accepts a read with a gap', () => {
   const result = SessionLogReadSchema.safeParse(payload);
 
   expect(result.data).toStrictEqual(payload);
+});
+
+test('#SessionLogReadSchema accepts a read without a gap', () => {
+  const payload = {
+    offset: 0,
+    data: new Blob(['hello']),
+    log: {
+      session: 'main',
+      executionGeneration: '0123456789abcdef0123456789abcdef',
+      bootId: 'boot-1',
+      state: 'live',
+      logStart: 0,
+      logEnd: 5,
+      bytes: 5,
+      complete: false,
+      startedAt: new Date('2026-01-02T03:04:05.000Z'),
+    },
+  } as const;
+
+  expect(SessionLogReadSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#SessionLogReadSchema rejects data that is not a blob', () => {

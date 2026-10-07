@@ -511,7 +511,7 @@ test('#MOVING rejects a retry delay of zero', () => {
   expect(result.error?.issues).toPartiallyContain({ path: ['retryAfterS'], code: 'too_small' });
 });
 
-test('#IMP_ERRORS declares every error code that impd raises', () => {
+test('#IMP_ERRORS declares exactly these error codes, in this order', () => {
   expect(Object.keys(IMP_ERRORS)).toStrictEqual([
     'NOT_FOUND',
     'CONFLICT',

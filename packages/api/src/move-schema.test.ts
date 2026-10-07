@@ -128,6 +128,30 @@ test('#WarmMoveSchema accepts the side of a move that a sleeping imp sends', () 
   expect(WarmMoveSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
+test('#WarmMoveSchema accepts a snapshot from an impd before the CPU was recorded', () => {
+  const payload = {
+    slot: 3,
+    egressMode: 'open',
+    snapshot: {
+      firecrackerVersion: '1.12.0',
+      snapshotVersion: '6.0.0',
+      hostKernel: '6.6.87',
+      cpuModel: null,
+      cpuFlags: null,
+      ipv6Prefix: null,
+    },
+    host: {
+      dataDir: '/data',
+      storage: 'zfs',
+      subnet: '10.0.0.0/16',
+      brokerPort: 7443,
+      dns: ['1.1.1.1'],
+    },
+  } as const;
+
+  expect(WarmMoveSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
 test('#WarmMoveSchema rejects a negative slot', () => {
   const result = WarmMoveSchema.safeParse({
     slot: -1,

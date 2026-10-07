@@ -107,6 +107,18 @@ test('#ImageBuildResultSchema rejects a source outside the source list', () => {
   expect(result.error?.issues).toPartiallyContain({ path: ['source'], code: 'invalid_value' });
 });
 
+test('#ImageBuildErrorSchema rejects an error without a code', () => {
+  const result = ImageBuildErrorSchema.safeParse({ message: 'the build failed' });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['code'], code: 'invalid_type' });
+});
+
+test('#ImageBuildErrorSchema rejects a message that is not a string', () => {
+  const result = ImageBuildErrorSchema.safeParse({ code: 'BUILD_FAILED', message: 42 });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['message'], code: 'invalid_type' });
+});
+
 test('#ImageBuildErrorSchema accepts a code and a message', () => {
   const payload = { code: 'BUILD_FAILED', message: 'the build failed' } as const;
 
@@ -222,8 +234,12 @@ test('#ImageOpEventSchema rejects an image event with its date as a string', () 
   });
 });
 
-test('#ImageOpEventSchema rejects an error event', () => {
-  const result = ImageOpEventSchema.safeParse({ type: 'error', phase: 'pull', elapsedMs: 0 });
+test('#ImageOpEventSchema rejects an error event, which throws through the iterator instead', () => {
+  const result = ImageOpEventSchema.safeParse({
+    type: 'error',
+    code: 'BUILD_FAILED',
+    message: 'the build failed',
+  });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['type'], code: 'invalid_union' });
 });

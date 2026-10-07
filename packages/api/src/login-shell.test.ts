@@ -23,7 +23,7 @@ function setupTest() {
   };
 }
 
-test('it runs the current user’s shell from the passwd file as a login shell', () => {
+test('#buildConsoleShell runs the current user’s shell from the passwd file as a login shell', () => {
   using ctx = setupTest();
 
   const shell = join(ctx.dir, 'user-shell');
@@ -46,7 +46,7 @@ test('it runs the current user’s shell from the passwd file as a login shell',
   });
 });
 
-test('it skips the passwd entries of other users', () => {
+test('#buildConsoleShell skips the passwd entries of other users', () => {
   using ctx = setupTest();
 
   const other = join(ctx.dir, 'other-shell');
@@ -72,7 +72,7 @@ test('it skips the passwd entries of other users', () => {
   expect(run.stdout.toString()).toBe('user-shell -l\n');
 });
 
-test('it falls back to the first executable fallback when the user’s shell is missing', () => {
+test('#buildConsoleShell falls back to the first executable fallback when the user’s shell is missing', () => {
   using ctx = setupTest();
 
   const fallback = join(ctx.dir, 'fallback-shell');
@@ -96,7 +96,7 @@ test('it falls back to the first executable fallback when the user’s shell is 
   expect(run.stdout.toString()).toBe('fallback-shell -l\n');
 });
 
-test('it falls back when the passwd file has no entry for the user', () => {
+test('#buildConsoleShell falls back when the passwd file has no entry for the user', () => {
   using ctx = setupTest();
 
   const fallback = join(ctx.dir, 'fallback-shell');
@@ -112,7 +112,7 @@ test('it falls back when the passwd file has no entry for the user', () => {
   expect(run.stdout.toString()).toBe('fallback-shell -l\n');
 });
 
-test('it passes on the exit code of the login shell', () => {
+test('#buildConsoleShell passes on the exit code of the login shell', () => {
   using ctx = setupTest();
 
   const shell = join(ctx.dir, 'user-shell');
@@ -132,6 +132,17 @@ test('it passes on the exit code of the login shell', () => {
   expect(run.exitCode).toBe(3);
 });
 
-test('it reads the image’s /etc/passwd and falls back to bash, then sh, for consoles', () => {
-  expect(CONSOLE_SHELL).toBe(buildConsoleShell('/etc/passwd', ['/bin/bash', '/bin/sh']));
+test('#CONSOLE_SHELL reads /etc/passwd and falls back to bash, then sh', () => {
+  expect(CONSOLE_SHELL).toBe(
+    [
+      'uid=$(id -u 2>/dev/null) || uid=0',
+      'shell=',
+      'while IFS=: read -r _ _ id _ _ _ login; do',
+      '  if [ "$id" = "$uid" ]; then shell=$login; break; fi',
+      'done < /etc/passwd',
+      '[ -x "$shell" ] || shell=/bin/bash',
+      '[ -x "$shell" ] || shell=/bin/sh',
+      'exec "$shell" -l',
+    ].join('\n'),
+  );
 });

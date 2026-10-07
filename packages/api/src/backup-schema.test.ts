@@ -34,6 +34,75 @@ test('#BackupStatusSchema accepts a status that has never run', () => {
   expect(BackupStatusSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
+test('#BackupPointSchema rejects a time sent as a string', () => {
+  const result = BackupPointSchema.safeParse({
+    id: 'a1b2c3',
+    time: '2026-01-02T03:04:05.000Z',
+    imps: ['dev', 'web'],
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['time'], code: 'invalid_type' });
+});
+
+test('#BackupPointSchema rejects an imp that is not a string', () => {
+  const result = BackupPointSchema.safeParse({
+    id: 'a1b2c3',
+    time: new Date('2026-01-02T03:04:05.000Z'),
+    imps: ['dev', 7],
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['imps', 1], code: 'invalid_type' });
+});
+
+test('#BackupStatusSchema rejects a point without its time', () => {
+  const result = BackupStatusSchema.safeParse({
+    points: [{ id: 'a1b2c3', imps: ['dev'] }],
+    lastRunAt: new Date('2026-01-02T03:04:05.000Z'),
+    lastPruneAt: new Date('2026-01-02T04:05:06.000Z'),
+    lastCheck: { at: new Date('2026-01-02T04:05:06.000Z'), error: 'pack 1f2e is damaged' },
+  });
+
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['points', 0, 'time'],
+    code: 'invalid_type',
+  });
+});
+
+test('#BackupStatusSchema rejects a missing last run, which is null when there was none', () => {
+  const result = BackupStatusSchema.safeParse({
+    points: [{ id: 'a1b2c3', time: new Date('2026-01-02T03:04:05.000Z'), imps: ['dev'] }],
+    lastPruneAt: new Date('2026-01-02T04:05:06.000Z'),
+    lastCheck: { at: new Date('2026-01-02T04:05:06.000Z'), error: 'pack 1f2e is damaged' },
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['lastRunAt'], code: 'invalid_type' });
+});
+
+test('#BackupStatusSchema rejects a check without its time', () => {
+  const result = BackupStatusSchema.safeParse({
+    points: [{ id: 'a1b2c3', time: new Date('2026-01-02T03:04:05.000Z'), imps: ['dev'] }],
+    lastRunAt: new Date('2026-01-02T03:04:05.000Z'),
+    lastPruneAt: new Date('2026-01-02T04:05:06.000Z'),
+    lastCheck: { error: 'pack 1f2e is damaged' },
+  });
+
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['lastCheck', 'at'],
+    code: 'invalid_type',
+  });
+});
+
+test('#BackupStatusSchema accepts a check that passed', () => {
+  const payload = {
+    points: [],
+    lastRunAt: new Date('2026-01-02T03:04:05.000Z'),
+    lastPruneAt: null,
+    lastCheck: { at: new Date('2026-01-02T04:05:06.000Z') },
+  } as const;
+
+  expect(BackupStatusSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
 test('#BackupRunSchema accepts a run that skipped an imp', () => {
   const payload = {
     snapshotId: 'a1b2c3',

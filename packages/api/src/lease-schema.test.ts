@@ -49,6 +49,24 @@ test('#LeaseOwnerSchema accepts an owner', () => {
   expect(LeaseOwnerSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
+test('#LeaseOwnerSchema rejects an owner without a principal', () => {
+  const result = LeaseOwnerSchema.safeParse({ display: 'laptop', label: 'hold' });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['principal'], code: 'invalid_type' });
+});
+
+test('#LeaseOwnerSchema rejects a display that is not a string', () => {
+  const result = LeaseOwnerSchema.safeParse({ principal: 'token:1', display: null, label: 'hold' });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['display'], code: 'invalid_type' });
+});
+
+test('#LeaseOwnerSchema rejects a label that is not a string', () => {
+  const result = LeaseOwnerSchema.safeParse({ principal: 'token:1', display: 'laptop', label: 1 });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['label'], code: 'invalid_type' });
+});
+
 test('#LeaseSchema accepts a lease with an end', () => {
   const payload = {
     name: 'dev',

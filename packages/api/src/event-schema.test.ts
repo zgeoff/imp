@@ -29,7 +29,7 @@ test('#ImpEventDetailSchema rejects a negative prepareMs', () => {
   expect(result.error?.issues).toPartiallyContain({ path: ['prepareMs'], code: 'too_small' });
 });
 
-test('#ImpEventDetailSchema parses a detail with prepareMs through the schema a client had before prepareMs', () => {
+test('#ImpEventDetailSchema sends prepareMs in a detail that a client from before prepareMs still parses', () => {
   // ImpEventDetailSchema as it was before prepareMs
   const oldDetailSchema = z
     .object({
@@ -41,12 +41,14 @@ test('#ImpEventDetailSchema parses a detail with prepareMs through the schema a 
     })
     .readonly();
 
-  const result = oldDetailSchema.safeParse({
+  const detail = ImpEventDetailSchema.parse({
     trigger: 'RAM over budget',
     durationMs: 900,
     prepareMs: 240,
     steps: { pause: 1, snapshot: 700 },
   });
+
+  const result = oldDetailSchema.safeParse(detail);
 
   expect(result.data).toStrictEqual({
     trigger: 'RAM over budget',
