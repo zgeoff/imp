@@ -1,0 +1,15 @@
+{
+  "name": "@imp/test-utils",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The test run's preload and the test utils every package shares: env overrides, a seeded faker, waitFor, invariant and the MSW server",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@faker-js/faker": "catalog:",
+    "@mswjs/interceptors": "catalog:",
+    "msw": "catalog:"
+  }
+}

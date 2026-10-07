@@ -17,6 +17,8 @@
         "verbs": ["allocate", "list", "open", "sleep", "wake", "hold", "grow", "shrink"],
         "exemptNames": [
           "main",
+          // the testing skill names this narrowing helper
+          "invariant",
           // kysely's Driver interface: BunSqliteDriver implements it, so
           // these method names are fixed by the library contract
           "init",

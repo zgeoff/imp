@@ -154,7 +154,7 @@ usual roots: verification stays on. The suite writes the file and removes it whe
 
 A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the timings the suites
 measure. A suite file also runs on its own against a running instance:
-`bun test ./test/e2e/suites/sleep.e2e.ts`.
+`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`.
 
 ### Wake bench
 
