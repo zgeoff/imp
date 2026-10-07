@@ -327,6 +327,21 @@ test('a 200 with no token is a transient failure that changes nothing', async ()
   expect(after?.error).toBe('no token in the response');
 });
 
+test('expires_in with no new access token leaves the old expiry', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildReadyState({ expiresAt: T0 + 10_000 }));
+
+  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-1', expires_in: 3600 }));
+
+  await ctx.refresher.refresh('codex', true);
+
+  const state = await ctx.readState();
+
+  expect(state?.refreshToken).toBe('fake-refresh-1');
+  expect(state?.expiresAt).toBe(T0 + 10_000);
+});
+
 test('when a refresh is due', () => {
   const ready = buildReadyState();
 
@@ -339,6 +354,12 @@ test('when a refresh is due', () => {
 
   expect(isDue(short, T0 + 0.9 * HOUR)).toBe(false);
   expect(isDue(short, T0 + 1.1 * HOUR)).toBe(true);
+
+  // a token shorter than a tick and a token call is due at once
+  const brief = buildReadyState({ expiresAt: T0 + 60_000 });
+
+  expect(isDue(brief, T0)).toBe(true);
+  expect(isDue(buildReadyState({ expiresAt: T0 + 60_000, refreshedAt: null }), T0)).toBe(true);
 
   // no expiry: older than an hour
   const unknown = buildReadyState({ expiresAt: null });

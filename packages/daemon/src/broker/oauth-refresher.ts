@@ -64,6 +64,10 @@ interface OAuthRefresherDeps {
 
 const HOUR_MS = 60 * 60 * 1000;
 const MAX_LEAD_MS = 24 * HOUR_MS;
+
+// at least one 60 s tick and one 30 s token call before the expiry, with room
+// to spare, so a short-lived token is refreshed before it runs out
+const MIN_LEAD_MS = 3 * 60_000;
 const BACKOFF_BASE_MS = 60_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
 
@@ -284,15 +288,15 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     const refreshToken = tokens.refreshToken ?? state.refreshToken;
 
     // a response with only a rotated refresh token leaves the access token
-    // and its expiry as they were
+    // and its expiry as they were: expires_in describes a new access token
     let expiresAt: number | null;
 
-    if (tokens.expiresInMs !== null) {
-      expiresAt = at + tokens.expiresInMs;
-    } else if (tokens.accessToken === null) {
+    if (tokens.accessToken === null) {
       expiresAt = state.expiresAt;
-    } else {
+    } else if (tokens.expiresInMs === null) {
       expiresAt = readJwtExpiry(accessToken);
+    } else {
+      expiresAt = at + tokens.expiresInMs;
     }
 
     // an expiry no date can hold is no expiry; the tokens are kept all the same
@@ -512,9 +516,9 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
   };
 }
 
-// Whether a refresh is due: now when there is no access token; else once
-// less than min(24 h, half the lifetime) is left, so an impd stopped for a
-// day never hands out an expired token. A needs_login secret never is.
+// Due now without an access token, never for needs_login; else with less
+// than min(24 h, half the lifetime) left, and never less than MIN_LEAD_MS, so
+// an impd stopped for a day never hands out an expired token.
 export function isDue(state: Readonly<OAuthStateFile>, at: number): boolean {
   if (state.status === 'needs_login') {
     return false;
@@ -531,12 +535,12 @@ export function isDue(state: Readonly<OAuthStateFile>, at: number): boolean {
   const remaining = state.expiresAt - at;
 
   if (state.refreshedAt === null) {
-    return remaining <= 0;
+    return remaining < MIN_LEAD_MS;
   }
 
   const lifetime = state.expiresAt - state.refreshedAt;
 
-  return remaining < Math.min(MAX_LEAD_MS, lifetime / 2);
+  return remaining < Math.max(MIN_LEAD_MS, Math.min(MAX_LEAD_MS, lifetime / 2));
 }
 
 // the error of a token endpoint's answer: a string, or an object with a

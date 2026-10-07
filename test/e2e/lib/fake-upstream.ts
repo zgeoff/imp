@@ -20,7 +20,7 @@ interface SeenRequest {
 // the OAuth side: /oauth/token takes a JSON refresh request and rotates the
 // refresh token each time, and /oauth-e2e/me says whether the bearer token is
 // the access token issued last. Every token is made up for the run.
-export interface FakeOAuth {
+interface FakeOAuth {
   readonly clientId: string;
 
   // the refresh token a secret starts from
