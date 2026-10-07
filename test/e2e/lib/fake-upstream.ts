@@ -1,11 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as z from 'zod';
 import { runChecked } from './instance';
 
+const OAUTH_CLIENT_ID = 'e2e-client';
+
 // A fake github.com and api.github.com on this machine: git smart HTTP
-// behind Basic auth, and a check of the bearer token. It never echoes the
-// token, which would put it in the guest's memory.
+// behind Basic auth, a check of the bearer token, and a fake OAuth token
+// endpoint. It never echoes a token, which would put it in the guest's memory.
 
 interface SeenRequest {
   readonly method: string;
@@ -13,7 +17,30 @@ interface SeenRequest {
   readonly authorization: string | null;
 }
 
+// the OAuth side: /oauth/token takes a JSON refresh request and rotates the
+// refresh token each time, and /oauth-e2e/me says whether the bearer token is
+// the access token issued last. Every token is made up for the run.
+export interface FakeOAuth {
+  readonly clientId: string;
+
+  // the refresh token a secret starts from
+  readonly firstRefreshToken: string;
+
+  // each token issued, in order
+  readonly accessTokens: () => readonly string[];
+  readonly refreshTokens: () => readonly string[];
+
+  // how many refresh requests were refused
+  readonly refused: () => number;
+
+  // the status the endpoint answers a refresh token, as a request would; a
+  // current one is exchanged
+  readonly exchange: (refreshToken: string) => number;
+}
+
 export interface FakeUpstream extends AsyncDisposable {
+  readonly oauth: FakeOAuth;
+
   // https://<address>:<port>, for the broker's test-upstreams file
   readonly origin: string;
   readonly caPem: string;
@@ -35,6 +62,47 @@ export async function startFakeUpstream(address: string, token: string): Promise
   mkdirSync(repos);
 
   await createCertificates(dir, address);
+
+  const oauthState = {
+    refreshTokens: [`e2e-refresh-${randomUUID()}`],
+    accessTokens: [] as string[],
+    refused: 0,
+  };
+
+  const runTokenExchange = (refreshToken: string): { status: number; body: unknown } => {
+    if (refreshToken !== oauthState.refreshTokens.at(-1)) {
+      oauthState.refused += 1;
+
+      return { status: 400, body: { error: 'invalid_grant' } };
+    }
+
+    const access = `e2e-access-${randomUUID()}`;
+    const refresh = `e2e-refresh-${randomUUID()}`;
+
+    oauthState.accessTokens.push(access);
+    oauthState.refreshTokens.push(refresh);
+
+    return {
+      status: 200,
+      body: { access_token: access, refresh_token: refresh, expires_in: 3600 },
+    };
+  };
+
+  const handleToken = async (request: Request): Promise<Response> => {
+    const payload: unknown = await request.json().catch(() => null);
+
+    const fields = z
+      .object({ client_id: z.string(), refresh_token: z.string() })
+      .safeParse(payload);
+
+    if (!fields.success || fields.data.client_id !== OAUTH_CLIENT_ID) {
+      return Response.json({ error: 'invalid_request' }, { status: 400 });
+    }
+
+    const answer = runTokenExchange(fields.data.refresh_token);
+
+    return Response.json(answer.body, { status: answer.status });
+  };
 
   const handleGit = async (request: Request, path: string, query: string): Promise<Response> => {
     if (request.headers.get('authorization') !== expected) {
@@ -86,6 +154,20 @@ export async function startFakeUpstream(address: string, token: string): Promise
         authorization: request.headers.get('authorization'),
       });
 
+      if (url.pathname === '/oauth/token' && request.method === 'POST') {
+        return handleToken(request);
+      }
+
+      if (url.pathname === '/oauth-e2e/me') {
+        const current = oauthState.accessTokens.at(-1);
+
+        return Response.json({
+          generation: oauthState.accessTokens.length,
+          authorized:
+            current !== undefined && request.headers.get('authorization') === `Bearer ${current}`,
+        });
+      }
+
       if (url.pathname.includes('.git/')) {
         return handleGit(request, url.pathname, url.search.slice(1));
       }
@@ -95,6 +177,14 @@ export async function startFakeUpstream(address: string, token: string): Promise
   });
 
   return {
+    oauth: {
+      clientId: OAUTH_CLIENT_ID,
+      firstRefreshToken: oauthState.refreshTokens[0] ?? '',
+      accessTokens: () => [...oauthState.accessTokens],
+      refreshTokens: () => [...oauthState.refreshTokens],
+      refused: () => oauthState.refused,
+      exchange: (refreshToken) => runTokenExchange(refreshToken).status,
+    },
     origin: `https://${address}:${String(server.port)}`,
     caPem: readFileSync(join(dir, 'ca.pem'), 'utf8'),
     seen,

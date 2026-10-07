@@ -25,6 +25,11 @@ const secret = `${prefix}gh`;
 const token = `e2e-${randomUUID()}`;
 const upstreamsFile = join(instance.dataDir, 'broker-test-upstreams.json');
 
+// the oauth secret's fake hosts, both served by the fake upstream
+const oauthSecret = `${prefix}oa`;
+const oauthApiHost = 'api.oauth-e2e.test';
+const oauthTokenHost = 'auth.oauth-e2e.test';
+
 const AuditSchema = z.array(
   z.object({
     host: z.string(),
@@ -48,11 +53,17 @@ beforeAll(async () => {
     upstreamsFile,
     JSON.stringify({
       ca: upstream.caPem,
-      upstreams: { 'github.com': upstream.origin, 'api.github.com': upstream.origin },
+      upstreams: {
+        'github.com': upstream.origin,
+        'api.github.com': upstream.origin,
+        [oauthApiHost]: upstream.origin,
+        [oauthTokenHost]: upstream.origin,
+      },
     }),
   );
 
   await tryImp(['secret', 'rm', secret]);
+  await tryImp(['secret', 'rm', oauthSecret]);
   await createImp(name, '--image', resolveImageName('base'), '--memory', '1g');
   await holdImp(name);
 }, 300_000);
@@ -61,6 +72,7 @@ afterAll(async () => {
   rmSync(upstreamsFile, { force: true });
 
   await tryImp(['secret', 'rm', secret]);
+  await tryImp(['secret', 'rm', oauthSecret]);
 
   await upstream[Symbol.asyncDispose]();
 });
@@ -272,4 +284,117 @@ test('without a grant, an exec that requires the broker runs nothing', async () 
   const ran = await checkRan(marker);
 
   expect(ran).toBe('none');
+});
+
+const MeSchema = z.object({ generation: z.number(), authorized: z.boolean() });
+
+// the oauth API as the guest sees it
+async function readOAuthMe(): Promise<z.infer<typeof MeSchema>> {
+  const body = await runShellInImp(name, `curl -sS --fail https://${oauthApiHost}/oauth-e2e/me`);
+
+  return MeSchema.parse(JSON.parse(body));
+}
+
+test('an oauth secret signs in, and the guest reaches the API with the access token', async () => {
+  const added = await tryImp(
+    [
+      'secret',
+      'add',
+      oauthSecret,
+      '--kind',
+      'oauth',
+      '--hosts',
+      oauthApiHost,
+      '--token-url',
+      `https://${oauthTokenHost}/oauth/token`,
+      '--client-id',
+      upstream.oauth.clientId,
+      '--token-format',
+      'json',
+    ],
+    { stdin: `${upstream.oauth.firstRefreshToken}\n` },
+  );
+
+  expect(added.exitCode).toBe(0);
+  expect(added.stderr).toContain(`${oauthSecret} signed in`);
+  expect(added.stdout).toContain('ready until');
+
+  await runImp('grant', name, oauthSecret);
+
+  const me = await readOAuthMe();
+
+  expect(me).toEqual({ generation: 1, authorized: true });
+
+  const listed = await runImp('secret', 'ls');
+
+  expect(listed).toContain(oauthSecret);
+  expect(listed).toContain('ready until');
+  expect(listed).not.toContain('e2e-refresh');
+  expect(listed).not.toContain('e2e-access');
+});
+
+test('a forced refresh rotates the tokens, and the next request carries the new one', async () => {
+  const refreshed = await tryImp(['secret', 'refresh', oauthSecret]);
+
+  expect(refreshed.exitCode).toBe(0);
+
+  const me = await readOAuthMe();
+
+  expect(me).toEqual({ generation: 2, authorized: true });
+
+  // the first refresh token is dead at the endpoint, and impd used each once
+  const [first, second] = upstream.oauth.refreshTokens();
+
+  expect(upstream.oauth.exchange(first ?? '')).toBe(400);
+  expect(upstream.oauth.refreshTokens()).toHaveLength(3);
+  expect(second).toBeDefined();
+});
+
+test('a websocket upgrade to a granted host is answered 426 at once', async () => {
+  const answer = await runShellInImp(
+    name,
+    `curl -sS -i -H 'Connection: Upgrade' -H 'Upgrade: websocket' https://${oauthApiHost}/oauth-e2e/me`,
+  );
+
+  expect(answer).toContain('426');
+  expect(answer).toContain('websocket upgrades are not supported through the broker');
+});
+
+test('no oauth token is in the guest: not its environment, disk or memory', async () => {
+  const tokens = [...upstream.oauth.accessTokens(), ...upstream.oauth.refreshTokens()];
+
+  expect(tokens.length).toBeGreaterThan(4);
+
+  const env = await runShellInImp(name, 'env');
+
+  for (const value of tokens) {
+    expect(env).not.toContain(value);
+  }
+
+  // the disk, by the tokens' common prefixes: a token on a command line
+  // would sit in the guest's memory, which the check below looks through
+  const onDisk = await runShellInImp(
+    name,
+    `grep -rIl -F -e e2e-access- -e e2e-refresh- / --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev 2>/dev/null | head -5; true`,
+  );
+
+  expect(onDisk.trim()).toBe('');
+
+  const imp = await requireImp(name);
+
+  await runImp('sleep', name);
+
+  const mem = `/var/lib/imp/imps/${imp.id}/snapshot/mem`;
+
+  for (const value of tokens) {
+    const found = await runInContainer(['grep', '-c', '-a', value, mem]);
+
+    expect(found.stdout.trim()).toBe('0');
+  }
+
+  await holdImp(name);
+
+  const me = await readOAuthMe();
+
+  expect(me.authorized).toBe(true);
 });
