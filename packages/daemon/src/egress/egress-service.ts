@@ -19,10 +19,10 @@ import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createRangeChecker } from '../net/range-checker';
 import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6, RESERVED_RANGES6 } from '../net/ranges6';
-import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { createDnsForward } from './dns-upstream';
 import type { DnsForward } from './dns-upstream';
+import { runConntrackFlush, runForwardRulesList, runPairFlush } from './egress-commands';
 import { createNftWriter, formatNftError, runNft } from './egress-firewall';
 import type { NftRunner } from './egress-firewall';
 import { createQueryHandler, startResolverServer } from './egress-resolver';
@@ -140,9 +140,9 @@ interface HostNetwork {
 export function createEgressService(deps: EgressDeps): EgressService {
   const now = deps.now ?? Date.now;
   const write = createNftWriter(deps.runNft ?? runNft);
-  const flushConnections = deps.flushConnections ?? runConntrackFlush;
-  const flushPair = deps.flushPair ?? runPairFlush;
-  const readForwardRules = deps.readForwardRules ?? runForwardRulesList;
+  const flushConnections = deps.flushConnections ?? ((guestIp) => runConntrackFlush(guestIp));
+  const flushPair = deps.flushPair ?? ((first, second) => runPairFlush(first, second));
+  const readForwardRules = deps.readForwardRules ?? (() => runForwardRulesList());
   const forward = deps.forward ?? createDnsForward(deps.config.dns);
   const ipv6 = deps.ipv6 ?? null;
   const readConnected6 = deps.readConnected6 ?? readConnectedPrefixes6;
@@ -755,18 +755,6 @@ function listPeerPairs(members: readonly NetworkMember[]): Set<string> {
   return pairs;
 }
 
-async function runForwardRulesList(): Promise<string> {
-  const result = await runCommand(['iptables', '-S', 'FORWARD']);
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `iptables -S FORWARD exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-    );
-  }
-
-  return result.stdout;
-}
-
 // setup-net.sh's rule, as `iptables -S FORWARD` prints it
 function isPeerAccept(rule: string): boolean {
   return (
@@ -774,33 +762,6 @@ function isPeerAccept(rule: string): boolean {
     rule.includes('--mark 0x1000000/0x1000000') &&
     rule.endsWith('-j ACCEPT')
   );
-}
-
-// both directions: conntrack matches -s and -d on a flow's original tuple
-async function runPairFlush(first: string, second: string): Promise<void> {
-  for (const [source, destination] of [
-    [first, second],
-    [second, first],
-  ] as const) {
-    const result = await runCommand(['conntrack', '-D', '-s', source, '-d', destination]);
-
-    if (result.exitCode !== 0 && !result.stderr.includes('0 flow entries')) {
-      throw new Error(
-        `conntrack -D -s ${source} -d ${destination} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-      );
-    }
-  }
-}
-
-// `conntrack -D` exits 1 when it found nothing to delete
-async function runConntrackFlush(guestIp: string): Promise<void> {
-  const result = await runCommand(['conntrack', '-D', '-s', guestIp]);
-
-  if (result.exitCode !== 0 && !result.stderr.includes('0 flow entries')) {
-    throw new Error(
-      `conntrack -D -s ${guestIp} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-    );
-  }
 }
 
 // A records, and with IPv6 AAAA too; a name with no AAAA still resolves

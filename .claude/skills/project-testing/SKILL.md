@@ -232,7 +232,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Docker for dev.sh   | `scripts/test-utils/build-stub-dev-docker.ts`                                       | The images, labels and containers `dev.sh prune` reads      |
 | Registry for base   | `scripts/test-utils/build-stub-registry-docker.ts`                                  | `docker buildx imagetools inspect` in the release Plan step |
 | impd for the client | `packages/client/smoke/run-stub-impd.ts`                                            | impd's app on loopback, run by `check-client-runtimes.sh`   |
-| nft                 | `setupImpTest`'s default `runNft`, which records scripts                            | `nft` from the egress service                               |
+| nft                 | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                | `nft` from the egress service                               |
+| Upstream DNS        | `test-utils/start-stub-dns-upstream.ts`                                             | An IMP_DNS server over UDP and TCP, with chosen faults      |
+| Egress for resolver | `test-utils/build-stub-egress-service.ts`                                           | The egress service as `createQueryHandler`'s deps           |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                                          | `ip` and `sysctl -n`, as `createTapDevices`'s `run`         |
 | mount               | A `run` with a mount table in `vmm/jail.test.ts`                                    | `mount` and `umount` for the jailer                         |
 | cgroups and `/proc` | Temp dirs as `root` and `procRoot` (5)                                              | The cgroup tree and `/proc`                                 |
@@ -259,6 +261,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
    function of a sourced script with only `PATH` and the variables a test passes.
 8. Bash that `egress/egress-ruleset.host.test.ts` runs in a mount and network namespace.
 9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
+10. `setupImpTest`'s default `runNft` still records scripts for the suites that use it.
 
 The mcp package's tests reach impd through the real `@zgeoff/imp-client` and
 `packages/mcp/src/test-utils/build-stub-impd.ts` (`buildStubImpd`): an MSW handler that answers the
