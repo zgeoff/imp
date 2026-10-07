@@ -60,6 +60,7 @@
         "@imp/daemon": "workspace:*",
         "@imp/test-utils": "workspace:*",
         "@orpc/contract": "catalog:",
+        "msw": "catalog:",
       },
     },
     "packages/client": {

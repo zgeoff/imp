@@ -1,126 +1,116 @@
-import { expect, test } from 'bun:test';
-import { EVENT_VERSION } from '@imp/api';
-import type { ImpEvent } from '@imp/api';
+import { expect, mock, test } from 'bun:test';
+import { buildMockGovernorDecision } from '@imp/api/test-utils/build-mock-governor-decision';
 import { ORPCError } from '@orpc/client';
+import { buildStubEventSource } from '../test-utils/build-stub-event-source';
 import { printEvents } from './events';
-import type { EventSource } from './events';
 
-const AT = new Date('2026-10-02T12:00:00Z');
+test('it prints the named imp’s events and reconnects after an end or a network drop', () => {
+  const dev = buildMockGovernorDecision({ name: 'dev' });
+  const web = buildMockGovernorDecision({ name: 'web' });
+  const print = mock<(line: string) => void>();
 
-function buildDecision(name: string): ImpEvent {
-  return {
-    v: EVENT_VERSION,
-    at: AT,
-    ev: 'GovernorDecision',
-    decision: 'admitted',
-    name,
-    trigger: 'admission',
-    usedMib: 0,
-    budgetMib: 1024,
-  };
-}
+  const stub = buildStubEventSource({
+    streams: [
+      { events: [dev, web] },
+      { failure: new TypeError('fetch failed') },
+      { events: [dev] },
+    ],
+    check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
+  });
 
-// a stream that sends `events`, then ends as impd ends one
-async function* buildEventStream(events: readonly ImpEvent[]): AsyncGenerator<ImpEvent> {
-  for (const event of events) {
-    yield await Promise.resolve(event);
-  }
-}
+  const printing = printEvents(stub.source, 'dev', print);
 
-const CHECK = { clientVersion: '0.3.0', serverVersion: '0.2.2', compatible: false };
+  expect(printing).rejects.toThrowWithMessage(
+    Error,
+    'the event stream ended 5 times in a row: impd closed it',
+  );
 
-interface ScriptedStream {
-  readonly names?: readonly string[];
-  readonly failure?: Error;
+  expect(print.mock.calls).toStrictEqual([[JSON.stringify(dev)], [JSON.stringify(dev)]]);
+  expect(stub.backoffs).toStrictEqual([1000, 2000, 4000, 8000]);
 
-  // how long the stream lasts, on the fake clock
-  readonly lastsMs?: number;
-}
-
-// an EventSource that plays `streams` in turn on a fake clock, and records
-// each backoff
-function buildSource(script: readonly ScriptedStream[]) {
-  const streams = [...script];
-  const clock = { now: 0 };
-  const backoffs: number[] = [];
-  const warnings: string[] = [];
-
-  const source: EventSource = {
-    openStream: () => {
-      const next = streams.shift() ?? {};
-
-      clock.now += next.lastsMs ?? 0;
-
-      if (next.failure !== undefined) {
-        return Promise.reject(next.failure);
-      }
-
-      const events = (next.names ?? []).map((name) => buildDecision(name));
-
-      return Promise.resolve(buildEventStream(events));
-    },
-    checkServer: () => Promise.resolve(CHECK),
-    now: () => clock.now,
-    wait: (ms) => {
-      backoffs.push(ms);
-
-      return Promise.resolve();
-    },
-    warn: (line) => {
-      warnings.push(line);
-    },
-  };
-
-  return { source, backoffs, warnings };
-}
-
-test('it prints one JSON line an event and reconnects after an end or a network drop', async () => {
-  const lines: string[] = [];
-
-  const scripted = buildSource([
-    { names: ['dev', 'web'] },
-    { failure: new TypeError('fetch failed') },
-    { names: ['dev'] },
-  ]);
-
-  const failure = await printEvents(scripted.source, 'dev', (line) => {
-    lines.push(line);
-  }).catch((error: unknown) => error);
-
-  expect(String(failure)).toContain('the event stream ended 5 times in a row');
-  expect(scripted.backoffs).toEqual([1000, 2000, 4000, 8000]);
-  expect(scripted.warnings[1]).toContain('fetch failed');
-
-  expect(lines.map((line) => JSON.parse(line) as unknown)).toEqual([
-    { ...buildDecision('dev'), at: AT.toISOString() },
-    { ...buildDecision('dev'), at: AT.toISOString() },
+  expect(stub.warnings).toStrictEqual([
+    'imp: the event stream ended (impd closed it); reconnecting in 1000ms',
+    'imp: the event stream ended (fetch failed); reconnecting in 2000ms',
+    'imp: the event stream ended (impd closed it); reconnecting in 4000ms',
+    'imp: the event stream ended (impd closed it); reconnecting in 8000ms',
   ]);
 });
 
-test('a stream that lasted starts the count and the backoff again', async () => {
-  const scripted = buildSource([{}, {}, { lastsMs: 20_000 }]);
+test('it prints every imp’s events when no imp is named', () => {
+  const dev = buildMockGovernorDecision({ name: 'dev' });
+  const web = buildMockGovernorDecision({ name: 'web' });
+  const print = mock<(line: string) => void>();
 
-  const failure = await printEvents(scripted.source, null, () => {}).catch(
-    (error: unknown) => error,
+  const stub = buildStubEventSource({
+    streams: [{ events: [dev, web] }],
+    check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
+  });
+
+  const printing = printEvents(stub.source, null, print);
+
+  expect(printing).rejects.toThrowWithMessage(
+    Error,
+    'the event stream ended 5 times in a row: impd closed it',
   );
 
-  expect(failure).toBeInstanceOf(Error);
-  expect(scripted.backoffs).toEqual([1000, 2000, 1000, 2000, 4000, 8000]);
+  expect(print.mock.calls).toStrictEqual([[JSON.stringify(dev)], [JSON.stringify(web)]]);
 });
 
-test('an impd from before the stream says to upgrade it, and a 401 is not retried', async () => {
-  const old = buildSource([{ failure: new ORPCError('NOT_FOUND', { status: 404 }) }]);
+test('it starts the count and the backoff again after a stream that lasted', () => {
+  const stub = buildStubEventSource({
+    streams: [{}, {}, { lastsMs: 20_000 }],
+    check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
+  });
 
-  const outdated = await printEvents(old.source, null, () => {}).catch((error: unknown) => error);
+  const printing = printEvents(stub.source, null, () => {});
 
-  expect(String(outdated)).toContain('impd 0.2.2 has no event stream; upgrade it to 0.3.0');
-
-  const refused = buildSource([{ failure: new ORPCError('UNAUTHORIZED', { status: 401 }) }]);
-
-  const unauthorized = await printEvents(refused.source, null, () => {}).catch(
-    (error: unknown) => error,
+  expect(printing).rejects.toThrowWithMessage(
+    Error,
+    'the event stream ended 5 times in a row: impd closed it',
   );
 
-  expect(unauthorized).toBeInstanceOf(ORPCError);
-  expect(refused.backoffs).toEqual([]);
+  expect(stub.backoffs).toStrictEqual([1000, 2000, 1000, 2000, 4000, 8000]);
+});
+
+test('it reconnects after impd answers a server error', () => {
+  const stub = buildStubEventSource({
+    streams: [{ failure: new ORPCError('INTERNAL_SERVER_ERROR', { message: 'boom' }) }],
+    check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
+  });
+
+  const printing = printEvents(stub.source, null, () => {});
+
+  expect(printing).rejects.toThrowWithMessage(
+    Error,
+    'the event stream ended 5 times in a row: impd closed it',
+  );
+
+  expect(stub.warnings[0]).toBe('imp: the event stream ended (boom); reconnecting in 1000ms');
+});
+
+test('it says to upgrade an impd from before the stream', () => {
+  const stub = buildStubEventSource({
+    streams: [{ failure: new ORPCError('NOT_FOUND', { status: 404 }) }],
+    check: { clientVersion: '0.3.0', serverVersion: '0.2.2', compatible: false },
+  });
+
+  expect(printEvents(stub.source, null, () => {})).rejects.toThrowWithMessage(
+    Error,
+    'impd 0.2.2 has no event stream; upgrade it to 0.3.0',
+  );
+});
+
+test.each([
+  ['UNAUTHORIZED', 401],
+  ['FORBIDDEN', 403],
+])('it rethrows a %s refusal without retrying', (code, status) => {
+  const stub = buildStubEventSource({
+    streams: [{ failure: new ORPCError(code, { status }) }],
+    check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
+  });
+
+  const printing = printEvents(stub.source, null, () => {});
+
+  expect(printing).rejects.toMatchObject({ code, status });
+  expect(stub.backoffs).toBeEmpty();
 });

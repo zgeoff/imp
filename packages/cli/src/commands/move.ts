@@ -26,6 +26,9 @@ export interface MoveRun {
   readonly output: ProgressOutput;
   readonly print: (line: string) => void;
   readonly wait: (ms: number) => Promise<void>;
+
+  // the clock the send's progress reads its rate from
+  readonly now: () => number;
 }
 
 // A whole move, as docs/guides/hosts.md#moves walks it: the source marks
@@ -122,7 +125,7 @@ async function runResume(run: MoveRun): Promise<void> {
 }
 
 async function waitForSend(run: MoveRun, totalBytes: number): Promise<MoveStatus> {
-  const progress = createCopyProgress(run.output, Date.now, 'imp move');
+  const progress = createCopyProgress(run.output, run.now, 'imp move');
   let shown = 0;
 
   progress.setTotal(totalBytes);
@@ -210,6 +213,7 @@ export const moveCommand = defineCommand({
           console.log(line);
         },
         wait: (ms) => Bun.sleep(ms),
+        now: Date.now,
       });
     });
   },
