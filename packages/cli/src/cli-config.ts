@@ -16,18 +16,22 @@ export interface CliConfig {
 const DEFAULT_URL = 'http://localhost:7070';
 
 // The impd to call and its token, always from one source, so a token never
-// goes to an impd it was not saved for. The order is in
-// docs/guides/configuration.md#cli; the tests cover every combination.
-export function loadCliConfig(env: CliEnv, host: string | null): CliConfig {
+// goes to an impd it was not saved for; `warn` gets the notes for stderr.
+// The order is in docs/guides/configuration.md#cli.
+export function loadCliConfig(
+  env: CliEnv,
+  host: string | null,
+  warn: (line: string) => void = console.error,
+): CliConfig {
   const envToken = readVariable(env, 'IMP_TOKEN');
   const named = host === null ? readHostVariable(env) : checkHostName(host);
 
   if (named !== null) {
     if (envToken !== null) {
-      console.error(`imp: note: IMP_TOKEN is ignored; ${named} uses its saved token`);
+      warn(`imp: note: IMP_TOKEN is ignored; ${named} uses its saved token`);
     }
 
-    return loadSavedHost(env, named);
+    return loadSavedHost(env, named, warn);
   }
 
   const envUrl = readVariable(env, 'IMP_URL');
@@ -40,10 +44,10 @@ export function loadCliConfig(env: CliEnv, host: string | null): CliConfig {
     return { url: envUrl, token: envToken, host: null };
   }
 
-  const config = readHostConfig(env);
+  const config = readHostConfig(env, warn);
 
   if (config.current !== null) {
-    const saved = loadSavedHost(env, config.current);
+    const saved = loadSavedHost(env, config.current, warn);
 
     return { ...saved, token: envToken ?? saved.token };
   }
@@ -55,8 +59,8 @@ export function isHttpUrl(url: string): boolean {
   return /^https?:$/.test(URL.parse(url)?.protocol ?? '');
 }
 
-function loadSavedHost(env: CliEnv, name: string): CliConfig {
-  const saved = readHostConfig(env).hosts[name];
+function loadSavedHost(env: CliEnv, name: string, warn: (line: string) => void): CliConfig {
+  const saved = readHostConfig(env, warn).hosts[name];
 
   if (saved === undefined) {
     throw new UsageError(
