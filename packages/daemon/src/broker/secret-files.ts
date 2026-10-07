@@ -1,13 +1,17 @@
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -16,6 +20,11 @@ import { dirname, join } from 'node:path';
 // named by buildValueFile, or by the bare secret name from an older impd.
 export interface SecretFiles {
   readonly write: (file: string, value: string) => void;
+
+  // Replaces a file's content in place by name, durably: temp file, fsync,
+  // rename, fsync of the directory. Only an oauth secret's file is rewritten
+  // (docs/guides/connectors.md#value-files).
+  readonly rewrite: (file: string, value: string) => void;
 
   // null when the file is gone
   readonly read: (file: string) => string | null;
@@ -72,6 +81,38 @@ export function createSecretFiles(dataDir: string): SecretFiles {
       try {
         writeFileSync(temp, value, { mode: 0o600, flag: 'wx' });
         renameSync(temp, join(dir, file));
+      } finally {
+        rmSync(temp, { force: true });
+      }
+    },
+    rewrite: (file, value) => {
+      const temp = join(dir, `.${file}.${randomBytes(6).toString('hex')}`);
+
+      try {
+        const fd = openSync(temp, 'wx', 0o600);
+
+        try {
+          const bytes = Buffer.from(value, 'utf8');
+          let written = 0;
+
+          while (written < bytes.length) {
+            written += writeSync(fd, bytes, written);
+          }
+
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+
+        renameSync(temp, join(dir, file));
+
+        const dirFd = openSync(dir, 'r');
+
+        try {
+          fsyncSync(dirFd);
+        } finally {
+          closeSync(dirFd);
+        }
       } finally {
         rmSync(temp, { force: true });
       }

@@ -47,3 +47,12 @@ test('placeholders come from the presets, each once', () => {
     'ANTHROPIC_API_KEY',
   ]);
 });
+
+test('oauth takes its rules from the caller like custom, and the presets refuse them', () => {
+  const rule = { host: 'api.example.com', header: 'authorization', scheme: 'bearer' as const };
+
+  expect(resolveRules('oauth', [rule])).toEqual([rule]);
+  expect(() => resolveRules('oauth', undefined)).toThrow('kind oauth needs at least one host');
+  expect(() => resolveRules('github', [rule])).toThrow('rules are for kinds custom and oauth');
+  expect(listPlaceholderEnv(['oauth', 'npm'])).toEqual(['NPM_TOKEN']);
+});

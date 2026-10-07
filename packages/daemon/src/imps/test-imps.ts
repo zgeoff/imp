@@ -10,6 +10,7 @@ import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
+import type { OAuthFetch } from '../broker/oauth-refresher';
 import { createSecretFiles } from '../broker/secret-files';
 import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
@@ -111,6 +112,12 @@ export interface ImpTestOptions {
 
   // holds a broker request between its rule read and its value read
   readonly afterRuleRead?: () => Promise<void>;
+
+  // the broker's token calls for oauth secrets, and its clock; its refresh
+  // timer never runs in the harness, so no test reaches a token endpoint
+  // unasked
+  readonly oauthFetch?: OAuthFetch;
+  readonly brokerNow?: () => number;
 
   // nft in place of the real one; by default it records each script
   readonly runNft?: (script: string) => Promise<void>;
@@ -238,6 +245,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       ((host) => Promise.reject(new TunnelRefusedError(`${host}: no network in tests`))),
     ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
     ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
+    ...(options.oauthFetch !== undefined && { oauthFetch: options.oauthFetch }),
+    ...(options.brokerNow !== undefined && { now: options.brokerNow }),
+    runOAuthTimer: false,
   });
 
   // every nft script and conntrack flush the egress firewall ran

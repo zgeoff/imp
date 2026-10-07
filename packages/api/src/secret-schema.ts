@@ -46,10 +46,37 @@ export const BrokerRuleSchema = z.object({
 export type BrokerRule = z.infer<typeof BrokerRuleSchema>;
 
 // A preset fills the rules and the guest's placeholder variables; `custom`
-// takes its rules from the caller.
-export const SecretKindSchema = z.enum(['github', 'anthropic', 'npm', 'custom']);
+// and `oauth` take their rules from the caller. An `oauth` secret's value is
+// a refresh token, which impd exchanges for the access token the broker sets.
+export const SecretKindSchema = z.enum(['github', 'anthropic', 'npm', 'custom', 'oauth']);
 
 export type SecretKind = z.infer<typeof SecretKindSchema>;
+
+// What an oauth secret needs to renew its access token: the token endpoint
+// (https only) and the client the refresh token was issued to. `form` sends
+// application/x-www-form-urlencoded, `json` a JSON body.
+export const OAuthConfigSchema = z.object({
+  tokenUrl: z.url({ protocol: /^https$/ }).max(2048),
+  clientId: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[!-~]+$/, 'must be printable ASCII without spaces'),
+  tokenFormat: z.enum(['json', 'form']).default('form'),
+});
+
+export type OAuthConfig = z.infer<typeof OAuthConfigSchema>;
+
+// An oauth secret's state, never a token. `error` is a short reason such as
+// `invalid_grant` or `HTTP 503`. `idClaims` is the ID token's payload
+// (identifiers, not credentials) that any token able to list secrets sees.
+const OAuthStateSchema = OAuthConfigSchema.extend({
+  status: z.enum(['pending', 'ready', 'needs_login']),
+  expiresAt: z.date().nullable(),
+  refreshedAt: z.date().nullable(),
+  error: z.string().nullable(),
+  idClaims: z.record(z.string(), z.unknown()).readonly().nullable(),
+});
 
 // What the API shows of a secret. The value never leaves impd.
 export const SecretSchema = z.object({
@@ -60,6 +87,9 @@ export const SecretSchema = z.object({
   // the imps it is granted to
   imps: z.array(NameSchema).readonly(),
   createdAt: z.date(),
+
+  // only for kind oauth
+  oauth: OAuthStateSchema.optional(),
 });
 
 export type Secret = z.infer<typeof SecretSchema>;

@@ -12,7 +12,7 @@ interface Preset {
 // what the guest holds in place of a secret
 export const PLACEHOLDER = 'imp-broker-placeholder';
 
-const PRESETS: Readonly<Record<Exclude<SecretKind, 'custom'>, Preset>> = {
+const PRESETS: Readonly<Record<Exclude<SecretKind, 'custom' | 'oauth'>, Preset>> = {
   // git smart HTTP on github.com takes Basic auth; the REST and upload APIs
   // take a bearer token
   github: {
@@ -38,21 +38,23 @@ export class SecretRulesError extends Error {
 }
 
 // The rules a secret of this kind gets: a preset's own, or the caller's
-// for `custom`. Two rules for one host would leave the header ambiguous.
+// for `custom` and `oauth`. Two rules for one host would leave the header ambiguous.
 export function resolveRules(
   kind: SecretKind,
   given: readonly BrokerRule[] | undefined,
 ): readonly BrokerRule[] {
-  if (kind !== 'custom') {
+  if (kind !== 'custom' && kind !== 'oauth') {
     if (given !== undefined) {
-      throw new SecretRulesError(`kind ${kind} has its own hosts; rules are for kind custom`);
+      throw new SecretRulesError(
+        `kind ${kind} has its own hosts; rules are for kinds custom and oauth`,
+      );
     }
 
     return PRESETS[kind].rules;
   }
 
   if (given === undefined || given.length === 0) {
-    throw new SecretRulesError('kind custom needs at least one host');
+    throw new SecretRulesError(`kind ${kind} needs at least one host`);
   }
 
   const hosts = given.map((rule) => rule.host);
@@ -67,7 +69,9 @@ export function resolveRules(
 
 // the placeholder variables for these kinds, each once
 export function listPlaceholderEnv(kinds: readonly SecretKind[]): readonly string[] {
-  const names = kinds.flatMap((kind) => (kind === 'custom' ? [] : PRESETS[kind].env));
+  const names = kinds.flatMap((kind) =>
+    kind === 'custom' || kind === 'oauth' ? [] : PRESETS[kind].env,
+  );
 
   return [...new Set(names)];
 }

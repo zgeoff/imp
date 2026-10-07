@@ -336,6 +336,9 @@ export function createFakeImpd(): FakeImpd {
         throw new Error('not in the fake');
       }),
       list: os.secrets.list.handler(() => []),
+      refresh: os.secrets.refresh.handler(() => {
+        throw new Error('not in the fake');
+      }),
       delete: os.secrets.delete.handler(() => ({})),
     },
 

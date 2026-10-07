@@ -584,6 +584,14 @@ export const MIGRATIONS: Record<string, Migration> = {
       await db.schema.alterTable('api_audit').addColumn('detail', 'text').execute();
     },
   },
+
+  // a refreshing oauth secret kind (GEO-121): the token endpoint and client
+  // its refresh token belongs to; null for every other kind
+  '026_add_secret_oauth': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema.alterTable('secrets').addColumn('oauth', 'text').execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

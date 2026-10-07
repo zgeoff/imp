@@ -419,14 +419,35 @@ export function formatImages(images: readonly Image[]): string {
 
 export function formatSecrets(secrets: readonly Secret[]): string {
   return formatTable(
-    ['NAME', 'KIND', 'HOSTS', 'IMPS'],
+    ['NAME', 'KIND', 'STATE', 'HOSTS', 'IMPS'],
     secrets.map((secret) => [
       secret.name,
       secret.kind,
+      formatSecretState(secret),
       secret.rules.map((rule) => rule.host).join(','),
       secret.imps.length === 0 ? '-' : secret.imps.join(','),
     ]),
   );
+}
+
+// `-` for a kind that never expires; for oauth, whether its access token is
+// there and until when
+function formatSecretState(secret: Readonly<Secret>): string {
+  const oauth = secret.oauth;
+
+  if (oauth === undefined) {
+    return '-';
+  }
+
+  if (oauth.status === 'ready') {
+    return oauth.expiresAt === null ? 'ready' : `ready until ${oauth.expiresAt.toISOString()}`;
+  }
+
+  if (oauth.status === 'pending') {
+    return oauth.error === null ? 'pending' : `pending (${oauth.error})`;
+  }
+
+  return `needs_login (${oauth.error ?? 'unknown'})`;
 }
 
 export function formatNetworks(networks: readonly Network[]): string {

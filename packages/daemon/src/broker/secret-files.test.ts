@@ -135,3 +135,47 @@ test('the kept directories are listed with their files, and removed by name only
 
   expect(files.listKept()).toEqual([]);
 });
+
+test('a rewrite replaces a file in place by name, owner-only, and leaves no temp file', () => {
+  using tmp = setupDir();
+
+  const files = createSecretFiles(tmp.dir);
+
+  files.write('codex.a1', '{"v":1,"n":"old"}');
+  files.rewrite('codex.a1', '{"v":1,"n":"new"}');
+
+  expect(files.read('codex.a1')).toBe('{"v":1,"n":"new"}');
+  expect(readdirSync(join(tmp.dir, 'secrets'))).toEqual(['codex.a1']);
+  expect(statSync(join(tmp.dir, 'secrets', 'codex.a1')).mode & 0o777).toBe(0o600);
+});
+
+test('a rewrite that cannot finish leaves the old value and no temp file', () => {
+  using tmp = setupDir();
+
+  const files = createSecretFiles(tmp.dir);
+
+  files.write('codex.a1', 'old');
+
+  // a directory where the file goes: the rename fails
+  rmSync(join(tmp.dir, 'secrets', 'codex.a1'));
+  mkdirSync(join(tmp.dir, 'secrets', 'codex.a1'));
+  writeFileSync(join(tmp.dir, 'secrets', 'codex.a1', 'keep'), 'x');
+
+  expect(() => {
+    files.rewrite('codex.a1', 'new');
+  }).toThrow();
+
+  expect(readdirSync(join(tmp.dir, 'secrets'))).toEqual(['codex.a1']);
+});
+
+test('a rewrite writes a value of many bytes whole', () => {
+  using tmp = setupDir();
+
+  const files = createSecretFiles(tmp.dir);
+  const value = `{"v":1,"n":"${'é'.repeat(300_000)}"}`;
+
+  files.write('codex.a1', 'old');
+  files.rewrite('codex.a1', value);
+
+  expect(files.read('codex.a1')).toBe(value);
+});

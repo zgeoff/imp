@@ -104,7 +104,7 @@ test('a caller with patterns touches only its imps, and never the host', async (
   ]);
 
   const hostWide = await Promise.all(
-    ['secrets.add', 'backups.restore', 'tokens.create'].map((path) =>
+    ['secrets.add', 'secrets.refresh', 'backups.restore', 'tokens.create'].map((path) =>
       check(path, caller, { name: 'dev-a' }),
     ),
   );

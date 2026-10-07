@@ -71,6 +71,14 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
       return new Response(`this connection is for ${deps.host}\n`, { status: 421 });
     }
 
+    // answered at once, so a client that tries a WebSocket first falls back to
+    // HTTPS without waiting on a stripped upgrade
+    if (isWebSocketUpgrade(request.headers)) {
+      return new Response('websocket upgrades are not supported through the broker\n', {
+        status: 426,
+      });
+    }
+
     const credential = await deps.findCredential(deps.impId, deps.host);
 
     if (credential === null) {
@@ -151,6 +159,13 @@ function sendUpstream(url: string, init: UpstreamInit): Promise<Response> {
   const tls = init.tls === undefined ? {} : { tls: { ca: [...init.tls.ca] } };
 
   return fetch(url, { ...init, ...tls });
+}
+
+// `Upgrade: websocket`, in a list of protocols and in any case
+function isWebSocketUpgrade(headers: Headers): boolean {
+  return (headers.get('upgrade') ?? '')
+    .split(',')
+    .some((protocol) => protocol.trim().toLowerCase().split('/')[0] === 'websocket');
 }
 
 // the host part of a Host header: lowercased, without :443
