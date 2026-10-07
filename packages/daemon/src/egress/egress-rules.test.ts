@@ -5,71 +5,96 @@ import {
   isNameAllowed,
   isTunnelAllowed,
   listExactNames,
+  normalizeName,
 } from './egress-rules';
 
-const RULES = buildAllowRules(['github.com', '*.npmjs.org', '172.17.0.1', '203.0.113.0/24']);
+test('#buildAllowRules splits a list into names, suffixes and ranges of each family', () => {
+  const rules = buildAllowRules([
+    'github.com',
+    '*.npmjs.org',
+    '172.17.0.1',
+    '203.0.113.0/24',
+    '2001:db8:b::1',
+    '2001:db8:c::/48',
+  ]);
 
-test('an exact name matches itself in any case, with or without the trailing dot', () => {
-  for (const name of ['github.com', 'GitHub.COM', 'github.com.']) {
-    expect({ name, allowed: isNameAllowed(RULES, name) }).toEqual({ name, allowed: true });
-  }
-
-  for (const name of ['api.github.com', 'github.com.evil.test', 'xgithub.com']) {
-    expect({ name, allowed: isNameAllowed(RULES, name) }).toEqual({ name, allowed: false });
-  }
+  expect(rules).toStrictEqual({
+    names: new Set(['github.com']),
+    suffixes: ['.npmjs.org'],
+    ranges: [
+      [2_886_795_265, 1],
+      [3_405_803_776, 256],
+    ],
+    ranges6: [
+      [0x20_01_0d_b8_00_0b_00_00_00_00_00_00_00_00_00_01n, 1n],
+      [0x20_01_0d_b8_00_0c_00_00_00_00_00_00_00_00_00_00n, 2n ** 80n],
+    ],
+    cidrs: ['172.17.0.1/32', '203.0.113.0/24', '2001:db8:b::1/128', '2001:db8:c::/48'],
+  });
 });
 
-test('a wildcard matches subdomains at any depth, not the name itself', () => {
-  for (const name of ['registry.npmjs.org', 'a.b.npmjs.org', 'REGISTRY.npmjs.org.']) {
-    expect({ name, allowed: isNameAllowed(RULES, name) }).toEqual({ name, allowed: true });
-  }
-
-  for (const name of ['npmjs.org', 'evilnpmjs.org', 'npmjs.org.evil.test']) {
-    expect({ name, allowed: isNameAllowed(RULES, name) }).toEqual({ name, allowed: false });
-  }
+test.each([
+  ['GitHub.COM', 'github.com'],
+  ['github.com.', 'github.com'],
+  ['Registry.NPMJS.org.', 'registry.npmjs.org'],
+  ['github.com', 'github.com'],
+])('#normalizeName reads %p as %p', (name, normal) => {
+  expect(normalizeName(name)).toBe(normal);
 });
 
-test('an address entry is a /32, and a CIDR covers its range', () => {
-  expect(RULES.cidrs).toEqual(['172.17.0.1/32', '203.0.113.0/24']);
-
-  for (const [address, allowed] of [
-    ['172.17.0.1', true],
-    ['172.17.0.2', false],
-    ['203.0.113.0', true],
-    ['203.0.113.255', true],
-    ['203.0.114.0', false],
-    ['github.com', false],
-  ] as const) {
-    expect({ address, allowed: isAddressAllowed(RULES, address) }).toEqual({ address, allowed });
-  }
+test.each([
+  ['github.com', true],
+  ['GitHub.COM', true],
+  ['github.com.', true],
+  ['api.github.com', false],
+  ['github.com.evil.test', false],
+  ['xgithub.com', false],
+  ['registry.npmjs.org', true],
+  ['a.b.npmjs.org', true],
+  ['REGISTRY.npmjs.org.', true],
+  ['npmjs.org', false],
+  ['evilnpmjs.org', false],
+  ['npmjs.org.evil.test', false],
+])('#isNameAllowed of github.com and *.npmjs.org gives %p %p', (name, allowed) => {
+  expect(isNameAllowed(buildAllowRules(['github.com', '*.npmjs.org']), name)).toBe(allowed);
 });
 
-test('a tunnel follows the mode: open allows, none refuses, box checks the list', () => {
-  const box = { mode: 'box', allow: ['github.com', '172.17.0.1'] } as const;
+test.each([
+  ['172.17.0.1', true],
+  ['172.17.0.2', false],
+  ['203.0.113.0', true],
+  ['203.0.113.255', true],
+  ['203.0.114.0', false],
+  ['github.com', false],
+  ['2001:db8:b::1', true],
+  ['2001:db8:b::2', false],
+  ['2001:db8:c:ffff::1', true],
+  ['2001:db8:d::1', false],
+])('#isAddressAllowed of a /32, a /24, a /128 and a /48 gives %p %p', (address, allowed) => {
+  const rules = buildAllowRules([
+    '172.17.0.1',
+    '203.0.113.0/24',
+    '2001:db8:b::1',
+    '2001:db8:c::/48',
+    'github.com',
+  ]);
 
-  expect(isTunnelAllowed({ mode: 'open', allow: [] }, 'example.org')).toBeTrue();
-  expect(isTunnelAllowed({ mode: 'public', allow: [] }, 'example.org')).toBeTrue();
-  expect(isTunnelAllowed({ mode: 'none', allow: [] }, 'github.com')).toBeFalse();
-  expect(isTunnelAllowed(box, 'github.com')).toBeTrue();
-  expect(isTunnelAllowed(box, '172.17.0.1')).toBeTrue();
-  expect(isTunnelAllowed(box, 'example.org')).toBeFalse();
+  expect(isAddressAllowed(rules, address)).toBe(allowed);
 });
 
-test('only the exact names can be resolved ahead of the guest', () => {
-  expect(listExactNames(['github.com', '*.npmjs.org', '9.9.9.9'])).toEqual(['github.com']);
+test.each([
+  ['open', [], 'example.org', true],
+  ['public', [], 'example.org', true],
+  ['none', [], 'github.com', false],
+  ['box', ['github.com', '172.17.0.1'], 'github.com', true],
+  ['box', ['github.com', '172.17.0.1'], '172.17.0.1', true],
+  ['box', ['github.com', '172.17.0.1'], 'example.org', false],
+] as const)('#isTunnelAllowed under %p with %p to %p gives %p', (mode, allow, host, allowed) => {
+  expect(isTunnelAllowed({ mode, allow: [...allow] }, host)).toBe(allowed);
 });
 
-test('an IPv6 entry is a /128, and an IPv6 CIDR covers its range', () => {
-  const rules = buildAllowRules(['2001:db8:b::1', '2001:db8:c::/48', 'github.com']);
-
-  expect(rules.cidrs).toEqual(['2001:db8:b::1/128', '2001:db8:c::/48']);
-
-  for (const [address, allowed] of [
-    ['2001:db8:b::1', true],
-    ['2001:db8:b::2', false],
-    ['2001:db8:c:ffff::1', true],
-    ['2001:db8:d::1', false],
-  ] as const) {
-    expect({ address, allowed: isAddressAllowed(rules, address) }).toEqual({ address, allowed });
-  }
+test('#listExactNames lists only the exact names, which impd can resolve ahead of the guest', () => {
+  expect(listExactNames(['github.com', '*.npmjs.org', '9.9.9.9', '2001:db8::/32'])).toStrictEqual([
+    'github.com',
+  ]);
 });

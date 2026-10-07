@@ -1,123 +1,218 @@
 import { expect, test } from 'bun:test';
-import type { NetworkMember } from '../db/networks';
 import { parseSubnet } from '../net/addressing';
+import { buildMockNetworkMember } from '../test-utils/build-mock-network-member';
 import { resolveNetworkName } from './network-names';
 
-const SUBNET = parseSubnet('10.66.0.0/16');
+test('it answers a peer by its name under the network', () => {
+  const view = {
+    names: new Set(['lab']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+    ],
+  };
 
-function buildMember(network: string, name: string, slot: number): NetworkMember {
-  return { network, impId: name, name, slot, guestIp: `10.66.0.${String(slot * 4 + 2)}` };
-}
+  const answer = resolveNetworkName(view, parseSubnet('10.66.0.0/16'), {
+    slot: 0,
+    name: 'db.lab.internal',
+    type: 'A',
+  });
 
-// web and db share lab, db and cache share ops, and slot 3 is on neither
-const MEMBERS = [
-  buildMember('lab', 'db', 1),
-  buildMember('lab', 'web', 0),
-  buildMember('ops', 'cache', 2),
-  buildMember('ops', 'db', 1),
-];
-
-// empty has no members
-const VIEW = { names: new Set(['lab', 'ops', 'empty']), members: MEMBERS };
-
-function resolveAs(slot: number, name: string, type = 'A') {
-  return resolveNetworkName(VIEW, SUBNET, { slot, name, type });
-}
-
-test('a peer has an address under its network, and by its bare name', () => {
-  const full = resolveAs(0, 'db.lab.internal');
-  const bare = resolveAs(0, 'db');
-
-  expect(full).toEqual({
+  expect(answer).toStrictEqual({
     kind: 'records',
     records: [{ type: 'A', name: 'db.lab.internal', ttl: 5, data: '10.66.0.6' }],
   });
+});
 
-  expect(bare).toEqual({
+test('it answers a peer by its bare name', () => {
+  const view = {
+    names: new Set(['lab']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+    ],
+  };
+
+  const answer = resolveNetworkName(view, parseSubnet('10.66.0.0/16'), {
+    slot: 0,
+    name: 'db',
+    type: 'A',
+  });
+
+  expect(answer).toStrictEqual({
     kind: 'records',
     records: [{ type: 'A', name: 'db', ttl: 5, data: '10.66.0.6' }],
   });
 });
 
-test('a name of the zone the guest shares no network with does not exist', () => {
-  const answers = [
-    // web is not on ops
-    resolveAs(0, 'cache.ops.internal'),
+// web and db share lab, db and cache share ops, slot 3 is on neither, and
+// empty has no members
+test.each([
+  [0, 'cache.ops.internal'],
+  [0, 'cache.lab.internal'],
+  [3, 'db.lab.internal'],
+  [0, 'nothing.lab.internal'],
+  [0, 'lab.internal'],
+  [0, 'a.db.lab.internal'],
+  [0, 'db.empty.internal'],
+])('it answers NXDOMAIN to slot %p for %p, a name under a network it may not see', (slot, name) => {
+  const view = {
+    names: new Set(['lab', 'ops', 'empty']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'ops', name: 'cache', slot: 2, guestIp: '10.66.0.10' }),
+      buildMockNetworkMember({ network: 'ops', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+    ],
+  };
 
-    // cache is on ops, not lab
-    resolveAs(0, 'cache.lab.internal'),
-
-    // slot 3 is on no network
-    resolveAs(3, 'db.lab.internal'),
-    resolveAs(0, 'nothing.lab.internal'),
-    resolveAs(0, 'lab.internal'),
-    resolveAs(0, 'a.db.lab.internal'),
-    resolveAs(0, 'db.empty.internal'),
-  ];
-
-  expect(answers).toEqual(Array.from({ length: answers.length }, () => ({ kind: 'nxdomain' })));
+  expect(
+    resolveNetworkName(view, parseSubnet('10.66.0.0/16'), { slot, name, type: 'A' }),
+  ).toStrictEqual({ kind: 'nxdomain' });
 });
 
-test('an internal name under no network of the host goes upstream', () => {
-  const answers = [
-    resolveAs(0, 'metadata.google.internal'),
-    resolveAs(0, 'db.corp.internal'),
-    resolveAs(0, 'internal'),
-  ];
+// web and db share lab; cache is on ops, which web is not on
+test.each([
+  [0, 'metadata.google.internal'],
+  [0, 'db.corp.internal'],
+  [0, 'internal'],
+  [0, 'cache'],
+  [3, 'db'],
+  [0, 'example.com'],
+])('it passes on slot %p asking for %p, a name of no network on the host', (slot, name) => {
+  const view = {
+    names: new Set(['lab', 'ops']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'ops', name: 'cache', slot: 2, guestIp: '10.66.0.10' }),
+    ],
+  };
 
-  expect(answers).toEqual([null, null, null]);
+  expect(
+    resolveNetworkName(view, parseSubnet('10.66.0.0/16'), { slot, name, type: 'A' }),
+  ).toBeNull();
 });
 
-test('a bare name that is no peer goes upstream', () => {
-  const answers = [resolveAs(0, 'cache'), resolveAs(3, 'db'), resolveAs(0, 'example.com')];
+test('it answers no data, not NXDOMAIN, for another type of a peer', () => {
+  const view = {
+    names: new Set(['lab']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+    ],
+  };
 
-  expect(answers).toEqual([null, null, null]);
-});
-
-test('another type for a peer is no data, not NXDOMAIN', () => {
-  const answer = resolveAs(0, 'db.lab.internal', 'AAAA');
-
-  expect(answer).toEqual({ kind: 'records', records: [] });
-});
-
-test('a peer address names the peer on each network the two share', () => {
-  const fromDb = resolveAs(1, '10.0.66.10.in-addr.arpa', 'PTR');
-  const fromWeb = resolveAs(0, '6.0.66.10.in-addr.arpa', 'PTR');
-  const fromCache = resolveAs(2, '6.0.66.10.in-addr.arpa', 'PTR');
-
-  expect(fromDb).toEqual({
-    kind: 'records',
-    records: [{ type: 'PTR', name: '10.0.66.10.in-addr.arpa', ttl: 5, data: 'cache.ops.internal' }],
+  const answer = resolveNetworkName(view, parseSubnet('10.66.0.0/16'), {
+    slot: 0,
+    name: 'db.lab.internal',
+    type: 'AAAA',
   });
 
-  expect(fromWeb).toEqual({
-    kind: 'records',
-    records: [{ type: 'PTR', name: '6.0.66.10.in-addr.arpa', ttl: 5, data: 'db.lab.internal' }],
+  expect(answer).toStrictEqual({ kind: 'records', records: [] });
+});
+
+// db shares lab with web and ops with cache
+test.each([
+  [1, '10.0.66.10.in-addr.arpa', 'cache.ops.internal'],
+  [0, '6.0.66.10.in-addr.arpa', 'db.lab.internal'],
+  [2, '6.0.66.10.in-addr.arpa', 'db.ops.internal'],
+])(
+  'it answers slot %p for %p with the peer name %p of the network they share',
+  (slot, name, data) => {
+    const view = {
+      names: new Set(['lab', 'ops']),
+      members: [
+        buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+        buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+        buildMockNetworkMember({ network: 'ops', name: 'cache', slot: 2, guestIp: '10.66.0.10' }),
+        buildMockNetworkMember({ network: 'ops', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+      ],
+    };
+
+    expect(
+      resolveNetworkName(view, parseSubnet('10.66.0.0/16'), { slot, name, type: 'PTR' }),
+    ).toStrictEqual({ kind: 'records', records: [{ type: 'PTR', name, ttl: 5, data }] });
+  },
+);
+
+test('it names a peer once for each network the two share', () => {
+  const view = {
+    names: new Set(['lab', 'ops']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'ops', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+      buildMockNetworkMember({ network: 'ops', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+    ],
+  };
+
+  const answer = resolveNetworkName(view, parseSubnet('10.66.0.0/16'), {
+    slot: 0,
+    name: '6.0.66.10.in-addr.arpa',
+    type: 'PTR',
   });
 
-  expect(fromCache).toEqual({
+  expect(answer).toStrictEqual({
     kind: 'records',
-    records: [{ type: 'PTR', name: '6.0.66.10.in-addr.arpa', ttl: 5, data: 'db.ops.internal' }],
+    records: [
+      { type: 'PTR', name: '6.0.66.10.in-addr.arpa', ttl: 5, data: 'db.lab.internal' },
+      { type: 'PTR', name: '6.0.66.10.in-addr.arpa', ttl: 5, data: 'db.ops.internal' },
+    ],
   });
 });
 
-test('every reverse name of the subnet stays in impd', () => {
-  const answers = [
-    // not a peer of web
-    resolveAs(0, '10.0.66.10.in-addr.arpa', 'PTR'),
-    resolveAs(0, '0.66.10.in-addr.arpa', 'PTR'),
-    resolveAs(0, '66.10.in-addr.arpa', 'SOA'),
-  ];
+test('it answers no data for another type of a peer address', () => {
+  const view = {
+    names: new Set(['lab']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'lab', name: 'db', slot: 1, guestIp: '10.66.0.6' }),
+    ],
+  };
 
-  expect(answers).toEqual(Array.from({ length: answers.length }, () => ({ kind: 'nxdomain' })));
+  const answer = resolveNetworkName(view, parseSubnet('10.66.0.0/16'), {
+    slot: 0,
+    name: '6.0.66.10.in-addr.arpa',
+    type: 'A',
+  });
+
+  expect(answer).toStrictEqual({ kind: 'records', records: [] });
 });
 
-test('a reverse name outside the subnet goes upstream', () => {
-  const answers = [
-    resolveAs(0, '1.1.1.1.in-addr.arpa', 'PTR'),
-    resolveAs(0, '10.in-addr.arpa', 'PTR'),
-    resolveAs(0, '1.0.67.10.in-addr.arpa', 'PTR'),
-  ];
+// cache, on ops, is no peer of web
+test.each([
+  ['10.0.66.10.in-addr.arpa', 'PTR'],
+  ['0.66.10.in-addr.arpa', 'PTR'],
+  ['66.10.in-addr.arpa', 'SOA'],
+])('it keeps %p %p in impd as NXDOMAIN, a reverse name of the subnet', (name, type) => {
+  const view = {
+    names: new Set(['lab', 'ops']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      buildMockNetworkMember({ network: 'ops', name: 'cache', slot: 2, guestIp: '10.66.0.10' }),
+    ],
+  };
 
-  expect(answers).toEqual([null, null, null]);
+  expect(
+    resolveNetworkName(view, parseSubnet('10.66.0.0/16'), { slot: 0, name, type }),
+  ).toStrictEqual({ kind: 'nxdomain' });
+});
+
+test.each([
+  ['1.1.1.1.in-addr.arpa'],
+  ['10.in-addr.arpa'],
+  ['1.0.67.10.in-addr.arpa'],
+  ['5.1.0.66.10.in-addr.arpa'],
+])('it passes on %p, a reverse name outside the subnet', (name) => {
+  const view = {
+    names: new Set(['lab']),
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+    ],
+  };
+
+  expect(
+    resolveNetworkName(view, parseSubnet('10.66.0.0/16'), { slot: 0, name, type: 'PTR' }),
+  ).toBeNull();
 });
