@@ -603,3 +603,10 @@ test('it leaves the host addresses empty, with a warning, when ip fails', () => 
   expect(readEnvValues(env, 'IMP_HOST_ADDRESSES')).toStrictEqual(['']);
   expect(result.stderr.toString()).toInclude("cannot read the host's addresses");
 });
+
+test('it refuses to run without the bootstrap.sh it sizes the host with, with its usage', () => {
+  const result = Bun.spawnSync(['bash', new URL('imp-host-env.sh', import.meta.url).pathname]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString()).toInclude('usage: imp-host-env.sh BOOTSTRAP_SH');
+});

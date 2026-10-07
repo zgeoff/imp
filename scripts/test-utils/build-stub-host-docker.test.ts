@@ -258,3 +258,120 @@ test('it lists no imps when none are awake', () => {
 
   expect(result.stdout.toString()).toBe('[]\n');
 });
+
+test('it answers inspect, pull, plain imp ls and compose up with success and no output', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+    }),
+  );
+
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      '-c',
+      'docker inspect imp-host; echo "inspect $?"; docker pull -q imp-host:next; echo "pull $?"; ' +
+        'docker exec imp-host imp ls; echo "ls $?"; ' +
+        'docker compose -f c.yaml up -d imp-host; echo "up $?"',
+    ],
+    { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
+  );
+
+  expect(result.stdout.toString()).toBe('inspect 0\npull 0\nls 0\nup 0\n');
+});
+
+test('it fails a pull of another image than the one it was given', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+    }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'pull', '-q', 'imp-host:other'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.exitCode).toBe(1);
+});
+
+test('it answers imp info with an empty object unless told otherwise', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+    }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'info', '--json'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.stdout.toString()).toBe('{}\n');
+});
+
+test('it answers imp info with what it was given', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+      impInfo: '{"bootStatus":null}',
+    }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'info', '--json'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.stdout.toString()).toBe('{"bootStatus":null}\n');
+});
+
+test('it fails imp info when told to', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+      impInfo: null,
+    }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'info', '--json'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect({ exitCode: result.exitCode, stdout: result.stdout.toString() }).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+  });
+});

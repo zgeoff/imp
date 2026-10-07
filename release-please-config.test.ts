@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import * as z from 'zod';
 import { checkReleaseRefs } from './scripts/test-utils/check-release-refs';
-import type { ReleaseRefs } from './scripts/test-utils/check-release-refs';
 
 // release-please tags from its manifest and rewrites the first X.Y.Z of each marked line in
 // its generic extra-files, so every default image, the NixOS module's included, must sit under
@@ -73,9 +72,11 @@ test('it names the release of package.json at every marked default of each gener
   const checked = generic.map((file) => {
     const text = readFileSync(new URL(file.path, import.meta.url), 'utf8');
 
-    return checkReleaseRefs(file.path, text, pkg.version);
+    return { path: file.path, refs: checkReleaseRefs(file.path, text, pkg.version) };
   });
 
-  expect(checked.flatMap((refs) => refs.problems)).toStrictEqual([]);
-  expect(checked).toSatisfyAll((refs: ReleaseRefs) => refs.defaults > 0);
+  expect(checked.flatMap((file) => file.refs.problems)).toStrictEqual([]);
+
+  // a failure names each file that has no marked default
+  expect(checked.filter((file) => file.refs.defaults === 0).map((file) => file.path)).toBeEmpty();
 });

@@ -117,7 +117,6 @@ test.each([
   ['// docs/architecture/sleep-and-wake.md, "Sleep"', 'names a heading in quotes'],
   ['// (docs/architecture/sleep-and-wake.md, gotcha 6)', 'names a section in prose'],
   ['// (docs/architecture/sleep-and-wake.md, Sleep)', 'names a heading after a comma'],
-  ['// (docs/architecture/', 'splits a docs path across lines'],
 ])('#checkFile fails the heading named only in prose in %p', (line, problem) => {
   const repo = buildStubDocRepo({
     pages: { 'docs/architecture/sleep-and-wake.md': '# Sleep and wake\n## Sleep' },

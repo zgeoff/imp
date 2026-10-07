@@ -17,7 +17,7 @@ the rules for writing tests live in the testing skill.
 
 | Run                     | Command                                                             | Needs                                              |
 | ----------------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
-| Unit and package tests  | `bun test` at the root                                              | Nothing beyond Bun; the gated files below skip     |
+| Unit and package tests  | `bun test` at the root                                              | Bun, bash, git, jq; the gated files below skip     |
 | Dashboard components    | `bun run test:dashboard`                                            | Nothing beyond Bun                                 |
 | End to end              | `scripts/test-e2e.sh`                                               | KVM, Docker; some suites need more (below)         |
 | Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun test test/host/` | Root or unprivileged namespaces, `nft`, `iptables` |
@@ -26,6 +26,9 @@ the rules for writing tests live in the testing skill.
 | Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`     | A small filesystem mounted at `<dir>`              |
 | ACME issuer             | `bun run test:pebble`                                               | Docker                                             |
 | Docker idle             | `bun run test:slow`                                                 | Nothing beyond Bun; about 6.5 minutes              |
+
+Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
+tests need `jq`, and `release-please-config.test.ts` and `scripts/check-doc-refs.ts` run `git`.
 
 The build disk hold's `<file>` is `packages/daemon/src/images/isolated-build.test.ts`; its
 small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory.

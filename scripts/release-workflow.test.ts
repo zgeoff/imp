@@ -57,14 +57,25 @@ test('it checks out the tag being built in the base job', () => {
   expect(checkout?.with).toContainEntry(['ref', `\${{ inputs.tag || github.sha }}`]);
 });
 
-test('it labels the base image with the commit it builds, for linux/amd64 only', () => {
+test('it labels the base image with the commit it builds', () => {
   const jobs = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   const build = jobs.base.steps.find((step) => step.run?.includes('docker buildx build') === true);
 
-  expect(build?.run).toIncludeMultiple(['git rev-parse HEAD', '--platform linux/amd64']);
+  expect(build?.run).toInclude('git rev-parse HEAD');
+});
+
+test('it builds the base image for linux/amd64 only', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  const build = jobs.base.steps.find((step) => step.run?.includes('docker buildx build') === true);
+  const platforms = [...(build?.run ?? '').matchAll(/--platform[ =](?<list>\S+)/gv)];
+
+  expect(platforms.map((match) => match.groups?.['list'])).toStrictEqual(['linux/amd64']);
 });
 
 test('it plans before any build, and builds, checks, pushes and attests only on push', () => {

@@ -175,3 +175,17 @@ test('it keeps the staged token, without failing the start, when the source cann
   expect(readFileSync(join(ctx.dir, 'dns', 'token'), 'utf8')).toBe('cf-good\n');
   expect(readdirSync(join(ctx.dir, 'dns'))).toStrictEqual(['token']);
 });
+
+test.each([[[]], [['/run/secrets/dns-token']]])(
+  'it refuses to run with the arguments %p, with its usage',
+  (args) => {
+    const result = Bun.spawnSync([
+      'bash',
+      new URL('imp-host-dns-token.sh', import.meta.url).pathname,
+      ...args,
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toInclude('usage: imp-host-dns-token.sh SOURCE DIR');
+  },
+);

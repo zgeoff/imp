@@ -24,7 +24,7 @@ function setupTest() {
   };
 }
 
-test('#prune stops before it asks docker anything when there is no machine id', () => {
+test('it stops before it asks docker anything when there is no machine id', () => {
   using ctx = setupTest();
 
   const docker = createStubBin(ctx.dir, 'docker', 'exit 1');
@@ -45,7 +45,7 @@ test('#prune stops before it asks docker anything when there is no machine id', 
   expect(readFileSync(docker.calls, 'utf8')).toBe('');
 });
 
-test('#prune removes the own tag of a gone checkout on this machine, then the leftovers', () => {
+test('it removes the own tag of a gone checkout on this machine, then the leftovers', () => {
   using ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
@@ -53,7 +53,7 @@ test('#prune removes the own tag of a gone checkout on this machine, then the le
   const gone = runSourcedFunction({
     script: lib,
     fn: 'dev_image_tag',
-    args: ['/nonexistent/gone'],
+    args: [join(ctx.dir, 'gone')],
   });
 
   const tag = gone.stdout.trim();
@@ -65,7 +65,7 @@ test('#prune removes the own tag of a gone checkout on this machine, then the le
     'docker',
     `case "$*" in
   "image ls --filter label=imp.worktree --format "*) echo '${tag} id-gone' ;;
-  "image inspect -f "*" id-gone") printf '%s\\t%s\\n' /nonexistent/gone fake-machine-id ;;
+  "image inspect -f "*" id-gone") printf '%s\\t%s\\n' '${join(ctx.dir, 'gone')}' fake-machine-id ;;
   "ps -aq --filter ancestor=id-gone" | "image rm "* | "image prune "*) ;;
   *) exit 1 ;;
 esac`,
@@ -79,7 +79,10 @@ esac`,
   });
 
   expect(result.exitCode).toBe(0);
-  expect(result.stdout.toString()).toBe(`dev.sh: removed ${tag} (/nonexistent/gone is gone)\n`);
+
+  expect(result.stdout.toString()).toBe(
+    `dev.sh: removed ${tag} (${join(ctx.dir, 'gone')} is gone)\n`,
+  );
 
   expect(
     readFileSync(docker.calls, 'utf8')
@@ -91,14 +94,24 @@ esac`,
   ]);
 });
 
-test("#prune never removes a live checkout's image, another machine's, or an unmarked one", () => {
+test("it never removes a live checkout's image, another machine's, or an unmarked one", () => {
   using ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
   const live = runSourcedFunction({ script: lib, fn: 'dev_image_tag', args: [ctx.dir] });
-  const other = runSourcedFunction({ script: lib, fn: 'dev_image_tag', args: ['/nonexistent/o'] });
-  const bare = runSourcedFunction({ script: lib, fn: 'dev_image_tag', args: ['/nonexistent/u'] });
+
+  const other = runSourcedFunction({
+    script: lib,
+    fn: 'dev_image_tag',
+    args: [join(ctx.dir, 'other')],
+  });
+
+  const bare = runSourcedFunction({
+    script: lib,
+    fn: 'dev_image_tag',
+    args: [join(ctx.dir, 'unmarked')],
+  });
 
   writeFileSync(join(ctx.dir, 'machine-id'), 'fake-machine-id\n');
 
@@ -110,8 +123,8 @@ test("#prune never removes a live checkout's image, another machine's, or an unm
     printf '%s\\n' '${live.stdout.trim()} id-live' '${other.stdout.trim()} id-other' \\
       '${bare.stdout.trim()} id-unmarked' 'imp-host:dev-empty-4 id-empty' '<none>:<none> id-dangling' ;;
   "image inspect -f "*" id-live") printf '%s\\t%s\\n' '${ctx.dir}' fake-machine-id ;;
-  "image inspect -f "*" id-other") printf '%s\\t%s\\n' /nonexistent/o another-machine ;;
-  "image inspect -f "*" id-unmarked") printf '%s\\t%s\\n' /nonexistent/u '' ;;
+  "image inspect -f "*" id-other") printf '%s\\t%s\\n' '${join(ctx.dir, 'other')}' another-machine ;;
+  "image inspect -f "*" id-unmarked") printf '%s\\t%s\\n' '${join(ctx.dir, 'unmarked')}' '' ;;
   "image inspect -f "*" id-empty") printf '%s\\t%s\\n' '' fake-machine-id ;;
   "ps -aq "* | "image rm "* | "image prune "*) ;;
   *) exit 1 ;;
@@ -135,13 +148,22 @@ esac`,
   ).toStrictEqual([]);
 });
 
-test('#prune keeps a gone checkout image it cannot remove, and says why', () => {
+test('it keeps a gone checkout image it cannot remove, and says why', () => {
   using ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
-  const stuck = runSourcedFunction({ script: lib, fn: 'dev_image_tag', args: ['/nonexistent/s'] });
-  const used = runSourcedFunction({ script: lib, fn: 'dev_image_tag', args: ['/nonexistent/u'] });
+  const stuck = runSourcedFunction({
+    script: lib,
+    fn: 'dev_image_tag',
+    args: [join(ctx.dir, 'stuck')],
+  });
+
+  const used = runSourcedFunction({
+    script: lib,
+    fn: 'dev_image_tag',
+    args: [join(ctx.dir, 'used')],
+  });
 
   writeFileSync(join(ctx.dir, 'machine-id'), 'fake-machine-id\n');
 
@@ -152,9 +174,9 @@ test('#prune keeps a gone checkout image it cannot remove, and says why', () => 
   "image ls --filter label=imp.worktree --format "*)
     printf '%s\\n' '${stuck.stdout.trim()} id-stuck' 'imp-host:pinned id-pinned' \\
       '${used.stdout.trim()} id-used' 'imp-host:dev-broken-5 id-broken' ;;
-  "image inspect -f "*" id-stuck") printf '%s\\t%s\\n' /nonexistent/s fake-machine-id ;;
-  "image inspect -f "*" id-pinned") printf '%s\\t%s\\n' /nonexistent/s fake-machine-id ;;
-  "image inspect -f "*" id-used") printf '%s\\t%s\\n' /nonexistent/u fake-machine-id ;;
+  "image inspect -f "*" id-stuck") printf '%s\\t%s\\n' '${join(ctx.dir, 'stuck')}' fake-machine-id ;;
+  "image inspect -f "*" id-pinned") printf '%s\\t%s\\n' '${join(ctx.dir, 'stuck')}' fake-machine-id ;;
+  "image inspect -f "*" id-used") printf '%s\\t%s\\n' '${join(ctx.dir, 'used')}' fake-machine-id ;;
   "image inspect -f "*) exit 1 ;;
   "ps -aq --filter ancestor=id-used") echo c0ffee ;;
   "ps -aq "* | "image prune "*) ;;
@@ -174,7 +196,7 @@ esac`,
 
   expect(result.stdout.toString().split('\n')).toStrictEqual([
     `dev.sh: keeping ${stuck.stdout.trim()}: docker image rm failed`,
-    'dev.sh: keeping imp-host:pinned: not the tag of /nonexistent/s',
+    `dev.sh: keeping imp-host:pinned: not the tag of ${join(ctx.dir, 'stuck')}`,
     `dev.sh: keeping ${used.stdout.trim()}: a container uses it`,
     'dev.sh: keeping imp-host:dev-broken-5: docker image inspect failed',
     '',

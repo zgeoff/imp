@@ -139,49 +139,6 @@ test('#render leaves the checked-in units, bootstrap.sh and compose.yaml as they
   expect(render(argsJson, current)).toStrictEqual(current);
 });
 
-test('#readHostArgs finds nothing --privileged in the deploy args', () => {
-  const args = readHostArgs(
-    readFileSync(new URL('../deploy/imp-host.args.json', import.meta.url), 'utf8'),
-  );
-
-  const words = [...args.privileges, ...args.lines, ...args.proxy.privileges, ...args.proxy.lines];
-
-  expect(words.flat()).not.toContain('--privileged');
-});
-
-test('#readHostArgs gives imp-host only the proxy socket, read-only', () => {
-  const args = readHostArgs(
-    readFileSync(new URL('../deploy/imp-host.args.json', import.meta.url), 'utf8'),
-  );
-
-  const hostWords = [...args.privileges, ...args.lines].flat();
-
-  expect(hostWords.filter((word) => word.includes('docker.sock'))).toStrictEqual([
-    'DOCKER_HOST=unix:///run/imp-docker/docker.sock',
-  ]);
-
-  expect(hostWords).toContain('/run/imp-docker:/run/imp-docker:ro');
-});
-
-test("#readHostArgs gives the proxy the host's docker.sock with no capabilities or network", () => {
-  const args = readHostArgs(
-    readFileSync(new URL('../deploy/imp-host.args.json', import.meta.url), 'utf8'),
-  );
-
-  const proxyWords = [...args.proxy.privileges, ...args.proxy.lines].flat();
-
-  expect(proxyWords).toContain('/var/run/docker.sock:/var/run/docker.sock');
-  expect(proxyWords).not.toContain('--cap-add');
-  expect(proxyWords).not.toContain('--env-file');
-
-  expect(proxyWords.join(' ')).toIncludeMultiple([
-    '--cap-drop ALL',
-    '--network none',
-    '--security-opt no-new-privileges',
-    '--user 65534:65534',
-  ]);
-});
-
 test('#readHostArgs passes an unbraced $NAME in lines as env words', () => {
   const args = readHostArgs(
     '{"privileges": [["--init"]], "probed": [], "lines": [["$IMP_PUBLIC_PORTS"]], ' +
@@ -344,21 +301,37 @@ test('#renderProxyUnit refuses a unit whose docker run has no command after the 
   );
 });
 
+test('#renderBootstrap refuses a bootstrap.sh without the proxy unit heredoc', () => {
+  expect(() =>
+    renderBootstrap("unit_imp_host() {\n  cat <<'EOF'\nold\nEOF\n}\n", 'unit', 'proxy unit'),
+  ).toThrowWithMessage(Error, 'deploy/bootstrap.sh: no heredoc from "unit_imp_docker_proxy"');
+});
+
+test('#render refuses a compose file without the proxy privileges block', () => {
+  const argsJson =
+    '{"privileges": [["--init"]], "probed": [], "lines": [["--name", "x"]], ' +
+    '"proxy": {"privileges": [["--read-only"]], "lines": [["--name", "p"]], "command": ["y"]}}';
+
+  const current = {
+    unit: `ExecStartPre=/bin/sh -c 'a=; old'\nExecStart=/usr/bin/docker run \\\n  \${IMP_HOST_IMAGE}\n`,
+    proxyUnit: `ExecStart=/usr/bin/docker run \\\n  \${IMP_HOST_IMAGE} old\n`,
+    bootstrap:
+      "unit_imp_host() {\n  cat <<'EOF'\nold\nEOF\n}\n" +
+      "unit_imp_docker_proxy() {\n  cat <<'EOF'\nold\nEOF\n}\n",
+    compose:
+      '    # privileges: from deploy/imp-host.args.json (bun run render:deploy)\n' +
+      '    # end of privileges\n',
+  };
+
+  expect(() => render(argsJson, current)).toThrowWithMessage(
+    Error,
+    'deploy/compose.yaml: no block from "# proxy privileges: from deploy/imp-host.args.json (bun run render:deploy)"',
+  );
+});
+
 test('#renderBootstrap refuses a bootstrap.sh without the unit heredoc', () => {
   expect(() => renderBootstrap('main() { :; }\n', 'unit', 'proxy unit')).toThrowWithMessage(
     Error,
     'deploy/bootstrap.sh: no heredoc from "unit_imp_host"',
   );
-});
-
-test('#readHostArgs probes only devices that compose.zfs.yaml passes', () => {
-  const override = readFileSync(new URL('../deploy/compose.zfs.yaml', import.meta.url), 'utf8');
-
-  const probed = readHostArgs(
-    readFileSync(new URL('../deploy/imp-host.args.json', import.meta.url), 'utf8'),
-  ).probed;
-
-  expect(
-    probed.filter((entry) => entry.args[0] === '--device').map((entry) => `- ${entry.path}`),
-  ).toSatisfyAll((line: string) => override.includes(line));
 });

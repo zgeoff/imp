@@ -49,3 +49,35 @@ test('it throws on a workflow without the base job', () => {
 
   expect(() => parseReleaseWorkflow(yaml)).toThrow();
 });
+
+test('it throws on a job without needs', () => {
+  const yaml = [
+    'jobs:',
+    '  base:',
+    '    steps: []',
+    '  image:',
+    '    needs: []',
+    '    steps: []',
+    '  publish:',
+    '    needs: []',
+    '    steps: []',
+  ].join('\n');
+
+  expect(() => parseReleaseWorkflow(yaml)).toThrow(/"needs"/u);
+});
+
+test('it throws on a job without steps', () => {
+  const yaml = [
+    'jobs:',
+    '  base:',
+    '    needs: []',
+    '  image:',
+    '    needs: []',
+    '    steps: []',
+    '  publish:',
+    '    needs: []',
+    '    steps: []',
+  ].join('\n');
+
+  expect(() => parseReleaseWorkflow(yaml)).toThrow(/"steps"/u);
+});

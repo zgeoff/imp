@@ -911,13 +911,21 @@ test.each([['fd12::/56'], ['fd12::1/64'], ['fd12:::/64'], ['nope/64'], ['10.0.0.
   },
 );
 
-test('#random_ula64 picks a unique local /64 that subnet6 accepts as it is', () => {
+test('#random_ula64 picks a unique local /64', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  const result = runSourcedFunction({ script, fn: 'random_ula64' });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toMatch(/^fd[0-9a-f]{2}:[0-9a-f:]+\/64\n$/u);
+});
+
+test('#subnet6 accepts the subnet random_ula64 picks as it is', () => {
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
   const subnet = runSourcedFunction({ script, fn: 'random_ula64' }).stdout.trim();
   const checked = runSourcedFunction({ script, fn: 'subnet6', args: [subnet] });
 
-  expect(subnet).toMatch(/^fd[0-9a-f]{2}:[0-9a-f:]+\/64$/u);
   expect(checked).toStrictEqual({ exitCode: 0, stdout: `${subnet}\n`, stderr: '' });
 });
 
@@ -1288,4 +1296,49 @@ test.each([
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toEndWith(`bootstrap: ${message}\n`);
+});
+
+// the value an env file gave, set as resolve_* sees it after reading the file
+test('#resolve_host_firewall refuses a host firewall other than own or none', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({ script, fn: 'eval', args: ['host_firewall=ufw; resolve_host_firewall'] }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'bootstrap: /etc/imp/imp-host.env says IMP_HOST_FIREWALL=ufw; want own or none\n',
+  });
+});
+
+test('#resolve_host_firewall keeps none', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: ['host_firewall=none; resolve_host_firewall; echo "$host_firewall"'],
+    }),
+  ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: host firewall: none\nnone\n', stderr: '' });
+});
+
+test('#resolve_ipv6 refuses an IPv6 choice other than on, off or auto', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({ script, fn: 'eval', args: ['ipv6=maybe; resolve_ipv6'] }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'bootstrap: /etc/imp/imp-host.env says IMP_HOST_IPV6=maybe; want on or off\n',
+  });
+});
+
+test('#resolve_ipv6 keeps on', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({ script, fn: 'eval', args: ['ipv6=on; resolve_ipv6; echo "$ipv6"'] }),
+  ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: ipv6: on\non\n', stderr: '' });
 });

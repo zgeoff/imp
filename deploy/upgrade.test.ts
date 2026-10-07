@@ -1625,7 +1625,7 @@ test('it refuses a compose .env image built from other variables, before any pul
   );
 });
 
-test('it gives compose config an IMP_DOCKER_GID when the environment has none', () => {
+test("it gives compose config the Docker socket's group when the environment has no IMP_DOCKER_GID", () => {
   using ctx = setupTest();
 
   const docker = createStubBin(
@@ -1641,6 +1641,7 @@ test('it gives compose config an IMP_DOCKER_GID when the environment has none', 
   );
 
   createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+  createStubBin(ctx.dir, 'stat', 'echo 4321');
 
   writeFileSync(
     join(ctx.dir, 'imp-host.service'),
@@ -1672,7 +1673,8 @@ test('it gives compose config an IMP_DOCKER_GID when the environment has none', 
   const calls = readFileSync(docker.calls, 'utf8');
 
   expect(result.exitCode).toBe(0);
-  expect(calls).toMatch(/compose config, IMP_HOST_IMAGE unset, IMP_DOCKER_GID \d*\n/v);
+  expect(calls).toInclude('stat -c %g /var/run/docker.sock\n');
+  expect(calls).toInclude('compose config, IMP_HOST_IMAGE unset, IMP_DOCKER_GID 4321\n');
 });
 
 test('it never prints the environment that compose config reads', () => {
@@ -1783,7 +1785,13 @@ test('it refuses --compose without a file, with its usage', () => {
   const result = Bun.spawnSync(
     ['bash', new URL('upgrade.sh', import.meta.url).pathname, '--compose'],
     {
-      env: { PATH: `${join(ctx.dir, 'bin')}:${process.env['PATH'] ?? ''}` },
+      env: {
+        PATH: `${join(ctx.dir, 'bin')}:${process.env['PATH'] ?? ''}`,
+        IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+        IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+        IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+        IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+      },
     },
   );
 
@@ -1801,7 +1809,13 @@ test('it refuses to run on a host without jq', () => {
   const result = Bun.spawnSync(
     [Bun.which('bash') ?? 'bash', new URL('upgrade.sh', import.meta.url).pathname],
     {
-      env: { PATH: docker.bin },
+      env: {
+        PATH: docker.bin,
+        IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+        IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+        IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+        IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+      },
     },
   );
 
@@ -1821,6 +1835,8 @@ test('it refuses a host with no imp-host container, before any pull', () => {
       IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
       IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
       IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
     },
   });
 
@@ -2029,4 +2045,86 @@ test('it stops before anything restarts when it cannot rewrite the env file', ()
   );
 
   expect(readFileSync(docker.calls, 'utf8')).not.toInclude('systemctl');
+});
+
+test('it warns, and still upgrades, when imp info fails', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      impInfo: null,
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+
+  expect(result.stderr.toString()).toInclude(
+    'upgrade: imp info failed; see the NOTE column below\n',
+  );
+});
+
+test('it warns, and still upgrades, when it cannot read imp info', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      impInfo: 'not json',
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+
+  expect(result.stderr.toString()).toInclude(
+    'upgrade: could not read imp info; see the NOTE column below\n',
+  );
 });

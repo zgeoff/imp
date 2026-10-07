@@ -16,6 +16,9 @@ interface StubHostDocker {
   readonly awakeImps?: readonly string[];
   readonly sleeplessImp?: string;
 
+  // what `imp info --json` prints, `{}` unless set; null fails it
+  readonly impInfo?: string | null;
+
   // the end of the deploy file whose `docker run ... cat` fails, such as .service
   readonly unreadableFile?: string;
 
@@ -40,6 +43,9 @@ export function buildStubHostDocker(stub: StubHostDocker): string {
 
   const imps = JSON.stringify((stub.awakeImps ?? []).map((name) => ({ name, state: 'running' })));
 
+  const impInfo =
+    stub.impInfo === null ? 'exit 1' : `printf '%s\\n' ${buildShellWord(stub.impInfo ?? '{}')}`;
+
   return `case "$*" in
   "inspect -f {{.Image}} imp-host") echo sha256:old ;;
   "inspect imp-host" | "pull -q "${buildShellWord(stub.image)}) ;;
@@ -52,7 +58,7 @@ export function buildStubHostDocker(stub: StubHostDocker): string {
   "exec imp-host imp ls --json") echo ${buildShellWord(imps)} ;;
   "exec imp-host imp sleep "${buildShellWord(stub.sleeplessImp ?? '')}) exit 1 ;;
   "exec imp-host imp sleep "*) ;;
-  "exec imp-host imp info --json") echo '{}' ;;
+  "exec imp-host imp info --json") ${impInfo} ;;
   "compose -f "*" config --environment")
     echo "compose config, IMP_HOST_IMAGE \${IMP_HOST_IMAGE-unset}, IMP_DOCKER_GID \${IMP_DOCKER_GID-unset}" >>"$STUB_CALLS"
     ${composeConfig} ;;
