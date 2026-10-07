@@ -1,32 +1,30 @@
-import { afterEach, expect } from 'bun:test';
-import { GlobalRegistrator } from '@happy-dom/global-registrator';
-import * as jestDOMMatchers from '@testing-library/jest-dom/matchers';
+import { afterAll, afterEach, beforeAll, mock } from 'bun:test';
+import { registerRunHooks } from '@imp/test-utils/register-run-hooks';
+import { IMPD_ORIGIN, knownTokens } from './src/mocks/handlers';
+import { server } from './src/mocks/node';
 
-// Bun's own fetch stack survives happy-dom: the client's Request and
-// AbortSignal must come from one implementation
-const nativeFetchStack = {
-  AbortController: globalThis.AbortController,
-  AbortSignal: globalThis.AbortSignal,
-  Blob: globalThis.Blob,
-  fetch: globalThis.fetch,
-  Headers: globalThis.Headers,
-  ReadableStream: globalThis.ReadableStream,
-  Request: globalThis.Request,
-  Response: globalThis.Response,
-  TextDecoder: globalThis.TextDecoder,
-  TextEncoder: globalThis.TextEncoder,
-  TransformStream: globalThis.TransformStream,
-  WritableStream: globalThis.WritableStream,
-};
+declare global {
+  // happy-dom's own API on the window that @zgeoff/bun-test-react registers
+  var happyDOM: { readonly setURL: (url: string) => void };
+}
 
-GlobalRegistrator.register({ url: 'http://impd.test/ui/' });
-Object.assign(globalThis, nativeFetchStack);
+// a seeded faker, and every env override put back after each test
+registerRunHooks();
 
-expect.extend(jestDOMMatchers);
+// the page's own origin, as impd serves the dashboard: the session routes
+// (src/lib/session.ts) fetch relative URLs
+globalThis.happyDOM.setURL(`${IMPD_ORIGIN}/ui/`);
 
-// imported after the DOM exists: Testing Library reads `document` on import
-const reactTestingLibrary = await import('@testing-library/react');
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: 'error' });
+});
 
 afterEach(() => {
-  reactTestingLibrary.cleanup();
+  server.resetHandlers();
+  knownTokens.clear();
+  mock.restore();
+});
+
+afterAll(() => {
+  server.close();
 });
