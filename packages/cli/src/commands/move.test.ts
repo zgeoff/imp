@@ -19,6 +19,7 @@ import { server } from '@imp/test-utils/mock-server';
 import { createImpClient } from '@zgeoff/imp-client';
 import { HttpResponse, http } from 'msw';
 import { runCli } from '../test-utils/start-cli';
+import { startStubImpd } from '../test-utils/start-stub-impd';
 import { UsageError } from '../usage-error';
 import { runMove } from './move';
 
@@ -304,6 +305,141 @@ test('it sends the target’s facts to prepare for a sleeping imp', async () => 
   ).rejects.toThrow(
     /^dev cannot move with its memory: IMP_DATA_DIR differs \(\S+cli-move-a-\S+ here, \S+cli-move-b-\S+ there\)/u,
   );
+});
+
+test('it prepares a sleeping imp without facts when the target is an older impd with none to give', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.from.imps.create({ name: 'dev' });
+  await ctx.from.imps.sleep({ name: 'dev' });
+
+  // an impd from before warm moves has no moves.facts
+  using older = startStubImpd({
+    answers: { 'system/info': { storage: { backend: 'xfs' } } },
+    failures: { 'moves/facts': { code: 'NOT_FOUND', status: 404, message: 'Not found' } },
+  });
+
+  const to = createImpClient({ url: older.url, token: older.token });
+
+  expect(
+    runMove({
+      name: 'dev',
+      from: ctx.from,
+      to,
+      toHost: 'b',
+      mode: 'move',
+      stop: false,
+      output: { isTTY: false, write: () => {} },
+      print: () => {},
+      wait: () =>
+        new Promise((resolve) => {
+          setImmediate(resolve);
+        }),
+      now: () => 0,
+    }),
+  ).rejects.toThrow(/^dev cannot move with its memory: the target does not say what it can load/u);
+});
+
+test('it sends the warm plan with the ticket and says the imp moved asleep, from stub hosts since two impds in one process never share a data dir', async () => {
+  const facts = {
+    firecrackerVersion: 'v1.17.0',
+    snapshotVersion: 'v12.0.0',
+    hostKernel: 'test',
+    cpuModel: 'Test CPU',
+    cpuFlags: 'test-flags',
+    dataDir: '/var/lib/imp',
+    storage: 'xfs',
+    subnet: '10.66.0.0/16',
+    slotCount: 16_384,
+    brokerPort: 7443,
+    dns: ['1.1.1.1'],
+  } as const;
+
+  const warm = {
+    slot: 0,
+    egressMode: 'none',
+    snapshot: {
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix: null,
+    },
+    host: {
+      dataDir: '/var/lib/imp',
+      storage: 'xfs',
+      subnet: '10.66.0.0/16',
+      brokerPort: 7443,
+      dns: ['1.1.1.1'],
+    },
+  } as const;
+
+  using source = startStubImpd({
+    answers: {
+      'moves/prepare': { bytes: 4096, checkpoints: 0, warm },
+      'moves/send': {
+        state: 'sending',
+        peer: 'http://100.100.0.2:7070',
+        sentBytes: 0,
+        totalBytes: 4096,
+        isDone: false,
+        error: null,
+      },
+      'moves/status': {
+        state: null,
+        peer: null,
+        sentBytes: 4096,
+        totalBytes: 4096,
+        isDone: true,
+        error: null,
+      },
+    },
+  });
+
+  using target = startStubImpd({
+    answers: {
+      'system/info': { storage: { backend: 'xfs' } },
+      'moves/facts': facts,
+      'moves/receive': {
+        ticket: 'ticket-1',
+        expiresAt: new Date(60_000),
+        peerUrl: 'http://100.100.0.2:7070',
+      },
+    },
+  });
+
+  const print = mock<(line: string) => void>();
+
+  await runMove({
+    name: 'dev',
+    from: createImpClient({ url: source.url, token: source.token }),
+    to: createImpClient({ url: target.url, token: target.token }),
+    toHost: 'b',
+    mode: 'move',
+    stop: false,
+    output: { isTTY: false, write: () => {} },
+    print,
+    wait: () =>
+      new Promise((resolve) => {
+        setImmediate(resolve);
+      }),
+    now: () => 0,
+  });
+
+  expect(print).toHaveBeenCalledExactlyOnceWith('dev: moved to b, asleep with its memory');
+
+  expect(source.calls.map((call) => [call.path, call.input])).toStrictEqual([
+    ['moves/prepare', { name: 'dev', stop: false, targetStorage: 'xfs', target: facts }],
+    ['moves/send', { name: 'dev', to: 'http://100.100.0.2:7070', ticket: 'ticket-1' }],
+    ['moves/status', { name: 'dev' }],
+  ]);
+
+  expect(target.calls.map((call) => [call.path, call.input])).toStrictEqual([
+    ['system/info', undefined],
+    ['moves/facts', undefined],
+    ['moves/receive', { name: 'dev', bytes: 4096, warm }],
+  ]);
 });
 
 test('it takes the source’s mark off when the target refuses the ticket', async () => {
