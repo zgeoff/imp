@@ -157,3 +157,44 @@ test('a test upstream gets the extra CA, never a switch that turns verification 
   expect(ctx.sent[0]?.url).toBe('https://172.17.0.1:9443/x');
   expect(ctx.sent[0]?.init.tls).toEqual({ ca: ['ROOT', 'TEST CA'] });
 });
+
+test('a websocket upgrade is answered 426 without a credential lookup or an upstream request', async () => {
+  const lookups: string[] = [];
+
+  const ctx = setupForwarder({
+    findCredential: (impId, host) => {
+      lookups.push(`${impId} ${host}`);
+
+      return Promise.resolve(null);
+    },
+  });
+
+  for (const upgrade of ['websocket', 'WebSocket', 'h2c, websocket']) {
+    const response = await ctx.forward(
+      new Request('https://api.github.com/stream', {
+        headers: { host: 'api.github.com', connection: 'Upgrade', upgrade },
+      }),
+    );
+
+    const text = await response.text();
+
+    expect(response.status).toBe(426);
+    expect(text).toBe('websocket upgrades are not supported through the broker\n');
+  }
+
+  expect(lookups).toEqual([]);
+  expect(ctx.sent).toEqual([]);
+  expect(ctx.audits).toEqual([]);
+});
+
+test('another upgrade protocol is not answered 426', async () => {
+  const ctx = setupForwarder();
+
+  const response = await ctx.forward(
+    new Request('https://api.github.com/x', {
+      headers: { host: 'api.github.com', upgrade: 'h2c' },
+    }),
+  );
+
+  expect(response.status).toBe(201);
+});
