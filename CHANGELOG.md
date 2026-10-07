@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.1](https://github.com/zgeoff/imp/compare/v0.40.0...v0.40.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **geo-135:** wait for the leader's trap before sending sigusr1 ([#245](https://github.com/zgeoff/imp/issues/245)) ([3aa85bb](https://github.com/zgeoff/imp/commit/3aa85bb4b0e00bcce1233092077bee28ed9723a2))
+
 ## [0.40.0](https://github.com/zgeoff/imp/compare/v0.39.0...v0.40.0) (2026-10-07)
 
 ### Features
