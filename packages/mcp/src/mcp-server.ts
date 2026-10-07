@@ -10,6 +10,8 @@ import {
   parseMessage,
 } from './json-rpc';
 import type { RequestId } from './json-rpc';
+import { runOnInterval } from './repeat';
+import type { Repeat } from './repeat';
 import type { Tool } from './tools/define-tool';
 import { hasScope } from './tools/define-tool';
 import type { ToolClient } from './tools/tool-client';
@@ -27,6 +29,10 @@ export interface McpServerOptions {
   // shorter in tests
   readonly progressIntervalMs?: number;
   readonly killGraceMs?: number;
+
+  // the timer behind progress notifications (and an HTTP stream's
+  // keepalive); setInterval when left out
+  readonly repeat?: Repeat;
 }
 
 // Who one message comes from, and where its answers go. Over stdio every
@@ -67,6 +73,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
 
   const progressIntervalMs = options.progressIntervalMs ?? PROGRESS_INTERVAL_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
+  const repeat = options.repeat ?? runOnInterval;
 
   // never rejects: a failed tool call is an isError result and a bug an
   // internal error
@@ -87,6 +94,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
 
     const stopProgress = startProgress(message.reply, readProgressToken(params), {
       intervalMs: progressIntervalMs,
+      repeat,
       signal,
     });
 
@@ -240,6 +248,7 @@ function readProgressToken(params: Readonly<Record<string, unknown>>): string | 
 
 interface ProgressOptions {
   readonly intervalMs: number;
+  readonly repeat: Repeat;
 
   // the call's cancel: a cancelled call reports no more progress
   readonly signal: Readonly<AbortSignal>;
@@ -259,7 +268,7 @@ function startProgress(
   const started = Date.now();
   let progress = 0;
 
-  const timer = setInterval(() => {
+  const stopTimer = options.repeat(options.intervalMs, () => {
     progress += 1;
 
     const seconds = Math.round((Date.now() - started) / 1000);
@@ -271,10 +280,10 @@ function startProgress(
         message: `still running after ${String(seconds)} s`,
       }),
     );
-  }, options.intervalMs);
+  });
 
   const stop = (): void => {
-    clearInterval(timer);
+    stopTimer();
 
     options.signal.removeEventListener('abort', stop);
   };

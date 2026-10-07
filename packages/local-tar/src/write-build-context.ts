@@ -254,10 +254,11 @@ function openEntry(pack: Pack, header: Readonly<Header>) {
 
   return {
     write: async (chunk: Uint8Array): Promise<void> => {
-      if (!sink.write(chunk)) {
+      // a pack destroyed by a failed write has closed already, and never drains
+      if (!sink.write(chunk) && !sink.destroyed) {
         const drained = Promise.withResolvers<void>();
 
-        // a destroyed pack, after a failed write, never drains
+        // a pack destroyed while this waits closes instead of draining
         sink.once('drain', drained.resolve);
         sink.once('close', drained.resolve);
 
@@ -417,7 +418,9 @@ async function runContextPass(
 
     await writing;
 
-    throw error;
+    // a failed write or the caller's abort is the cause, not the destroyed
+    // entry it leaves behind
+    throw writeFailure.error ?? error;
   } finally {
     signal?.removeEventListener('abort', stop);
 

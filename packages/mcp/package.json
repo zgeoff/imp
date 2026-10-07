@@ -11,5 +11,11 @@
     "@imp/api": "workspace:*",
     "@zgeoff/imp-client": "workspace:*",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "catalog:",
+    "@imp/test-utils": "workspace:*",
+    "@orpc/server": "catalog:",
+    "msw": "catalog:"
   }
 }
