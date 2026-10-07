@@ -21,13 +21,11 @@ test.each(['', '-web', 'Web', 'my_service', 'web.service', `a${'b'.repeat(63)}`]
   (name) => {
     const result = ServiceNameSchema.safeParse(name);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message:
-          'must be a lowercase letter or digit followed by up to 62 lowercase letters, digits or -',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message:
+        'must be a lowercase letter or digit followed by up to 62 lowercase letters, digits or -',
+    });
   },
 );
 
@@ -38,7 +36,7 @@ test.each(['always', 'on-failure', 'never'])('#ServiceRestartSchema accepts %s',
 test('#ServiceRestartSchema rejects a policy outside the list', () => {
   const result = ServiceRestartSchema.safeParse('sometimes');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test.each(['starting', 'running', 'backoff', 'stopped', 'exited'])(
@@ -51,7 +49,7 @@ test.each(['starting', 'running', 'backoff', 'stopped', 'exited'])(
 test('#ServiceStateSchema rejects a state outside the list', () => {
   const result = ServiceStateSchema.safeParse('paused');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test('#ServiceDefSchema accepts a full service file', () => {
@@ -71,9 +69,8 @@ test('#ServiceDefSchema accepts a full service file', () => {
 
 test('#ServiceDefSchema accepts a service file with only a name and argv', () => {
   const payload = { name: 'web', argv: ['node', 'server.js'] } as const;
-  const result = ServiceDefSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(ServiceDefSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#ServiceDefSchema rejects a name that is not a service name', () => {
@@ -86,7 +83,7 @@ test('#ServiceDefSchema rejects a name that is not a service name', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['name'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['name'], code: 'invalid_format' });
 });
 
 test('#ServiceDefSchema rejects an empty argv', () => {
@@ -99,7 +96,7 @@ test('#ServiceDefSchema rejects an empty argv', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['argv'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['argv'], code: 'too_small' });
 });
 
 test('#ServiceDefSchema rejects an argv of more than 256 words', () => {
@@ -112,7 +109,7 @@ test('#ServiceDefSchema rejects an argv of more than 256 words', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['argv'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['argv'], code: 'too_big' });
 });
 
 test('#ServiceDefSchema rejects an empty word in argv', () => {
@@ -125,7 +122,7 @@ test('#ServiceDefSchema rejects an empty word in argv', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['argv', 1] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['argv', 1], code: 'too_small' });
 });
 
 test('#ServiceDefSchema rejects an env entry that is not KEY=VALUE', () => {
@@ -138,9 +135,10 @@ test('#ServiceDefSchema rejects an env entry that is not KEY=VALUE', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['env', 0], message: 'must be KEY=VALUE' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['env', 0],
+    message: 'must be KEY=VALUE',
+  });
 });
 
 test('#ServiceDefSchema rejects more than 256 env entries', () => {
@@ -153,7 +151,7 @@ test('#ServiceDefSchema rejects more than 256 env entries', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['env'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['env'], code: 'too_big' });
 });
 
 test('#ServiceDefSchema rejects an empty cwd', () => {
@@ -166,7 +164,7 @@ test('#ServiceDefSchema rejects an empty cwd', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['cwd'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['cwd'], code: 'too_small' });
 });
 
 test('#ServiceDefSchema rejects an empty user', () => {
@@ -179,7 +177,7 @@ test('#ServiceDefSchema rejects an empty user', () => {
     restart: 'on-failure',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['user'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['user'], code: 'too_small' });
 });
 
 test('#ServiceDefSchema rejects a restart policy outside the list', () => {
@@ -192,7 +190,7 @@ test('#ServiceDefSchema rejects a restart policy outside the list', () => {
     restart: 'sometimes',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['restart'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['restart'], code: 'invalid_value' });
 });
 
 test('#ServiceSchema accepts a running service', () => {
@@ -253,7 +251,7 @@ test('#ServiceSchema rejects a state outside the list', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['state'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['state'], code: 'invalid_value' });
 });
 
 test('#ServiceSchema rejects a pid of zero', () => {
@@ -272,7 +270,7 @@ test('#ServiceSchema rejects a pid of zero', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['pid'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['pid'], code: 'too_small' });
 });
 
 test('#ServiceSchema rejects a fractional pid', () => {
@@ -291,7 +289,7 @@ test('#ServiceSchema rejects a fractional pid', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['pid'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['pid'], code: 'invalid_type' });
 });
 
 test('#ServiceSchema rejects a negative restart count', () => {
@@ -310,7 +308,7 @@ test('#ServiceSchema rejects a negative restart count', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['restarts'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['restarts'], code: 'too_small' });
 });
 
 test('#ServiceSchema rejects a fractional exit code', () => {
@@ -329,9 +327,10 @@ test('#ServiceSchema rejects a fractional exit code', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['lastExit', 'code'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['lastExit', 'code'],
+    code: 'invalid_type',
+  });
 });
 
 test('#ServiceSchema rejects a restart policy outside the list', () => {
@@ -350,7 +349,7 @@ test('#ServiceSchema rejects a restart policy outside the list', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['restart'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['restart'], code: 'invalid_value' });
 });
 
 test('#ServiceSchema rejects a source outside the list', () => {
@@ -369,7 +368,7 @@ test('#ServiceSchema rejects a source outside the list', () => {
     root: false,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['source'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['source'], code: 'invalid_value' });
 });
 
 test('#ServiceListSchema accepts a recorded list of services', () => {
@@ -419,23 +418,22 @@ test('#ServiceListSchema rejects a service that breaks the service schema', () =
     recorded: true,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['services', 0, 'state'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['services', 0, 'state'],
+    code: 'invalid_value',
+  });
 });
 
 test('#ServiceLogSchema accepts a piece of a log', () => {
   const payload = { type: 'log', service: 'web', text: 'listening on 8080\n' } as const;
-  const result = ServiceLogSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(ServiceLogSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#ServiceLogSchema accepts a sleeping event with the imp state', () => {
   const payload = { type: 'sleeping', state: 'sleeping' } as const;
-  const result = ServiceLogSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(ServiceLogSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test.each(['awake', 'restarting'])('#ServiceLogSchema accepts a bare %s event', (type) => {
@@ -445,11 +443,11 @@ test.each(['awake', 'restarting'])('#ServiceLogSchema accepts a bare %s event', 
 test('#ServiceLogSchema rejects a sleeping event with a state outside the imp states', () => {
   const result = ServiceLogSchema.safeParse({ type: 'sleeping', state: 'napping' });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['state'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['state'], code: 'invalid_value' });
 });
 
 test('#ServiceLogSchema rejects an unknown event type', () => {
   const result = ServiceLogSchema.safeParse({ type: 'paused' });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['type'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['type'], code: 'invalid_union' });
 });

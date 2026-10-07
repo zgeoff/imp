@@ -201,9 +201,7 @@ test('it rejects a negative RAM budget', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ramBudgetMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['ramBudgetMib'], code: 'too_small' });
 });
 
 test('it rejects a negative used RAM', () => {
@@ -241,9 +239,7 @@ test('it rejects a negative used RAM', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ramUsedMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['ramUsedMib'], code: 'too_small' });
 });
 
 test('it rejects a negative reserved RAM', () => {
@@ -281,9 +277,7 @@ test('it rejects a negative reserved RAM', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ramReservedMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['ramReservedMib'], code: 'too_small' });
 });
 
 test('it rejects a negative committed RAM', () => {
@@ -321,9 +315,7 @@ test('it rejects a negative committed RAM', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ramCommittedMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['ramCommittedMib'], code: 'too_small' });
 });
 
 test('it rejects a negative sleeping RAM', () => {
@@ -362,9 +354,7 @@ test('it rejects a negative sleeping RAM', () => {
     ramSleepingMib: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ramSleepingMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['ramSleepingMib'], code: 'too_small' });
 });
 
 test('it rejects a fractional awake count', () => {
@@ -402,9 +392,7 @@ test('it rejects a fractional awake count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['awakeCount'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['awakeCount'], code: 'invalid_type' });
 });
 
 test('it rejects a negative imp count', () => {
@@ -442,7 +430,7 @@ test('it rejects a negative imp count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['impCount'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['impCount'], code: 'too_small' });
 });
 
 test('it rejects a negative session count', () => {
@@ -480,9 +468,7 @@ test('it rejects a negative session count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['sessionCount'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['sessionCount'], code: 'too_small' });
 });
 
 test('it rejects a negative cold boot count', () => {
@@ -520,9 +506,10 @@ test('it rejects a negative cold boot count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bootStatus', 'coldBoots'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['bootStatus', 'coldBoots'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative outdated firecracker count', () => {
@@ -560,9 +547,9 @@ test('it rejects a negative outdated firecracker count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bootStatus', 'outdated', 'firecracker'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['bootStatus', 'outdated', 'firecracker'],
+  });
 });
 
 test('it rejects a negative outdated kernel count', () => {
@@ -600,9 +587,10 @@ test('it rejects a negative outdated kernel count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bootStatus', 'outdated', 'kernel'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['bootStatus', 'outdated', 'kernel'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative outdated agent count', () => {
@@ -640,9 +628,10 @@ test('it rejects a negative outdated agent count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bootStatus', 'outdated', 'agent'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['bootStatus', 'outdated', 'agent'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative outdated ipv6 count', () => {
@@ -680,9 +669,10 @@ test('it rejects a negative outdated ipv6 count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bootStatus', 'outdated', 'ipv6'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['bootStatus', 'outdated', 'ipv6'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a storage backend outside the list', () => {
@@ -720,9 +710,10 @@ test('it rejects a storage backend outside the list', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['storage', 'backend'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['storage', 'backend'],
+    code: 'invalid_value',
+  });
 });
 
 test('it rejects a negative used storage size', () => {
@@ -760,9 +751,10 @@ test('it rejects a negative used storage size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['storage', 'usedBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['storage', 'usedBytes'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative available storage size', () => {
@@ -800,9 +792,10 @@ test('it rejects a negative available storage size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['storage', 'availableBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['storage', 'availableBytes'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative reserved storage size', () => {
@@ -840,9 +833,10 @@ test('it rejects a negative reserved storage size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['storage', 'reserveBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['storage', 'reserveBytes'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative pending storage size', () => {
@@ -880,9 +874,10 @@ test('it rejects a negative pending storage size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['storage', 'pendingBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['storage', 'pendingBytes'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative imp disk storage size', () => {
@@ -920,9 +915,10 @@ test('it rejects a negative imp disk storage size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['storage', 'impDiskBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['storage', 'impDiskBytes'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative live tailnet name count', () => {
@@ -960,9 +956,10 @@ test('it rejects a negative live tailnet name count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['tailscale', 'names', 'live'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['tailscale', 'names', 'live'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a failed tailnet name that is not an imp name', () => {
@@ -1000,9 +997,9 @@ test('it rejects a failed tailnet name that is not an imp name', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['tailscale', 'names', 'failed', 0, 'name'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['tailscale', 'names', 'failed', 0, 'name'],
+  });
 });
 
 test('it rejects a negative KSM shared size', () => {
@@ -1048,9 +1045,10 @@ test('it rejects a negative KSM shared size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ksm', 'sharedMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['ksm', 'sharedMib'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative KSM zero page size', () => {
@@ -1096,9 +1094,7 @@ test('it rejects a negative KSM zero page size', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ksm', 'zeroMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['ksm', 'zeroMib'], code: 'too_small' });
 });
 
 test('it rejects a negative KSM headroom', () => {
@@ -1144,9 +1140,10 @@ test('it rejects a negative KSM headroom', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ksm', 'headroomMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['ksm', 'headroomMib'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a negative unmergeable imp count', () => {
@@ -1192,9 +1189,10 @@ test('it rejects a negative unmergeable imp count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ksm', 'unmergeable'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['ksm', 'unmergeable'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a fractional KSM profit', () => {
@@ -1240,9 +1238,10 @@ test('it rejects a fractional KSM profit', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['ksm', 'profitMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['ksm', 'profitMib'],
+    code: 'invalid_type',
+  });
 });
 
 test('it rejects zero host CPUs', () => {
@@ -1281,9 +1280,7 @@ test('it rejects zero host CPUs', () => {
     cpu: { hostCpus: 0, limitsEnforced: true },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['cpu', 'hostCpus'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['cpu', 'hostCpus'], code: 'too_small' });
 });
 
 test('it rejects a default memory of zero', () => {
@@ -1322,9 +1319,10 @@ test('it rejects a default memory of zero', () => {
     defaults: { memoryMib: 0, image: 'base' },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['defaults', 'memoryMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['defaults', 'memoryMib'],
+    code: 'too_small',
+  });
 });
 
 test('it rejects a public IP that is not IPv4', () => {
@@ -1367,9 +1365,10 @@ test('it rejects a public IP that is not IPv4', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['public', 'ip'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['public', 'ip'],
+    code: 'invalid_format',
+  });
 });
 
 test('it rejects a negative public imp count', () => {
@@ -1412,9 +1411,7 @@ test('it rejects a negative public imp count', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['public', 'imps'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['public', 'imps'], code: 'too_small' });
 });
 
 test('it rejects a records pass time that is not a date', () => {
@@ -1457,9 +1454,10 @@ test('it rejects a records pass time that is not a date', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['public', 'records', 'at'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['public', 'records', 'at'],
+    code: 'invalid_type',
+  });
 });
 
 test('it rejects a DNS token read time that is not a date', () => {
@@ -1501,7 +1499,8 @@ test('it rejects a DNS token read time that is not a date', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['https', 'dnsToken', 'at'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['https', 'dnsToken', 'at'],
+    code: 'invalid_type',
+  });
 });

@@ -55,9 +55,7 @@ test('#BackupRunSchema rejects a negative byte count', () => {
     durationMs: 900,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['dataAddedBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['dataAddedBytes'], code: 'too_small' });
 });
 
 test('#BackupRunSchema rejects a fractional duration', () => {
@@ -69,9 +67,7 @@ test('#BackupRunSchema rejects a fractional duration', () => {
     durationMs: 0.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['durationMs'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['durationMs'], code: 'invalid_type' });
 });
 
 test('#BackupRestoreSchema accepts restored imps with a skipped grant', () => {
@@ -123,13 +119,10 @@ test('#BackupRestoreSchema rejects a restored imp that is not a valid imp', () =
     skippedGrants: [{ imp: 'dev', secret: 'github', reason: 'no-secret' }],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['imps', 0, 'name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['imps', 0, 'name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test.each(['1/5', '10%', '2.5%', '2G', '512K', '100'])(
@@ -144,6 +137,6 @@ test.each(['', '1/', '10 %', '2g', '2GB', '-1', '%'])(
   (input) => {
     const result = BackupCheckSubsetSchema.safeParse(input);
 
-    expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+    expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_format' });
   },
 );

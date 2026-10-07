@@ -13,10 +13,10 @@ test.each(['sending', 'moved', 'receiving'])('#MoveStateSchema accepts the %s st
   expect(MoveStateSchema.safeParse(input).data).toBe(input);
 });
 
-test.each(['sent'])('#MoveStateSchema rejects the unknown state %s', (input) => {
-  const result = MoveStateSchema.safeParse(input);
+test('#MoveStateSchema rejects the unknown state sent', () => {
+  const result = MoveStateSchema.safeParse('sent');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test.each(['http://100.64.0.2:7070', 'https://100.64.0.2:7070/impd'])(
@@ -29,7 +29,7 @@ test.each(['http://100.64.0.2:7070', 'https://100.64.0.2:7070/impd'])(
 test.each(['ftp://100.64.0.2', '100.64.0.2:7070'])('#PeerUrlSchema rejects the URL %s', (input) => {
   const result = PeerUrlSchema.safeParse(input);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_format' });
 });
 
 test('#WarmHostSchema accepts a host', () => {
@@ -65,7 +65,7 @@ test('#WarmHostSchema rejects a storage outside the storage list', () => {
     dns: ['1.1.1.1'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['storage'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['storage'], code: 'invalid_value' });
 });
 
 test('#WarmHostSchema rejects a zero slot count', () => {
@@ -83,7 +83,7 @@ test('#WarmHostSchema rejects a zero slot count', () => {
     dns: ['1.1.1.1'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['slotCount'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['slotCount'], code: 'too_small' });
 });
 
 test('#WarmHostSchema rejects a zero broker port', () => {
@@ -101,9 +101,7 @@ test('#WarmHostSchema rejects a zero broker port', () => {
     dns: ['1.1.1.1'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['brokerPort'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['brokerPort'], code: 'too_small' });
 });
 
 test('#WarmMoveSchema accepts the side of a move that a sleeping imp sends', () => {
@@ -151,7 +149,7 @@ test('#WarmMoveSchema rejects a negative slot', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['slot'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['slot'], code: 'too_small' });
 });
 
 test('#WarmMoveSchema rejects a host storage outside the storage list', () => {
@@ -175,9 +173,10 @@ test('#WarmMoveSchema rejects a host storage outside the storage list', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['host', 'storage'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['host', 'storage'],
+    code: 'invalid_value',
+  });
 });
 
 test('#MovePlanSchema accepts a cold plan', () => {
@@ -217,15 +216,13 @@ test('#MovePlanSchema accepts a warm plan', () => {
 test('#MovePlanSchema rejects a negative byte count', () => {
   const result = MovePlanSchema.safeParse({ bytes: -1, checkpoints: 2, warm: null });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['bytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['bytes'], code: 'too_small' });
 });
 
 test('#MovePlanSchema rejects a fractional checkpoint count', () => {
   const result = MovePlanSchema.safeParse({ bytes: 4096, checkpoints: 1.5, warm: null });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['checkpoints'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['checkpoints'], code: 'invalid_type' });
 });
 
 test('#MoveTicketSchema accepts a ticket', () => {
@@ -245,7 +242,7 @@ test('#MoveTicketSchema rejects a peer URL that is not http or https', () => {
     peerUrl: 'ftp://100.64.0.2',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['peerUrl'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['peerUrl'], code: 'invalid_format' });
 });
 
 test('#MoveStatusSchema accepts a running move', () => {
@@ -284,7 +281,7 @@ test('#MoveStatusSchema rejects a state outside the state list', () => {
     error: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['state'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['state'], code: 'invalid_value' });
 });
 
 test('#MoveStatusSchema rejects a negative sent byte count', () => {
@@ -297,7 +294,7 @@ test('#MoveStatusSchema rejects a negative sent byte count', () => {
     error: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['sentBytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['sentBytes'], code: 'too_small' });
 });
 
 test('#MoveStatusSchema rejects a fractional total byte count', () => {
@@ -310,7 +307,5 @@ test('#MoveStatusSchema rejects a fractional total byte count', () => {
     error: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['totalBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['totalBytes'], code: 'invalid_type' });
 });

@@ -6,8 +6,7 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./test-utils/*": "./src/test-utils/*.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@orpc/client": "catalog:",

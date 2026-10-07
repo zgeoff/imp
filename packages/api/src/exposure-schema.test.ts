@@ -11,20 +11,20 @@ test.each(['tailnet', 'public'])('#ExposureSchema accepts the %s exposure', (inp
   expect(ExposureSchema.safeParse(input).data).toBe(input);
 });
 
-test.each(['private'])('#ExposureSchema rejects the unknown exposure %s', (input) => {
-  const result = ExposureSchema.safeParse(input);
+test('#ExposureSchema rejects the unknown exposure private', () => {
+  const result = ExposureSchema.safeParse('private');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test.each(['none', 'token', 'basic'])('#PublicAuthSchema accepts the %s auth', (input) => {
   expect(PublicAuthSchema.safeParse(input).data).toBe(input);
 });
 
-test.each(['password'])('#PublicAuthSchema rejects the unknown auth %s', (input) => {
-  const result = PublicAuthSchema.safeParse(input);
+test('#PublicAuthSchema rejects the unknown auth password', () => {
+  const result = PublicAuthSchema.safeParse('password');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test.each(['imp', 'a!~', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'])(
@@ -39,12 +39,10 @@ test.each(['', 'a:b', 'a b', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   (input) => {
     const result = BasicUserSchema.safeParse(input);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message: 'must be 1 to 64 printable characters, without a colon',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message: 'must be 1 to 64 printable characters, without a colon',
+    });
   },
 );
 
@@ -64,38 +62,34 @@ test('#ExposeInputSchema accepts a user with basic auth', () => {
 test('#ExposeInputSchema rejects a user with token auth', () => {
   const result = ExposeInputSchema.safeParse({ name: 'dev', auth: 'token', user: 'alice' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['user'], message: 'only basic auth takes a user' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['user'],
+    message: 'only basic auth takes a user',
+  });
 });
 
 test('#ExposeInputSchema rejects a name that is not a valid name', () => {
   const result = ExposeInputSchema.safeParse({ name: 'Dev', auth: 'basic', user: 'alice' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#ExposeInputSchema rejects an auth outside the auth list', () => {
   const result = ExposeInputSchema.safeParse({ name: 'dev', auth: 'password', user: 'alice' });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['auth'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['auth'], code: 'invalid_value' });
 });
 
 test('#ExposeInputSchema rejects a user with a colon', () => {
   const result = ExposeInputSchema.safeParse({ name: 'dev', auth: 'basic', user: 'al:ice' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['user'],
-      message: 'must be 1 to 64 printable characters, without a colon',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['user'],
+    message: 'must be 1 to 64 printable characters, without a colon',
+  });
 });
 
 test('#ExposeResultSchema accepts a result with a credential', () => {
@@ -129,7 +123,7 @@ test('#ExposeResultSchema rejects a url that is not a URL', () => {
     credential: 's3cret',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['url'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['url'], code: 'invalid_format' });
 });
 
 test('#ExposeResultSchema rejects an auth outside the auth list', () => {
@@ -140,5 +134,5 @@ test('#ExposeResultSchema rejects an auth outside the auth list', () => {
     credential: 's3cret',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['auth'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['auth'], code: 'invalid_value' });
 });

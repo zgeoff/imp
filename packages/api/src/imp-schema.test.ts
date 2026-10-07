@@ -15,20 +15,20 @@ test.each(['creating', 'running', 'sleeping', 'stopped', 'error'])(
   },
 );
 
-test.each(['paused'])('#ImpStateSchema rejects the unknown state %s', (input) => {
-  const result = ImpStateSchema.safeParse(input);
+test('#ImpStateSchema rejects the unknown state paused', () => {
+  const result = ImpStateSchema.safeParse('paused');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test.each(['user', 'builder'])('#ImpKindSchema accepts the %s kind', (input) => {
   expect(ImpKindSchema.safeParse(input).data).toBe(input);
 });
 
-test.each(['system'])('#ImpKindSchema rejects the unknown kind %s', (input) => {
-  const result = ImpKindSchema.safeParse(input);
+test('#ImpKindSchema rejects the unknown kind system', () => {
+  const result = ImpKindSchema.safeParse('system');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test('#ImpSchema accepts an imp without its optional fields', () => {
@@ -135,13 +135,10 @@ test('#ImpSchema rejects a name that is not a valid name', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#ImpSchema rejects an image that is not a valid name', () => {
@@ -162,13 +159,10 @@ test('#ImpSchema rejects an image that is not a valid name', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['image'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['image'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#ImpSchema rejects a state outside the state list', () => {
@@ -189,7 +183,7 @@ test('#ImpSchema rejects a state outside the state list', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['state'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['state'], code: 'invalid_value' });
 });
 
 test('#ImpSchema rejects a kind outside the kind list', () => {
@@ -211,7 +205,7 @@ test('#ImpSchema rejects a kind outside the kind list', () => {
     kind: 'system',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['kind'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['kind'], code: 'invalid_value' });
 });
 
 test('#ImpSchema rejects zero vcpus', () => {
@@ -232,7 +226,7 @@ test('#ImpSchema rejects zero vcpus', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['vcpus'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['vcpus'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a fractional vcpu count', () => {
@@ -253,7 +247,7 @@ test('#ImpSchema rejects a fractional vcpu count', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['vcpus'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['vcpus'], code: 'invalid_type' });
 });
 
 test('#ImpSchema rejects zero memory', () => {
@@ -274,7 +268,7 @@ test('#ImpSchema rejects zero memory', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['memoryMib'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['memoryMib'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a zero memory ceiling', () => {
@@ -296,9 +290,7 @@ test('#ImpSchema rejects a zero memory ceiling', () => {
     maxMemoryMib: 0,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['maxMemoryMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['maxMemoryMib'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects negative plugged memory', () => {
@@ -320,9 +312,7 @@ test('#ImpSchema rejects negative plugged memory', () => {
     pluggedMib: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['pluggedMib'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['pluggedMib'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a zero disk size', () => {
@@ -343,7 +333,7 @@ test('#ImpSchema rejects a zero disk size', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['diskMib'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['diskMib'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects an ip that is not IPv4', () => {
@@ -364,7 +354,7 @@ test('#ImpSchema rejects an ip that is not IPv4', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['ip'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['ip'], code: 'invalid_format' });
 });
 
 test('#ImpSchema rejects a negative slot', () => {
@@ -385,7 +375,7 @@ test('#ImpSchema rejects a negative slot', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['slot'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['slot'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a zero port', () => {
@@ -406,7 +396,7 @@ test('#ImpSchema rejects a zero port', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['port'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['port'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a zero HTTP port', () => {
@@ -427,7 +417,7 @@ test('#ImpSchema rejects a zero HTTP port', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['httpPort'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['httpPort'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a url that is not a URL', () => {
@@ -448,7 +438,7 @@ test('#ImpSchema rejects a url that is not a URL', () => {
     lastActiveAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['url'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['url'], code: 'invalid_format' });
 });
 
 test('#ImpSchema rejects a public auth outside the auth list', () => {
@@ -470,9 +460,10 @@ test('#ImpSchema rejects a public auth outside the auth list', () => {
     public: { auth: 'password' },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['public', 'auth'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['public', 'auth'],
+    code: 'invalid_value',
+  });
 });
 
 test('#ImpSchema rejects negative RAM', () => {
@@ -494,7 +485,7 @@ test('#ImpSchema rejects negative RAM', () => {
     ramMib: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['ramMib'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['ramMib'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects negative resident memory', () => {
@@ -516,7 +507,7 @@ test('#ImpSchema rejects negative resident memory', () => {
     rssMib: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['rssMib'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['rssMib'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a negative session count', () => {
@@ -538,7 +529,7 @@ test('#ImpSchema rejects a negative session count', () => {
     sessions: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['sessions'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['sessions'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects an outdated part outside the part list', () => {
@@ -560,9 +551,7 @@ test('#ImpSchema rejects an outdated part outside the part list', () => {
     outdated: ['bios'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['outdated', 0] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['outdated', 0], code: 'invalid_value' });
 });
 
 test('#ImpSchema rejects a zero CPU limit', () => {
@@ -584,9 +573,7 @@ test('#ImpSchema rejects a zero CPU limit', () => {
     cpu: { limit: 0, weight: 100 },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['cpu', 'limit'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['cpu', 'limit'], code: 'too_small' });
 });
 
 test('#ImpSchema rejects a fractional CPU weight', () => {
@@ -608,9 +595,10 @@ test('#ImpSchema rejects a fractional CPU weight', () => {
     cpu: { limit: null, weight: 1.5 },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['cpu', 'weight'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['cpu', 'weight'],
+    code: 'invalid_type',
+  });
 });
 
 test('#ImpSchema rejects a move state outside the state list', () => {
@@ -632,7 +620,7 @@ test('#ImpSchema rejects a move state outside the state list', () => {
     move: 'paused',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['move'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['move'], code: 'invalid_value' });
 });
 
 test('#ImpSchema rejects a negative exclusive disk usage', () => {
@@ -660,9 +648,10 @@ test('#ImpSchema rejects a negative exclusive disk usage', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['diskUsage', 'exclusiveBytes'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['diskUsage', 'exclusiveBytes'],
+    code: 'too_small',
+  });
 });
 
 test('#ImpSchema rejects a negative wake count', () => {
@@ -684,9 +673,10 @@ test('#ImpSchema rejects a negative wake count', () => {
     resources: { wakeCount: -1, awakeMs: 0 },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['resources', 'wakeCount'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['resources', 'wakeCount'],
+    code: 'too_small',
+  });
 });
 
 test('#ImpSchema rejects a negative CPU percent in a sample', () => {
@@ -719,9 +709,10 @@ test('#ImpSchema rejects a negative CPU percent in a sample', () => {
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['resources', 'sample', 'cpuPercent'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['resources', 'sample', 'cpuPercent'],
+    code: 'too_small',
+  });
 });
 
 test('#ImpSchema rejects a negative count of other leases', () => {
@@ -743,9 +734,10 @@ test('#ImpSchema rejects a negative count of other leases', () => {
     leases: { leases: [], otherCount: -1 },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['leases', 'otherCount'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['leases', 'otherCount'],
+    code: 'too_small',
+  });
 });
 
 test.each(['not-grantable', 'clash', 'no-secret'])(
@@ -755,10 +747,10 @@ test.each(['not-grantable', 'clash', 'no-secret'])(
   },
 );
 
-test.each(['expired'])('#GrantNotCopiedReasonSchema rejects the unknown reason %s', (input) => {
-  const result = GrantNotCopiedReasonSchema.safeParse(input);
+test('#GrantNotCopiedReasonSchema rejects the unknown reason expired', () => {
+  const result = GrantNotCopiedReasonSchema.safeParse('expired');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test('#GrantNotCopiedSchema accepts a secret and a reason', () => {
@@ -770,19 +762,16 @@ test('#GrantNotCopiedSchema accepts a secret and a reason', () => {
 test('#GrantNotCopiedSchema rejects a secret that is not a valid secret name', () => {
   const result = GrantNotCopiedSchema.safeParse({ secret: 'GitHub', reason: 'clash' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['secret'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['secret'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#GrantNotCopiedSchema rejects a reason outside the reason list', () => {
   const result = GrantNotCopiedSchema.safeParse({ secret: 'github', reason: 'expired' });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['reason'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['reason'], code: 'invalid_value' });
 });
 
 test('#ForkResultSchema accepts a fork from an impd before the grants report', () => {
@@ -870,9 +859,10 @@ test('#ForkResultSchema rejects a grant reason outside the reason list', () => {
     grantsNotCopied: [{ secret: 'github', reason: 'expired' }],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['grantsNotCopied', 0, 'reason'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['grantsNotCopied', 0, 'reason'],
+    code: 'invalid_value',
+  });
 });
 
 test('#ForkResultSchema rejects a fork that is not a valid imp', () => {
@@ -894,5 +884,5 @@ test('#ForkResultSchema rejects a fork that is not a valid imp', () => {
     grantsNotCopied: [{ secret: 'github', reason: 'not-grantable' }],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['vcpus'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['vcpus'], code: 'too_small' });
 });

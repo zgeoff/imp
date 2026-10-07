@@ -11,7 +11,7 @@ test.each(['token', 'dashboard', 'ssh', 'tailnet', 'oauth'])(
 test.each(['cookie', ''])('#ApiActorSchema rejects the unknown actor %s', (input) => {
   const result = ApiActorSchema.safeParse(input);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test('#ApiCallSchema accepts a row without its optional fields', () => {
@@ -50,7 +50,7 @@ test('#ApiCallSchema rejects an actor outside the actor list', () => {
     durationMs: 12,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['actor'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['actor'], code: 'invalid_value' });
 });
 
 test('#ApiCallSchema rejects an imp that is not a valid name', () => {
@@ -63,13 +63,10 @@ test('#ApiCallSchema rejects an imp that is not a valid name', () => {
     imp: 'Dev',
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['imp'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['imp'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#ApiCallSchema rejects a negative duration', () => {
@@ -81,9 +78,7 @@ test('#ApiCallSchema rejects a negative duration', () => {
     durationMs: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['durationMs'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['durationMs'], code: 'too_small' });
 });
 
 test('#ApiCallSchema rejects a fractional duration', () => {
@@ -95,7 +90,5 @@ test('#ApiCallSchema rejects a fractional duration', () => {
     durationMs: 1.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['durationMs'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['durationMs'], code: 'invalid_type' });
 });

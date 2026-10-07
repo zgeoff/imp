@@ -23,22 +23,24 @@ test.each([
 ])('#LeaseLabelSchema rejects the label %s', (input) => {
   const result = LeaseLabelSchema.safeParse(input);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: [],
-      message: 'must be 1–64 letters, digits, dots, underscores, colons or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must be 1–64 letters, digits, dots, underscores, colons or hyphens',
+  });
 });
 
 test.each([10, 600, 3600])('#LeaseTtlSchema accepts %d seconds', (input) => {
   expect(LeaseTtlSchema.safeParse(input).data).toBe(input);
 });
 
-test.each([9, 3601, 10.5])('#LeaseTtlSchema rejects %d seconds', (input) => {
+test.each([
+  [9, 'too_small'],
+  [3601, 'too_big'],
+  [10.5, 'invalid_type'],
+])('#LeaseTtlSchema rejects %d seconds with %s', (input, code) => {
   const result = LeaseTtlSchema.safeParse(input);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code });
 });
 
 test('#LeaseOwnerSchema accepts an owner', () => {
@@ -74,13 +76,10 @@ test('#LeaseSchema rejects a name that is not a valid name', () => {
     until: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#LeaseSummarySchema accepts leases and a count of others', () => {
@@ -110,9 +109,7 @@ test('#LeaseSummarySchema rejects a negative count of others', () => {
     otherCount: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['otherCount'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['otherCount'], code: 'too_small' });
 });
 
 test('#LeaseSummarySchema rejects a fractional count of others', () => {
@@ -127,9 +124,7 @@ test('#LeaseSummarySchema rejects a fractional count of others', () => {
     otherCount: 1.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['otherCount'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['otherCount'], code: 'invalid_type' });
 });
 
 test('#LeaseSummarySchema rejects a lease that is not a valid lease', () => {
@@ -144,11 +139,8 @@ test('#LeaseSummarySchema rejects a lease that is not a valid lease', () => {
     otherCount: 2,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['leases', 0, 'name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['leases', 0, 'name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });

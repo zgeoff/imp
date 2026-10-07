@@ -13,27 +13,24 @@ test.each(['', '-main', 'Main', 'my_session', 'main.1', `a${'b'.repeat(32)}`])(
   (name) => {
     const result = SessionNameSchema.safeParse(name);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message:
-          'must be a lowercase letter or digit followed by up to 31 lowercase letters, digits or hyphens',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message:
+        'must be a lowercase letter or digit followed by up to 31 lowercase letters, digits or hyphens',
+    });
   },
 );
 
 test('#SessionExitSchema accepts an exit by signal', () => {
   const payload = { code: null, signal: 'SIGTERM' } as const;
-  const result = SessionExitSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(SessionExitSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#SessionExitSchema rejects a fractional exit code', () => {
   const result = SessionExitSchema.safeParse({ code: 1.5, signal: null });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['code'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['code'], code: 'invalid_type' });
 });
 
 test('#SessionSchema accepts a session with offsets and a log', () => {
@@ -89,7 +86,7 @@ test('#SessionSchema rejects a name that is not a session name', () => {
     startedAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['name'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['name'], code: 'invalid_format' });
 });
 
 test('#SessionSchema rejects a pid of zero', () => {
@@ -104,7 +101,7 @@ test('#SessionSchema rejects a pid of zero', () => {
     startedAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['pid'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['pid'], code: 'too_small' });
 });
 
 test('#SessionSchema rejects a state outside the list', () => {
@@ -119,7 +116,7 @@ test('#SessionSchema rejects a state outside the list', () => {
     startedAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['state'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['state'], code: 'invalid_value' });
 });
 
 test('#SessionSchema rejects zero columns', () => {
@@ -134,7 +131,7 @@ test('#SessionSchema rejects zero columns', () => {
     startedAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['cols'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['cols'], code: 'too_small' });
 });
 
 test('#SessionSchema rejects zero rows', () => {
@@ -149,7 +146,7 @@ test('#SessionSchema rejects zero rows', () => {
     startedAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['rows'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['rows'], code: 'too_small' });
 });
 
 test('#SessionSchema rejects a start time that is not a date', () => {
@@ -164,7 +161,7 @@ test('#SessionSchema rejects a start time that is not a date', () => {
     startedAt: '2026-01-02T03:04:05.000Z',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['startedAt'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['startedAt'], code: 'invalid_type' });
 });
 
 test('#SessionSchema rejects a continuity outside the list', () => {
@@ -180,9 +177,7 @@ test('#SessionSchema rejects a continuity outside the list', () => {
     continuity: 'lines',
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['continuity'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['continuity'], code: 'invalid_value' });
 });
 
 test('#SessionSchema rejects a generation that is not 32 hex digits', () => {
@@ -198,9 +193,10 @@ test('#SessionSchema rejects a generation that is not 32 hex digits', () => {
     executionGeneration: 'gen-1',
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['executionGeneration'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['executionGeneration'],
+    code: 'invalid_format',
+  });
 });
 
 test('#SessionSchema rejects a negative end', () => {
@@ -216,5 +212,5 @@ test('#SessionSchema rejects a negative end', () => {
     end: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['end'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['end'], code: 'too_small' });
 });

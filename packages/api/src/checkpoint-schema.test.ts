@@ -31,7 +31,7 @@ test('it rejects a negative size', () => {
     sizeBytes: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['sizeBytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['sizeBytes'], code: 'too_small' });
 });
 
 test('it rejects a zero disk size', () => {
@@ -41,7 +41,7 @@ test('it rejects a zero disk size', () => {
     diskMib: 0,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['diskMib'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['diskMib'], code: 'too_small' });
 });
 
 test('it rejects a fractional disk size', () => {
@@ -51,5 +51,5 @@ test('it rejects a fractional disk size', () => {
     diskMib: 1.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['diskMib'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['diskMib'], code: 'invalid_type' });
 });

@@ -18,13 +18,10 @@ test('#NetworkSchema rejects a name that is not a valid name', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#NetworkSchema rejects an imp that is not a valid name', () => {
@@ -34,13 +31,10 @@ test('#NetworkSchema rejects an imp that is not a valid name', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['imps', 1],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['imps', 1],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#NetworkJoinSchema accepts a join without a warning', () => {
@@ -73,11 +67,8 @@ test('#NetworkJoinSchema rejects an imp that is not a valid name', () => {
     warning: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['imps', 0],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['imps', 0],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });

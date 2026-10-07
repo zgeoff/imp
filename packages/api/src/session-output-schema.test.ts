@@ -28,7 +28,7 @@ test.each([
 ])('#ExecutionGenerationSchema rejects the generation %p', (generation) => {
   const result = ExecutionGenerationSchema.safeParse(generation);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_format' });
 });
 
 test.each(['start', 'wake_fallback', 'watchdog', 'restore', 'recovery', 'unknown'])(
@@ -38,21 +38,27 @@ test.each(['start', 'wake_fallback', 'watchdog', 'restore', 'recovery', 'unknown
   },
 );
 
-test('#ColdBootCauseSchema lists the same causes as COLD_BOOT_CAUSES', () => {
-  expect(ColdBootCauseSchema.options).toStrictEqual([...COLD_BOOT_CAUSES]);
+test('#COLD_BOOT_CAUSES lists every cause a client may meet, in order', () => {
+  expect(COLD_BOOT_CAUSES).toStrictEqual([
+    'start',
+    'wake_fallback',
+    'watchdog',
+    'restore',
+    'recovery',
+    'unknown',
+  ]);
 });
 
 test('#ColdBootCauseSchema rejects a cause outside the list', () => {
   const result = ColdBootCauseSchema.safeParse('crash');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test('#ColdBootSchema accepts a cold boot', () => {
   const payload = { bootId: 'boot-1', cause: 'watchdog', at: '2026-01-02T03:04:05.000Z' } as const;
-  const result = ColdBootSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(ColdBootSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#ColdBootSchema rejects a cause outside the list', () => {
@@ -62,7 +68,7 @@ test('#ColdBootSchema rejects a cause outside the list', () => {
     at: '2026-01-02T03:04:05.000Z',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['cause'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['cause'], code: 'invalid_value' });
 });
 
 test('#ColdBootSchema rejects a time that is not an ISO datetime', () => {
@@ -72,7 +78,7 @@ test('#ColdBootSchema rejects a time that is not an ISO datetime', () => {
     at: 'yesterday',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['at'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['at'], code: 'invalid_format' });
 });
 
 test('#ColdBootsSchema accepts four cold boots', () => {
@@ -97,7 +103,7 @@ test('#ColdBootsSchema rejects more than four cold boots', () => {
     { bootId: 'boot-1', cause: 'unknown', at: '2026-01-01T00:00:00.000Z' },
   ]);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
 
 test('#PreviousGenerationSchema accepts a generation that ended on a signal', () => {
@@ -119,9 +125,10 @@ test('#PreviousGenerationSchema rejects a generation that is not 32 hex digits',
     exitCode: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['executionGeneration'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['executionGeneration'],
+    code: 'invalid_format',
+  });
 });
 
 test('#PreviousGenerationSchema rejects a negative end', () => {
@@ -131,7 +138,7 @@ test('#PreviousGenerationSchema rejects a negative end', () => {
     exitCode: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['end'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['end'], code: 'too_small' });
 });
 
 test('#PreviousGenerationSchema rejects a fractional exit code', () => {
@@ -141,22 +148,22 @@ test('#PreviousGenerationSchema rejects a fractional exit code', () => {
     exitCode: 0.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['exitCode'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['exitCode'], code: 'invalid_type' });
 });
 
 test('#ResumeFromSchema accepts a generation and an offset', () => {
   const payload = { executionGeneration: '0123456789abcdef0123456789abcdef', offset: 0 } as const;
-  const result = ResumeFromSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(ResumeFromSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#ResumeFromSchema rejects a generation that is not 32 hex digits', () => {
   const result = ResumeFromSchema.safeParse({ executionGeneration: 'gen-1', offset: 0 });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['executionGeneration'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['executionGeneration'],
+    code: 'invalid_format',
+  });
 });
 
 test('#ResumeFromSchema rejects a negative offset', () => {
@@ -165,7 +172,7 @@ test('#ResumeFromSchema rejects a negative offset', () => {
     offset: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['offset'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['offset'], code: 'too_small' });
 });
 
 test('#ResumeFromSchema rejects a fractional offset', () => {
@@ -174,7 +181,7 @@ test('#ResumeFromSchema rejects a fractional offset', () => {
     offset: 1.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['offset'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['offset'], code: 'invalid_type' });
 });
 
 test('#ResumeResultSchema accepts an exact resume', () => {
@@ -183,9 +190,8 @@ test('#ResumeResultSchema accepts an exact resume', () => {
 
 test('#ResumeResultSchema accepts a resume with a gap', () => {
   const payload = { kind: 'gap', from: 10, to: 20 } as const;
-  const result = ResumeResultSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(ResumeResultSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#ResumeResultSchema accepts a resume into a changed generation', () => {
@@ -203,13 +209,13 @@ test('#ResumeResultSchema accepts a resume into a changed generation', () => {
 test('#ResumeResultSchema rejects a gap with a negative start', () => {
   const result = ResumeResultSchema.safeParse({ kind: 'gap', from: -1, to: 20 });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['from'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['from'], code: 'too_small' });
 });
 
 test('#ResumeResultSchema rejects a gap with a negative end', () => {
   const result = ResumeResultSchema.safeParse({ kind: 'gap', from: 10, to: -1 });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['to'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['to'], code: 'too_small' });
 });
 
 test('#ResumeResultSchema rejects a changed generation that is not 32 hex digits', () => {
@@ -219,9 +225,10 @@ test('#ResumeResultSchema rejects a changed generation that is not 32 hex digits
     firstOffset: 0,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['executionGeneration'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['executionGeneration'],
+    code: 'invalid_format',
+  });
 });
 
 test('#ResumeResultSchema rejects a negative first offset', () => {
@@ -231,15 +238,13 @@ test('#ResumeResultSchema rejects a negative first offset', () => {
     firstOffset: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['firstOffset'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['firstOffset'], code: 'too_small' });
 });
 
 test('#ResumeResultSchema rejects an unknown kind', () => {
   const result = ResumeResultSchema.safeParse({ kind: 'rewound' });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['kind'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['kind'], code: 'invalid_union' });
 });
 
 test('#SessionOutputSchema accepts the output of an agent without offsets', () => {
@@ -292,9 +297,7 @@ test('#SessionOutputSchema accepts offsets with no previous generation, resume o
 test('#SessionOutputSchema rejects an unknown continuity', () => {
   const result = SessionOutputSchema.safeParse({ continuity: 'lines' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['continuity'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['continuity'], code: 'invalid_union' });
 });
 
 test('#SessionOutputSchema rejects a generation that is not 32 hex digits', () => {
@@ -309,9 +312,10 @@ test('#SessionOutputSchema rejects a generation that is not 32 hex digits', () =
     coldBoots: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['executionGeneration'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['executionGeneration'],
+    code: 'invalid_format',
+  });
 });
 
 test('#SessionOutputSchema rejects a negative buffer start', () => {
@@ -326,9 +330,7 @@ test('#SessionOutputSchema rejects a negative buffer start', () => {
     coldBoots: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bufferStart'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['bufferStart'], code: 'too_small' });
 });
 
 test('#SessionOutputSchema rejects a negative end', () => {
@@ -343,7 +345,7 @@ test('#SessionOutputSchema rejects a negative end', () => {
     coldBoots: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['end'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['end'], code: 'too_small' });
 });
 
 test('#SessionOutputSchema rejects a negative offset', () => {
@@ -358,7 +360,7 @@ test('#SessionOutputSchema rejects a negative offset', () => {
     coldBoots: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['offset'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['offset'], code: 'too_small' });
 });
 
 test('#SessionOutputSchema rejects a negative prelude', () => {
@@ -373,7 +375,7 @@ test('#SessionOutputSchema rejects a negative prelude', () => {
     coldBoots: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['prelude'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['prelude'], code: 'too_small' });
 });
 
 test('#SessionOutputSchema rejects a cold boot with an unknown cause', () => {
@@ -388,9 +390,10 @@ test('#SessionOutputSchema rejects a cold boot with an unknown cause', () => {
     coldBoots: [{ bootId: 'boot-2', cause: 'crash', at: '2026-01-02T00:00:00.000Z' }],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['coldBoots', 0, 'cause'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['coldBoots', 0, 'cause'],
+    code: 'invalid_value',
+  });
 });
 
 test('#SessionOutputSchema rejects a resume of an unknown kind', () => {
@@ -406,9 +409,10 @@ test('#SessionOutputSchema rejects a resume of an unknown kind', () => {
     resume: { kind: 'rewound' },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['resume', 'kind'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['resume', 'kind'],
+    code: 'invalid_union',
+  });
 });
 
 test('#NoSessionDataSchema accepts a boot with its cold boots and previous generation', () => {
@@ -438,28 +442,23 @@ test('#NoSessionDataSchema rejects a previous generation with a negative end', (
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['previous', 'end'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['previous', 'end'], code: 'too_small' });
 });
 
 test('#InvalidResumeDataSchema accepts an end and a buffer start', () => {
   const payload = { end: 4096, bufferStart: 1024 } as const;
-  const result = InvalidResumeDataSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(InvalidResumeDataSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#InvalidResumeDataSchema rejects a negative end', () => {
   const result = InvalidResumeDataSchema.safeParse({ end: -1, bufferStart: 1024 });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['end'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['end'], code: 'too_small' });
 });
 
 test('#InvalidResumeDataSchema rejects a negative buffer start', () => {
   const result = InvalidResumeDataSchema.safeParse({ end: 4096, bufferStart: -1 });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['bufferStart'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: ['bufferStart'], code: 'too_small' });
 });

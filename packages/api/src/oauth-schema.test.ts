@@ -26,20 +26,16 @@ test.each([
 ])('#RedirectUriSchema rejects the URI %s', (input) => {
   const result = RedirectUriSchema.safeParse(input);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: [],
-      message: 'must be an https URL, or http on a loopback host, with no fragment',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must be an https URL, or http on a loopback host, with no fragment',
+  });
 });
 
 test('#RedirectUriSchema rejects a URI longer than 2048 characters', () => {
   const result = RedirectUriSchema.safeParse(`https://example.com/${'a'.repeat(2030)}`);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: [], code: 'too_big' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
 
 test('#RedirectUrisSchema accepts distinct URIs', () => {
@@ -51,7 +47,7 @@ test('#RedirectUrisSchema accepts distinct URIs', () => {
 test('#RedirectUrisSchema rejects no URIs', () => {
   const result = RedirectUrisSchema.safeParse([]);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_small' });
 });
 
 test('#RedirectUrisSchema rejects more than 8 URIs', () => {
@@ -67,26 +63,25 @@ test('#RedirectUrisSchema rejects more than 8 URIs', () => {
     'https://example.com/8',
   ]);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
 
 test('#RedirectUrisSchema rejects a URI named twice', () => {
   const result = RedirectUrisSchema.safeParse(['https://claude.ai/cb', 'https://claude.ai/cb']);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: [], message: 'must not name a redirect URI twice' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must not name a redirect URI twice',
+  });
 });
 
 test('#RedirectUrisSchema rejects a URI that is not allowed', () => {
   const result = RedirectUrisSchema.safeParse(['https://claude.ai/cb', 'http://example.com/cb']);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: [1],
-      message: 'must be an https URL, or http on a loopback host, with no fragment',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [1],
+    message: 'must be an https URL, or http on a loopback host, with no fragment',
+  });
 });
 
 test.each(['*', 'dev', 'dev-*', 'a*'])('#GrantPatternSchema accepts the pattern %s', (input) => {
@@ -98,12 +93,10 @@ test.each(['', 'Dev', '*dev', 'dev*x', '2dev'])(
   (input) => {
     const result = GrantPatternSchema.safeParse(input);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message: 'must be an imp name, or a name prefix and a trailing *, such as dev-*',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message: 'must be an imp name, or a name prefix and a trailing *, such as dev-*',
+    });
   },
 );
 
@@ -120,12 +113,10 @@ test.each(['ABCD-EFG', 'ABCD-EFGHI', 'ABCD-EFGI', 'ABCD-EFG0', 'ABCD-EFG1'])(
   (input) => {
     const result = ApprovalCodeSchema.safeParse(input);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message: 'must be the 8-symbol code the sign-in page shows',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message: 'must be the 8-symbol code the sign-in page shows',
+    });
   },
 );
 
@@ -148,13 +139,10 @@ test('#OAuthClientSchema rejects a name that is not a valid name', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#OAuthGrantSchema accepts a grant limited to some imps', () => {
@@ -196,13 +184,10 @@ test('#OAuthGrantSchema rejects a client that is not a valid name', () => {
     lastUsedAt: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['client'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['client'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#OAuthGrantSchema rejects a token that is not a valid name', () => {
@@ -216,13 +201,10 @@ test('#OAuthGrantSchema rejects a token that is not a valid name', () => {
     lastUsedAt: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['token'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['token'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#OAuthGrantSchema rejects a scope outside the scope list', () => {
@@ -236,7 +218,7 @@ test('#OAuthGrantSchema rejects a scope outside the scope list', () => {
     lastUsedAt: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['scope'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['scope'], code: 'invalid_value' });
 });
 
 test('#OAuthGrantSchema rejects an imp pattern that is not a pattern', () => {
@@ -250,12 +232,10 @@ test('#OAuthGrantSchema rejects an imp pattern that is not a pattern', () => {
     lastUsedAt: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['imps', 0],
-      message: 'must be an imp name, or a name prefix and a trailing *, such as dev-*',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['imps', 0],
+    message: 'must be an imp name, or a name prefix and a trailing *, such as dev-*',
+  });
 });
 
 test('#OAuthApprovalSchema accepts an approval', () => {
@@ -279,13 +259,10 @@ test('#OAuthApprovalSchema rejects a client that is not a valid name', () => {
     expiresAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['client'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['client'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#OAuthApprovalSchema rejects a scope outside the scope list', () => {
@@ -297,7 +274,8 @@ test('#OAuthApprovalSchema rejects a scope outside the scope list', () => {
     expiresAt: new Date('2026-01-02T04:05:06.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['requestedScope'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['requestedScope'],
+    code: 'invalid_value',
+  });
 });

@@ -15,10 +15,10 @@ test.each(['Dockerfile', 'docker/Dockerfile.dev', 'a..b/Dockerfile'])(
   },
 );
 
-test.each([''])('#DockerfilePathSchema rejects the path %s', (input) => {
-  const result = DockerfilePathSchema.safeParse(input);
+test('#DockerfilePathSchema rejects an empty path', () => {
+  const result = DockerfilePathSchema.safeParse('');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_small' });
 });
 
 test.each(['/Dockerfile', '../Dockerfile', 'a/../../Dockerfile', String.raw`a\..\Dockerfile`])(
@@ -26,12 +26,10 @@ test.each(['/Dockerfile', '../Dockerfile', 'a/../../Dockerfile', String.raw`a\..
   (input) => {
     const result = DockerfilePathSchema.safeParse(input);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message: 'the Dockerfile path must be relative and stay inside the build context',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message: 'the Dockerfile path must be relative and stay inside the build context',
+    });
   },
 );
 
@@ -44,24 +42,19 @@ test('#ImageBuildQuerySchema accepts a name and a Dockerfile path', () => {
 test('#ImageBuildQuerySchema rejects a name that is not a valid name', () => {
   const result = ImageBuildQuerySchema.safeParse({ name: 'Web', dockerfile: 'docker/Dockerfile' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#ImageBuildQuerySchema rejects an absolute Dockerfile path', () => {
   const result = ImageBuildQuerySchema.safeParse({ name: 'web', dockerfile: '/Dockerfile' });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['dockerfile'],
-      message: 'the Dockerfile path must be relative and stay inside the build context',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['dockerfile'],
+    message: 'the Dockerfile path must be relative and stay inside the build context',
+  });
 });
 
 test('#ImageBuildResultSchema turns the date string into a date', () => {
@@ -97,7 +90,7 @@ test('#ImageBuildResultSchema rejects a date string that is not a date', () => {
     sizeBytes: 1_048_576,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['createdAt'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['createdAt'], code: 'invalid_type' });
 });
 
 test('#ImageBuildResultSchema rejects a source outside the source list', () => {
@@ -111,7 +104,7 @@ test('#ImageBuildResultSchema rejects a source outside the source list', () => {
     sizeBytes: 1_048_576,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['source'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['source'], code: 'invalid_value' });
 });
 
 test('#ImageBuildErrorSchema accepts a code and a message', () => {
@@ -163,7 +156,7 @@ test('#ImageBuildEventSchema accepts an error event', () => {
 test('#ImageBuildEventSchema rejects an unknown event type', () => {
   const result = ImageBuildEventSchema.safeParse({ type: 'log', phase: 'build', elapsedMs: 1500 });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['type'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['type'], code: 'invalid_union' });
 });
 
 test('#ImageBuildEventSchema rejects a phase outside the phase list', () => {
@@ -173,7 +166,7 @@ test('#ImageBuildEventSchema rejects a phase outside the phase list', () => {
     elapsedMs: 1500,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['phase'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['phase'], code: 'invalid_value' });
 });
 
 test('#ImageBuildEventSchema rejects a negative elapsed time', () => {
@@ -183,7 +176,7 @@ test('#ImageBuildEventSchema rejects a negative elapsed time', () => {
     elapsedMs: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['elapsedMs'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['elapsedMs'], code: 'too_small' });
 });
 
 test('#ImageOpEventSchema accepts a progress event', () => {
@@ -223,13 +216,14 @@ test('#ImageOpEventSchema rejects an image event with its date as a string', () 
     },
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['image', 'createdAt'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['image', 'createdAt'],
+    code: 'invalid_type',
+  });
 });
 
 test('#ImageOpEventSchema rejects an error event', () => {
   const result = ImageOpEventSchema.safeParse({ type: 'error', phase: 'pull', elapsedMs: 0 });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['type'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['type'], code: 'invalid_union' });
 });

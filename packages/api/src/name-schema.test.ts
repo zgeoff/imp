@@ -19,11 +19,8 @@ test.each([
 ])('it rejects %s as a name', (name) => {
   const result = NameSchema.safeParse(name);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: [],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });

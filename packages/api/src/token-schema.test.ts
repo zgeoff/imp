@@ -17,7 +17,7 @@ test.each(['read', 'exec', 'manage'])('#ScopeSchema accepts the scope %s', (scop
 test('#ScopeSchema rejects a scope outside the list', () => {
   const result = ScopeSchema.safeParse('admin');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test.each(['dev', 'dev-*', '*', '*-test', `a${'b'.repeat(30)}`])(
@@ -32,12 +32,10 @@ test.each(['', '2dev', '-dev', 'Dev', 'dev_*', 'dev?', `a${'b'.repeat(31)}`])(
   (pattern) => {
     const result = ImpPatternSchema.safeParse(pattern);
 
-    expect(result.error?.issues).toPartiallyContain(
-      expect.objectContaining({
-        path: [],
-        message: 'must be an imp name, with * for any run of characters, such as dev-*',
-      }),
-    );
+    expect(result.error?.issues).toPartiallyContain({
+      path: [],
+      message: 'must be an imp name, with * for any run of characters, such as dev-*',
+    });
   },
 );
 
@@ -51,27 +49,28 @@ test('#GrantableSchema accepts distinct secret names', () => {
 test('#GrantableSchema rejects an empty list', () => {
   const result = GrantableSchema.safeParse([]);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_small' });
 });
 
 test('#GrantableSchema rejects more than 32 names', () => {
   const result = GrantableSchema.safeParse(Array.from({ length: 33 }, (_, index) => `s${index}`));
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
 
 test('#GrantableSchema rejects a name that is not a secret name', () => {
   const result = GrantableSchema.safeParse(['github-token', 'NPM']);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [1] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [1], code: 'invalid_format' });
 });
 
 test('#GrantableSchema rejects a secret named twice', () => {
   const result = GrantableSchema.safeParse(['github-token', 'github-token']);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: [], message: 'must not name a secret twice' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must not name a secret twice',
+  });
 });
 
 test('#GrantableUpdateSchema accepts an empty list', () => {
@@ -83,21 +82,22 @@ test('#GrantableUpdateSchema rejects more than 32 names', () => {
     Array.from({ length: 33 }, (_, index) => `s${index}`),
   );
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
 
 test('#GrantableUpdateSchema rejects a name that is not a secret name', () => {
   const result = GrantableUpdateSchema.safeParse(['github-token', 'NPM']);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [1] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [1], code: 'invalid_format' });
 });
 
 test('#GrantableUpdateSchema rejects a secret named twice', () => {
   const result = GrantableUpdateSchema.safeParse(['github-token', 'github-token']);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: [], message: 'must not name a secret twice' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must not name a secret twice',
+  });
 });
 
 test('#SshPublicKeySchema trims the whitespace around a key line', () => {
@@ -109,13 +109,13 @@ test('#SshPublicKeySchema trims the whitespace around a key line', () => {
 test('#SshPublicKeySchema rejects a key line of only whitespace', () => {
   const result = SshPublicKeySchema.safeParse('  \n');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_small' });
 });
 
 test('#SshPublicKeySchema rejects a key line over 16384 characters', () => {
   const result = SshPublicKeySchema.safeParse(`ssh-rsa ${'A'.repeat(16_377)}`);
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
 
 test('#SshKeySchema accepts a bound key', () => {
@@ -174,7 +174,7 @@ test('#TokenSchema rejects a name that is not a name', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['name'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['name'], code: 'invalid_format' });
 });
 
 test('#TokenSchema rejects a scope outside the list', () => {
@@ -187,7 +187,7 @@ test('#TokenSchema rejects a scope outside the list', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['scope'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['scope'], code: 'invalid_value' });
 });
 
 test('#TokenSchema rejects an imp pattern that is not a pattern', () => {
@@ -200,7 +200,7 @@ test('#TokenSchema rejects an imp pattern that is not a pattern', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['imps', 0] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['imps', 0], code: 'invalid_format' });
 });
 
 test('#TokenSchema rejects a grantable name that is not a secret name', () => {
@@ -213,9 +213,10 @@ test('#TokenSchema rejects a grantable name that is not a secret name', () => {
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['grantable', 0] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['grantable', 0],
+    code: 'invalid_format',
+  });
 });
 
 test('#TokenSchema rejects a creation time that is not a date', () => {
@@ -228,7 +229,7 @@ test('#TokenSchema rejects a creation time that is not a date', () => {
     createdAt: '2026-01-02T03:04:05.000Z',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['createdAt'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['createdAt'], code: 'invalid_type' });
 });
 
 test('#IdentitySchema accepts a tailnet identity', () => {
@@ -271,7 +272,7 @@ test('#IdentitySchema rejects a kind outside the actors', () => {
     grantable: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['kind'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['kind'], code: 'invalid_value' });
 });
 
 test('#IdentitySchema rejects a scope outside the list', () => {
@@ -283,7 +284,7 @@ test('#IdentitySchema rejects a scope outside the list', () => {
     grantable: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['scope'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['scope'], code: 'invalid_value' });
 });
 
 test('#IdentitySchema rejects an imp pattern that is not a pattern', () => {
@@ -295,7 +296,7 @@ test('#IdentitySchema rejects an imp pattern that is not a pattern', () => {
     grantable: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['imps', 0] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['imps', 0], code: 'invalid_format' });
 });
 
 test('#IdentitySchema rejects a grantable name that is not a secret name', () => {
@@ -307,7 +308,8 @@ test('#IdentitySchema rejects a grantable name that is not a secret name', () =>
     grantable: ['GitHub'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['grantable', 0] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['grantable', 0],
+    code: 'invalid_format',
+  });
 });

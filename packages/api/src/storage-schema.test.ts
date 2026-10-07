@@ -19,7 +19,7 @@ test.each(['imp', 'checkpoint', 'image', 'snapshot', 'memory', 'secrets'])(
 test('#DroppedStorageSchema rejects a kind outside the list', () => {
   const result = DroppedStorageSchema.safeParse({ kind: 'token', id: 'x-1' });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['kind'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['kind'], code: 'invalid_value' });
 });
 
 test('#OrphanStorageSchema accepts an orphaned directory of secret values', () => {
@@ -63,7 +63,7 @@ test('#OrphanStorageSchema rejects a kind outside the list', () => {
     snapshots: ['cp-1'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['kind'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['kind'], code: 'invalid_value' });
 });
 
 test('#OrphanStorageSchema rejects a negative size', () => {
@@ -76,7 +76,7 @@ test('#OrphanStorageSchema rejects a negative size', () => {
     snapshots: ['cp-1'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['bytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['bytes'], code: 'too_small' });
 });
 
 test('#OrphanStorageSchema rejects a fractional size', () => {
@@ -89,7 +89,7 @@ test('#OrphanStorageSchema rejects a fractional size', () => {
     snapshots: ['cp-1'],
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['bytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['bytes'], code: 'invalid_type' });
 });
 
 test('#StorageGcSchema accepts a dry run with kept orphans', () => {
@@ -115,9 +115,8 @@ test('#StorageGcSchema accepts a dry run with kept orphans', () => {
 
 test('#StorageGcSchema accepts a run from an impd that reports no kept orphans', () => {
   const payload = { dryRun: false, dropped: [] } as const;
-  const result = StorageGcSchema.safeParse(payload);
 
-  expect(result.data).toStrictEqual(payload);
+  expect(StorageGcSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
 test('#StorageGcSchema rejects a dropped item of an unknown kind', () => {
@@ -127,9 +126,10 @@ test('#StorageGcSchema rejects a dropped item of an unknown kind', () => {
     kept: [],
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: ['dropped', 0, 'kind'] }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['dropped', 0, 'kind'],
+    code: 'invalid_value',
+  });
 });
 
 test('#DatabaseCopySchema accepts a database copy', () => {
@@ -157,7 +157,7 @@ test('#DatabaseCopySchema rejects a negative size', () => {
     integrity: 'ok',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['sizeBytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['sizeBytes'], code: 'too_small' });
 });
 
 test('#DatabaseCopySchema rejects a creation time that is not a date', () => {
@@ -170,5 +170,5 @@ test('#DatabaseCopySchema rejects a creation time that is not a date', () => {
     integrity: 'ok',
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['createdAt'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['createdAt'], code: 'invalid_type' });
 });

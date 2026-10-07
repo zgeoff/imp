@@ -5,10 +5,10 @@ test.each(['oci', 'imp'])('#ImageSourceSchema accepts the %s source', (input) =>
   expect(ImageSourceSchema.safeParse(input).data).toBe(input);
 });
 
-test.each(['docker'])('#ImageSourceSchema rejects the unknown source %s', (input) => {
-  const result = ImageSourceSchema.safeParse(input);
+test('#ImageSourceSchema rejects the unknown source docker', () => {
+  const result = ImageSourceSchema.safeParse('docker');
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: [] }));
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_value' });
 });
 
 test('#ImageSchema accepts an image', () => {
@@ -36,13 +36,10 @@ test('#ImageSchema rejects a name that is not a valid name', () => {
     sizeBytes: 1_048_576,
   });
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: ['name'],
-      message:
-        'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['name'],
+    message: 'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  });
 });
 
 test('#ImageSchema rejects a source outside the source list', () => {
@@ -56,7 +53,7 @@ test('#ImageSchema rejects a source outside the source list', () => {
     sizeBytes: 1_048_576,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['source'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['source'], code: 'invalid_value' });
 });
 
 test('#ImageSchema rejects a negative size', () => {
@@ -70,7 +67,7 @@ test('#ImageSchema rejects a negative size', () => {
     sizeBytes: -1,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['sizeBytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['sizeBytes'], code: 'too_small' });
 });
 
 test('#ImageSchema rejects a fractional size', () => {
@@ -84,5 +81,5 @@ test('#ImageSchema rejects a fractional size', () => {
     sizeBytes: 1.5,
   });
 
-  expect(result.error?.issues).toPartiallyContain(expect.objectContaining({ path: ['sizeBytes'] }));
+  expect(result.error?.issues).toPartiallyContain({ path: ['sizeBytes'], code: 'invalid_type' });
 });

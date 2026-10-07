@@ -33,18 +33,14 @@ test.each([
 ])('it rejects %s as an image reference', (ref) => {
   const result = ImageRefSchema.safeParse(ref);
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({
-      path: [],
-      message: 'must be an image reference such as ubuntu:24.04 or ghcr.io/org/app@sha256:…',
-    }),
-  );
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must be an image reference such as ubuntu:24.04 or ghcr.io/org/app@sha256:…',
+  });
 });
 
 test('it rejects a reference longer than 255 characters', () => {
   const result = ImageRefSchema.safeParse('a'.repeat(256));
 
-  expect(result.error?.issues).toPartiallyContain(
-    expect.objectContaining({ path: [], code: 'too_big' }),
-  );
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
 });
