@@ -229,7 +229,7 @@ test('#createQueryHandler refuses a denied name with no OPT record when the quer
 
 // slot 1's /30 holds 10.66.0.5 and 10.66.0.7 too; slot 0 holds no imp
 test.each(['10.66.0.7', '10.66.0.5', '10.66.0.2', '192.0.2.1'])(
-  'it refuses a query from %p, which is no guest with an imp',
+  '#createQueryHandler refuses a query from %p, which is no guest with an imp',
   async (source) => {
     const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'admit' } } });
     const handle = createQueryHandler(egress.deps);
@@ -438,7 +438,7 @@ test.each([
   ['10.66.0.10', 'web.lab.internal'],
   ['10.66.0.6', 'nobody.lab.internal'],
 ])(
-  'it answers %p NXDOMAIN for %p, a network name it may not see, and never sends it upstream',
+  '#createQueryHandler answers %p NXDOMAIN for %p, a network name it may not see, and never sends it upstream',
   async (source, name) => {
     const egress = buildStubEgressService({
       verdicts: { 1: {}, 2: {} },

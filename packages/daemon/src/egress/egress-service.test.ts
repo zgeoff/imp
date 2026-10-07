@@ -1538,3 +1538,18 @@ test('it frees the DNS port when it stops', async () => {
 
   expect(socket.port).toBe(booted.config.egressDnsPort);
 });
+
+test('it logs a rebuild of the table that nft refuses too after a failed change', async () => {
+  await using ctx = await setupTest();
+
+  const booted = await ctx.startImpd();
+
+  await booted.impd.imps.createImp({ name: 'dev' });
+
+  ctx.nft.refuse({ reason: 'table busy', times: 2 });
+
+  const change = booted.impd.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+  expect(change).rejects.toThrow(new Error('nft exited 1: table busy'));
+  expect(ctx.logs).toContain('impd: egress: rebuilding the table: nft exited 1: table busy');
+});

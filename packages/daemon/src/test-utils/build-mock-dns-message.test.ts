@@ -74,3 +74,25 @@ test('it puts records in the authority and additional sections, and sets TC and 
     ].join(''),
   );
 });
+
+test('it builds a default dns reply', () => {
+  const query = buildMockDnsQuery({ name: 'a.test', type: 'A', id: 0x12_34, edns: false });
+
+  expect(Buffer.from(buildMockDnsReply(query)).toString('hex')).toBe(
+    '123481800001000000000000016104746573740000010001',
+  );
+});
+
+test('it applies reply overrides on top of the defaults', () => {
+  const query = buildMockDnsQuery({ name: 'a.test', type: 'A', id: 0x12_34, edns: false });
+
+  const reply = buildMockDnsReply(query, {
+    answers: [{ type: 'A', name: 'a.test', ttl: 60, data: '192.0.2.1' }],
+    id: 0x00_07,
+  });
+
+  expect(Buffer.from(reply).toString('hex')).toBe(
+    '000781800001000100000000016104746573740000010001016104746573740000010001' +
+      '0000003c0004c0000201',
+  );
+});
