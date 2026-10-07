@@ -668,3 +668,109 @@ test('a missing value file is reported, not refreshed', async () => {
   expect(gone).toEqual({ kind: 'gone' });
   expect(ctx.calls).toHaveLength(0);
 });
+
+test('an answer with only a rotated refresh token keeps the access token and its expiry', async () => {
+  await using ctx = await setupTest();
+
+  const expiresAt = T0 + 5 * HOUR;
+
+  await ctx.writeState(buildReadyState({ expiresAt }));
+
+  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-1' }));
+
+  await ctx.refresher.refresh('codex', true);
+
+  const state = await ctx.readState();
+
+  expect(state).toMatchObject({
+    refreshToken: 'fake-refresh-1',
+    accessToken: 'fake-access-0',
+    expiresAt,
+  });
+});
+
+test('a tick writes a result an earlier write failed on, though the secret is not due', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildPendingState('fake-refresh-0'));
+
+  const failing = { on: true };
+
+  const flaky = createOAuthRefresher({
+    db: ctx.db,
+    files: {
+      read: ctx.files.read,
+      rewrite: (file, value) => {
+        if (failing.on) {
+          throw new Error('ENOSPC: no space left on device');
+        }
+
+        ctx.files.rewrite(file, value);
+      },
+    },
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => ctx.clock.now,
+    fetch: () =>
+      Promise.resolve(
+        Response.json({
+          access_token: 'fake-access-1',
+          refresh_token: 'fake-refresh-1',
+          expires_in: 240 * 3600,
+        }),
+      ),
+  });
+
+  await flaky.refresh('codex', true);
+
+  const before = await ctx.readState();
+
+  expect(before).toMatchObject({ status: 'pending', refreshToken: 'fake-refresh-0' });
+
+  failing.on = false;
+
+  await flaky.tick();
+
+  const after = await ctx.readState();
+
+  expect(after).toMatchObject({ status: 'ready', refreshToken: 'fake-refresh-1' });
+});
+
+test('stop waits for a refresh under way and starts no other', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildPendingState('fake-refresh-0'));
+
+  const gate = Promise.withResolvers<void>();
+
+  ctx.hold.gate = gate.promise;
+
+  ctx.replies.push(
+    buildReply(200, { access_token: 'fake-access-1', refresh_token: 'fake-refresh-1' }),
+  );
+
+  const running = ctx.refresher.refresh('codex', true);
+  const stopped = ctx.refresher.stop();
+
+  const early = await Promise.race([
+    stopped.then(() => 'stopped'),
+    Bun.sleep(20).then(() => 'waiting'),
+  ]);
+
+  expect(early).toBe('waiting');
+
+  gate.resolve();
+
+  await stopped;
+
+  const outcome = await running;
+  const state = await ctx.readState();
+  const later = await ctx.refresher.refresh('codex', true);
+
+  expect(outcome).toEqual({ kind: 'refreshed', rotated: true });
+  expect(state).toMatchObject({ refreshToken: 'fake-refresh-1' });
+  expect(later).toMatchObject({ kind: 'transient' });
+  expect(ctx.calls).toHaveLength(1);
+});

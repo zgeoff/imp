@@ -101,6 +101,8 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
   // the refresh token it holds may be the only live one
   const unsaved = new Map<string, { valueFile: string; state: OAuthStateFile }>();
 
+  const lifecycle = { stopping: false };
+
   const timer: { handle: ReturnType<typeof setInterval> | null; running: Promise<void> | null } = {
     handle: null,
     running: null,
@@ -277,8 +279,17 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
     const refreshToken = tokens.refreshToken ?? state.refreshToken;
 
-    const expiresAt =
-      tokens.expiresInMs === null ? readJwtExpiry(accessToken) : at + tokens.expiresInMs;
+    // a response with only a rotated refresh token leaves the access token
+    // and its expiry as they were
+    let expiresAt: number | null;
+
+    if (tokens.expiresInMs !== null) {
+      expiresAt = at + tokens.expiresInMs;
+    } else if (tokens.accessToken === null) {
+      expiresAt = state.expiresAt;
+    } else {
+      expiresAt = readJwtExpiry(accessToken);
+    }
 
     const next: OAuthStateFile = {
       v: 1,
@@ -349,6 +360,10 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
   };
 
   const startRefresh = (name: string, force: boolean): Promise<RefreshOutcome> => {
+    if (lifecycle.stopping) {
+      return Promise.resolve({ kind: 'transient', error: 'impd is stopping' });
+    }
+
     const running = inflight.get(name);
 
     if (running !== undefined) {
@@ -368,6 +383,32 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     return started;
   };
 
+  const writeUnsaved = async (name: string, secret: Readonly<SecretRecord>): Promise<void> => {
+    if (!unsaved.has(name)) {
+      return;
+    }
+
+    try {
+      await withLock(name, () => {
+        const kept = unsaved.get(name);
+
+        if (kept === undefined) {
+          return Promise.resolve();
+        }
+
+        if (kept.valueFile === secret.valueFile) {
+          writeState(name, kept.valueFile, kept.state);
+        } else {
+          unsaved.delete(name);
+        }
+
+        return Promise.resolve();
+      });
+    } catch (error) {
+      log(`impd: broker: oauth secret ${name}: ${readErrorMessage(error)}`);
+    }
+  };
+
   const runDueRefreshes = async (): Promise<void> => {
     try {
       const at = now();
@@ -377,9 +418,17 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       for (const entry of listed) {
         const secret = entry.secret;
 
+        if (lifecycle.stopping) {
+          break;
+        }
+
         if (secret.kind !== 'oauth' || secret.oauth === null) {
           continue;
         }
+
+        // a result whose write failed is written again at every tick,
+        // whether or not the secret is due
+        await writeUnsaved(secret.name, secret);
 
         const wait = backoff.get(secret.name);
 
@@ -430,6 +479,8 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       timer.handle.unref();
     },
     stop: async () => {
+      lifecycle.stopping = true;
+
       if (timer.handle !== null) {
         clearInterval(timer.handle);
 
@@ -437,6 +488,9 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       }
 
       await timer.running;
+
+      // a refresh under way ends, its write included, before stop answers
+      await Promise.allSettled(inflight.values());
     },
   };
 }

@@ -92,7 +92,13 @@ export function createSecretFiles(dataDir: string): SecretFiles {
         const fd = openSync(temp, 'wx', 0o600);
 
         try {
-          writeSync(fd, value);
+          const bytes = Buffer.from(value, 'utf8');
+          let written = 0;
+
+          while (written < bytes.length) {
+            written += writeSync(fd, bytes, written);
+          }
+
           fsyncSync(fd);
         } finally {
           closeSync(fd);

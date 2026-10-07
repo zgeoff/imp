@@ -167,3 +167,15 @@ test('a rewrite that cannot finish leaves the old value and no temp file', () =>
 
   expect(readdirSync(join(tmp.dir, 'secrets'))).toEqual(['codex.a1']);
 });
+
+test('a rewrite writes a value of many bytes whole', () => {
+  using tmp = setupDir();
+
+  const files = createSecretFiles(tmp.dir);
+  const value = `{"v":1,"n":"${'é'.repeat(300_000)}"}`;
+
+  files.write('codex.a1', 'old');
+  files.rewrite('codex.a1', value);
+
+  expect(files.read('codex.a1')).toBe(value);
+});

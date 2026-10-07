@@ -83,6 +83,10 @@ const STOP_DEADLINE_MS = 100_000;
 
 // at most per step before the sleep pass, which gets whatever is left
 const STOP_STEP_MAX_MS = 10_000;
+
+// the broker's stop waits for a token exchange under way (30 s at most) and
+// its write, so a rotated refresh token is stored before the database closes
+const STOP_BROKER_MAX_MS = 40_000;
 const BODY_SLACK_BYTES = 1024 ** 2;
 
 // Bounded, and a failure is logged: impd always reaches its exit. True when
@@ -635,7 +639,7 @@ async function main(): Promise<void> {
     }
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
-    await runStopStep('broker', readStepMs(), () => broker.stop());
+    await runStopStep('broker', Math.min(STOP_BROKER_MAX_MS, readLeftMs()), () => broker.stop());
 
     egress.stop();
 
