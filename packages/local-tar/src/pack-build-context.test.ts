@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { chmod, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MissingDockerfileError, listContextEntries } from './pack-build-context';
@@ -105,6 +105,11 @@ test('it lists a symlink as a link and a file with its exec bits', async () => {
   await chmod(join(ctx.root, 'run.sh'), 0o755);
   await symlink('run.sh', join(ctx.root, 'start'));
 
+  // a symlink's own mode differs by platform: 0o777 on Linux, not on macOS
+  const link = await lstat(join(ctx.root, 'start'));
+
+  const linkMode = link.mode & 0o7777;
+
   const entries: unknown = await listContextEntries(ctx.root, 'Dockerfile');
 
   expect(entries).toStrictEqual([
@@ -129,7 +134,7 @@ test('it lists a symlink as a link and a file with its exec bits', async () => {
       name: 'start',
       kind: 'symlink',
       size: 6,
-      mode: 0o777,
+      mode: linkMode,
       mtimeMs: expect.any(Number) as unknown,
     },
   ]);

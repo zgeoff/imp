@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { $ } from 'bun';
 import {
   countFileBytes,
   countTarBytes,
@@ -29,6 +30,11 @@ test('#listLocalEntries lists the path and everything under it, parents first, n
   await createStubTree(ctx.root, { 'top/b.sh': 'run', 'top/a/c.txt': 'c' });
   await chmod(join(ctx.root, 'top/b.sh'), 0o755);
   await symlink('b.sh', join(ctx.root, 'top/link'));
+
+  // a symlink's own mode differs by platform: 0o777 on Linux, not on macOS
+  const link = await lstat(join(ctx.root, 'top/link'));
+
+  const linkMode = link.mode & 0o7777;
 
   const entries: unknown = await listLocalEntries(join(ctx.root, 'top'));
 
@@ -70,7 +76,7 @@ test('#listLocalEntries lists the path and everything under it, parents first, n
       name: 'top/link',
       kind: 'symlink',
       size: 4,
-      mode: 0o777,
+      mode: linkMode,
       mtimeMs: expect.any(Number) as unknown,
     },
   ]);
@@ -80,8 +86,7 @@ test('#listLocalEntries lists a FIFO as an other entry', async () => {
   await using ctx = await setupTest();
 
   await mkdir(join(ctx.root, 'top'));
-
-  Bun.spawnSync(['mkfifo', join(ctx.root, 'top/pipe')]);
+  await $`mkfifo ${join(ctx.root, 'top/pipe')}`;
 
   const entries: unknown = await listLocalEntries(join(ctx.root, 'top'));
 
@@ -214,8 +219,7 @@ test('#writeLocalEntries warns about and leaves out an entry that is not a file,
   await using ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'top/a.txt': 'alpha' });
-
-  Bun.spawnSync(['mkfifo', join(ctx.root, 'top/pipe')]);
+  await $`mkfifo ${join(ctx.root, 'top/pipe')}`;
 
   const entries = await listLocalEntries(join(ctx.root, 'top'));
 

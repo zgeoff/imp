@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { $ } from 'bun';
 import { buildStubTar } from './test-utils/build-stub-tar';
 import { readTarEntries } from './test-utils/read-tar-entries';
 import {
@@ -498,7 +499,7 @@ test('#writeBuildContext rejects with the reason of a signal aborted during its 
   const bytes = await buildStubTar([{ name: 'Dockerfile', content: 'FROM busybox:1.37\n' }]);
 
   // a FIFO the test feeds, so the read waits for the rest of the tar
-  Bun.spawnSync(['mkfifo', input]);
+  await $`mkfifo ${input}`;
 
   const writing = writeBuildContext(
     input,
@@ -525,6 +526,46 @@ test('#writeBuildContext rejects with the reason of a signal aborted during its 
   controller.abort(reason);
 
   expect(writing).rejects.toBe(reason);
+});
+
+test('#writeBuildContext rejects with an error of the text of a reason that is not an error', async () => {
+  await using ctx = await setupTest();
+
+  const input = join(ctx.dir, 'in.tar');
+  const output = join(ctx.dir, 'out.tar');
+
+  const controller = new AbortController();
+
+  const bytes = await buildStubTar([{ name: 'Dockerfile', content: 'FROM busybox:1.37\n' }]);
+
+  // a FIFO the test feeds, so the read waits for the rest of the tar
+  await $`mkfifo ${input}`;
+
+  const writing = writeBuildContext(
+    input,
+    output,
+    { dockerfilePath: 'Dockerfile', dockerfile: 'FROM busybox:1.37\n' },
+    'FROM busybox:1.37\n',
+    1024,
+    controller.signal,
+  );
+
+  const feed = await open(input, 'w');
+
+  onTestFinished(() => feed.close());
+
+  // every entry, without the two zero blocks that end the tar
+  await feed.write(bytes.subarray(0, -1024));
+
+  await waitFor(async () => {
+    const written = await stat(output);
+
+    expect(written.size).toBeGreaterThan(0);
+  });
+
+  controller.abort('the client went');
+
+  expect(writing).rejects.toThrowWithMessage(Error, 'the client went');
 });
 
 test('#writeBuildContext rejects with the write failure as it is', async () => {

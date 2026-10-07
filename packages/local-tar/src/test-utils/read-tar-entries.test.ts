@@ -43,5 +43,8 @@ test('it reads each entry in order with its header and decoded data', async () =
 test('it rejects bytes that are not a tar', () => {
   const bytes = new TextEncoder().encode('not a tar\n'.repeat(64));
 
-  expect(readTarEntries(bytes)).rejects.toThrow();
+  expect(readTarEntries(bytes)).rejects.toThrowWithMessage(
+    Error,
+    'Invalid tar header. Maybe the tar is corrupted or it needs to be gunzipped?',
+  );
 });
