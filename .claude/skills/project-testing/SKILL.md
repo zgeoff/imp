@@ -475,8 +475,8 @@ file leaves every host on its real origin.
 2. To mount the small filesystem.
 3. Passwordless, for the `registry` suite.
 4. For `tailscale` and `moves-tailnet`.
-5. Optional: `packages/cli/src/image/pack-build-context.docker.test.ts` runs the real
-   `docker buildx` and skips when it is missing.
+5. Optional: `packages/cli/src/image/run-image-build.docker.test.ts` runs the real `docker buildx`
+   and skips when it is missing.
 
 - `IMP_HOST_TESTS=required` makes the `canUnshare` probe (`packages/daemon/src/test-utils/`) of each
   `*.host.test.ts` test true, so a missing tool or namespace fails the test instead of skipping it.

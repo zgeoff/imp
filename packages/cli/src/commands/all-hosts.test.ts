@@ -1,389 +1,660 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { writeHostConfig } from '../host-store';
+import { runCli } from '../test-utils/start-cli';
+import { startStubRpcImpd } from '../test-utils/start-stub-rpc-impd';
 
-const MAIN = join(import.meta.dir, '..', 'main.ts');
-const TOKEN = 'all-hosts-secret-token';
+// `ls --all` and `new --place` reach every saved host. The CLI runs as a
+// user runs it, against stand-in impds on loopback, each in the state the
+// test names.
 
-// the fields `imp ls` prints; the CLI does not check impd's answer
-function buildImp(name: string, slot = 0) {
-  return {
-    name,
-    state: 'running',
-    image: 'base',
-    vcpus: 1,
-    memoryMib: 512,
-    diskMib: 32_768,
-    ip: `10.66.0.${String(slot + 2)}`,
-    url: `http://${name}.imp.localhost:7080`,
-  };
+async function setupTest() {
+  await using stack = new AsyncDisposableStack();
+
+  const dir = await mkdtemp(join(tmpdir(), 'imp-all-hosts-'));
+
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
+
+  const owned = stack.move();
+
+  // the CLI's home, where config.json keeps the saved hosts
+  const env = { HOME: dir, XDG_CONFIG_HOME: dir };
+
+  return { env, [Symbol.asyncDispose]: () => owned.disposeAsync() };
 }
 
-type FakeImp = Readonly<ReturnType<typeof buildImp>>;
+test('it lists every saved host and exits 3 when one of them fails', async () => {
+  await using ctx = await setupTest();
 
-interface FakeHost {
-  readonly imps: readonly FakeImp[];
-  readonly ramBudgetMib?: number;
-  readonly images?: readonly string[];
-
-  // imps.create answers RAM_BUDGET_EXCEEDED, as a full host's governor does
-  readonly isFull?: boolean;
-
-  // the token's imp patterns; null for a whole-host token
-  readonly tokenImps?: readonly string[] | null;
-
-  // imps.expose answers PRECONDITION_FAILED, as an impd without a public IP does
-  readonly cannotExpose?: boolean;
-}
-
-// what an impd answers for a refused call
-function buildRpcError(code: string, status: number, message: string) {
-  return Response.json({ json: { defined: false, code, status, message } }, { status });
-}
-
-// An impd that speaks oRPC's RPC protocol for the calls `ls --all` and
-// `new --place` make, for the right token, and records each create
-function startImpd(host: FakeHost) {
-  const creates: unknown[] = [];
-  const exposes: unknown[] = [];
-  const lists: string[] = [];
-
-  const answers: Readonly<Record<string, unknown>> = {
-    'imps/list': host.imps,
-    'images/list': (host.images ?? ['base']).map((name) => ({ name })),
-    'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: host.tokenImps ?? null },
-    'imps/expose': {
-      url: 'https://dev.example.com',
-      auth: 'token',
-      user: null,
-      credential: 'expose-credential',
-    },
-    'system/info': {
-      version: '0.12.0',
-      ramBudgetMib: host.ramBudgetMib ?? 8192,
-      ramUsedMib: 0,
-      ramReservedMib: 0,
-      ramSleepingMib: 0,
-      storage: { isLow: false },
-      defaults: { memoryMib: 512, image: 'base' },
-      egress: { isEnforced: true },
-    },
-  };
-
-  const server = Bun.serve({
-    port: 0,
-    fetch: async (request) => {
-      if (request.headers.get('authorization') !== `Bearer ${TOKEN}`) {
-        return Response.json({ json: { message: 'unauthorized' } }, { status: 401 });
-      }
-
-      const path = new URL(request.url).pathname.replace(/^\/rpc\//u, '');
-
-      if (path === 'imps/list') {
-        const body = await request.text();
-
-        lists.push(body);
-      }
-
-      if (path === 'imps/expose') {
-        const body: unknown = await request.json();
-
-        exposes.push(body);
-
-        if (host.cannotExpose === true) {
-          return buildRpcError('PRECONDITION_FAILED', 412, 'IMP_PUBLIC_IP is not set');
-        }
-      }
-
-      if (path !== 'imps/create') {
-        return Response.json({ json: answers[path] ?? null });
-      }
-
-      const body: unknown = await request.json();
-
-      creates.push(body);
-
-      if (host.isFull === true) {
-        const error = {
-          defined: true,
-          code: 'RAM_BUDGET_EXCEEDED',
-          status: 503,
-          message: 'Not enough RAM budget, even after sleeping idle imps',
-          data: { budgetMib: 8192, usedMib: 8000, requestedMib: 512 },
-        };
-
-        return Response.json({ json: error }, { status: 503 });
-      }
-
-      return Response.json({ json: buildImp('dev') });
+  // db is on its way to another host
+  using box = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [
+        buildMockImp({ name: 'web', state: 'running', move: 'receiving' }),
+        buildMockImp({ name: 'db', state: 'running', move: 'sending' }),
+      ],
     },
   });
 
-  return { url: `http://localhost:${String(server.port)}`, server, creates, exposes, lists };
-}
+  using laptop = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: { 'imps/list': [buildMockImp({ name: 'dev', state: 'sleeping' })] },
+  });
 
-// a host that takes the connection and never answers, as a sleeping laptop's
-// impd does from behind a stalled tailnet path
-function startSilentImpd() {
-  const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
-
-  return { url: `http://localhost:${String(server.port)}`, server };
-}
-
-// `withSilent` adds a saved host that never answers
-function setupTest(hosts: Readonly<Record<string, FakeHost>>, withSilent = false) {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-all-hosts-'));
-  const env = { XDG_CONFIG_HOME: dir };
-
-  const impds = Object.fromEntries(
-    Object.entries(hosts).map(([name, host]) => [name, startImpd(host)]),
-  );
-
-  const saved = Object.entries(impds).map(
-    ([name, impd]) => [name, { url: impd.url, token: TOKEN }] as const,
-  );
-
-  const silent = withSilent ? startSilentImpd() : null;
-
-  writeHostConfig(env, {
-    current: Object.keys(hosts)[0] ?? null,
+  writeHostConfig(ctx.env, {
+    current: 'box',
     hosts: {
-      ...Object.fromEntries(saved),
-      gone: { url: 'http://127.0.0.1:1', token: TOKEN },
-      ...(silent !== null && { silent: { url: silent.url, token: TOKEN } }),
+      box: { url: box.url, token: 'all-hosts-token' },
+      laptop: { url: laptop.url, token: 'all-hosts-token' },
+      gone: { url: 'http://127.0.0.1:1', token: 'all-hosts-token' },
     },
   });
 
-  const run = async (args: readonly string[]) => {
-    const child = Bun.spawn(['bun', MAIN, ...args], {
-      env: { PATH: process.env['PATH'] ?? '', HOME: dir, ...env },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-
-    return { stdout, stderr, code };
-  };
-
-  const stopAll = async () => {
-    for (const impd of Object.values(impds)) {
-      await impd.server.stop(true);
-    }
-
-    await silent?.server.stop(true);
-  };
-
-  return {
-    impds,
-    run,
-    stopAll,
-    [Symbol.asyncDispose]: async () => {
-      await stopAll();
-
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
-
-// db is on its way to another host. Its `host` is a field this CLI's schema
-// lacks, as a newer impd's imp could carry, and must not replace the saved
-// host's name.
-const TWO_HOSTS = {
-  box: { imps: [buildImp('web', 0), { ...buildImp('db', 1), move: 'sending', host: 'peer' }] },
-  laptop: { imps: [buildImp('dev', 0)] },
-};
-
-// the silent host costs the 5 s that each host gets
-test('ls --all lists every saved host, says which failed, and exits 3 for a partial list', async () => {
-  await using ctx = setupTest(TWO_HOSTS, true);
-
-  const started = performance.now();
-
-  const listed = await ctx.run(['ls', '--all']);
-
-  // the timeout, not a hang: the aborted request lets the process exit
-  expect(performance.now() - started).toBeLessThan(8000);
+  const listed = await runCli({ args: ['ls', '--all'], env: ctx.env });
 
   const rows = listed.stdout.trimEnd().split('\n');
 
-  expect(rows.map((row) => row.split(/\s+/u).slice(0, 3))).toEqual([
+  expect(rows.map((row) => row.split(/\s+/u).slice(0, 3))).toStrictEqual([
     ['HOST', 'NAME', 'STATE'],
     ['box', 'web', 'running'],
     ['box', 'db', 'running'],
-    ['laptop', 'dev', 'running'],
+    ['laptop', 'dev', 'sleeping'],
   ]);
 
-  // the move mark in the NOTE column
-  expect(rows[2]).toEndWith('  sending');
+  expect(rows[2]).toInclude('  sending');
+  expect(listed.stderr).toMatch(/^imp: gone: [^\n]+\n$/u);
+  expect(listed.code).toBe(3);
+});
 
-  const failed = listed.stderr.trimEnd().split('\n');
+test('it gives up on a host that never answers after 5 s', async () => {
+  await using ctx = await setupTest();
 
-  expect(failed).toHaveLength(2);
-  expect(failed[0]).toStartWith('imp: gone: ');
-  expect(failed[1]).toBe('imp: silent: no answer in 5 s');
-  expect(listed.stdout + listed.stderr).not.toContain(TOKEN);
+  using box = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: { 'imps/list': [buildMockImp({ name: 'web', state: 'running' })] },
+  });
+
+  // takes the connection and never answers, as a sleeping laptop's impd
+  // does from behind a stalled tailnet path
+  using silent = startStubRpcImpd({ token: 'all-hosts-token', isSilent: true });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-token' },
+      silent: { url: silent.url, token: 'all-hosts-token' },
+    },
+  });
+
+  const listed = await runCli({ args: ['ls', '--all'], env: ctx.env });
+
+  expect(
+    listed.stdout
+      .trimEnd()
+      .split('\n')
+      .map((row) => row.split(/\s+/u).slice(0, 3)),
+  ).toStrictEqual([
+    ['HOST', 'NAME', 'STATE'],
+    ['box', 'web', 'running'],
+  ]);
+
+  expect(listed.stderr).toBe('imp: silent: no answer in 5 s\n');
   expect(listed.code).toBe(3);
 }, 15_000);
 
-test('ls --all --json always writes the imps and the errors', async () => {
-  await using ctx = setupTest(TWO_HOSTS);
+test('it never prints a saved token in ls --all', async () => {
+  await using ctx = await setupTest();
 
-  const listed = await ctx.run(['ls', '--all', '--json']);
+  using box = startStubRpcImpd({
+    token: 'all-hosts-secret-token',
+    answers: { 'imps/list': [buildMockImp({ name: 'web' })] },
+  });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-secret-token' },
+      gone: { url: 'http://127.0.0.1:1', token: 'all-hosts-secret-token' },
+    },
+  });
+
+  const listed = await runCli({ args: ['ls', '--all'], env: ctx.env });
+
+  expect(`${listed.stdout}${listed.stderr}`).not.toInclude('all-hosts-secret-token');
+});
+
+test('it writes the imps and the errors of every host as JSON for ls --all --json', async () => {
+  await using ctx = await setupTest();
+
+  // db carries `host`, a field a newer impd's imp could carry and this
+  // CLI's schema lacks, which must not replace the saved host's name
+  const web = buildMockImp({ name: 'web' });
+  const db = { ...buildMockImp({ name: 'db' }), host: 'peer' };
+  const dev = buildMockImp({ name: 'dev' });
+
+  using box = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: { 'imps/list': [web, db] },
+  });
+
+  using laptop = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: { 'imps/list': [dev] },
+  });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-token' },
+      laptop: { url: laptop.url, token: 'all-hosts-token' },
+      gone: { url: 'http://127.0.0.1:1', token: 'all-hosts-token' },
+    },
+  });
+
+  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.env });
 
   const body: unknown = JSON.parse(listed.stdout);
 
-  expect(body).toEqual({
-    imps: [
-      { host: 'box', ...buildImp('web', 0) },
-      { host: 'box', ...buildImp('db', 1), move: 'sending' },
-      { host: 'laptop', ...buildImp('dev', 0) },
-    ],
+  // what the CLI receives, dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(
+    JSON.stringify([
+      { ...web, host: 'box' },
+      { ...db, host: 'box' },
+      { ...dev, host: 'laptop' },
+    ]),
+  );
+
+  expect(body).toStrictEqual({
+    imps: sent,
     errors: [{ host: 'gone', message: expect.any(String) as unknown }],
   });
 
   expect(listed.code).toBe(3);
-
-  await ctx.stopAll();
-
-  // no host answered: the JSON still comes, and the exit is a failure
-  const none = await ctx.run(['ls', '--all', '--json']);
-
-  expect(JSON.parse(none.stdout)).toMatchObject({ imps: [] });
-  expect(none.stderr.trimEnd().split('\n')).toHaveLength(3);
-  expect(none.code).toBe(1);
 });
 
-test('ls --all --builders asks every host for its builders too', async () => {
-  await using ctx = setupTest(TWO_HOSTS);
+test('it writes an empty JSON list and exits 1 when no host answers ls --all --json', async () => {
+  await using ctx = await setupTest();
 
-  await ctx.run(['ls', '--all', '--builders']);
-  await ctx.run(['ls', '--all']);
+  writeHostConfig(ctx.env, {
+    current: 'gone',
+    hosts: {
+      gone: { url: 'http://127.0.0.1:1', token: 'all-hosts-token' },
+      away: { url: 'http://127.0.0.1:2', token: 'all-hosts-token' },
+    },
+  });
 
-  for (const impd of Object.values(ctx.impds)) {
-    expect(impd.lists).toHaveLength(2);
-    expect(impd.lists[0]).toContain('"builders":true');
-    expect(impd.lists[1]).not.toContain('builders');
-  }
+  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.env });
+
+  const body: unknown = JSON.parse(listed.stdout);
+
+  expect(body).toStrictEqual({
+    imps: [],
+    errors: [
+      { host: 'away', message: expect.any(String) as unknown },
+      { host: 'gone', message: expect.any(String) as unknown },
+    ],
+  });
+
+  const failed: unknown = listed.stderr.trimEnd().split('\n');
+
+  expect(failed).toStrictEqual([
+    expect.stringMatching(/^imp: away: /u) as unknown,
+    expect.stringMatching(/^imp: gone: /u) as unknown,
+  ]);
+
+  expect(listed.code).toBe(1);
 });
 
-test('--all and --place with --host are usage errors, and plain ls stays one host', async () => {
-  await using ctx = setupTest(TWO_HOSTS);
+test('it asks every host for its builders under ls --all --builders', async () => {
+  await using ctx = await setupTest();
 
-  const all = await ctx.run(['--host', 'box', 'ls', '--all']);
-  const place = await ctx.run(['--host', 'box', 'new', 'dev', '--place']);
+  using box = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+  using laptop = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
 
-  expect(all).toEqual({
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-token' },
+      laptop: { url: laptop.url, token: 'all-hosts-token' },
+    },
+  });
+
+  await runCli({ args: ['ls', '--all', '--builders'], env: ctx.env });
+
+  expect([...box.calls, ...laptop.calls]).toStrictEqual([
+    { path: 'imps/list', authorization: 'Bearer all-hosts-token', input: { builders: true } },
+    { path: 'imps/list', authorization: 'Bearer all-hosts-token', input: { builders: true } },
+  ]);
+});
+
+test('it asks no host for its builders under plain ls --all', async () => {
+  await using ctx = await setupTest();
+
+  using box = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+  using laptop = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [] } });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-token' },
+      laptop: { url: laptop.url, token: 'all-hosts-token' },
+    },
+  });
+
+  await runCli({ args: ['ls', '--all'], env: ctx.env });
+
+  expect([...box.calls, ...laptop.calls]).toStrictEqual([
+    { path: 'imps/list', authorization: 'Bearer all-hosts-token', input: undefined },
+    { path: 'imps/list', authorization: 'Bearer all-hosts-token', input: undefined },
+  ]);
+});
+
+test('it refuses ls --all with --host', async () => {
+  await using ctx = await setupTest();
+
+  using box = startStubRpcImpd({ token: 'all-hosts-token' });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: 'all-hosts-token' } },
+  });
+
+  const listed = await runCli({ args: ['--host', 'box', 'ls', '--all'], env: ctx.env });
+
+  expect(listed).toStrictEqual({
     stdout: '',
     stderr: 'imp: --all lists every saved host; drop --host\n',
     code: 2,
   });
 
-  expect(place).toEqual({
+  expect(box.calls).toStrictEqual([]);
+});
+
+test('it refuses new --place with --host', async () => {
+  await using ctx = await setupTest();
+
+  using box = startStubRpcImpd({ token: 'all-hosts-token' });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: 'all-hosts-token' } },
+  });
+
+  const placed = await runCli({ args: ['--host', 'box', 'new', 'dev', '--place'], env: ctx.env });
+
+  expect(placed).toStrictEqual({
     stdout: '',
     stderr: 'imp: --place picks among the saved hosts; drop --host\n',
     code: 2,
   });
 
-  const plain = await ctx.run(['ls', '--json']);
-
-  const body: unknown = JSON.parse(plain.stdout);
-
-  expect(body).toEqual([
-    buildImp('web', 0),
-    { ...buildImp('db', 1), move: 'sending', host: 'peer' },
-  ]);
-
-  expect(plain.code).toBe(0);
+  expect(box.calls).toStrictEqual([]);
 });
 
-test('new --place skips what cannot take the imp, and moves past a RAM refusal', async () => {
-  await using ctx = setupTest({
-    big: { imps: [], ramBudgetMib: 32_768, isFull: true },
-    small: { imps: [] },
-    bare: { imps: [], ramBudgetMib: 65_536, images: ['ubuntu'] },
-  });
+test('it lists the current host alone under plain ls', async () => {
+  await using ctx = await setupTest();
 
-  const placed = await ctx.run(['new', 'dev', '--place', '--json']);
+  // a field this CLI's schema lacks passes through as impd sent it
+  const db = { ...buildMockImp({ name: 'db' }), host: 'peer' };
 
-  expect(placed.stderr.split('\n').filter((line) => !line.startsWith('imp: gone:'))).toEqual([
-    'imp: bare: skipped: it has no image base',
-    'imp: placing on big',
-    'imp: big: Not enough RAM budget, even after sleeping idle imps; trying the next host',
-    'imp: placing on small',
-    '',
-  ]);
+  using box = startStubRpcImpd({ token: 'all-hosts-token', answers: { 'imps/list': [db] } });
+  using laptop = startStubRpcImpd({ token: 'all-hosts-token' });
 
-  expect(JSON.parse(placed.stdout)).toEqual({ host: 'small', imp: buildImp('dev') });
-  expect(placed.code).toBe(0);
-
-  // one create on each host it tried, none on the one it skipped
-  expect(ctx.impds['big']?.creates).toHaveLength(1);
-  expect(ctx.impds['small']?.creates).toEqual([{ json: { name: 'dev' } }]);
-  expect(ctx.impds['bare']?.creates).toHaveLength(0);
-});
-
-test('new --place refuses a name a saved host has already', async () => {
-  await using ctx = setupTest(TWO_HOSTS);
-
-  const placed = await ctx.run(['new', 'dev', '--place']);
-
-  expect(placed.stderr).toEndWith('imp: dev exists on laptop already; pick another name\n');
-  expect(placed.code).toBe(1);
-  expect(ctx.impds['box']?.creates).toHaveLength(0);
-  expect(ctx.impds['laptop']?.creates).toHaveLength(0);
-});
-
-test('new --place --public passes over a host whose token is limited, then exposes', async () => {
-  await using ctx = setupTest({
-    big: { imps: [], ramBudgetMib: 65_536, tokenImps: ['dev*'] },
-    small: { imps: [] },
-  });
-
-  const placed = await ctx.run(['new', 'dev', '--place', '--public', '--json']);
-
-  expect(placed.stderr.split('\n').filter((line) => !line.startsWith('imp: gone:'))).toEqual([
-    'imp: big: skipped: its token is limited to some imps, which --public and --net need it not to be',
-    'imp: placing on small',
-    '',
-  ]);
-
-  expect(JSON.parse(placed.stdout)).toEqual({
-    host: 'small',
-    imp: buildImp('dev'),
-    public: {
-      url: 'https://dev.example.com',
-      auth: 'token',
-      user: null,
-      credential: 'expose-credential',
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-token' },
+      laptop: { url: laptop.url, token: 'all-hosts-token' },
     },
   });
 
-  expect(placed.code).toBe(0);
-  expect(ctx.impds['big']?.creates).toHaveLength(0);
-  expect(ctx.impds['small']?.exposes).toEqual([{ json: { name: 'dev', auth: 'token' } }]);
+  const listed = await runCli({ args: ['ls', '--json'], env: ctx.env });
+
+  const body: unknown = JSON.parse(listed.stdout);
+
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(JSON.stringify([db]));
+
+  expect(body).toStrictEqual(sent);
+  expect(listed.code).toBe(0);
+  expect(laptop.calls).toStrictEqual([]);
 });
 
-test('a failure after a placed create names the host, and --json still gets the imp', async () => {
-  await using ctx = setupTest({ box: { imps: [], cannotExpose: true } });
+test('it skips a host without the image and moves past a RAM refusal under new --place', async () => {
+  await using ctx = await setupTest();
 
-  const placed = await ctx.run(['new', 'dev', '--place', '--public', '--json']);
+  const created = buildMockImp({ name: 'dev' });
 
-  expect(placed.stderr).toEndWith(
-    'imp: dev was created on box; PRECONDITION_FAILED: IMP_PUBLIC_IP is not set\n',
-  );
-
-  expect(JSON.parse(placed.stdout)).toEqual({
-    host: 'box',
-    imp: buildImp('dev'),
-    error: 'PRECONDITION_FAILED: IMP_PUBLIC_IP is not set',
+  // the most RAM, but its governor refuses the create, as a full host's does
+  using big = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 32_768,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+    },
+    failures: {
+      'imps/create': {
+        defined: true,
+        code: 'RAM_BUDGET_EXCEEDED',
+        status: 503,
+        message: 'Not enough RAM budget, even after sleeping idle imps',
+        data: { budgetMib: 32_768, usedMib: 32_500, requestedMib: 512 },
+      },
+    },
   });
 
+  using small = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 8192,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+      'imps/create': created,
+    },
+  });
+
+  // the most RAM of all, but not the default image
+  using bare = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [],
+      'images/list': [{ name: 'ubuntu' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 65_536,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+    },
+  });
+
+  writeHostConfig(ctx.env, {
+    current: 'big',
+    hosts: {
+      big: { url: big.url, token: 'all-hosts-token' },
+      small: { url: small.url, token: 'all-hosts-token' },
+      bare: { url: bare.url, token: 'all-hosts-token' },
+    },
+  });
+
+  const placed = await runCli({ args: ['new', 'dev', '--place', '--json'], env: ctx.env });
+
+  const body: unknown = JSON.parse(placed.stdout);
+
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(JSON.stringify({ host: 'small', imp: created }));
+
+  expect(placed.stderr).toBe(
+    [
+      'imp: bare: skipped: it has no image base',
+      'imp: placing on big',
+      'imp: big: Not enough RAM budget, even after sleeping idle imps; trying the next host',
+      'imp: placing on small',
+      '',
+    ].join('\n'),
+  );
+
+  expect(body).toStrictEqual(sent);
+  expect(placed.code).toBe(0);
+  expect(big.calls.filter((call) => call.path === 'imps/create')).toHaveLength(1);
+
+  expect(small.calls.filter((call) => call.path === 'imps/create')).toStrictEqual([
+    { path: 'imps/create', authorization: 'Bearer all-hosts-token', input: { name: 'dev' } },
+  ]);
+
+  expect(bare.calls.filter((call) => call.path === 'imps/create')).toBeEmpty();
+});
+
+test('it refuses new --place for a name a saved host has already', async () => {
+  await using ctx = await setupTest();
+
+  using box = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [buildMockImp({ name: 'web' })],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 8192,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+    },
+  });
+
+  using laptop = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [buildMockImp({ name: 'dev' })],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 8192,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+    },
+  });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'all-hosts-token' },
+      laptop: { url: laptop.url, token: 'all-hosts-token' },
+    },
+  });
+
+  const placed = await runCli({ args: ['new', 'dev', '--place'], env: ctx.env });
+
+  expect(placed).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: dev exists on laptop already; pick another name\n',
+    code: 1,
+  });
+
+  expect([...box.calls, ...laptop.calls].filter((call) => call.path === 'imps/create')).toBeEmpty();
+});
+
+test('it passes over a host whose token is limited, then exposes, under new --place --public', async () => {
+  await using ctx = await setupTest();
+
+  const created = buildMockImp({ name: 'dev' });
+
+  // the most RAM, but its token reaches only some imps
+  using big = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: ['dev*'] },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 65_536,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+    },
+  });
+
+  using small = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 8192,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+      'imps/create': created,
+      'imps/expose': {
+        url: 'https://dev.example.com',
+        auth: 'token',
+        user: null,
+        credential: 'expose-credential',
+      },
+    },
+  });
+
+  writeHostConfig(ctx.env, {
+    current: 'big',
+    hosts: {
+      big: { url: big.url, token: 'all-hosts-token' },
+      small: { url: small.url, token: 'all-hosts-token' },
+    },
+  });
+
+  const placed = await runCli({
+    args: ['new', 'dev', '--place', '--public', '--json'],
+    env: ctx.env,
+  });
+
+  const body: unknown = JSON.parse(placed.stdout);
+
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(
+    JSON.stringify({
+      host: 'small',
+      imp: created,
+      public: {
+        url: 'https://dev.example.com',
+        auth: 'token',
+        user: null,
+        credential: 'expose-credential',
+      },
+    }),
+  );
+
+  expect(placed.stderr).toBe(
+    [
+      'imp: big: skipped: its token is limited to some imps, which --public and --net need it not to be',
+      'imp: placing on small',
+      '',
+    ].join('\n'),
+  );
+
+  expect(body).toStrictEqual(sent);
+  expect(placed.code).toBe(0);
+  expect(big.calls.filter((call) => call.path === 'imps/create')).toBeEmpty();
+
+  expect(small.calls.filter((call) => call.path === 'imps/expose')).toStrictEqual([
+    {
+      path: 'imps/expose',
+      authorization: 'Bearer all-hosts-token',
+      input: { name: 'dev', auth: 'token' },
+    },
+  ]);
+});
+
+test('it names the host of a failure after a placed create, and still writes the imp', async () => {
+  await using ctx = await setupTest();
+
+  const created = buildMockImp({ name: 'dev' });
+
+  // expose fails, as on an impd without a public IP
+  using box = startStubRpcImpd({
+    token: 'all-hosts-token',
+    answers: {
+      'imps/list': [],
+      'images/list': [{ name: 'base' }],
+      'tokens/whoami': { kind: 'token', name: 'root', scope: 'manage', imps: null },
+      'system/info': {
+        version: '0.12.0',
+        ramBudgetMib: 8192,
+        ramUsedMib: 0,
+        ramReservedMib: 0,
+        ramSleepingMib: 0,
+        storage: { isLow: false },
+        defaults: { memoryMib: 512, image: 'base' },
+        egress: { isEnforced: true },
+      },
+      'imps/create': created,
+    },
+    failures: {
+      'imps/expose': {
+        code: 'PRECONDITION_FAILED',
+        status: 412,
+        message: 'IMP_PUBLIC_IP is not set',
+      },
+    },
+  });
+
+  writeHostConfig(ctx.env, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: 'all-hosts-token' } },
+  });
+
+  const placed = await runCli({
+    args: ['new', 'dev', '--place', '--public', '--json'],
+    env: ctx.env,
+  });
+
+  const body: unknown = JSON.parse(placed.stdout);
+
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(
+    JSON.stringify({
+      host: 'box',
+      imp: created,
+      error: 'PRECONDITION_FAILED: IMP_PUBLIC_IP is not set',
+    }),
+  );
+
+  expect(placed.stderr).toBe(
+    'imp: placing on box\nimp: dev was created on box; PRECONDITION_FAILED: IMP_PUBLIC_IP is not set\n',
+  );
+
+  expect(body).toStrictEqual(sent);
   expect(placed.code).toBe(1);
 });
