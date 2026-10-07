@@ -114,12 +114,13 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
 const SUITE_TIMEOUT_MS = 3_600_000;
 
 // Plain `bun test` skips *.e2e.ts; a ./ path runs one anyway, where a bare
-// path is a name filter. --bail ends a suite at its first failure: the steps
-// build on each other.
+// path is a name filter. The suites' own bunfig has no MSW server. --bail ends
+// a suite at its first failure: the steps build on each other.
 export function buildSuiteArgv(bunPath: string, name: string): readonly string[] {
   return [
     bunPath,
     'test',
+    '--config=test/e2e/bunfig.toml',
     '--bail',
     '--timeout',
     String(SUITE_TIMEOUT_MS),

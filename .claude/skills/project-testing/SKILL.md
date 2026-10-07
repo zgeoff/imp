@@ -37,10 +37,12 @@ from the package.
 The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
 `packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores
 every `updateEnv` override after each test, and runs one MSW server
-(`packages/test-utils/src/mock-server.ts`) for the whole run with `onUnhandledRequest: 'error'`.
-While it listens, the global `fetch` sends a request to a loopback host or over a unix socket to the
-native fetch (`route-fetch.ts`), and every other request to MSW. The global `WebSocket` stays
-native. `updateEnv`, `invariant` and `waitFor` live in `packages/test-utils/src`.
+(`packages/test-utils/src/mock-server.ts`) for the whole run with `onUnhandledRequest: 'error'`. The
+server intercepts `fetch` only; `node:http` clients and WebSockets stay native. While it listens,
+the global `fetch` sends a request to a loopback host or over a unix socket to the native fetch
+(`route-fetch.ts`), and every other request to MSW. The end-to-end suites run with
+`test/e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env overrides and seeds faker,
+with no MSW server. `updateEnv`, `invariant` and `waitFor` live in `packages/test-utils/src`.
 
 Plain `bun test` does not match `*.e2e.ts`, `*.pebble.ts`, or `*.slow.ts`; each of those runs only
 when its `./` path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain
@@ -56,16 +58,16 @@ namespace probe fails.
 2. Reads the API token with `scripts/dev.sh token` and sets `IMP_TOKEN` and `IMP_HOST_IMAGE`.
 3. Builds the fixture images the selected suites list and impd does not have yet.
 4. Runs each suite as its own process,
-   `bun test --bail --timeout 3600000 ./test/e2e/suites/<name>.e2e.ts`, in the order of `SUITES` in
-   `test/e2e/lib/suites.ts`.
+   `bun test --config=test/e2e/bunfig.toml --bail --timeout 3600000 ./test/e2e/suites/<name>.e2e.ts`,
+   in the order of `SUITES` in `test/e2e/lib/suites.ts`.
 5. After each suite, fails it when the impd log shows a boot-template fallback (the `chaos` suite
    may cause one), and on a failure removes the imps with the suite's prefix (`e2e-<abbr>-`).
 6. Writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
    (`E2E_METRICS_FILE`).
 
 A suite file also runs alone against an instance that is up:
-`bun test ./test/e2e/suites/sleep.e2e.ts`. `test/e2e/lib/setup-suite.ts` then removes the suite's
-leftover imps and builds its missing images.
+`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`.
+`test/e2e/lib/setup-suite.ts` then removes the suite's leftover imps and builds its missing images.
 
 Flags: `--only <suites or sets>`, `--clean`, `--reuse`, `--keep`; `--help` lists the suites. The
 sets live in `SUITE_SETS`: `acceptance` (the default) is every suite, and `fast` is the CI subset.

@@ -1,0 +1,4 @@
+[test]
+# the end-to-end suites drive a real impd and real registries: env restore and
+# a seeded faker, and no MSW server
+preload = ["./packages/test-utils/src/preload-e2e.ts", "@zgeoff/bun-test-extended"]

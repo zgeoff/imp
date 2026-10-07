@@ -8,7 +8,13 @@ const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
 test('it runs a suite file by a ./ path, which bun test does not read as a name filter', () => {
   const argv = buildSuiteArgv('/usr/bin/bun', 'sleep');
 
-  expect(argv.slice(0, 3)).toEqual(['/usr/bin/bun', 'test', '--bail']);
+  expect(argv.slice(0, 4)).toStrictEqual([
+    '/usr/bin/bun',
+    'test',
+    '--config=test/e2e/bunfig.toml',
+    '--bail',
+  ]);
+
   expect(argv.at(-1)).toBe('./test/e2e/suites/sleep.e2e.ts');
 });
 

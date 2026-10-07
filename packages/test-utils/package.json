@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@faker-js/faker": "catalog:",
+    "@mswjs/interceptors": "catalog:",
     "msw": "catalog:"
   }
 }
