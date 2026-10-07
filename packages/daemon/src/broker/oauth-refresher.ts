@@ -274,7 +274,11 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     const accessToken = tokens.accessToken ?? state.accessToken;
 
     if (accessToken === null) {
-      return writeTransient(name, secret, state, 'no access token in the response');
+      // a rotated refresh token is the only live one: keep it
+      const kept =
+        tokens.refreshToken === null ? state : { ...state, refreshToken: tokens.refreshToken };
+
+      return writeTransient(name, secret, kept, 'no access token in the response');
     }
 
     const refreshToken = tokens.refreshToken ?? state.refreshToken;
@@ -383,26 +387,31 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     return started;
   };
 
-  const writeUnsaved = async (name: string, secret: Readonly<SecretRecord>): Promise<void> => {
+  // Writes a result an earlier write failed on. The secret's row is read
+  // again under the lock: a result for a secret since deleted or replaced is
+  // dropped, never written.
+  const writeUnsaved = async (name: string): Promise<void> => {
     if (!unsaved.has(name)) {
       return;
     }
 
     try {
-      await withLock(name, () => {
+      await withLock(name, async () => {
         const kept = unsaved.get(name);
 
         if (kept === undefined) {
-          return Promise.resolve();
+          return;
         }
 
-        if (kept.valueFile === secret.valueFile) {
-          writeState(name, kept.valueFile, kept.state);
-        } else {
+        const current = await findSecret(deps.db, name);
+
+        if (current?.kind !== 'oauth' || current.valueFile !== kept.valueFile) {
           unsaved.delete(name);
+
+          return;
         }
 
-        return Promise.resolve();
+        writeState(name, kept.valueFile, kept.state);
       });
     } catch (error) {
       log(`impd: broker: oauth secret ${name}: ${readErrorMessage(error)}`);
@@ -428,7 +437,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
         // a result whose write failed is written again at every tick,
         // whether or not the secret is due
-        await writeUnsaved(secret.name, secret);
+        await writeUnsaved(secret.name);
 
         const wait = backoff.get(secret.name);
 
@@ -491,6 +500,9 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
       // a refresh under way ends, its write included, before stop answers
       await Promise.allSettled(inflight.values());
+
+      // one last try at each result still unsaved, for a restart to find
+      await Promise.allSettled([...unsaved.keys()].map((name) => writeUnsaved(name)));
     },
   };
 }

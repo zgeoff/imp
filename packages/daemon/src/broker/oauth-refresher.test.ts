@@ -774,3 +774,101 @@ test('stop waits for a refresh under way and starts no other', async () => {
   expect(later).toMatchObject({ kind: 'transient' });
   expect(ctx.calls).toHaveLength(1);
 });
+
+test('a rotated refresh token alone on a pending secret is kept, not dropped', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildPendingState('fake-refresh-0'));
+
+  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-1' }));
+
+  const outcome = await ctx.refresher.refresh('codex', true);
+  const state = await ctx.readState();
+
+  expect(outcome).toMatchObject({ kind: 'transient' });
+  expect(state).toMatchObject({ status: 'pending', refreshToken: 'fake-refresh-1' });
+});
+
+// a refresher whose writes fail while `failing.on` and are counted
+async function setupFlakyTest() {
+  const ctx = await setupTest();
+
+  const failing = { on: true };
+  const writes: string[] = [];
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: {
+      read: ctx.files.read,
+      rewrite: (file, value) => {
+        if (failing.on) {
+          throw new Error('ENOSPC: no space left on device');
+        }
+
+        writes.push(file);
+        ctx.files.rewrite(file, value);
+      },
+    },
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => ctx.clock.now,
+    fetch: () =>
+      Promise.resolve(
+        Response.json({
+          access_token: 'fake-access-1',
+          refresh_token: 'fake-refresh-1',
+          expires_in: 240 * 3600,
+        }),
+      ),
+  });
+
+  return {
+    ctx,
+    failing,
+    writes,
+    refresher,
+    [Symbol.asyncDispose]: () => ctx[Symbol.asyncDispose](),
+  };
+}
+
+test('stop writes a result an earlier write failed on', async () => {
+  await using flaky = await setupFlakyTest();
+
+  await flaky.ctx.writeState(buildPendingState('fake-refresh-0'));
+  await flaky.refresher.refresh('codex', true);
+
+  flaky.failing.on = false;
+
+  await flaky.refresher.stop();
+
+  const state = await flaky.ctx.readState();
+
+  expect(state).toMatchObject({ status: 'ready', refreshToken: 'fake-refresh-1' });
+});
+
+test('an unsaved result is not written for a secret deleted while the tick waited', async () => {
+  await using flaky = await setupFlakyTest();
+
+  await flaky.ctx.writeState(buildPendingState('fake-refresh-0'));
+  await flaky.refresher.refresh('codex', true);
+
+  flaky.failing.on = false;
+
+  // hold the lock so the tick has listed the row and waits behind it
+  const gate = Promise.withResolvers<void>();
+  const holder = flaky.refresher.withLock('codex', () => gate.promise);
+  const ticking = flaky.refresher.tick();
+
+  await Bun.sleep(20);
+
+  await removeSecret(flaky.ctx.db, 'codex');
+
+  gate.resolve();
+
+  await holder;
+  await ticking;
+
+  expect(flaky.writes).toHaveLength(0);
+});
