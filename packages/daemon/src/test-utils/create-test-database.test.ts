@@ -1,32 +1,17 @@
 import { expect, test } from 'bun:test';
 import { createImage, listImages } from '../db/images';
+import { listImps } from '../db/imps';
 import { createTestDatabase } from './create-test-database';
 
-test('it holds one image with the documented fields', async () => {
+test('it opens a migrated database that holds no rows', async () => {
   await using testDatabase = await createTestDatabase();
 
-  const images = await listImages(testDatabase.db);
+  const tables = {
+    images: await listImages(testDatabase.db),
+    imps: await listImps(testDatabase.db),
+  };
 
-  expect(images).toStrictEqual([
-    {
-      id: expect.toBeString(),
-      name: 'base',
-      ref: 'imp/base:latest',
-      digest: 'sha256:0000',
-      source: 'oci',
-      sourceImp: null,
-      sizeBytes: 1024,
-      createdAt: expect.toBeValidDate(),
-    },
-  ]);
-});
-
-test('it returns the image row it wrote', async () => {
-  await using testDatabase = await createTestDatabase();
-
-  const images = await listImages(testDatabase.db);
-
-  expect(images).toStrictEqual([testDatabase.image]);
+  expect(tables).toStrictEqual({ images: [], imps: [] });
 });
 
 test('it opens a fresh database on each call', async () => {
@@ -42,7 +27,7 @@ test('it opens a fresh database on each call', async () => {
 
   const images = await listImages(second.db);
 
-  expect(images.map((image) => image.name)).toStrictEqual(['base']);
+  expect(images).toStrictEqual([]);
 });
 
 test('it closes the database on dispose', async () => {

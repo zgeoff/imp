@@ -206,12 +206,16 @@ no port: `main.ts` then listens, starts the tickers and owns the stop. `deps` ta
 the root token, an unstarted storage backend and the system files, and optional stand-ins for each
 boundary (`vms`, `runCommand`, `taps`, `cgroups`, `broker`, `egress`, `imps`, `images`,
 `readDiskSpace`, `readIdentity`, `resolveIpv6`, `readTailscale`, `whois`, `freezer`, `oauthKey`,
-`now`, `log`); `now` reaches every service, leases and the RAM governor included. A field left out
-takes the host's real one. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`,
-`startGovernedImps`, `loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are
-exported for `setupImpTest`, which wires them without the start steps.
-`packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
-`IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
+`now`, `log`); `now` reaches leases, the RAM governor and memory control, egress, the broker's
+injected clock, tokens, OAuth, the audit log, moves and the API. It does not reach
+`buildTailnetNames`' services API, the template service's timings (`performance.now`), the disk
+usage cache, backups, the builders' engine wait, or the broker's direct `Date.now()` reads in
+`broker-service.ts` (the connected-prefix and public-route caches, and the leaf renewal check),
+which stay on the wall clock: a known gap. A field left out takes the host's real one. Its parts
+(`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`,
+`buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for `setupImpTest`, which wires
+them without the start steps. `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs.
+The egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
 `test-utils/find-free-ports.ts`.
 
 ## Connectors

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createCheckpoint } from '../db/checkpoints';
+import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createDiskUsageCache } from './disk-usage-cache';
@@ -12,11 +13,19 @@ type CacheOptions = Pick<Parameters<typeof createDiskUsageCache>[0], 'now' | 're
 async function setupCache(measureUsage: MeasureUsage, options: CacheOptions = {}) {
   const ctx = await createTestDatabase();
 
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   const logs: string[] = [];
 
   const imp = await createImp(ctx.db, {
     name: 'dev',
-    imageId: ctx.image.id,
+    imageId: image.id,
     vcpus: 1,
     memoryMib: 512,
     slot: 0,

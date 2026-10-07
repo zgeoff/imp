@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { BunSqliteDriver } from './bun-sqlite-driver';
+import { createImage } from './images';
 import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
 import { createImp, findImpById } from './imps';
@@ -16,9 +17,17 @@ const AT = 1_800_000_000_000;
 async function setupTest() {
   const database = await createTestDatabase();
 
+  // the image every imp row here refers to
+  const image = await createImage(database.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   const imp = await createImp(database.db, {
     name: 'dev',
-    imageId: database.image.id,
+    imageId: image.id,
     vcpus: 1,
     memoryMib: 512,
     slot: 0,

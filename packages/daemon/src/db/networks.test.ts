@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createTestDatabase } from '../test-utils/create-test-database';
+import { createImage } from './images';
 import { createImp, removeImp } from './imps';
 import {
   listNetworkMembers,
@@ -12,6 +13,15 @@ import {
 
 async function setupNetwork() {
   const ctx = await createTestDatabase();
+
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   const network = await writeNetwork(ctx.db, 'lab');
 
   if (network === null) {
@@ -21,7 +31,7 @@ async function setupNetwork() {
   const createMember = (name: string, slot: number) =>
     createImp(ctx.db, {
       name,
-      imageId: ctx.image.id,
+      imageId: image.id,
       vcpus: 1,
       memoryMib: 512,
       slot,

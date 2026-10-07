@@ -386,14 +386,19 @@ test('it ends a lease once its clock passes the lease end', async () => {
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 30 });
 
+  const held = await ctx.client.leases.list({});
+
   ctx.advance(30_001);
 
-  const leases = await ctx.client.leases.list({});
+  const left = await ctx.client.leases.list({});
 
-  expect(leases).toStrictEqual([]);
+  expect({ held: held.map((lease) => lease.owner.label), left }).toStrictEqual({
+    held: ['job'],
+    left: [],
+  });
 });
 
-test('it ends leases by the wall clock when no clock is given', async () => {
+test('it sets a lease end from the wall clock when no clock is given', async () => {
   await using ctx = await setupTest();
 
   await using restart = new AsyncDisposableStack();

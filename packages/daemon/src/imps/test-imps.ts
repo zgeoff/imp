@@ -700,8 +700,12 @@ export async function findBrokenInvariants(
 }
 
 // 'done' or 'failed' once the promise settles, 'hung' when it is still
-// pending after `ms` of polling its state
-export async function waitForOutcome(promise: Promise<unknown>, ms: number): Promise<string> {
+// pending after `ms` of polling its state, read on `clock`
+export async function waitForOutcome(
+  promise: Promise<unknown>,
+  ms: number,
+  clock: Readonly<{ now?: () => number; wait?: (ms: number) => Promise<void> }> = {},
+): Promise<string> {
   const settled = (async () => {
     try {
       await promise;
@@ -719,7 +723,7 @@ export async function waitForOutcome(promise: Promise<unknown>, ms: number): Pro
           throw new Error('still pending');
         }
       },
-      { timeoutMs: ms },
+      { ...clock, timeoutMs: ms },
     );
   } catch {
     return 'hung';

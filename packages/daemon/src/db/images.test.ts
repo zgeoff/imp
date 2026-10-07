@@ -6,6 +6,13 @@ import { createImp } from './imps';
 test('it creates, finds and lists images by name', async () => {
   await using ctx = await createTestDatabase();
 
+  await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   const dev = await createImage(ctx.db, {
     name: 'dev',
     ref: 'imp/hello:latest',
@@ -25,31 +32,60 @@ test('it creates, finds and lists images by name', async () => {
 test('it rejects a duplicate image name', async () => {
   await using ctx = await createTestDatabase();
 
+  await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   const duplicate = { name: 'base', ref: 'x', digest: 'sha256:2222', sizeBytes: 1 };
 
-  expect(createImage(ctx.db, duplicate)).rejects.toThrow('images.name');
+  expect(createImage(ctx.db, duplicate)).rejects.toThrowWithMessage(
+    Error,
+    /UNIQUE constraint failed: images\.name/u,
+  );
 });
 
 test('it refuses to remove an image an imp still uses', async () => {
   await using ctx = await createTestDatabase();
 
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   await createImp(ctx.db, {
     name: 'dev',
-    imageId: ctx.image.id,
+    imageId: image.id,
     vcpus: 1,
     memoryMib: 512,
     slot: 0,
     ip: '10.66.0.2',
   });
 
-  expect(removeImage(ctx.db, ctx.image.id)).rejects.toThrow('FOREIGN KEY');
+  expect(removeImage(ctx.db, image.id)).rejects.toThrowWithMessage(
+    Error,
+    /FOREIGN KEY constraint failed/u,
+  );
 });
 
 test('it removes an unused image once', async () => {
   await using ctx = await createTestDatabase();
 
-  const first = await removeImage(ctx.db, ctx.image.id);
-  const second = await removeImage(ctx.db, ctx.image.id);
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const first = await removeImage(ctx.db, image.id);
+  const second = await removeImage(ctx.db, image.id);
 
   expect(first).toBe(true);
   expect(second).toBe(false);

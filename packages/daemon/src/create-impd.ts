@@ -141,8 +141,9 @@ export interface ImpdDeps {
 
   readonly log?: (message: string) => void;
 
-  // the clock every service judges time by, leases and the RAM governor
-  // included; Date.now by default
+  // leases', the RAM governor's, egress's, the broker's injected and the
+  // API services' clock; Date.now by default. project-testing names what
+  // still reads Date.now itself
   readonly now?: () => number;
 
   // the host's free space as the disk budget sees it; the storage's own

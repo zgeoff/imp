@@ -7,7 +7,13 @@ import { invariant } from '@imp/test-utils/invariant';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
-import { buildTestApp, findBrokenInvariants, setupImpTest, writeTestSnapshot } from './test-imps';
+import {
+  buildTestApp,
+  findBrokenInvariants,
+  setupImpTest,
+  waitForOutcome,
+  writeTestSnapshot,
+} from './test-imps';
 
 test('#setupImpTest boots imps on the stub VMM', async () => {
   await using ctx = await setupImpTest();
@@ -164,4 +170,31 @@ test('#writeTestSnapshot writes the files and the meta a wake loads', async () =
       ramMib: 300,
     },
   });
+});
+
+test('#waitForOutcome reports done for a promise that resolves', async () => {
+  const outcome = await waitForOutcome(Promise.resolve('fine'), 1000);
+
+  expect(outcome).toBe('done');
+});
+
+test('#waitForOutcome reports failed for a promise that rejects', async () => {
+  const outcome = await waitForOutcome(Promise.reject(new Error('boom')), 1000);
+
+  expect(outcome).toBe('failed');
+});
+
+test('#waitForOutcome reports hung for a promise still pending at its deadline', async () => {
+  const clock = { nowMs: 0 };
+
+  const outcome = await waitForOutcome(new Promise(() => {}), 1000, {
+    now: () => clock.nowMs,
+    wait: (ms) => {
+      clock.nowMs += ms;
+
+      return Promise.resolve();
+    },
+  });
+
+  expect(outcome).toBe('hung');
 });

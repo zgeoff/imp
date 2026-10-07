@@ -2,11 +2,16 @@ import { expect, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
 import { buildStubCpuCgroups } from './build-stub-cpu-cgroups';
 
-test('it makes a cgroup with the settings and procs path an enforced setup gives', () => {
-  const stub = buildStubCpuCgroups();
-  const made = stub.cgroups.setup('imp-a', { limit: 1.5, weight: 200 }, 2048);
+test('it hands back the procs path of the cgroup an enforced setup makes', () => {
+  expect(
+    buildStubCpuCgroups().cgroups.setup('imp-a', { limit: 1.5, weight: 200 }, 2048)?.procsPath,
+  ).toBe('/sys/fs/cgroup/imps/imp-a/cgroup.procs');
+});
 
-  expect(made?.procsPath).toBe('/sys/fs/cgroup/imps/imp-a/cgroup.procs');
+test('it makes a cgroup with the settings an enforced setup gives', () => {
+  const stub = buildStubCpuCgroups();
+
+  stub.cgroups.setup('imp-a', { limit: 1.5, weight: 200 }, 2048);
 
   expect(stub.readGroup('imp-a')).toStrictEqual({
     cpu: { limit: 1.5, weight: 200 },
@@ -16,11 +21,21 @@ test('it makes a cgroup with the settings and procs path an enforced setup gives
   });
 });
 
+test('it hands back no cgroup on a host whose cpu controller is not delegated', () => {
+  expect(
+    buildStubCpuCgroups({ isEnforced: false }).cgroups.setup(
+      'imp-a',
+      { limit: null, weight: 100 },
+      512,
+    ),
+  ).toBeNull();
+});
+
 test('it makes no cgroup on a host whose cpu controller is not delegated', () => {
   const stub = buildStubCpuCgroups({ isEnforced: false });
-  const made = stub.cgroups.setup('imp-a', { limit: null, weight: 100 }, 512);
 
-  expect(made).toBeNull();
+  stub.cgroups.setup('imp-a', { limit: null, weight: 100 }, 512);
+
   expect(stub.listGroups()).toStrictEqual([]);
 });
 

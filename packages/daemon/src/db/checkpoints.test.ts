@@ -1,14 +1,23 @@
 import { expect, test } from 'bun:test';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createCheckpoint, findCheckpoint, listCheckpoints, removeCheckpoint } from './checkpoints';
+import { createImage } from './images';
 import { createImp, removeImp } from './imps';
 
 async function setupImp() {
   const ctx = await createTestDatabase();
 
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
   const imp = await createImp(ctx.db, {
     name: 'dev',
-    imageId: ctx.image.id,
+    imageId: image.id,
     vcpus: 1,
     memoryMib: 512,
     slot: 0,
@@ -66,7 +75,10 @@ test('it rejects a duplicate label on one imp', async () => {
 
   await createCheckpoint(ctx.db, { id: 'cp-1', ...checkpoint });
 
-  expect(createCheckpoint(ctx.db, { id: 'cp-2', ...checkpoint })).rejects.toThrow('UNIQUE');
+  expect(createCheckpoint(ctx.db, { id: 'cp-2', ...checkpoint })).rejects.toThrowWithMessage(
+    Error,
+    /UNIQUE constraint failed/u,
+  );
 });
 
 test('it rejects a checkpoint for an imp that does not exist', async () => {
@@ -74,7 +86,10 @@ test('it rejects a checkpoint for an imp that does not exist', async () => {
 
   const orphan = { id: 'cp-x', impId: 'missing', label: null, sizeBytes: null };
 
-  expect(createCheckpoint(ctx.db, orphan)).rejects.toThrow('FOREIGN KEY');
+  expect(createCheckpoint(ctx.db, orphan)).rejects.toThrowWithMessage(
+    Error,
+    /FOREIGN KEY constraint failed/u,
+  );
 });
 
 test('it removes a checkpoint, and removing the imp removes the rest', async () => {

@@ -52,8 +52,14 @@ test('#StubVmError names itself so a test can tell it from a real bug', () => {
   expect(new StubVmError('boom')).toMatchObject({ name: 'StubVmError', message: 'boom' });
 });
 
-test('#buildStubBootId builds a version 4 UUID from the pid', () => {
-  expect(buildStubBootId(1001)).toBe('00000000-0000-4000-8000-000000001001');
+test('#buildStubBootId builds a version 4 UUID, as the kernel writes a boot_id', () => {
+  expect(buildStubBootId(1001)).toMatch(
+    /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/u,
+  );
+});
+
+test('#buildStubBootId builds the same id for the same pid', () => {
+  expect(buildStubBootId(1001)).toBe(buildStubBootId(1001));
 });
 
 test('#buildStubBootId builds different ids for different pids', () => {
