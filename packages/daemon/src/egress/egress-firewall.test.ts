@@ -91,15 +91,18 @@ test('#createNftRunner rejects with the exit code and the first line nft printed
   );
 });
 
-test('#formatNftError says nft is not installed when its binary is missing', async () => {
+test('#createNftRunner rejects with ENOENT when the nft binary is missing', async () => {
   await using ctx = await setupTest();
 
-  const failure = await createNftRunner(join(ctx.dir, 'nft'))('table inet imp_egress {}\n').then(
-    () => null,
-    (error: unknown) => error,
+  expect(createNftRunner(join(ctx.dir, 'nft'))('table inet imp_egress {}\n')).rejects.toThrow(
+    /^ENOENT: no such file or directory, posix_spawn /v,
   );
+});
 
-  expect(formatNftError(failure)).toBe('nft is not installed');
+test('#formatNftError says nft is not installed for a binary that could not start', () => {
+  expect(formatNftError(new Error("ENOENT: no such file or directory, posix_spawn 'nft'"))).toBe(
+    'nft is not installed',
+  );
 });
 
 test('#formatNftError keeps the message of any other failure', () => {

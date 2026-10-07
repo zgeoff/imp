@@ -26,11 +26,6 @@ import { buildStubNft } from '../test-utils/build-stub-nft';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 
-interface BootOverrides {
-  readonly env?: Readonly<Record<string, string>>;
-  readonly deps?: Partial<ImpdDeps>;
-}
-
 async function setupTest() {
   await using stack = new AsyncDisposableStack();
 
@@ -153,7 +148,9 @@ async function setupTest() {
 
   // impd on this data dir and database; each boot takes its own DNS port,
   // as the resolver binds it on every address
-  const startImpd = async (overrides: Readonly<BootOverrides> = {}) => {
+  const startImpd = async (
+    overrides: Readonly<{ env?: Readonly<Record<string, string>>; deps?: Partial<ImpdDeps> }> = {},
+  ) => {
     // a new disk stays the size of its image: the clone copies every byte
     const config = {
       ...loadConfig({

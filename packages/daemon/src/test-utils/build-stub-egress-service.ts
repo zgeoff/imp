@@ -27,7 +27,7 @@ interface StubEgressServiceOptions {
   readonly screened?: readonly string[];
 }
 
-export interface AdmittedAnswer {
+interface AdmittedAnswer {
   readonly slot: number;
   readonly names: readonly string[];
   readonly answers: readonly AddressAnswer[];

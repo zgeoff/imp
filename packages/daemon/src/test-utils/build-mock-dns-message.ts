@@ -6,7 +6,7 @@ import { faker } from '@faker-js/faker';
 
 const TYPE_CODES = { A: 1, CNAME: 5, SOA: 6, PTR: 12, MX: 15, TXT: 16, AAAA: 28 } as const;
 
-export type MockDnsType = keyof typeof TYPE_CODES;
+type MockDnsType = keyof typeof TYPE_CODES;
 
 const CLASS_IN = 1;
 const TYPE_OPT = 41;

@@ -25,7 +25,7 @@ interface StubDnsUpstreamOptions {
   readonly tcp?: StubDnsTcpMode;
 }
 
-export interface StubDnsQueryRecord {
+interface StubDnsQueryRecord {
   readonly transport: 'udp' | 'tcp';
   readonly id: number;
 }
