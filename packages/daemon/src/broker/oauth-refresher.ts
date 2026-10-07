@@ -295,6 +295,11 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       expiresAt = readJwtExpiry(accessToken);
     }
 
+    // an expiry no date can hold is no expiry; the tokens are kept all the same
+    if (expiresAt !== null && !isValidTime(expiresAt)) {
+      expiresAt = null;
+    }
+
     const next: OAuthStateFile = {
       v: 1,
       refreshToken,
@@ -607,10 +612,21 @@ function readTokens(body: unknown): Classified {
     return { kind: 'transient', error: 'invalid response' };
   }
 
+  // a 200 that carries no token refreshed nothing
+  if (accessToken === null && refreshToken === null) {
+    return { kind: 'transient', error: 'no token in the response' };
+  }
+
+  // 0 or less is a token that is already due, not an unknown expiry
   const expiresIn = parsed.data.expires_in ?? null;
-  const expiresInMs = expiresIn !== null && expiresIn > 0 ? expiresIn * 1000 : null;
+  const expiresInMs = expiresIn === null ? null : Math.max(0, expiresIn) * 1000;
 
   return { kind: 'ok', tokens: { accessToken, refreshToken, idToken, expiresInMs } };
+}
+
+// a time in ms that a Date can hold
+function isValidTime(ms: number): boolean {
+  return Number.isFinite(ms) && !Number.isNaN(new Date(ms).getTime());
 }
 
 function sendToken(url: string, init: OAuthRequest): Promise<Response> {

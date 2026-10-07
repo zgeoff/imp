@@ -271,6 +271,62 @@ test('the expiry is expires_in, else the access token exp, else unknown', async 
   expect(expiry3?.expiresAt).toBeNull();
 });
 
+test('an expiry no date can hold is unknown, and the rotated tokens are kept', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildPendingState('fake-refresh-0'));
+
+  ctx.replies.push(
+    buildReply(200, {
+      access_token: 'fake-access-1',
+      refresh_token: 'fake-refresh-1',
+      expires_in: 1e20,
+    }),
+  );
+
+  await ctx.refresher.refresh('codex', true);
+
+  const state = await ctx.readState();
+
+  expect(state?.status).toBe('ready');
+  expect(state?.expiresAt).toBeNull();
+  expect(state?.refreshToken).toBe('fake-refresh-1');
+  expect(state?.accessToken).toBe('fake-access-1');
+});
+
+test('an expires_in of 0 is due now, not unknown', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildPendingState('fake-refresh-0'));
+
+  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 0 }));
+
+  await ctx.refresher.refresh('codex', true);
+
+  const state = await ctx.readState();
+
+  expect(state?.expiresAt).toBe(T0);
+});
+
+test('a 200 with no token is a transient failure that changes nothing', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.writeState(buildReadyState());
+
+  const before = await ctx.readState();
+
+  ctx.replies.push(buildReply(200, {}));
+
+  await ctx.refresher.refresh('codex', true);
+
+  const after = await ctx.readState();
+
+  expect(after?.status).toBe('ready');
+  expect(after?.refreshedAt).toBe(before?.refreshedAt ?? -1);
+  expect(after?.accessToken).toBe(before?.accessToken ?? '');
+  expect(after?.error).toBe('no token in the response');
+});
+
 test('when a refresh is due', () => {
   const ready = buildReadyState();
 
