@@ -544,7 +544,16 @@ function parseOAuth(json: string | null): OAuthConfig | null {
 
 function toBindingKey(rules: readonly BrokerRule[]): string {
   const canonical = rules
-    .map((rule) => [rule.host, rule.header.toLowerCase(), rule.scheme, rule.user ?? null] as const)
+    .map(
+      (rule) =>
+        [
+          rule.host,
+          rule.header.toLowerCase(),
+          rule.scheme,
+          rule.user ?? null,
+          rule.upstream ?? null,
+        ] as const,
+    )
     .toSorted((x, y) => `${x[0]}\n${x[1]}`.localeCompare(`${y[0]}\n${y[1]}`));
 
   return JSON.stringify(canonical);

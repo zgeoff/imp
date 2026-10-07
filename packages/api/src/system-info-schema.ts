@@ -190,6 +190,10 @@ export const SystemInfoSchema = z.object({
 
       // secret kind `oauth` and `secrets.refresh`; an older impd refuses the kind
       oauthSecrets: z.boolean().optional(),
+
+      // a custom secret's rule takes `upstream`; an older impd drops it
+      // unread and would send the credential to https://<host>
+      secretUpstream: z.boolean().optional(),
     })
     .optional(),
 });

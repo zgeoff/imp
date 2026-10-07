@@ -615,3 +615,70 @@ test('a rotation sends the new value on the next request, with the grant kept', 
     '/two Bearer ghp_rotated',
   ]);
 });
+
+test('a rule’s upstream takes the request of a host with no public name', async () => {
+  await using ctx = await setupBroker();
+
+  const plain = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request) =>
+      new Response(
+        `plain ${request.headers.get('authorization') ?? '-'} ${request.headers.get('host') ?? '-'}`,
+      ),
+  });
+
+  try {
+    await ctx.broker.addSecret({
+      name: 'op',
+      kind: 'custom',
+      value: 'real-token',
+      rules: [
+        {
+          host: 'svc.imp.internal',
+          header: 'authorization',
+          scheme: 'bearer',
+          upstream: `http://127.0.0.1:${String(plain.port)}`,
+        },
+      ],
+    });
+
+    await ctx.broker.addGrant('dev', 'op');
+
+    const result = await ctx.runCurl('https://svc.imp.internal/v1/ping', [
+      '-H',
+      'Authorization: Bearer imp-broker-placeholder',
+    ]);
+
+    // the upstream's own authority is its Host, not the guest's name
+    expect(result).toMatchObject({
+      code: 0,
+      stdout: `plain Bearer real-token 127.0.0.1:${String(plain.port)}`,
+    });
+
+    expect(ctx.seen).toEqual([]);
+
+    const imp = await findImpByName(ctx.db, 'dev');
+    const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10, null);
+
+    expect(audit).toMatchObject([{ secret: 'op', host: 'svc.imp.internal', path: '/v1/ping' }]);
+
+    // a rebind without an upstream applies to the next request, and the grant goes
+    await ctx.broker.addSecret({
+      name: 'op',
+      kind: 'custom',
+      value: 'real-token',
+      rules: buildBearerRules('svc.imp.internal'),
+      replace: true,
+      rebind: true,
+    });
+
+    await ctx.broker.addGrant('dev', 'op');
+
+    const after = await ctx.runCurl('https://svc.imp.internal/v1/ping');
+
+    expect(after.stdout).not.toContain('plain');
+  } finally {
+    await plain.stop(true);
+  }
+});

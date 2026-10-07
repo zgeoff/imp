@@ -457,3 +457,67 @@ test('secret ls shows a state column, and a dash for other kinds', async () => {
   expect(listed.stdout).toContain('needs_login (refresh_token_reused)');
   expect(listed.stdout.split('\n')[1]).toMatch(/^gh\s+github\s+-\s/);
 });
+
+const UPSTREAM_ARGS = [
+  'secret',
+  'add',
+  'op-connect',
+  '--kind',
+  'custom',
+  '--hosts',
+  'op-connect.imp.internal',
+  '--upstream',
+  'http://172.17.0.1:18081',
+];
+
+test('a secret upstream needs an impd that knows it, and sends it in the rule', async () => {
+  await using older = setupTest(OLD_INFO);
+
+  const refused = await older.run(UPSTREAM_ARGS, 'fake-token\n');
+
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain('this impd has no secret upstreams');
+  expect(older.calls).toEqual(['system/info']);
+
+  const features = { ...NEW_INFO.features, secretUpstream: true };
+
+  await using ready = setupTest({ ...NEW_INFO, features });
+
+  const added = await ready.run(UPSTREAM_ARGS, 'fake-token\n');
+
+  expect(added.code).toBe(0);
+  expect(ready.calls).toEqual(['system/info', 'secrets/add']);
+});
+
+test('--upstream is refused before any call unless it is one host of kind custom', async () => {
+  await using impd = setupTest(NEW_INFO);
+
+  const twoHosts = await impd.run(
+    UPSTREAM_ARGS.map((arg) =>
+      arg === 'op-connect.imp.internal' ? 'a.example.com,b.example.com' : arg,
+    ),
+    'fake-token\n',
+  );
+
+  expect(twoHosts.code).toBe(2);
+  expect(twoHosts.stderr).toContain('--upstream needs exactly one host');
+
+  const preset = await impd.run(
+    ['secret', 'add', 'gh', '--kind', 'github', '--upstream', 'http://172.17.0.1:18081'],
+    'fake-token\n',
+  );
+
+  expect(preset.code).toBe(2);
+  expect(preset.stderr).toContain('--upstream is for --kind custom');
+
+  const path = await impd.run(
+    UPSTREAM_ARGS.map((arg) =>
+      arg === 'http://172.17.0.1:18081' ? 'http://172.17.0.1:18081/x' : arg,
+    ),
+    'fake-token\n',
+  );
+
+  expect(path.code).toBe(2);
+  expect(path.stderr).toContain('must be an origin with no path');
+  expect(impd.calls).toEqual([]);
+});

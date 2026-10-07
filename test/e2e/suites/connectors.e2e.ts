@@ -30,6 +30,10 @@ const oauthSecret = `${prefix}oa`;
 const oauthApiHost = 'api.oauth-e2e.test';
 const oauthTokenHost = 'auth.oauth-e2e.test';
 
+// a custom secret for a name with no DNS, sent to the fake upstream over http
+const upstreamSecret = `${prefix}up`;
+const upstreamHost = 'svc.imp.internal';
+
 const AuditSchema = z.array(
   z.object({
     host: z.string(),
@@ -64,6 +68,7 @@ beforeAll(async () => {
 
   await tryImp(['secret', 'rm', secret]);
   await tryImp(['secret', 'rm', oauthSecret]);
+  await tryImp(['secret', 'rm', upstreamSecret]);
   await createImp(name, '--image', resolveImageName('base'), '--memory', '1g');
   await holdImp(name);
 }, 300_000);
@@ -73,6 +78,7 @@ afterAll(async () => {
 
   await tryImp(['secret', 'rm', secret]);
   await tryImp(['secret', 'rm', oauthSecret]);
+  await tryImp(['secret', 'rm', upstreamSecret]);
 
   await upstream[Symbol.asyncDispose]();
 });
@@ -358,6 +364,52 @@ test('a websocket upgrade to a granted host is answered 426 at once', async () =
 
   expect(answer).toContain('426');
   expect(answer).toContain('websocket upgrades are not supported through the broker');
+});
+
+test('a secret with an upstream reaches a service with no public name over plain http', async () => {
+  const added = await tryImp(
+    [
+      'secret',
+      'add',
+      upstreamSecret,
+      '--kind',
+      'custom',
+      '--hosts',
+      upstreamHost,
+      '--upstream',
+      upstream.plainOrigin,
+    ],
+    { stdin: `${token}\n` },
+  );
+
+  expect(added.exitCode).toBe(0);
+  expect(added.stdout).toContain(upstream.plainOrigin);
+
+  await runImp('grant', name, upstreamSecret);
+
+  const before = upstream.seen.length;
+
+  const body = await runShellInImp(
+    name,
+    `OP_CONNECT_TOKEN=imp-broker-placeholder; curl -sS --fail -H "Authorization: Bearer $OP_CONNECT_TOKEN" https://${upstreamHost}/svc-e2e/me`,
+  );
+
+  expect(JSON.parse(body)).toEqual({ authorized: true });
+
+  expect(upstream.seen.slice(before)).toEqual([
+    { method: 'GET', path: '/svc-e2e/me', authorization: `Bearer ${token}` },
+  ]);
+
+  const auditJson = await runImp('audit', name, '--json');
+
+  const audit = AuditSchema.parse(JSON.parse(auditJson));
+  const row = audit.find((entry) => entry.host === upstreamHost);
+
+  expect(row).toMatchObject({ path: '/svc-e2e/me', status: 200, secret: upstreamSecret });
+
+  const listed = await runImp('secret', 'ls');
+
+  expect(listed).toContain(`${upstreamHost} -> ${upstream.plainOrigin}`);
 });
 
 test('no oauth token is in the guest: not its environment, disk or memory', async () => {

@@ -11,6 +11,7 @@ const FEATURES = {
   tokenUpdate: 'is older than 0.34.0',
   publicEgress: 'is older than 0.35.0',
   oauthSecrets: 'has no oauth secrets',
+  secretUpstream: 'has no secret upstreams',
 } as const;
 
 type Feature = keyof typeof FEATURES;

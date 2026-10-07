@@ -28,9 +28,45 @@ export const BrokerHostSchema = z
     'must be a lowercase hostname such as api.example.com',
   );
 
+// Where a custom secret's requests go in place of https://<host>: an origin
+// (http or https, optional port), with no credentials, path, query or
+// fragment. It is kept as that origin, so a trailing slash is the same rule.
+const BrokerUpstreamSchema = z
+  .string()
+  .max(2048)
+  .transform((value, context) => {
+    const url = URL.parse(value);
+
+    if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+      context.addIssue({ code: 'custom', message: 'must be an http or https URL' });
+
+      return z.NEVER;
+    }
+
+    if (url.username !== '' || url.password !== '') {
+      context.addIssue({ code: 'custom', message: 'must not hold a user name or password' });
+
+      return z.NEVER;
+    }
+
+    if (url.search !== '' || url.hash !== '' || value.includes('?') || value.includes('#')) {
+      context.addIssue({ code: 'custom', message: 'must not have a query or a fragment' });
+
+      return z.NEVER;
+    }
+
+    if (url.pathname !== '/') {
+      context.addIssue({ code: 'custom', message: 'must be an origin with no path' });
+
+      return z.NEVER;
+    }
+
+    return url.origin;
+  });
+
 // The header impd sets for the host, and how it renders the value:
 // `bearer` is `Bearer <value>`, `basic` is HTTP Basic with `user` as the
-// user name, and `raw` is the value as it is.
+// user name, and `raw` is the value as it is. `upstream`, custom only.
 export const BrokerRuleSchema = z.object({
   host: BrokerHostSchema,
   header: z
@@ -41,6 +77,7 @@ export const BrokerRuleSchema = z.object({
     .string()
     .regex(/^[!-9;-~]{1,64}$/, 'must be printable ASCII without a colon')
     .optional(),
+  upstream: BrokerUpstreamSchema.optional(),
 });
 
 export type BrokerRule = z.infer<typeof BrokerRuleSchema>;

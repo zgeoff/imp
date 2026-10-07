@@ -44,6 +44,9 @@ export interface FakeUpstream extends AsyncDisposable {
   // https://<address>:<port>, for the broker's test-upstreams file
   readonly origin: string;
   readonly caPem: string;
+
+  // http://<address>:<port>: the same fake over plain http, for a rule's upstream
+  readonly plainOrigin: string;
   readonly seen: readonly SeenRequest[];
 
   // a bare repo at <owner>/<repo>.git that accepts pushes
@@ -139,42 +142,46 @@ export async function startFakeUpstream(address: string, token: string): Promise
     return parseCgiOutput(new Uint8Array(output));
   };
 
+  const readRequest = (request: Request): Promise<Response> | Response => {
+    const url = new URL(request.url);
+
+    seen.push({
+      method: request.method,
+      path: url.pathname,
+      authorization: request.headers.get('authorization'),
+    });
+
+    if (url.pathname === '/oauth/token' && request.method === 'POST') {
+      return handleToken(request);
+    }
+
+    if (url.pathname === '/oauth-e2e/me') {
+      const current = oauthState.accessTokens.at(-1);
+
+      return Response.json({
+        generation: oauthState.accessTokens.length,
+        authorized:
+          current !== undefined && request.headers.get('authorization') === `Bearer ${current}`,
+      });
+    }
+
+    if (url.pathname.includes('.git/')) {
+      return handleGit(request, url.pathname, url.search.slice(1));
+    }
+
+    return Response.json({ authorized: request.headers.get('authorization') === bearer });
+  };
+
   const server = Bun.serve({
     hostname: '0.0.0.0',
     port: 0,
     tls: { cert: readFileSync(join(dir, 'leaf.pem')), key: readFileSync(join(dir, 'leaf.key')) },
     maxRequestBodySize: 256 * 1024 ** 2,
     idleTimeout: 60,
-    fetch: (request) => {
-      const url = new URL(request.url);
-
-      seen.push({
-        method: request.method,
-        path: url.pathname,
-        authorization: request.headers.get('authorization'),
-      });
-
-      if (url.pathname === '/oauth/token' && request.method === 'POST') {
-        return handleToken(request);
-      }
-
-      if (url.pathname === '/oauth-e2e/me') {
-        const current = oauthState.accessTokens.at(-1);
-
-        return Response.json({
-          generation: oauthState.accessTokens.length,
-          authorized:
-            current !== undefined && request.headers.get('authorization') === `Bearer ${current}`,
-        });
-      }
-
-      if (url.pathname.includes('.git/')) {
-        return handleGit(request, url.pathname, url.search.slice(1));
-      }
-
-      return Response.json({ authorized: request.headers.get('authorization') === bearer });
-    },
+    fetch: readRequest,
   });
+
+  const plainServer = Bun.serve({ hostname: '0.0.0.0', port: 0, fetch: readRequest });
 
   return {
     oauth: {
@@ -187,6 +194,7 @@ export async function startFakeUpstream(address: string, token: string): Promise
     },
     origin: `https://${address}:${String(server.port)}`,
     caPem: readFileSync(join(dir, 'ca.pem'), 'utf8'),
+    plainOrigin: `http://${address}:${String(plainServer.port)}`,
     seen,
     createRepo: async (path) => {
       const repo = join(repos, path);
@@ -198,6 +206,7 @@ export async function startFakeUpstream(address: string, token: string): Promise
     },
     [Symbol.asyncDispose]: async () => {
       await server.stop(true);
+      await plainServer.stop(true);
 
       rmSync(dir, { recursive: true, force: true });
     },

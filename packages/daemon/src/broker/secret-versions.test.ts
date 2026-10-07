@@ -105,6 +105,48 @@ test('a changed binding without rebind is CONFLICT and changes nothing', async (
   expect(grants).toEqual(['api']);
 });
 
+test('an upstream is part of the binding: changing it needs a rebind', async () => {
+  await using ctx = await setupTest();
+
+  const rule = { host: 'svc.imp.internal', header: 'authorization', scheme: 'bearer' as const };
+
+  await ctx.client.secrets.add({
+    name: 'api',
+    kind: 'custom',
+    value: 'v1',
+    rules: [{ ...rule, upstream: 'http://172.17.0.1:18081' }],
+  });
+
+  await ctx.client.grants.add({ name: 'dev', secret: 'api' });
+
+  const updateSecret = (upstream: string | undefined, rebind: boolean) =>
+    ctx.client.secrets.add({
+      name: 'api',
+      kind: 'custom',
+      value: 'v2',
+      rules: [upstream === undefined ? rule : { ...rule, upstream }],
+      replace: true,
+      ...(rebind && { rebind }),
+    });
+
+  // the same origin written another way is the same binding
+  const rotated = await updateSecret('http://172.17.0.1:18081/', false);
+
+  expect(rotated.droppedGrants).toBe(0);
+  expect(rotated.rules).toEqual([{ ...rule, upstream: 'http://172.17.0.1:18081' }]);
+
+  for (const changed of ['http://172.17.0.1:18082', undefined]) {
+    const refused = await updateSecret(changed, false).catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({ code: 'CONFLICT', data: { reason: 'binding_changed' } });
+  }
+
+  const rebound = await updateSecret('https://other.example.com', true);
+
+  expect(rebound.droppedGrants).toBe(1);
+  expect(rebound.rules[0]?.upstream).toBe('https://other.example.com');
+});
+
 test('a rebind takes a new generation and drops every grant of the secret', async () => {
   await using ctx = await setupTest();
 

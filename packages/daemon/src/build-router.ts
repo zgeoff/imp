@@ -951,6 +951,7 @@ const SYSTEM_FEATURES = {
   sessionLog: true,
   publicEgress: true,
   oauthSecrets: true,
+  secretUpstream: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second
