@@ -1,105 +1,93 @@
 import { expect, test } from 'bun:test';
-import { screen, waitFor, within } from '@testing-library/react';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createFakeImpd } from '../test-utils/fake-impd';
+import { buildMockIdentity } from '../test-utils/build-mock-identity';
+import { buildMockToken } from '../test-utils/build-mock-token';
+import { buildStubImpd } from '../test-utils/build-stub-impd';
 import { renderApp } from '../test-utils/render-app';
 
 test('it makes a token limited to some imps and shows its secret once', async () => {
-  const fake = createFakeImpd();
+  const stub = buildStubImpd();
   const user = userEvent.setup();
+  const rendered = renderApp(stub, '/tokens');
 
-  renderApp(fake, '/tokens');
+  const field = await rendered.findByLabelText('Name');
 
-  const name = await screen.findByLabelText('Name');
+  await user.type(field, 'ci');
+  await user.selectOptions(rendered.getByLabelText('Scope'), 'exec');
+  await user.type(rendered.getByLabelText('Imps'), 'dev-*, ci-*');
+  await user.click(rendered.getByRole('button', { name: 'Make token' }));
 
-  await user.type(name, 'ci');
-  await user.selectOptions(screen.getByLabelText('Scope'), 'exec');
-  await user.type(screen.getByLabelText('Imps'), 'dev-*, ci-*');
-  await user.click(screen.getByRole('button', { name: 'Make token' }));
+  const card = await rendered.findByRole('region', { name: 'Secret of ci' });
+  const row = await rendered.findByRole('row', { name: /ci/ });
 
-  const card = await screen.findByRole('region', { name: 'Secret of ci' });
+  expect(within(card).getByText('imp_stub.ci-secret')).toBeInTheDocument();
+  expect(within(row).getByText('dev-*, ci-*')).toBeInTheDocument();
 
-  expect(within(card).getByText('imp_fake.ci-secret')).toBeInTheDocument();
-
-  expect(fake.state.calls).toEqual([
+  expect(stub.state.calls).toStrictEqual([
     { path: 'tokens.create', input: { name: 'ci', scope: 'exec', imps: ['dev-*', 'ci-*'] } },
   ]);
-
-  const row = await screen.findByRole('row', { name: /ci/ });
-
-  expect(within(row).getByText('dev-*, ci-*')).toBeInTheDocument();
 });
 
 test('it deletes a token after a confirm', async () => {
-  const fake = createFakeImpd();
+  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  fake.state.tokens.push({
-    name: 'old',
-    scope: 'read',
-    imps: null,
-    grantable: [],
-    sshKeys: [],
-    createdAt: new Date(),
-  });
+  stub.state.tokens.push(buildMockToken({ name: 'old' }));
 
-  renderApp(fake, '/tokens');
+  const rendered = renderApp(stub, '/tokens');
 
-  const row = await screen.findByRole('row', { name: /old/ });
+  const row = await rendered.findByRole('row', { name: /old/ });
 
   await user.click(within(row).getByRole('button', { name: 'Delete' }));
 
-  const dialog = await screen.findByRole('dialog', { name: 'Delete old?' });
+  const dialog = await rendered.findByRole('dialog', { name: 'Delete old?' });
 
   await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
   await waitFor(() => {
-    expect(fake.state.calls).toEqual([{ path: 'tokens.delete', input: { name: 'old' } }]);
+    expect(stub.state.calls).toStrictEqual([{ path: 'tokens.delete', input: { name: 'old' } }]);
   });
 });
 
-test('the nav offers tokens only to a caller that manages the whole host', async () => {
-  const fake = createFakeImpd();
+test('it hides the tokens link from a caller limited to some imps', async () => {
+  const stub = buildStubImpd();
 
-  fake.state.identity = {
-    kind: 'dashboard',
-    name: 'dev',
-    scope: 'manage',
-    imps: ['dev-*'],
-    grantable: [],
-  };
+  stub.state.identity = buildMockIdentity({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
 
-  renderApp(fake, '/');
+  const rendered = renderApp(stub, '/');
 
-  const identity = await screen.findByText('dev (manage)');
+  await rendered.findByText('dev (manage)');
 
-  expect(identity).toBeInTheDocument();
-  expect(screen.queryByRole('link', { name: 'Tokens' })).toBeNull();
+  expect(rendered.queryByRole('link', { name: 'Tokens' })).toBeNull();
 });
 
-test('the nav links to tokens for the root token', async () => {
-  renderApp(createFakeImpd(), '/');
+test('it links to tokens for a caller that manages the whole host', async () => {
+  const stub = buildStubImpd();
 
-  const link = await screen.findByRole('link', { name: 'Tokens' });
+  stub.state.identity = buildMockIdentity({ name: 'root', scope: 'manage', imps: null });
+
+  const rendered = renderApp(stub, '/');
+
+  const link = await rendered.findByRole('link', { name: 'Tokens' });
 
   expect(link).toBeInTheDocument();
 });
 
 test('it lists the SSH keys bound to each token', async () => {
-  const fake = createFakeImpd();
+  const stub = buildStubImpd();
 
-  fake.state.tokens.push({
-    name: 'laptop',
-    scope: 'exec',
-    imps: ['dev-*'],
-    grantable: [],
-    sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
-    createdAt: new Date(),
-  });
+  stub.state.tokens.push(
+    buildMockToken({
+      name: 'laptop',
+      sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
+    }),
+  );
 
-  renderApp(fake, '/tokens');
+  const rendered = renderApp(stub, '/tokens');
 
-  const row = await screen.findByRole('row', { name: /laptop/ });
+  const row = await rendered.findByRole('row', { name: /laptop/ });
 
   expect(within(row).getByText('me@laptop SHA256:abc')).toBeInTheDocument();
 });

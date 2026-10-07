@@ -4,10 +4,11 @@ import { render } from '@testing-library/react';
 import { buildQueryClient } from '../lib/build-query-client';
 import { ImpdProvider } from '../lib/impd';
 import { buildRouter } from '../router';
-import type { FakeImpd } from './fake-impd';
+import type { StubImpd } from './build-stub-impd';
 
-// The whole app at `path` (under /ui), against a fake impd
-export function renderApp(fake: FakeImpd, path = '/') {
+// The whole app at `path` (under /ui), against a stub impd, with the router
+// and query client beside the render result
+export function renderApp(stub: StubImpd, path = '/') {
   const router = buildRouter(createMemoryHistory({ initialEntries: [`/ui${path}`] }));
 
   const queryClient = buildQueryClient(() => {
@@ -15,7 +16,7 @@ export function renderApp(fake: FakeImpd, path = '/') {
   });
 
   const rendered = render(
-    <ImpdProvider impd={fake.impd}>
+    <ImpdProvider impd={stub.impd}>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>

@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
-import { buildImp } from '../test-utils/fake-impd';
+import { buildMockDiskUsage } from '../test-utils/build-mock-disk-usage';
+import { buildMockImp } from '../test-utils/build-mock-imp';
+import { buildMockImpResources } from '../test-utils/build-mock-imp-resources';
 import {
   formatBytes,
   formatCpuUse,
@@ -9,71 +11,86 @@ import {
   formatRelativeTime,
 } from './format';
 
-test('it formats sizes in binary units', () => {
-  expect(formatBytes(512)).toBe('512 B');
-  expect(formatBytes(1536)).toBe('1.5 KiB');
-  expect(formatMib(300)).toBe('300 MiB');
-  expect(formatMib(2048)).toBe('2.0 GiB');
-  expect(formatMib(6 * 1024 * 1024)).toBe('6.0 TiB');
+test.each([
+  [512, '512 B'],
+  [1536, '1.5 KiB'],
+  [300 * 1024 * 1024, '300 MiB'],
+])('#formatBytes formats %d bytes as %s', (bytes, expected) => {
+  expect(formatBytes(bytes)).toBe(expected);
 });
 
-test('it formats times relative to now, past and future', () => {
+test.each([
+  [300, '300 MiB'],
+  [2048, '2.0 GiB'],
+  [6 * 1024 * 1024, '6.0 TiB'],
+])('#formatMib formats %d MiB as %s', (mib, expected) => {
+  expect(formatMib(mib)).toBe(expected);
+});
+
+test.each([
+  [-12_000, '12s ago'],
+  [-3 * 3_600_000, '3h ago'],
+  [-2 * 86_400_000, '2d ago'],
+  [90_000, 'in 1m'],
+])('#formatRelativeTime reads a time %d ms from now as %s', (offsetMs, expected) => {
   const now = Date.parse('2026-10-02T12:00:00Z');
 
-  expect(formatRelativeTime(new Date(now - 12_000), now)).toBe('12s ago');
-  expect(formatRelativeTime(new Date(now - 3 * 3_600_000), now)).toBe('3h ago');
-  expect(formatRelativeTime(new Date(now - 2 * 86_400_000), now)).toBe('2d ago');
-  expect(formatRelativeTime(new Date(now + 90_000), now)).toBe('in 1m');
+  expect(formatRelativeTime(new Date(now + offsetMs), now)).toBe(expected);
 });
 
-test('it formats CPU use over the limit', () => {
-  const sample = {
-    measuredAt: new Date(),
-    since: new Date(),
-    cpuPercent: 44.6,
-    cpuThrottledMs: 0,
-    netRxBytes: 0,
-    netTxBytes: 0,
-  };
-
-  const resources = { wakeCount: 1, awakeMs: 0, sample };
-
-  expect(formatCpuUse(buildImp({ name: 'a' }))).toBe('—');
-  expect(formatCpuUse(buildImp({ name: 'a', resources }))).toBe('45%');
-
-  expect(formatCpuUse(buildImp({ name: 'a', resources, cpu: { limit: 1.5, weight: 100 } }))).toBe(
-    '45% / 1.5',
-  );
+test.each([
+  [45_000, '45s'],
+  [12 * 60_000, '12m'],
+  [200 * 60_000, '3h 20m'],
+])('#formatDuration formats %d ms as %s', (ms, expected) => {
+  expect(formatDuration(ms)).toBe(expected);
 });
 
-test('it formats durations', () => {
-  expect(formatDuration(45_000)).toBe('45s');
-  expect(formatDuration(12 * 60_000)).toBe('12m');
-  expect(formatDuration(200 * 60_000)).toBe('3h 20m');
+test('#formatCpuUse shows a dash for an imp with no sample', () => {
+  expect(formatCpuUse(buildMockImp())).toBe('—');
 });
 
-test('it formats disk use over the disk size, with its markers', () => {
-  const usage = {
-    exclusiveBytes: 1536 * 1024 * 1024,
-    sharedBytes: 0,
-    measuredAt: new Date(),
-    isPartial: false,
-    isUpperBound: false,
-  };
+test('#formatCpuUse rounds the sampled CPU of an imp without a limit', () => {
+  const imp = buildMockImp({ resources: buildMockImpResources({ sample: { cpuPercent: 44.6 } }) });
 
-  expect(formatDiskUse(buildImp({ name: 'a', diskMib: 32_768 }))).toBe('— / 32.0 GiB');
+  expect(formatCpuUse(imp)).toBe('45%');
+});
 
-  expect(formatDiskUse(buildImp({ name: 'a', diskMib: 32_768, diskUsage: usage }))).toBe(
-    '1.5 GiB / 32.0 GiB',
-  );
+test('#formatCpuUse shows the sampled CPU over the limit', () => {
+  const imp = buildMockImp({
+    resources: buildMockImpResources({ sample: { cpuPercent: 44.6 } }),
+    cpu: { limit: 1.5, weight: 100 },
+  });
 
-  expect(
-    formatDiskUse(
-      buildImp({
-        name: 'a',
-        diskMib: 32_768,
-        diskUsage: { ...usage, isPartial: true, isUpperBound: true },
-      }),
-    ),
-  ).toBe('≤1.5 GiB? / 32.0 GiB');
+  expect(formatCpuUse(imp)).toBe('45% / 1.5');
+});
+
+test('#formatDiskUse shows a dash over the disk size before a measurement', () => {
+  expect(formatDiskUse(buildMockImp({ diskMib: 32_768 }))).toBe('— / 32.0 GiB');
+});
+
+test('#formatDiskUse shows the exclusive use over the disk size', () => {
+  const imp = buildMockImp({
+    diskMib: 32_768,
+    diskUsage: buildMockDiskUsage({
+      exclusiveBytes: 1536 * 1024 * 1024,
+      isPartial: false,
+      isUpperBound: false,
+    }),
+  });
+
+  expect(formatDiskUse(imp)).toBe('1.5 GiB / 32.0 GiB');
+});
+
+test('#formatDiskUse marks a use that is an upper bound from a partial pass', () => {
+  const imp = buildMockImp({
+    diskMib: 32_768,
+    diskUsage: buildMockDiskUsage({
+      exclusiveBytes: 1536 * 1024 * 1024,
+      isPartial: true,
+      isUpperBound: true,
+    }),
+  });
+
+  expect(formatDiskUse(imp)).toBe('≤1.5 GiB? / 32.0 GiB');
 });

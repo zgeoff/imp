@@ -1,94 +1,114 @@
-import { afterEach, expect, mock, spyOn, test } from 'bun:test';
-import { screen } from '@testing-library/react';
+import { expect, mock, test } from 'bun:test';
 import userEvent from '@testing-library/user-event';
-import { buildImp, createFakeImpd } from '../test-utils/fake-impd';
+import { HttpResponse, http } from 'msw';
+import { IMPD_ORIGIN, knownTokens, resolveLogin } from '../mocks/handlers';
+import { server } from '../mocks/node';
+import { buildMockImp } from '../test-utils/build-mock-imp';
+import { buildStubImpd } from '../test-utils/build-stub-impd';
 import { renderApp } from '../test-utils/render-app';
 
-afterEach(() => {
-  mock.restore();
-});
-
-test('a wrong token stays on the login page with a message', async () => {
+test('it stays on the login page with a message for a token impd does not know', async () => {
   const user = userEvent.setup();
 
-  const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(null, { status: 401 }),
-  );
+  knownTokens.add('secret');
 
-  renderApp(createFakeImpd(), '/login');
+  const rendered = renderApp(buildStubImpd(), '/login');
 
-  const field = await screen.findByLabelText('API token');
+  const field = await rendered.findByLabelText('API token');
 
   await user.type(field, 'nope');
-  await user.click(screen.getByRole('button', { name: 'Log in' }));
+  await user.click(rendered.getByRole('button', { name: 'Log in' }));
 
-  const alert = await screen.findByRole('alert');
+  const alert = await rendered.findByRole('alert');
 
   expect(alert).toHaveTextContent('impd knows no such token.');
-
-  const [url, init] = fetchSpy.mock.calls[0] ?? [];
-
-  expect(url).toBe('/auth/login');
-  expect(init?.body).toBe('{"token":"nope"}');
+  expect(rendered.router.state.location.pathname).toBe('/login');
 });
 
-test('the right token opens the imps list', async () => {
+test('it sends the typed token to the session route of impd', async () => {
+  const user = userEvent.setup();
+  const received = mock<(body: unknown) => void>();
+
+  server.use(
+    http.post(`${IMPD_ORIGIN}/auth/login`, async (info) => {
+      const body: unknown = await info.request.clone().json();
+
+      received(body);
+
+      return resolveLogin(info);
+    }),
+  );
+
+  const rendered = renderApp(buildStubImpd(), '/login');
+
+  const field = await rendered.findByLabelText('API token');
+
+  await user.type(field, 'nope');
+  await user.click(rendered.getByRole('button', { name: 'Log in' }));
+  await rendered.findByRole('alert');
+
+  expect(received).toHaveBeenCalledExactlyOnceWith({ token: 'nope' });
+});
+
+test('it opens the imps list for a token impd knows', async () => {
   const user = userEvent.setup();
 
-  spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+  knownTokens.add('secret');
 
-  const rendered = renderApp(createFakeImpd(), '/login');
+  const rendered = renderApp(buildStubImpd(), '/login');
 
-  const field = await screen.findByLabelText('API token');
+  const field = await rendered.findByLabelText('API token');
 
   await user.type(field, 'secret');
-  await user.click(screen.getByRole('button', { name: 'Log in' }));
-  await screen.findByRole('heading', { name: 'Imps' });
+  await user.click(rendered.getByRole('button', { name: 'Log in' }));
+  await rendered.findByRole('heading', { name: 'Imps' });
 
   expect(rendered.router.state.location.pathname).toBe('/');
 });
 
-test('a 401 from impd sends the browser to the login page', async () => {
-  const fake = createFakeImpd();
+test('it sends the browser to the login page on a 401 from impd', async () => {
+  const stub = buildStubImpd();
 
-  fake.state.unauthorized = true;
+  stub.state.unauthorized = true;
 
-  const rendered = renderApp(fake);
+  const rendered = renderApp(stub);
 
-  await screen.findByLabelText('API token');
+  await rendered.findByLabelText('API token');
 
   expect(rendered.router.state.location.pathname).toBe('/login');
 });
 
-test('log out clears what the dashboard knew and opens the login page', async () => {
+test('it clears what the dashboard knew and opens the login page on log out', async () => {
+  const stub = buildStubImpd();
   const user = userEvent.setup();
-  const fake = createFakeImpd();
 
-  spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
 
-  fake.state.imps.push(buildImp({ name: 'web' }));
+  const rendered = renderApp(stub);
 
-  const rendered = renderApp(fake);
-
-  await screen.findByRole('row', { name: /web/ });
-  await user.click(screen.getByRole('button', { name: 'Log out' }));
-  await screen.findByLabelText('API token');
+  await rendered.findByRole('row', { name: /web/ });
+  await user.click(rendered.getByRole('button', { name: 'Log out' }));
+  await rendered.findByLabelText('API token');
 
   expect(rendered.router.state.location.pathname).toBe('/login');
-  expect(rendered.queryClient.getQueryCache().getAll()).toEqual([]);
+  expect(rendered.queryClient.getQueryCache().getAll()).toHaveLength(0);
 });
 
-test('a failed logout says so and stays', async () => {
+test('it says so and stays when the log out fails', async () => {
   const user = userEvent.setup();
 
-  spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 502 }));
-  renderApp(createFakeImpd());
+  server.use(
+    http.post(`${IMPD_ORIGIN}/auth/logout`, () => new HttpResponse(null, { status: 502 })),
+  );
 
-  const button = await screen.findByRole('button', { name: 'Log out' });
+  const rendered = renderApp(buildStubImpd());
+
+  const button = await rendered.findByRole('button', { name: 'Log out' });
 
   await user.click(button);
 
-  const alert = await screen.findByRole('alert');
+  const alert = await rendered.findByRole('alert');
 
   expect(alert).toHaveTextContent('impd did not log out (HTTP 502)');
+  expect(rendered.router.state.location.pathname).toBe('/');
 });
