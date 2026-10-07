@@ -3,10 +3,23 @@ import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/ex
 const SIGKILL = 9;
 const SIGTERM = 15;
 
+interface StubExecGuestOptions {
+  // the agent predates the group kill (protocol 0.8.0)
+  readonly oldAgent?: boolean;
+
+  // waits out a `wait N` command
+  readonly wait?: (ms: number) => Promise<void>;
+}
+
 // An imp's guest agent for the fake VMs, by argv: `head -c N PATH` reads from `files`, the
 // write script stores its stdin there, `/bin/sh -c` runs buildShellStream's
 // scripts, and `signals` holds each signal a command got as `command:number`.
-export function buildStubExecGuest(oldAgent: boolean) {
+export function buildStubExecGuest(options: Readonly<StubExecGuestOptions> = {}) {
+  const oldAgent = options.oldAgent ?? false;
+
+  // the real timer serves only the MCP endpoint's idle-timeout test
+  const wait = options.wait ?? Bun.sleep;
+
   const files = new Map<string, Uint8Array>();
 
   const requests: AgentExecRequest[] = [];
@@ -34,7 +47,7 @@ export function buildStubExecGuest(oldAgent: boolean) {
 
     const command = program === '/bin/sh' ? script : request.argv.join(' ');
 
-    const stream = buildShellStream(command, (signal) => {
+    const stream = buildShellStream(command, wait, (signal) => {
       signals.push(`${command}:${String(signal)}`);
     });
 
@@ -100,7 +113,11 @@ function buildWriteStream(path: string, store: (data: Uint8Array) => void) {
 // `echo TEXT`, `kill …` (exits 0), `fail` (stderr and exit 3), `flood N` (N
 // bytes from HEAD to TAIL), `cat` (echoes stdin), `sleepy` (runs until
 // SIGTERM) and `stubborn` (ignores SIGTERM, as a trap or a nohup'd child does)
-function buildShellStream(command: string, recordSignal: (signal: number) => void) {
+function buildShellStream(
+  command: string,
+  wait: (ms: number) => Promise<void>,
+  recordSignal: (signal: number) => void,
+) {
   const stream = buildEventStream();
   const [verb = '', ...rest] = command.split(' ');
 
@@ -111,10 +128,14 @@ function buildShellStream(command: string, recordSignal: (signal: number) => voi
 
   // a command that runs for N ms, longer than any idle timeout on the way
   if (verb === 'wait') {
-    setTimeout(() => {
+    const runWait = async () => {
+      await wait(Number(rest[0]));
+
       stream.emitText('stdout', 'waited\n');
       stream.emit({ type: 'exit', code: 0, signal: 0 });
-    }, Number(rest[0]));
+    };
+
+    void runWait();
   }
 
   // the sweep that kills what is left of a stopped command's group

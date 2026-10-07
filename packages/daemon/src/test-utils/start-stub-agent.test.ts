@@ -132,6 +132,51 @@ test('it decodes frames sent in the same chunk as the CONNECT line', async () =>
   expect(agent.received).toStrictEqual([{ type: 1, payload: Buffer.from('{"op":"ping"}') }]);
 });
 
+test('it waits for the rest of a CONNECT line split across chunks', async () => {
+  await using ctx = await setupTest();
+
+  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
+
+  onTestFinished(() => {
+    agent.close();
+  });
+
+  const client = createConnection(join(ctx.dir, 'v.sock'));
+
+  onTestFinished(() => {
+    client.destroy();
+  });
+
+  let reply = '';
+
+  client.on('data', (chunk: Buffer) => {
+    reply += chunk.toString();
+  });
+
+  client.write('CONNECT 10');
+
+  await waitFor(() => {
+    if (agent.reads === 0) {
+      throw new Error('the first chunk has not been read');
+    }
+  });
+
+  client.write(
+    Buffer.concat([Buffer.from('24\n'), encodeJsonFrame(FRAME_TYPES.request, { op: 'ping' })]),
+  );
+
+  await waitFor(() => {
+    if (agent.received.length === 0) {
+      throw new Error('no frame yet');
+    }
+  });
+
+  expect({ reply, received: agent.received }).toStrictEqual({
+    reply: 'OK 1073741824\n',
+    received: [{ type: 1, payload: Buffer.from('{"op":"ping"}') }],
+  });
+});
+
 test('it keeps the frames of every connection in received', async () => {
   await using ctx = await setupTest();
 

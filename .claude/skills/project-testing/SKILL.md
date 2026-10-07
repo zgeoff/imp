@@ -204,8 +204,9 @@ fresh network namespace.
 storage start, firewall start, VM re-adoption, leftover and drive cleanup, move recovery. It opens
 no port: `main.ts` then listens, starts the tickers and owns the stop. `deps` takes the database,
 the root token, an unstarted storage backend and the system files, and optional stand-ins for each
-boundary (`vms`, `taps`, `cgroups`, `broker`, `egress`, `imps`, `readDiskSpace`, `readIdentity`,
-`resolveIpv6`, `readTailscale`, `whois`, `freezer`, `oauthKey`, `now`, `log`); a field left out
+boundary (`vms`, `runCommand`, `taps`, `cgroups`, `broker`, `egress`, `imps`, `images`,
+`readDiskSpace`, `readIdentity`, `resolveIpv6`, `readTailscale`, `whois`, `freezer`, `oauthKey`,
+`now`, `log`); `now` reaches every service, leases and the RAM governor included. A field left out
 takes the host's real one. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`,
 `startGovernedImps`, `loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are
 exported for `setupImpTest`, which wires them without the start steps.

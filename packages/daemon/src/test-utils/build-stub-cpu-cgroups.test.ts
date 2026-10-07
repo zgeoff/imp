@@ -24,8 +24,22 @@ test('it makes no cgroup on a host whose cpu controller is not delegated', () =>
   expect(stub.listGroups()).toStrictEqual([]);
 });
 
-test('it reports the memory controller off without the cpu controller', () => {
-  const stub = buildStubCpuCgroups({ isEnforced: false, isMemoryEnforced: true });
+test.each([
+  [true, true, true],
+  [true, false, false],
+  [false, true, false],
+  [false, false, false],
+])(
+  'it reports, with the cpu controller %p and memory asked for %p, the memory controller on as %p',
+  (isEnforced, isMemoryAsked, isMemoryEnforced) => {
+    const stub = buildStubCpuCgroups({ isEnforced, isMemoryEnforced: isMemoryAsked });
+
+    expect(stub.cgroups.isMemoryEnforced).toBe(isMemoryEnforced);
+  },
+);
+
+test('it reports the memory controller off when memory is not asked for', () => {
+  const stub = buildStubCpuCgroups();
 
   expect(stub.cgroups.isMemoryEnforced).toBeFalse();
 });
@@ -80,6 +94,17 @@ test('it moves an adopted VM into its cgroup', () => {
     memoryMib: 1024,
     guestMib: null,
     pids: [4242],
+  });
+});
+
+test('it records an adoption but makes no cgroup on a host without a cpu controller', () => {
+  const stub = buildStubCpuCgroups({ isEnforced: false });
+
+  stub.cgroups.adopt('imp-a', 4242, { limit: null, weight: 100 }, 1024);
+
+  expect({ calls: stub.calls, groups: stub.listGroups() }).toStrictEqual({
+    calls: ['adopt imp-a 4242'],
+    groups: [],
   });
 });
 

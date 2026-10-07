@@ -9,14 +9,16 @@ test('it hands out distinct ports', () => {
   expect(new Set(ports).size).toBe(5);
 });
 
-test('it picks ports below the start of the ephemeral range', async () => {
+test('it picks ports from the 4000 just below the start of the ephemeral range', async () => {
   const range = await readFile('/proc/sys/net/ipv4/ip_local_port_range', 'utf8');
 
   const ephemeralStart = Number(range.trim().split(/\s+/)[0]);
   const free = findFreePorts(3);
   const ports = [free.take(), free.take(), free.take()];
 
-  expect(ports).toSatisfyAll((port: number) => port > 0 && port < ephemeralStart);
+  expect(ports).toSatisfyAll(
+    (port: number) => port >= ephemeralStart - 4000 && port < ephemeralStart,
+  );
 });
 
 test('it leaves the ports free for the test to bind', () => {

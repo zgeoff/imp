@@ -18,24 +18,39 @@ export type StubAgentHandler = (
 export async function startStubAgent(path: string, agent: StubAgentHandler) {
   const received: AgentFrame[] = [];
 
+  // the chunks read so far, for a test that splits its writes
+  const counts = { reads: 0 };
+
   mkdirSync(dirname(path), { recursive: true });
 
   const server = createServer((socket) => {
     const decoder = createFrameDecoder();
     const frames: AgentFrame[] = [];
-    let handshaken = false;
+
+    // the bytes of a CONNECT line whose newline has not arrived yet; null
+    // once the handshake is answered
+    let pending: Uint8Array | null = new Uint8Array();
 
     socket.on('data', (chunk: Uint8Array) => {
+      counts.reads += 1;
+
       let bytes = chunk;
 
-      if (!handshaken) {
-        const newline = bytes.indexOf(10);
+      if (pending !== null) {
+        const line = Buffer.concat([pending, chunk]);
+        const newline = line.indexOf(10);
 
-        handshaken = true;
+        if (newline === -1) {
+          pending = line;
+
+          return;
+        }
+
+        pending = null;
 
         socket.write('OK 1073741824\n');
 
-        bytes = bytes.subarray(newline + 1);
+        bytes = line.subarray(newline + 1);
       }
 
       for (const frame of decoder.push(bytes)) {
@@ -53,6 +68,9 @@ export async function startStubAgent(path: string, agent: StubAgentHandler) {
 
   return {
     received,
+    get reads(): number {
+      return counts.reads;
+    },
     close: () => {
       server.close();
     },

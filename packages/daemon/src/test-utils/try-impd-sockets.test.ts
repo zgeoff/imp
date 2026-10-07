@@ -3,7 +3,10 @@ import { tryExecSocket, tryTunnelSocket } from './try-impd-sockets';
 
 // a loopback stand-in for impd's own /exec and /tunnel server, to test the
 // clients alone: it upgrades every request and echoes each message back
-function setupTest() {
+// oxlint-disable-next-line require-await -- await using releases the stack if setup throws
+async function setupTest() {
+  await using stack = new AsyncDisposableStack();
+
   const upgrades: { path: string; query: string; authorization: string | null }[] = [];
   const messages: unknown[] = [];
 
@@ -29,16 +32,20 @@ function setupTest() {
     },
   });
 
+  stack.defer(() => server.stop(true));
+
+  const owned = stack.move();
+
   return {
     port: String(server.port),
     upgrades,
     messages,
-    [Symbol.asyncDispose]: () => server.stop(true),
+    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('#tryExecSocket sends a start for the name and returns the first message', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const reply = await tryExecSocket(ctx.port, 'ticket=abc', 'dev-a');
 
@@ -49,7 +56,7 @@ test('#tryExecSocket sends a start for the name and returns the first message', 
 });
 
 test('#tryExecSocket starts dev when no name is given', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   await tryExecSocket(ctx.port, '');
 
@@ -57,7 +64,7 @@ test('#tryExecSocket starts dev when no name is given', async () => {
 });
 
 test('#tryExecSocket opens /exec with the query and the headers', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   await tryExecSocket(ctx.port, 'ticket=abc', 'dev', { authorization: 'Bearer t0k' });
 
@@ -80,8 +87,29 @@ test('#tryExecSocket returns rejected when the upgrade is refused', async () => 
   expect(reply).toBe('rejected');
 });
 
+test('#tryExecSocket returns closed when the server closes without a message', async () => {
+  const closing = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request, srv) => {
+      srv.upgrade(request, { data: undefined });
+    },
+    websocket: {
+      message: (socket) => {
+        socket.close();
+      },
+    },
+  });
+
+  onTestFinished(() => closing.stop(true));
+
+  const reply = await tryExecSocket(String(closing.port), '');
+
+  expect(reply).toBe('closed');
+});
+
 test('#tryTunnelSocket sends an open for the name on port 5432 and returns the first message', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   const reply = await tryTunnelSocket(ctx.port, '', {}, 'db');
 
@@ -92,7 +120,7 @@ test('#tryTunnelSocket sends an open for the name on port 5432 and returns the f
 });
 
 test('#tryTunnelSocket opens nope when no name is given', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   await tryTunnelSocket(ctx.port, '', {});
 
@@ -100,7 +128,7 @@ test('#tryTunnelSocket opens nope when no name is given', async () => {
 });
 
 test('#tryTunnelSocket opens /tunnel with the query and the headers', async () => {
-  await using ctx = setupTest();
+  await using ctx = await setupTest();
 
   await tryTunnelSocket(ctx.port, 'ticket=abc', { authorization: 'Bearer t0k' });
 
@@ -121,4 +149,25 @@ test('#tryTunnelSocket returns rejected when the upgrade is refused', async () =
   const reply = await tryTunnelSocket(String(refusing.port), '', {});
 
   expect(reply).toBe('rejected');
+});
+
+test('#tryTunnelSocket returns closed when the server closes without a message', async () => {
+  const closing = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request, srv) => {
+      srv.upgrade(request, { data: undefined });
+    },
+    websocket: {
+      message: (socket) => {
+        socket.close();
+      },
+    },
+  });
+
+  onTestFinished(() => closing.stop(true));
+
+  const reply = await tryTunnelSocket(String(closing.port), '', {});
+
+  expect(reply).toBe('closed');
 });

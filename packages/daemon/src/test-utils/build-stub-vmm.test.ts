@@ -25,8 +25,27 @@ async function setupTest() {
   return { dir, paths, fake, runner, [Symbol.asyncDispose]: () => owned.disposeAsync() };
 }
 
-test('#STUB_AGENT_VERSION is the protocol version every fake agent reports', () => {
-  expect(STUB_AGENT_VERSION).toBe('0.1.0');
+test('#STUB_AGENT_VERSION is the agent version a boot reports by default', async () => {
+  await using ctx = await setupTest();
+
+  const vm = await ctx.runner.startVm({
+    firecrackerBin: '/usr/bin/firecracker',
+    kernelPath: '/images/vmlinux',
+    systemDrivePath: '/images/system.ext4',
+    paths: ctx.paths,
+    address: deriveSlotAddress(1, { subnet: parseSubnet('10.100.0.0/16'), portBase: 20_000 }),
+    impId: 'imp-1',
+    hostname: 'alpha',
+    vcpus: 1,
+    memoryMib: 512,
+    maxMemoryMib: 512,
+    dns: ['1.1.1.1'],
+    cgroup: null,
+    isIdentityReset: false,
+    jail: null,
+  });
+
+  expect(vm.agentVersion).toBe(STUB_AGENT_VERSION);
 });
 
 test('#StubVmError names itself so a test can tell it from a real bug', () => {
@@ -62,16 +81,16 @@ test('#buildStubVmm starts a running VM with a boot id from its pid on a boot', 
   });
 
   expect(vm).toStrictEqual({
-    pid: vm.pid,
+    pid: 1001,
     firecrackerVersion: 'v1.17.0',
     agentVersion: '0.1.0',
     timings: {},
-    bootId: buildStubBootId(vm.pid),
+    bootId: buildStubBootId(1001),
   });
 
-  expect(ctx.runner.isVmAlive(vm.pid, ctx.paths)).toBeTrue();
-  expect(ctx.fake.readState(vm.pid)).toBe('Running');
-  expect(ctx.runner.readPid(ctx.paths)).toBe(vm.pid);
+  expect(ctx.runner.isVmAlive(1001, ctx.paths)).toBeTrue();
+  expect(ctx.fake.readState(1001)).toBe('Running');
+  expect(ctx.runner.readPid(ctx.paths)).toBe(1001);
   expect(ctx.fake.boots).toStrictEqual([{ hostname: 'alpha', isIdentityReset: false }]);
 });
 
@@ -252,11 +271,11 @@ test('#buildStubVmm reports an absent identity reset for an agent that leaves it
   });
 
   expect(vm).toStrictEqual({
-    pid: vm.pid,
+    pid: 1001,
     firecrackerVersion: 'v1.17.0',
     agentVersion: '0.1.0',
     timings: {},
-    bootId: buildStubBootId(vm.pid),
+    bootId: buildStubBootId(1001),
     identityReset: undefined,
   });
 });
@@ -317,14 +336,12 @@ test('#buildStubVmm keeps the boot id of the socket last boot on a wake', async 
   });
 
   expect(woken).toStrictEqual({
-    pid: expect.toBeNumber(),
+    pid: 1002,
     firecrackerVersion: 'v1.17.0',
     agentVersion: '0.1.0',
     timings: {},
-    bootId: buildStubBootId(booted.pid),
+    bootId: buildStubBootId(1001),
   });
-
-  expect(woken.pid).not.toBe(booted.pid);
 });
 
 test('#buildStubVmm starts a running VM and marks its snapshot used on a wake', async () => {
@@ -736,16 +753,7 @@ test('#buildStubVmm keeps a held call pending once it reaches the hold', async (
 
   await hold.reached;
 
-  const settled = await Promise.race([
-    call.then(() => 'settled'),
-    new Promise<string>((resolve) => {
-      setImmediate(() => {
-        resolve('pending');
-      });
-    }),
-  ]);
-
-  expect(settled).toBe('pending');
+  expect(Bun.peek.status(call)).toBe('pending');
 });
 
 test('#buildStubVmm lets a held call through on release', async () => {
@@ -774,14 +782,6 @@ test('#buildStubVmm stops holding a step after release', async () => {
 test('#buildStubVmm keeps a hung call pending until the hangs are released', async () => {
   await using ctx = await setupTest();
 
-  const paced = Promise.withResolvers<void>();
-
-  ctx.fake.setPace(() => {
-    paced.resolve();
-
-    return Promise.resolve();
-  });
-
   ctx.fake.queue('agentReady', 'hang');
 
   onTestFinished(() => {
@@ -790,18 +790,11 @@ test('#buildStubVmm keeps a hung call pending until the hangs are released', asy
 
   const call = ctx.runner.isAgentReady(ctx.paths);
 
-  await paced.promise;
+  // a later call on the same step runs the same path, so it settles after
+  // the hung one would have
+  await ctx.runner.isAgentReady(ctx.paths);
 
-  const settled = await Promise.race([
-    call.then(() => 'settled'),
-    new Promise<string>((resolve) => {
-      setImmediate(() => {
-        resolve('pending');
-      });
-    }),
-  ]);
-
-  expect(settled).toBe('pending');
+  expect(Bun.peek.status(call)).toBe('pending');
 });
 
 test('#buildStubVmm lets a hung call succeed when the hangs are released', async () => {
@@ -830,15 +823,6 @@ test('#buildStubVmm hangs a later call again after the hangs are released', asyn
   await using ctx = await setupTest();
 
   ctx.fake.releaseHangs();
-
-  const paced = Promise.withResolvers<void>();
-
-  ctx.fake.setPace(() => {
-    paced.resolve();
-
-    return Promise.resolve();
-  });
-
   ctx.fake.queue('agentReady', 'hang');
 
   onTestFinished(() => {
@@ -847,35 +831,24 @@ test('#buildStubVmm hangs a later call again after the hangs are released', asyn
 
   const call = ctx.runner.isAgentReady(ctx.paths);
 
-  await paced.promise;
+  // a later call on the same step runs the same path, so it settles after
+  // the hung one would have
+  await ctx.runner.isAgentReady(ctx.paths);
 
-  const settled = await Promise.race([
-    call.then(() => 'settled'),
-    new Promise<string>((resolve) => {
-      setImmediate(() => {
-        resolve('pending');
-      });
-    }),
-  ]);
-
-  expect(settled).toBe('pending');
+  expect(Bun.peek.status(call)).toBe('pending');
 });
 
 test('#buildStubVmm never settles a call of a runner whose impd was replaced', async () => {
   await using ctx = await setupTest();
 
-  ctx.fake.startGeneration();
+  const next = ctx.fake.startGeneration();
+  const call = ctx.runner.isAgentReady(ctx.paths);
 
-  const settled = await Promise.race([
-    ctx.runner.isAgentReady(ctx.paths).then(() => 'settled'),
-    new Promise<string>((resolve) => {
-      setImmediate(() => {
-        resolve('pending');
-      });
-    }),
-  ]);
+  // the new runner's call runs the whole path, so it settles after the old
+  // one would have
+  await next.isAgentReady(ctx.paths);
 
-  expect(settled).toBe('pending');
+  expect(Bun.peek.status(call)).toBe('pending');
 });
 
 test('#buildStubVmm never settles an in-flight call once its impd is replaced', async () => {
@@ -886,19 +859,15 @@ test('#buildStubVmm never settles an in-flight call once its impd is replaced', 
 
   await hold.reached;
 
-  ctx.fake.startGeneration();
+  const next = ctx.fake.startGeneration();
+
   hold.release();
 
-  const settled = await Promise.race([
-    call.then(() => 'settled'),
-    new Promise<string>((resolve) => {
-      setImmediate(() => {
-        resolve('pending');
-      });
-    }),
-  ]);
+  // the new runner's call runs the whole path, so it settles after the
+  // released one would have
+  await next.isAgentReady(ctx.paths);
 
-  expect(settled).toBe('pending');
+  expect(Bun.peek.status(call)).toBe('pending');
 });
 
 test('#buildStubVmm throws on a liveness check by a runner whose impd was replaced', async () => {
@@ -1214,13 +1183,13 @@ test('#buildStubVmm starts a running VM and records the claim on a template rest
   const vm = await ctx.runner.loadTemplateVm(plan);
 
   expect(vm).toStrictEqual({
-    pid: vm.pid,
+    pid: 1001,
     firecrackerVersion: 'v1.17.0',
     agentVersion: '0.1.0',
     timings: {},
   });
 
-  expect(ctx.runner.isVmAlive(vm.pid, ctx.paths)).toBeTrue();
+  expect(ctx.runner.isVmAlive(1001, ctx.paths)).toBeTrue();
 
   expect(ctx.fake.restores).toStrictEqual([
     { hostname: 'alpha', isIdentityReset: false, memFile: '/templates/shape-1/mem' },

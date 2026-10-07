@@ -42,7 +42,7 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
   const setup = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
 
   const harness = stack.use(setup);
-  const guest = buildStubExecGuest(options.oldAgent ?? false);
+  const guest = buildStubExecGuest({ oldAgent: options.oldAgent ?? false });
 
   // the fake guest runs no agent, but the imp wakes or boots as for a real one
   const built = buildTestApp(

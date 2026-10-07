@@ -1,8 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { buildStubExecGuest } from './build-stub-exec-guest';
 
 test('it reads the first N bytes of a stored file with head -c', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   guest.files.set('/work/notes.txt', new TextEncoder().encode('hello world'));
 
@@ -20,7 +20,7 @@ test('it reads the first N bytes of a stored file with head -c', async () => {
 });
 
 test('it fails head -c with the no such file error for a missing file', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['head', '-c', '5', '/work/missing.txt'],
@@ -41,7 +41,7 @@ test('it fails head -c with the no such file error for a missing file', async ()
 });
 
 test('it stores the write script stdin at the path when stdin closes', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'cat > "$1"', 'sh', '/work/out.txt'],
@@ -61,7 +61,7 @@ test('it stores the write script stdin at the path when stdin closes', async () 
 });
 
 test('it stores nothing before the write script stdin closes', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'cat > "$1"', 'sh', '/work/out.txt'],
@@ -74,7 +74,7 @@ test('it stores nothing before the write script stdin closes', async () => {
 });
 
 test('it fails a write under /readonly/ with the read-only file system error', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'cat > "$1"', 'sh', '/readonly/out.txt'],
@@ -101,7 +101,7 @@ test('it fails a write under /readonly/ with the read-only file system error', a
 });
 
 test('it prints the text of a shell echo and exits 0', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'echo hello there'],
@@ -117,7 +117,7 @@ test('it prints the text of a shell echo and exits 0', async () => {
 });
 
 test('it runs a plain argv as the command its words join to', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', { argv: ['echo', 'hello', 'there'], tty: false });
   const events = await Array.fromAsync(stream.events());
@@ -129,7 +129,7 @@ test('it runs a plain argv as the command its words join to', async () => {
 });
 
 test('it prints partial output then boom and exits 3 for fail', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', { argv: ['/bin/sh', '-c', 'fail'], tty: false });
   const events = await Array.fromAsync(stream.events());
@@ -142,7 +142,7 @@ test('it prints partial output then boom and exits 3 for fail', async () => {
 });
 
 test('it floods N bytes from HEAD to TAIL in 4096-byte chunks', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'flood 10000'],
@@ -160,7 +160,7 @@ test('it floods N bytes from HEAD to TAIL in 4096-byte chunks', async () => {
 });
 
 test('it echoes stdin for cat and exits 0 when stdin closes', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', { argv: ['/bin/sh', '-c', 'cat'], tty: false });
 
@@ -177,8 +177,61 @@ test('it echoes stdin for cat and exits 0 when stdin closes', async () => {
   ]);
 });
 
+test('it prints waited and exits 0 once the wait for N ms ends', async () => {
+  const waits: number[] = [];
+  const timer = Promise.withResolvers<void>();
+
+  const guest = buildStubExecGuest({
+    wait: (ms) => {
+      waits.push(ms);
+
+      return timer.promise;
+    },
+  });
+
+  const stream = await guest.openExec('imp-a', {
+    argv: ['/bin/sh', '-c', 'wait 15000'],
+    tty: false,
+  });
+
+  timer.resolve();
+
+  const events = await Array.fromAsync(stream.events());
+
+  expect({ waits, events }).toStrictEqual({
+    waits: [15_000],
+    events: [
+      { type: 'stdout', data: new TextEncoder().encode('waited\n') },
+      { type: 'exit', code: 0, signal: 0 },
+    ],
+  });
+});
+
+test('it emits nothing for wait while the wait runs', async () => {
+  const timer = Promise.withResolvers<void>();
+  const guest = buildStubExecGuest({ wait: () => timer.promise });
+
+  onTestFinished(() => {
+    timer.resolve();
+  });
+
+  const waiting = await guest.openExec('imp-a', {
+    argv: ['/bin/sh', '-c', 'wait 15000'],
+    tty: false,
+  });
+
+  const echoing = await guest.openExec('imp-a', { argv: ['/bin/sh', '-c', 'echo hi'], tty: false });
+
+  const first = waiting.events().next();
+
+  // a full read of another stream lets any event already queued for wait through
+  await Array.fromAsync(echoing.events());
+
+  expect(Bun.peek.status(first)).toBe('pending');
+});
+
 test('it exits 0 for the kill sweep', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'kill -KILL -- -42'],
@@ -191,7 +244,7 @@ test('it exits 0 for the kill sweep', async () => {
 });
 
 test('it exits sleepy with 128 plus the signal on SIGTERM', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', { argv: ['/bin/sh', '-c', 'sleepy'], tty: false });
 
@@ -203,7 +256,7 @@ test('it exits sleepy with 128 plus the signal on SIGTERM', async () => {
 });
 
 test('it keeps stubborn running through SIGTERM and exits it on SIGKILL', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'stubborn'],
@@ -219,7 +272,7 @@ test('it keeps stubborn running through SIGTERM and exits it on SIGKILL', async 
 });
 
 test('it records each signal a command gets as command:number', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'stubborn'],
@@ -233,7 +286,7 @@ test('it records each signal a command gets as command:number', async () => {
 });
 
 test('it records the command of each stream that is closed', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const first = await guest.openExec('imp-a', { argv: ['/bin/sh', '-c', 'sleepy'], tty: false });
 
@@ -245,7 +298,7 @@ test('it records the command of each stream that is closed', async () => {
 });
 
 test('it records every request it is sent', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   await guest.openExec('imp-a', { argv: ['head', '-c', '5', '/work/notes.txt'], tty: false });
   await guest.openExec('imp-b', { argv: ['/bin/sh', '-c', 'echo hi'], tty: true, cols: 80 });
@@ -257,7 +310,7 @@ test('it records every request it is sent', async () => {
 });
 
 test('it kills the group when a new agent gets a kill grace', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'sleepy'],
@@ -269,7 +322,7 @@ test('it kills the group when a new agent gets a kill grace', async () => {
 });
 
 test('it leaves the group alone when an old agent gets a kill grace', async () => {
-  const guest = buildStubExecGuest(true);
+  const guest = buildStubExecGuest({ oldAgent: true });
 
   const stream = await guest.openExec('imp-a', {
     argv: ['/bin/sh', '-c', 'sleepy'],
@@ -281,7 +334,7 @@ test('it leaves the group alone when an old agent gets a kill grace', async () =
 });
 
 test('it leaves the group alone when a new agent gets no kill grace', async () => {
-  const guest = buildStubExecGuest(false);
+  const guest = buildStubExecGuest();
 
   const stream = await guest.openExec('imp-a', { argv: ['/bin/sh', '-c', 'sleepy'], tty: false });
 
