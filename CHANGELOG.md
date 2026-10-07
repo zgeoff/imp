@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.39.0](https://github.com/zgeoff/imp/compare/v0.38.1...v0.39.0) (2026-10-07)
+
+### Features
+
+- **broker:** add a refreshing oauth secret kind ([#235](https://github.com/zgeoff/imp/issues/235))
+  ([f625b1a](https://github.com/zgeoff/imp/commit/f625b1a6ffd10f5e1c023a8cb40555119788399a))
+
 ## [0.38.1](https://github.com/zgeoff/imp/compare/v0.38.0...v0.38.1) (2026-10-06)
 
 ### Bug Fixes
