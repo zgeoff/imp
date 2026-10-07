@@ -1,34 +1,26 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmod, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { MissingDockerfileError, listContextEntries } from './pack-build-context';
+import { createStubTree } from './test-utils/create-stub-tree';
 
-// a directory with these files (relative path → content), removed on dispose
-function createContext(files: Readonly<Record<string, string>>) {
-  const root = mkdtempSync(join(tmpdir(), 'imp-context-'));
+async function setupTest() {
+  await using stack = new AsyncDisposableStack();
 
-  for (const [path, content] of Object.entries(files)) {
-    mkdirSync(dirname(join(root, path)), { recursive: true });
-    writeFileSync(join(root, path), content);
-  }
+  const root = await mkdtemp(join(tmpdir(), 'imp-context-'));
 
-  return {
-    root,
-    [Symbol.dispose]: () => {
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
-}
+  stack.defer(() => rm(root, { recursive: true, force: true }));
 
-async function listNames(root: string, dockerfile = 'Dockerfile'): Promise<string[]> {
-  const entries = await listContextEntries(root, dockerfile);
+  const owned = stack.move();
 
-  return entries.map((entry) => entry.name);
+  return { root, [Symbol.asyncDispose]: () => owned.disposeAsync() };
 }
 
 test('it leaves out what .dockerignore matches, with docker’s rules', async () => {
-  using ctx = createContext({
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, {
     Dockerfile: 'FROM scratch',
     '.dockerignore': '*.log\n!keep.log\nnode_modules\nbuild/**\n!build/keep/**\n',
     'app.js': '',
@@ -40,9 +32,9 @@ test('it leaves out what .dockerignore matches, with docker’s rules', async ()
     'build/keep/k.txt': '',
   });
 
-  const names = await listNames(ctx.root);
+  const entries = await listContextEntries(ctx.root, 'Dockerfile');
 
-  expect(names).toEqual([
+  expect(entries.map((entry) => entry.name)).toStrictEqual([
     '.dockerignore',
     'Dockerfile',
     'app.js',
@@ -55,20 +47,24 @@ test('it leaves out what .dockerignore matches, with docker’s rules', async ()
   ]);
 });
 
-test('the Dockerfile goes even when the ignore file matches it', async () => {
-  using ctx = createContext({
+test('it keeps the Dockerfile when the ignore file matches it', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, {
     'docker/Dockerfile': 'FROM scratch',
     '.dockerignore': '*\n',
     'app.js': '',
   });
 
-  const names = await listNames(ctx.root, './docker/Dockerfile');
+  const entries = await listContextEntries(ctx.root, './docker/Dockerfile');
 
-  expect(names).toEqual(['docker', 'docker/Dockerfile']);
+  expect(entries.map((entry) => entry.name)).toStrictEqual(['docker', 'docker/Dockerfile']);
 });
 
-test('<Dockerfile>.dockerignore wins, and .dockerignore is then an ordinary file', async () => {
-  using ctx = createContext({
+test('it applies <Dockerfile>.dockerignore in place of .dockerignore', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, {
     'web.Dockerfile': 'FROM scratch',
     'web.Dockerfile.dockerignore': 'secret\n',
     '.dockerignore': 'app.js\n',
@@ -76,61 +72,111 @@ test('<Dockerfile>.dockerignore wins, and .dockerignore is then an ordinary file
     secret: '',
   });
 
-  const names = await listNames(ctx.root, 'web.Dockerfile');
+  const entries = await listContextEntries(ctx.root, 'web.Dockerfile');
 
-  expect(names).toEqual([
+  expect(entries.map((entry) => entry.name)).toStrictEqual([
     '.dockerignore',
     'app.js',
     'web.Dockerfile',
     'web.Dockerfile.dockerignore',
   ]);
-
-  writeFileSync(join(ctx.root, 'web.Dockerfile.dockerignore'), '.dockerignore\n*.dockerignore\n');
-
-  const without = await listNames(ctx.root, 'web.Dockerfile');
-
-  expect(without).toEqual(['app.js', 'secret', 'web.Dockerfile']);
 });
 
-test('symlinks stay links and modes keep their exec bits', async () => {
-  using ctx = createContext({ Dockerfile: 'FROM scratch', 'run.sh': '#!/bin/sh\n' });
+test('it leaves out .dockerignore as an ordinary file under <Dockerfile>.dockerignore', async () => {
+  await using ctx = await setupTest();
 
-  chmodSync(join(ctx.root, 'run.sh'), 0o755);
-  symlinkSync('run.sh', join(ctx.root, 'start'));
+  await createStubTree(ctx.root, {
+    'web.Dockerfile': 'FROM scratch',
+    'web.Dockerfile.dockerignore': '.dockerignore\n*.dockerignore\n',
+    '.dockerignore': 'app.js\n',
+    'app.js': '',
+    secret: '',
+  });
 
-  const entries = await listContextEntries(ctx.root, 'Dockerfile');
+  const entries = await listContextEntries(ctx.root, 'web.Dockerfile');
 
-  const script = entries.find((entry) => entry.name === 'run.sh');
-  const link = entries.find((entry) => entry.name === 'start');
-
-  expect(script?.mode).toBe(0o755);
-  expect(link?.kind).toBe('symlink');
+  expect(entries.map((entry) => entry.name)).toStrictEqual(['app.js', 'secret', 'web.Dockerfile']);
 });
 
-test('a missing Dockerfile is a MissingDockerfileError', async () => {
-  using ctx = createContext({ 'app.js': '' });
+test('it lists a symlink as a link and a file with its exec bits', async () => {
+  await using ctx = await setupTest();
 
-  const failure = await listContextEntries(ctx.root, 'Dockerfile').catch((error: unknown) => error);
+  await createStubTree(ctx.root, { Dockerfile: 'FROM scratch', 'run.sh': '#!/bin/sh\n' });
+  await chmod(join(ctx.root, 'run.sh'), 0o755);
+  await symlink('run.sh', join(ctx.root, 'start'));
 
-  expect(failure).toBeInstanceOf(MissingDockerfileError);
-  expect(String(failure)).toContain('there is no Dockerfile');
+  const entries: unknown = await listContextEntries(ctx.root, 'Dockerfile');
+
+  expect(entries).toStrictEqual([
+    {
+      path: join(ctx.root, 'Dockerfile'),
+      name: 'Dockerfile',
+      kind: 'file',
+      size: 12,
+      mode: expect.any(Number) as unknown,
+      mtimeMs: expect.any(Number) as unknown,
+    },
+    {
+      path: join(ctx.root, 'run.sh'),
+      name: 'run.sh',
+      kind: 'file',
+      size: 10,
+      mode: 0o755,
+      mtimeMs: expect.any(Number) as unknown,
+    },
+    {
+      path: join(ctx.root, 'start'),
+      name: 'start',
+      kind: 'symlink',
+      size: 6,
+      mode: 0o777,
+      mtimeMs: expect.any(Number) as unknown,
+    },
+  ]);
 });
 
-test('a lowercase dockerfile stands in for a missing Dockerfile, with its own ignore file', async () => {
-  using ctx = createContext({
+test('it rejects a context with no Dockerfile', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, { 'app.js': '' });
+
+  expect(listContextEntries(ctx.root, 'Dockerfile')).rejects.toThrowWithMessage(
+    MissingDockerfileError,
+    `there is no Dockerfile in ${ctx.root}`,
+  );
+});
+
+test('it lists a lowercase dockerfile in place of a missing Dockerfile, with its own ignore file', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, {
     dockerfile: 'FROM scratch',
     'dockerfile.dockerignore': '*\n',
     '.dockerignore': '',
     'app.js': '',
   });
 
-  using both = createContext({ Dockerfile: 'FROM scratch', dockerfile: 'FROM scratch' });
+  const entries = await listContextEntries(ctx.root, 'Dockerfile');
 
-  const lower = await listNames(ctx.root);
-  const dotted = await listNames(ctx.root, './Dockerfile');
-  const upper = await listNames(both.root);
+  expect(entries.map((entry) => entry.name)).toStrictEqual(['dockerfile']);
+});
 
-  expect(lower).toEqual(['dockerfile']);
-  expect(dotted).toEqual(['dockerfile']);
-  expect(upper).toEqual(['Dockerfile', 'dockerfile']);
+test('it lists a lowercase dockerfile in place of a missing ./Dockerfile', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, { dockerfile: 'FROM scratch', 'app.js': '' });
+
+  const entries = await listContextEntries(ctx.root, './Dockerfile');
+
+  expect(entries.map((entry) => entry.name)).toStrictEqual(['app.js', 'dockerfile']);
+});
+
+test('it lists both Dockerfile and dockerfile when the context has both', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, { Dockerfile: 'FROM scratch', dockerfile: 'FROM scratch' });
+
+  const entries = await listContextEntries(ctx.root, 'Dockerfile');
+
+  expect(entries.map((entry) => entry.name)).toStrictEqual(['Dockerfile', 'dockerfile']);
 });
