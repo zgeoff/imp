@@ -176,6 +176,27 @@ test('it lists a lowercase dockerfile in place of a missing ./Dockerfile', async
   expect(entries.map((entry) => entry.name)).toStrictEqual(['app.js', 'dockerfile']);
 });
 
+test('it applies dockerfile.dockerignore for a lowercase dockerfile in place of a missing ./Dockerfile', async () => {
+  await using ctx = await setupTest();
+
+  await createStubTree(ctx.root, {
+    dockerfile: 'FROM scratch',
+    'dockerfile.dockerignore': 'app.js\n',
+    '.dockerignore': '',
+    'app.js': '',
+    'keep.js': '',
+  });
+
+  const entries = await listContextEntries(ctx.root, './Dockerfile');
+
+  expect(entries.map((entry) => entry.name)).toStrictEqual([
+    '.dockerignore',
+    'dockerfile',
+    'dockerfile.dockerignore',
+    'keep.js',
+  ]);
+});
+
 test('it lists both Dockerfile and dockerfile when the context has both', async () => {
   await using ctx = await setupTest();
 

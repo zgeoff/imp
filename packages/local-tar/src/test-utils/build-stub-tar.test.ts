@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildStubTar } from './build-stub-tar';
-import { readTarEntries } from './read-tar-entries';
+import { parseTarEntries } from './parse-tar-entries';
 
 test('it packs each entry in order with its header and content', async () => {
   const bytes = await buildStubTar([
@@ -8,7 +8,7 @@ test('it packs each entry in order with its header and content', async () => {
     { name: 'app/main.js', content: 'x', mode: 0o755, mtime: new Date(1_700_000_000_000) },
   ]);
 
-  const entries = await readTarEntries(bytes);
+  const entries = await parseTarEntries(bytes);
 
   expect(entries).toStrictEqual([
     {

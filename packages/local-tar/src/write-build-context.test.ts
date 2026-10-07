@@ -6,7 +6,7 @@ import { gzipSync } from 'node:zlib';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { $ } from 'bun';
 import { buildStubTar } from './test-utils/build-stub-tar';
-import { readTarEntries } from './test-utils/read-tar-entries';
+import { parseTarEntries } from './test-utils/parse-tar-entries';
 import {
   BuildContextError,
   listDockerfileCandidates,
@@ -365,7 +365,12 @@ test('#writeBuildContext writes the files, directories, symlinks and long names 
   await writeBuildContext(input, output, checked, checked.dockerfile, 1024);
 
   const writtenBytes = await readFile(output);
-  const written = await readTarEntries(writtenBytes);
+  const written = await parseTarEntries(writtenBytes);
+
+  expect(checked).toStrictEqual({
+    dockerfilePath: 'Dockerfile',
+    dockerfile: 'FROM busybox:1.37\n',
+  });
 
   expect(
     written.map((entry) => [
@@ -405,7 +410,7 @@ test('#writeBuildContext keeps the permission bits and cuts the mtime to whole s
   await writeBuildContext(input, output, checked, checked.dockerfile, 1024);
 
   const writtenBytes = await readFile(output);
-  const written = await readTarEntries(writtenBytes);
+  const written = await parseTarEntries(writtenBytes);
 
   expect(written.map((entry) => [entry.header.mode, entry.header.mtime])).toStrictEqual([
     [0o4755, new Date(1_700_000_000_000)],
@@ -431,7 +436,12 @@ test('#writeBuildContext puts the given text in place of the Dockerfile the chec
   await writeBuildContext(input, output, checked, 'FROM busybox@sha256:aaaa\n', 1024);
 
   const writtenBytes = await readFile(output);
-  const written = await readTarEntries(writtenBytes);
+  const written = await parseTarEntries(writtenBytes);
+
+  expect(checked).toStrictEqual({
+    dockerfilePath: 'dockerfile',
+    dockerfile: 'FROM busybox:1.37\n',
+  });
 
   expect(written.map((entry) => [entry.header.name, entry.content])).toStrictEqual([
     ['dockerfile', 'FROM busybox@sha256:aaaa\n'],
@@ -457,7 +467,7 @@ test('#writeBuildContext drops a user xattr', async () => {
   await writeBuildContext(input, output, checked, checked.dockerfile, 1024);
 
   const writtenBytes = await readFile(output);
-  const written = await readTarEntries(writtenBytes);
+  const written = await parseTarEntries(writtenBytes);
 
   expect(written.map((entry) => [entry.header.name, entry.header.pax])).toStrictEqual([
     ['Dockerfile', null],

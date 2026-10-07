@@ -10,7 +10,7 @@ import {
   writeLocalEntries,
 } from './pack-local-path';
 import { createStubTree } from './test-utils/create-stub-tree';
-import { readTarEntries } from './test-utils/read-tar-entries';
+import { parseTarEntries } from './test-utils/parse-tar-entries';
 
 async function setupTest() {
   await using stack = new AsyncDisposableStack();
@@ -176,7 +176,7 @@ test('#writeLocalEntries writes a tar of the directories, files and symlinks', a
     () => {},
   );
 
-  const written = await readTarEntries(new Uint8Array(Bun.concatArrayBuffers(chunks)));
+  const written = await parseTarEntries(new Uint8Array(Bun.concatArrayBuffers(chunks)));
 
   expect(
     written.map((entry) => [
@@ -239,7 +239,7 @@ test('#writeLocalEntries warns about and leaves out an entry that is not a file,
     },
   );
 
-  const written = await readTarEntries(new Uint8Array(Bun.concatArrayBuffers(chunks)));
+  const written = await parseTarEntries(new Uint8Array(Bun.concatArrayBuffers(chunks)));
 
   expect(warnings).toStrictEqual([
     `${join(ctx.root, 'top/pipe')}: not a file, directory or symlink; left out`,

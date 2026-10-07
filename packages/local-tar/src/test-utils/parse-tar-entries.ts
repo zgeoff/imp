@@ -16,7 +16,7 @@ export interface TarEntry {
 }
 
 // Every entry of the tar in these bytes, in order, with its data.
-export async function readTarEntries(bytes: Uint8Array): Promise<TarEntry[]> {
+export async function parseTarEntries(bytes: Uint8Array): Promise<TarEntry[]> {
   const extract = tar.extract();
   const entries: TarEntry[] = [];
 
