@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
 import { buildStubCpuCgroups } from './build-stub-cpu-cgroups';
 
 test('it hands back the procs path of the cgroup an enforced setup makes', () => {
@@ -59,14 +58,10 @@ test('it reports the memory controller off when memory is not asked for', () => 
   expect(stub.cgroups.isMemoryEnforced).toBeFalse();
 });
 
-test('it records every change in the order impd asks for it', async () => {
+test('it records every change to a cgroup in the order impd asks for it', async () => {
   const stub = buildStubCpuCgroups();
-  const made = stub.cgroups.setup('imp-a', { limit: 1, weight: 100 }, 512);
 
-  invariant(made);
-
-  made.liftLimit();
-  made.applyLimit();
+  stub.cgroups.setup('imp-a', { limit: 1, weight: 100 }, 512);
   stub.cgroups.apply('imp-a', { limit: 2, weight: 50 });
   stub.cgroups.setGuestMib('imp-a', 1024);
   stub.cgroups.kill('imp-a');
@@ -75,13 +70,25 @@ test('it records every change in the order impd asks for it', async () => {
 
   expect(stub.calls).toStrictEqual([
     'setup imp-a 1/100',
-    'lift imp-a',
-    'limit imp-a',
     'apply imp-a 2/50',
     'memory imp-a 1024',
     'kill imp-a',
     'remove imp-a',
   ]);
+});
+
+test('it records a lift of the limit through the cgroup setup hands back', () => {
+  const stub = buildStubCpuCgroups();
+
+  stub.cgroups.setup('imp-a', { limit: 1, weight: 100 }, 512)?.liftLimit();
+  expect(stub.calls).toStrictEqual(['setup imp-a 1/100', 'lift imp-a']);
+});
+
+test('it records the limit put back through the cgroup setup hands back', () => {
+  const stub = buildStubCpuCgroups();
+
+  stub.cgroups.setup('imp-a', { limit: 1, weight: 100 }, 512)?.applyLimit();
+  expect(stub.calls).toStrictEqual(['setup imp-a 1/100', 'limit imp-a']);
 });
 
 test('it keeps new settings and the guest size on a cgroup a VM runs in', () => {

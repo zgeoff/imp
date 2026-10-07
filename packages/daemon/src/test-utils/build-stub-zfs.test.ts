@@ -1084,17 +1084,20 @@ test('#buildStubZfs commits a receive once the end record is in, though the inpu
 test('#buildStubZfs holds a matching command until it is released', async () => {
   const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
   const release = fake.blockBefore((command) => command.startsWith('zfs create'));
-  const held = fake.run(['zfs', 'create', 'tank/imp/a']);
+  const seen = { whileHeld: [] as string[] };
 
-  await fake.run(['zfs', 'version']);
+  await Promise.all([
+    fake.run(['zfs', 'create', 'tank/imp/a']),
+    (async () => {
+      await fake.run(['zfs', 'version']);
 
-  const whileHeld = fake.listDatasets();
+      seen.whileHeld = fake.listDatasets();
 
-  release();
+      release();
+    })(),
+  ]);
 
-  await held;
-
-  expect(whileHeld).toStrictEqual(['tank/imp']);
+  expect(seen.whileHeld).toStrictEqual(['tank/imp']);
   expect(fake.listDatasets()).toStrictEqual(['tank/imp', 'tank/imp/a']);
 });
 
