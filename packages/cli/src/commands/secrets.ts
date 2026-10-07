@@ -1,5 +1,5 @@
-import { BrokerRuleSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, SecretKind } from '@imp/api';
+import { BrokerRuleSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
+import type { BrokerRule, OAuthConfig, Secret, SecretKind } from '@imp/api';
 import { defineCommand } from '../define-command';
 import { formatApiCalls, formatAudit, formatOutput, formatSecrets } from '../format-output';
 import { readToken } from '../read-token';
@@ -17,21 +17,29 @@ interface CustomRuleArgs {
   readonly user?: string | undefined;
 }
 
+interface OAuthArgs {
+  readonly tokenUrl?: string | undefined;
+  readonly clientId?: string | undefined;
+  readonly tokenFormat?: string | undefined;
+}
+
 // --hosts a.example.com,b.example.com --header x-api-key --scheme raw: one
-// rule per host, all with the same header
+// rule per host, all with the same header; kinds custom and oauth
 function buildCustomRules(kind: SecretKind, args: CustomRuleArgs): BrokerRule[] | undefined {
   const given = [args.hosts, args.header, args.scheme, args.user].some((arg) => arg !== undefined);
 
-  if (kind !== 'custom') {
+  if (kind !== 'custom' && kind !== 'oauth') {
     if (given) {
-      throw new UsageError('--hosts, --header, --scheme and --user are for --kind custom');
+      throw new UsageError(
+        '--hosts, --header, --scheme and --user are for --kind custom and --kind oauth',
+      );
     }
 
     return undefined;
   }
 
   if (args.hosts === undefined) {
-    throw new UsageError('--kind custom needs --hosts');
+    throw new UsageError(`--kind ${kind} needs --hosts`);
   }
 
   return args.hosts.split(',').map((host) => {
@@ -48,6 +56,72 @@ function buildCustomRules(kind: SecretKind, args: CustomRuleArgs): BrokerRule[] 
 
     return parsed.data;
   });
+}
+
+// --token-url, --client-id and --token-format: kind oauth only
+function buildOAuthConfig(kind: SecretKind, args: OAuthArgs): OAuthConfig | undefined {
+  const given = [args.tokenUrl, args.clientId, args.tokenFormat].some((arg) => arg !== undefined);
+
+  if (kind !== 'oauth') {
+    if (given) {
+      throw new UsageError('--token-url, --client-id and --token-format are for --kind oauth');
+    }
+
+    return undefined;
+  }
+
+  if (args.tokenUrl === undefined || args.clientId === undefined) {
+    throw new UsageError('--kind oauth needs --token-url and --client-id');
+  }
+
+  const parsed = OAuthConfigSchema.safeParse({
+    tokenUrl: args.tokenUrl,
+    clientId: args.clientId,
+    ...(args.tokenFormat !== undefined && { tokenFormat: args.tokenFormat }),
+  });
+
+  if (!parsed.success) {
+    throw new UsageError(parsed.error.issues.map((issue) => issue.message).join('; '));
+  }
+
+  return parsed.data;
+}
+
+// what an oauth secret's first refresh came to, for stderr; never a token
+function formatOAuthOutcome(secret: Readonly<Secret>): string | null {
+  const oauth = secret.oauth;
+
+  if (oauth === undefined) {
+    return null;
+  }
+
+  if (oauth.status === 'ready') {
+    const until =
+      oauth.expiresAt === null ? '' : `, access token valid until ${oauth.expiresAt.toISOString()}`;
+
+    return `imp: ${secret.name} signed in${until}`;
+  }
+
+  const reason = oauth.error === null ? '' : `: ${oauth.error}`;
+
+  return `imp: ${secret.name} is ${oauth.status}${reason}`;
+}
+
+// why a refresh left the secret not ready, or null when it is
+function formatRefreshFailure(secret: Readonly<Secret>): string | null {
+  const oauth = secret.oauth;
+
+  if (oauth === undefined) {
+    return `${secret.name} is not an oauth secret`;
+  }
+
+  if (oauth.status === 'ready') {
+    return null;
+  }
+
+  const reason = oauth.error === null ? '' : `: ${oauth.error}`;
+
+  return `${secret.name} is ${oauth.status}${reason}`;
 }
 
 function parseKind(kind: string): SecretKind {
@@ -69,15 +143,27 @@ const addCommand = defineCommand({
     name: secretArg,
     kind: {
       type: 'string',
-      description: 'github, anthropic, npm, or custom with --hosts',
+      description: 'github, anthropic, npm, custom or oauth (both with --hosts)',
       required: true,
     },
 
     // not --host, which names the impd to call
-    hosts: { type: 'string', description: 'custom: the hosts it is for, comma-separated' },
-    header: { type: 'string', description: 'custom: the header to set (default authorization)' },
-    scheme: { type: 'string', description: 'custom: bearer (default), basic or raw' },
-    user: { type: 'string', description: 'custom: the user name for basic' },
+    hosts: {
+      type: 'string',
+      description: 'custom, oauth: the hosts it is for, comma-separated',
+    },
+    header: {
+      type: 'string',
+      description: 'custom, oauth: the header to set (default authorization)',
+    },
+    scheme: { type: 'string', description: 'custom, oauth: bearer (default), basic or raw' },
+    user: { type: 'string', description: 'custom, oauth: the user name for basic' },
+    'token-url': { type: 'string', description: 'oauth: the https token endpoint' },
+    'client-id': { type: 'string', description: 'oauth: the client the refresh token is for' },
+    'token-format': {
+      type: 'string',
+      description: 'oauth: form (default) or json, the token request body',
+    },
     replace: { type: 'boolean', description: 'replace the value of a secret by that name' },
     rebind: {
       type: 'boolean',
@@ -89,6 +175,12 @@ const addCommand = defineCommand({
     runAction(context.host, async (client) => {
       const kind = parseKind(context.args.kind);
       const rules = buildCustomRules(kind, context.args);
+
+      const oauth = buildOAuthConfig(kind, {
+        tokenUrl: context.args['token-url'],
+        clientId: context.args['client-id'],
+        tokenFormat: context.args['token-format'],
+      });
 
       if (context.args.rebind === true && context.args.replace !== true) {
         throw new UsageError('--rebind needs --replace');
@@ -103,7 +195,14 @@ const addCommand = defineCommand({
         );
       }
 
-      const value = await readToken(`value for ${context.args.name}: `);
+      // an older impd would refuse the kind, or drop the config unread
+      if (kind === 'oauth') {
+        await requireFeature(client, 'oauthSecrets', 'refuse the oauth kind');
+      }
+
+      const prompt = kind === 'oauth' ? 'refresh token' : 'value';
+
+      const value = await readToken(`${prompt} for ${context.args.name}: `);
 
       if (value === '') {
         throw new UsageError('no value given; nothing stored');
@@ -114,6 +213,7 @@ const addCommand = defineCommand({
         kind,
         value,
         ...(rules !== undefined && { rules }),
+        ...(oauth !== undefined && { oauth }),
         ...(context.args.replace === true && { replace: true }),
         ...(context.args.rebind === true && { rebind: true }),
       });
@@ -124,7 +224,35 @@ const addCommand = defineCommand({
         );
       }
 
+      const outcome = formatOAuthOutcome(secret);
+
+      if (outcome !== null) {
+        console.error(outcome);
+      }
+
       console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));
+    }),
+});
+
+const refreshCommand = defineCommand({
+  meta: {
+    name: 'refresh',
+    description: 'Refresh an oauth secret now; exits 1 unless it is ready after it',
+  },
+  args: { name: secretArg, json: jsonArg },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      await requireFeature(client, 'oauthSecrets', 'not know the command');
+
+      const secret = await client.secrets.refresh({ name: context.args.name });
+
+      console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));
+
+      const failure = formatRefreshFailure(secret);
+
+      if (failure !== null) {
+        throw new Error(failure);
+      }
     }),
 });
 
@@ -150,7 +278,7 @@ const rmCommand = defineCommand({
 
 export const secretCommand = defineCommand({
   meta: { name: 'secret', description: 'Manage the secrets the credential broker adds' },
-  subCommands: { add: addCommand, ls: lsCommand, rm: rmCommand },
+  subCommands: { add: addCommand, refresh: refreshCommand, ls: lsCommand, rm: rmCommand },
 });
 
 export const grantCommand = defineCommand({

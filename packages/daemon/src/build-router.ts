@@ -704,8 +704,12 @@ export function buildRouter(deps: RouterDeps) {
           rules: secret.rules,
           imps: secret.imps.filter((name) => isImpAllowed(patterns, name)),
           createdAt: secret.createdAt,
+          oauth: secret.oauth,
         }));
       }),
+      refresh: os.secrets.refresh.handler((context) =>
+        deps.broker.refreshSecret(context.input.name),
+      ),
       delete: os.secrets.delete.handler(async (context) => {
         await deps.broker.deleteSecret(context.input.name);
 
@@ -946,6 +950,7 @@ const SYSTEM_FEATURES = {
   secretFilesGc: true,
   sessionLog: true,
   publicEgress: true,
+  oauthSecrets: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second

@@ -132,3 +132,29 @@ test('the grantable migration gives each secret its own generation and its old f
 
   await db.destroy();
 });
+
+test('the oauth migration leaves existing secrets without an oauth config', async () => {
+  const db = openUnmigrated();
+
+  const migrator = new Migrator({
+    db,
+    provider: { getMigrations: () => Promise.resolve(MIGRATIONS) },
+  });
+
+  await migrator.migrateTo('025_add_api_audit_detail');
+
+  const rules = JSON.stringify([
+    { host: 'api.example.com', header: 'authorization', scheme: 'bearer' },
+  ]);
+
+  await sql`INSERT INTO secrets (name, kind, rules, created_at, generation, value_file)
+    VALUES ('gh', 'custom', ${rules}, 0, 'g', 'gh.a1')`.execute(db);
+
+  await migrator.migrateToLatest();
+
+  const rows = await db.selectFrom('secrets').select(['name', 'oauth']).execute();
+
+  expect(rows).toEqual([{ name: 'gh', oauth: null }]);
+
+  await db.destroy();
+});

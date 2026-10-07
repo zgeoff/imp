@@ -170,13 +170,21 @@ export {
   AuditEntrySchema,
   BrokerHostSchema,
   BrokerRuleSchema,
+  OAuthConfigSchema,
   SecretKindSchema,
   SecretNameSchema,
   SecretSchema,
   SecretValueSchema,
 } from './secret-schema';
 
-export type { AuditEntry, BrokerRule, Secret, SecretAdded, SecretKind } from './secret-schema';
+export type {
+  AuditEntry,
+  BrokerRule,
+  OAuthConfig,
+  Secret,
+  SecretAdded,
+  SecretKind,
+} from './secret-schema';
 
 export {
   ServiceDefSchema,

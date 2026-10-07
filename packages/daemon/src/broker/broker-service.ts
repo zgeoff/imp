@@ -5,6 +5,7 @@ import type {
   BrokerRule,
   EgressMode,
   GrantNotCopied,
+  OAuthConfig,
   Secret,
   SecretAdded,
   SecretKind,
@@ -28,6 +29,7 @@ import {
   createForkGrants,
   createSecret,
   findBrokerPeer,
+  findSecret,
   listAllGrantedRules,
   listFileRemovals,
   listGrantNames,
@@ -79,6 +81,9 @@ import {
   runBundleInstall,
 } from './guest-trust';
 import type { BrokerExecEnv, InstallBundle, TrustedImp } from './guest-trust';
+import { createOAuthRefresher } from './oauth-refresher';
+import type { OAuthFetch } from './oauth-refresher';
+import { buildPendingState, formatOAuthState, parseOAuthState, readIdClaims } from './oauth-state';
 import { buildValueFile, createSecretFiles } from './secret-files';
 import type { SecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
@@ -94,6 +99,9 @@ interface AddSecretInput {
   readonly kind: SecretKind;
   readonly value: string;
   readonly rules?: readonly BrokerRule[] | undefined;
+
+  // required for kind oauth, whose value is then the refresh token
+  readonly oauth?: OAuthConfig | undefined;
   readonly replace?: boolean | undefined;
   readonly rebind?: boolean | undefined;
 }
@@ -115,6 +123,9 @@ interface ForkEnd {
 export interface Broker {
   readonly addSecret: (input: AddSecretInput) => Promise<SecretAdded>;
   readonly listSecrets: () => Promise<Secret[]>;
+
+  // forces one refresh of an oauth secret and answers after it ends
+  readonly refreshSecret: (name: string) => Promise<Secret>;
   readonly deleteSecret: (name: string) => Promise<void>;
 
   // with an authority, the token must still exist and the secret still be
@@ -175,6 +186,11 @@ export interface BrokerDeps {
   // tests stand in for the guest install and for the network
   readonly installBundle?: InstallBundle;
   readonly fetch?: UpstreamFetch;
+  readonly oauthFetch?: OAuthFetch;
+  readonly now?: () => number;
+
+  // false in tests that run no refresh timer
+  readonly runOAuthTimer?: boolean;
   readonly resolveTunnelTarget?: (host: string, mode: EgressMode) => Promise<string>;
   readonly dialTunnel?: (address: string, port: number) => Socket;
 
@@ -316,7 +332,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
     await deps.afterRuleRead?.();
 
-    const value = granted === undefined ? null : files.read(granted.valueFile);
+    const stored = granted === undefined ? null : files.read(granted.valueFile);
+
+    // an oauth secret's file is its state; the credential is the access token
+    const value =
+      granted?.kind === 'oauth' && stored !== null
+        ? (parseOAuthState(stored)?.accessToken ?? null)
+        : stored;
 
     if (granted === undefined || value === null) {
       return null;
@@ -375,12 +397,37 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
     const imps = listed.find((entry) => entry.secret.name === secret.name)?.imps ?? [];
 
-    return {
+    return buildSecretView(secret, imps);
+  };
+
+  // what the API shows of a secret; for kind oauth, its state from the value
+  // file, with no token in it
+  const buildSecretView = (secret: SecretRecord, imps: readonly string[]): Secret => {
+    const shown: Secret = {
       name: secret.name,
       kind: secret.kind,
       rules: secret.rules,
       imps,
       createdAt: secret.createdAt,
+    };
+
+    if (secret.kind !== 'oauth' || secret.oauth === null) {
+      return shown;
+    }
+
+    const text = files.read(secret.valueFile);
+    const stored = text === null ? null : parseOAuthState(text);
+
+    return {
+      ...shown,
+      oauth: {
+        ...secret.oauth,
+        status: stored?.status ?? 'needs_login',
+        expiresAt: toDate(stored?.expiresAt),
+        refreshedAt: toDate(stored?.refreshedAt),
+        error: stored === null ? 'value file missing or unreadable' : stored.error,
+        idClaims: readIdClaims(stored?.idToken ?? null),
+      },
     };
   };
 
@@ -430,6 +477,19 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   };
 
+  const refresher = createOAuthRefresher({
+    db,
+    files,
+    log,
+    resolveUpstream,
+    ...(deps.oauthFetch !== undefined && { fetch: deps.oauthFetch }),
+    ...(deps.now !== undefined && { now: deps.now }),
+  });
+
+  if (deps.runOAuthTimer !== false) {
+    refresher.start();
+  }
+
   // never rejects: it runs from a timer and from imp changes
   const applyGrants = async (): Promise<void> => {
     try {
@@ -459,22 +519,53 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw error;
       }
 
-      const valueFile = buildValueFile(input.name);
-
-      // the value first, so no row ever names a file that is not there
-      files.write(valueFile, input.value);
-
-      const saved = await writeSecretRow(
-        { name: input.name, kind: input.kind, rules, valueFile },
-        input,
-      );
-
-      if (saved.oldValueFile !== null) {
-        await removeDisplacedFile(saved.oldValueFile);
-        await applyGrants();
+      if (input.kind === 'oauth' && input.oauth === undefined) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: 'kind oauth needs a token URL and a client id',
+        });
       }
 
-      const shown = await toApiSecret(saved.secret);
+      if (input.kind !== 'oauth' && input.oauth !== undefined) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `kind ${input.kind} has no token URL or client id; they are for kind oauth`,
+        });
+      }
+
+      const oauth = input.kind === 'oauth' ? (input.oauth ?? null) : null;
+
+      // under the secret's lock, so a replace never lands in the middle of a
+      // refresh, which rewrites the file the row names
+      const saved = await refresher.withLock(input.name, async () => {
+        const valueFile = buildValueFile(input.name);
+
+        const content =
+          input.kind === 'oauth' ? formatOAuthState(buildPendingState(input.value)) : input.value;
+
+        // the value first, so no row ever names a file that is not there
+        files.write(valueFile, content);
+
+        const written = await writeSecretRow(
+          { name: input.name, kind: input.kind, rules, oauth, valueFile },
+          input,
+        );
+
+        if (written.oldValueFile !== null) {
+          await removeDisplacedFile(written.oldValueFile);
+          await applyGrants();
+        }
+
+        return written;
+      });
+
+      // Only now, with the row committed: a refresh before it could rotate
+      // the token, and a failed commit removes the file that holds the result.
+      // A first refresh that fails still answers; the secret shows why.
+      if (input.kind === 'oauth') {
+        await refresher.refresh(input.name, true);
+      }
+
+      const latest = await findSecret(db, input.name);
+      const shown = await toApiSecret(latest ?? saved.secret);
 
       return { ...shown, droppedGrants: saved.droppedGrants };
     },
@@ -482,24 +573,42 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     listSecrets: async () => {
       const listed = await listSecrets(db);
 
-      return listed.map((entry) => ({
-        name: entry.secret.name,
-        kind: entry.secret.kind,
-        rules: entry.secret.rules,
-        imps: entry.imps,
-        createdAt: entry.secret.createdAt,
-      }));
+      return listed.map((entry) => buildSecretView(entry.secret, entry.imps));
     },
 
-    deleteSecret: async (name) => {
-      const valueFile = await removeSecret(db, name);
+    refreshSecret: async (name) => {
+      const secret = await findSecret(db, name);
 
-      if (valueFile === null) {
+      if (secret === undefined) {
         throw buildNotFoundError('secret', name);
       }
 
-      await removeDisplacedFile(valueFile);
-      await applyGrants();
+      if (secret.kind !== 'oauth') {
+        throw new ORPCError('BAD_REQUEST', { message: `secret ${name} is not an oauth secret` });
+      }
+
+      await refresher.refresh(name, true);
+
+      const current = await findSecret(db, name);
+
+      if (current === undefined) {
+        throw buildNotFoundError('secret', name);
+      }
+
+      return toApiSecret(current);
+    },
+
+    deleteSecret: async (name) => {
+      await refresher.withLock(name, async () => {
+        const valueFile = await removeSecret(db, name);
+
+        if (valueFile === null) {
+          throw buildNotFoundError('secret', name);
+        }
+
+        await removeDisplacedFile(valueFile);
+        await applyGrants();
+      });
     },
 
     addGrant: async (impName, secretName, authority = null) => {
@@ -655,10 +764,15 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     stop: async () => {
       unwatch();
 
+      await refresher.stop();
       await state.front?.stop();
       await terminators.stop();
     },
   };
+}
+
+function toDate(ms: number | null | undefined): Date | null {
+  return ms === null || ms === undefined ? null : new Date(ms);
 }
 
 // Removes each file a committed delete or replace displaced and impd stopped

@@ -10,6 +10,7 @@ const FEATURES = {
   sessionLog: 'has no session logs',
   tokenUpdate: 'is older than 0.34.0',
   publicEgress: 'is older than 0.35.0',
+  oauthSecrets: 'has no oauth secrets',
 } as const;
 
 type Feature = keyof typeof FEATURES;

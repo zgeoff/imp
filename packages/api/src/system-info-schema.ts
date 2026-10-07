@@ -187,6 +187,9 @@ export const SystemInfoSchema = z.object({
 
       // the `public` egress policy; an older impd refuses the mode
       publicEgress: z.boolean().optional(),
+
+      // secret kind `oauth` and `secrets.refresh`; an older impd refuses the kind
+      oauthSecrets: z.boolean().optional(),
     })
     .optional(),
 });

@@ -49,14 +49,20 @@ const OLD_INFO = { version: '0.26.0', features: { sessionOffsets: true, leases: 
 
 // An impd that answers system.info with `info`, or fails it when `info` is
 // 'fail', and records every call
-function startImpd(info: unknown) {
+function startImpd(info: unknown, extra: Readonly<Record<string, unknown>> = {}) {
   const calls: string[] = [];
+
+  const datePaths: Readonly<Record<string, readonly (readonly string[])[]>> = {
+    'secrets/add': [['createdAt'], ['oauth', 'expiresAt']],
+    'secrets/refresh': [['createdAt'], ['oauth', 'expiresAt']],
+  };
 
   const answers: Readonly<Record<string, unknown>> = {
     'system/info': info,
     'tokens/create': MADE_TOKEN,
     'tokens/update': MADE_TOKEN.token,
     'secrets/add': SECRET,
+    ...extra,
     'system/copyDatabase': {
       path: '/var/lib/imp/db-copies/before-upgrade.sqlite',
       sizeBytes: 4096,
@@ -81,16 +87,38 @@ function startImpd(info: unknown) {
         );
       }
 
-      return Response.json({ json: answers[path] ?? null });
+      // a date travels as an ISO string with a note of its path, as impd sends it
+      const dates = (datePaths[path] ?? []).filter((segments) =>
+        hasString(answers[path], segments),
+      );
+
+      return Response.json({
+        json: answers[path] ?? null,
+        meta: dates.map((segments) => buildDateMeta(segments)),
+      });
     },
   });
 
   return { url: `http://localhost:${String(server.port)}`, server, calls };
 }
 
-function setupTest(info: unknown) {
+function buildDateMeta(segments: readonly string[]): (number | string)[] {
+  return [1, ...segments];
+}
+
+// whether the answer holds a string at the path
+function hasString(answer: unknown, segments: readonly string[]): boolean {
+  const found = segments.reduce<unknown>(
+    (node, key) => (typeof node === 'object' && node !== null ? Reflect.get(node, key) : null),
+    answer,
+  );
+
+  return typeof found === 'string';
+}
+
+function setupTest(info: unknown, extra: Readonly<Record<string, unknown>> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-feature-gates-'));
-  const impd = startImpd(info);
+  const impd = startImpd(info, extra);
 
   const run = async (args: readonly string[], stdin = '') => {
     const child = Bun.spawn(['bun', MAIN, ...args], {
@@ -307,4 +335,125 @@ test('token set checks for tokens.update first, and refuses a bad name before an
   expect([set.code, cleared.code]).toEqual([0, 0]);
   expect(z.object({ name: z.string() }).parse(JSON.parse(set.stdout))).toEqual({ name: 'agent' });
   expect(newer.calls).toEqual(['system/info', 'tokens/update', 'system/info', 'tokens/update']);
+});
+
+const OAUTH_ARGS = [
+  'secret',
+  'add',
+  'codex',
+  '--kind',
+  'oauth',
+  '--hosts',
+  'chatgpt.com',
+  '--token-url',
+  'https://auth.example.com/oauth/token',
+  '--client-id',
+  'fake-client',
+  '--token-format',
+  'json',
+];
+
+function buildOAuthSecret(status: string, error: string | null) {
+  return {
+    ...SECRET,
+    name: 'codex',
+    kind: 'oauth',
+    rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
+    oauth: {
+      tokenUrl: 'https://auth.example.com/oauth/token',
+      clientId: 'fake-client',
+      tokenFormat: 'json',
+      status,
+      expiresAt: status === 'ready' ? '2030-01-01T00:00:00.000Z' : null,
+      refreshedAt: null,
+      error,
+      idClaims: null,
+    },
+  };
+}
+
+test('an oauth secret needs an impd that has them, and says how its sign-in went', async () => {
+  await using older = setupTest(OLD_INFO);
+
+  const refused = await older.run(OAUTH_ARGS, 'fake-refresh\n');
+
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain('this impd has no oauth secrets');
+  expect(older.calls).toEqual(['system/info']);
+
+  const features = { ...NEW_INFO.features, oauthSecrets: true };
+
+  await using ready = setupTest(
+    { ...NEW_INFO, features },
+    { 'secrets/add': buildOAuthSecret('ready', null) },
+  );
+
+  const added = await ready.run(OAUTH_ARGS, 'fake-refresh\n');
+
+  expect(added.code).toBe(0);
+
+  expect(added.stderr).toContain(
+    'imp: codex signed in, access token valid until 2030-01-01T00:00:00.000Z',
+  );
+
+  expect(added.stdout).toContain('ready until 2030-01-01T00:00:00.000Z');
+  expect(ready.calls).toEqual(['system/info', 'secrets/add']);
+
+  await using dead = setupTest(
+    { ...NEW_INFO, features },
+    { 'secrets/add': buildOAuthSecret('needs_login', 'invalid_grant') },
+  );
+
+  const failed = await dead.run(OAUTH_ARGS, 'fake-refresh\n');
+
+  expect(failed.stderr).toContain('imp: codex is needs_login: invalid_grant');
+  expect(failed.stdout).toContain('needs_login (invalid_grant)');
+
+  expect(`${added.stdout}${added.stderr}${failed.stdout}${failed.stderr}`).not.toContain(
+    'fake-refresh',
+  );
+});
+
+test('secret refresh prints the secret and exits 1 unless it is ready', async () => {
+  const features = { ...NEW_INFO.features, oauthSecrets: true };
+
+  await using ready = setupTest(
+    { ...NEW_INFO, features },
+    { 'secrets/refresh': buildOAuthSecret('ready', null) },
+  );
+
+  const good = await ready.run(['secret', 'refresh', 'codex']);
+
+  expect(good.code).toBe(0);
+  expect(good.stdout).toContain('ready until');
+
+  await using pending = setupTest(
+    { ...NEW_INFO, features },
+    { 'secrets/refresh': buildOAuthSecret('pending', 'HTTP 503') },
+  );
+
+  const bad = await pending.run(['secret', 'refresh', 'codex', '--json']);
+
+  expect(bad.code).toBe(1);
+  expect(bad.stderr).toContain('codex is pending: HTTP 503');
+  expect(JSON.parse(bad.stdout)).toMatchObject({ oauth: { status: 'pending' } });
+
+  await using older = setupTest(OLD_INFO);
+
+  const refused = await older.run(['secret', 'refresh', 'codex']);
+
+  expect(refused.code).toBe(1);
+  expect(older.calls).toEqual(['system/info']);
+});
+
+test('secret ls shows a state column, and a dash for other kinds', async () => {
+  await using ctx = setupTest(NEW_INFO, {
+    'secrets/list': [SECRET, buildOAuthSecret('needs_login', 'refresh_token_reused')],
+  });
+
+  const listed = await ctx.run(['secret', 'ls']);
+
+  expect(listed.stdout).toContain('STATE');
+  expect(listed.stdout).toContain('needs_login (refresh_token_reused)');
+  expect(listed.stdout.split('\n')[1]).toMatch(/^gh\s+github\s+-\s/);
 });

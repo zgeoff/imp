@@ -142,11 +142,48 @@ test('secret add takes its value from stdin only, never a flag', async () => {
 
 test('secret add checks the kind and the custom rules before it asks for a value', async () => {
   const cases: readonly (readonly [readonly string[], string])[] = [
-    [['--kind', 'gitlab'], 'imp: --kind must be one of github, anthropic, npm, custom'],
+    [['--kind', 'gitlab'], 'imp: --kind must be one of github, anthropic, npm, custom, oauth'],
     [['--kind', 'custom'], 'imp: --kind custom needs --hosts'],
     [
       ['--kind', 'github', '--hosts', 'api.github.com'],
-      'imp: --hosts, --header, --scheme and --user are for --kind custom',
+      'imp: --hosts, --header, --scheme and --user are for --kind custom and --kind oauth',
+    ],
+    [['--kind', 'oauth'], 'imp: --kind oauth needs --hosts'],
+    [
+      ['--kind', 'oauth', '--hosts', 'api.example.com'],
+      'imp: --kind oauth needs --token-url and --client-id',
+    ],
+    [
+      [
+        '--kind',
+        'oauth',
+        '--hosts',
+        'api.example.com',
+        '--token-url',
+        'http://a.example.com/t',
+        '--client-id',
+        'c',
+      ],
+      'imp: Invalid URL',
+    ],
+    [
+      [
+        '--kind',
+        'oauth',
+        '--hosts',
+        'api.example.com',
+        '--token-url',
+        'https://a.example.com/t',
+        '--client-id',
+        'c',
+        '--token-format',
+        'xml',
+      ],
+      'imp: Invalid option: expected one of "json"|"form"',
+    ],
+    [
+      ['--kind', 'custom', '--hosts', 'api.example.com', '--client-id', 'c'],
+      'imp: --token-url, --client-id and --token-format are for --kind oauth',
     ],
     [
       ['--kind', 'custom', '--hosts', '10.0.0.1'],

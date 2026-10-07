@@ -38,6 +38,7 @@ import {
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
+  OAuthConfigSchema,
   SecretAddedSchema,
   SecretKindSchema,
   SecretNameSchema,
@@ -465,9 +466,9 @@ export const impContract = {
 
   // credentials the broker adds to an imp's requests (docs/guides/connectors.md)
   secrets: {
-    // `replace` swaps the value; other kind or rules is CONFLICT unless
-    // `rebind`, which drops its grants (docs/guides/connectors.md). `rules`
-    // is for kind `custom` only, where it is required
+    // `replace` swaps the value; another kind, rules or oauth config is
+    // CONFLICT unless `rebind`, which drops its grants. `rules`: kinds
+    // `custom` and `oauth`; `oauth`: kind `oauth`, whose value is a refresh token
     add: base
       .input(
         z.object({
@@ -475,6 +476,7 @@ export const impContract = {
           kind: SecretKindSchema,
           value: SecretValueSchema,
           rules: z.array(BrokerRuleSchema).min(1).max(16).optional(),
+          oauth: OAuthConfigSchema.optional(),
           replace: z.boolean().optional(),
           rebind: z.boolean().optional(),
         }),
@@ -482,6 +484,10 @@ export const impContract = {
       .output(SecretAddedSchema),
 
     list: base.output(z.array(SecretSchema)),
+
+    // forces one refresh of an oauth secret now and answers after it ends;
+    // BAD_REQUEST for another kind, NOT_FOUND for no such secret
+    refresh: base.input(z.object({ name: SecretNameSchema })).output(SecretSchema),
 
     // revokes it from every imp
     delete: base.input(z.object({ name: SecretNameSchema })).output(EmptySchema),

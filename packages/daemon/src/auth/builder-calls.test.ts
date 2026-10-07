@@ -16,6 +16,7 @@ const NOT_AN_IMP_CALLS = new Set([
   'images.delete',
   'secrets.add',
   'secrets.delete',
+  'secrets.refresh',
   'networks.create',
   'networks.delete',
   'tokens.create',

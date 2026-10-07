@@ -56,6 +56,7 @@ test('it serves system.info from config and the database', async () => {
       secretFilesGc: true,
       sessionLog: true,
       publicEgress: true,
+      oauthSecrets: true,
     },
     ksm: null,
   });

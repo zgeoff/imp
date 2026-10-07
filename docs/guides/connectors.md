@@ -25,7 +25,8 @@ put secrets into the sandbox as environment variables.
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag.                                                                        |
 | `imp secret add <name> ... --replace` | Replaces the value of a secret that exists, for a rotation. Other hosts or headers need `--rebind` too ([rotate or rebind](#rotate-or-rebind)).                       |
-| `imp secret ls`                       | Lists each secret's kind, hosts and imps. It never shows a value.                                                                                                     |
+| `imp secret ls`                       | Lists each secret's kind, state, hosts and imps. It never shows a value.                                                                                              |
+| `imp secret refresh <name>`           | Refreshes an [oauth secret](#oauth-secrets) now, and exits 1 unless it is ready after it.                                                                             |
 | `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                                                                                       |
 | `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                                                                                          |
 | `imp revoke <imp> <secret>`           | Takes it away. A request under way finishes; every later one fails, on any connection.                                                                                |
@@ -66,8 +67,9 @@ terminator between the revoke and its stop finds no grant and gets a 403
 
 ### Rotate or rebind
 
-A secret's binding is its kind and its rules: hosts, headers, schemes and users. impd compares them
-in host order, so the same rules in another order are the same binding.
+A secret's binding is its kind and its rules: hosts, headers, schemes and users, and for an
+[oauth secret](#oauth-secrets) its token URL, client id and token format. impd compares the rules in
+host order, so the same rules in another order are the same binding.
 
 - `--replace` with the same binding is a rotation. Only the value changes; grants and the
   [grantable lists](./tokens.md#granting-secrets) of tokens keep working.
@@ -90,11 +92,14 @@ fails before it stores anything.
 
 ### Value files
 
-Each value is a file of its own, named `<name>.<random>`, that impd never writes again. The secret's
-row names the file, and a replace or a rebind switches the row to a new one in the transaction that
-changes the rules. A request reads the row and then exactly that file: it gets the old rules with
-the old value, or the new with the new. If the file is gone by then, the request gets no credential
-(a 403); the broker never falls back to another file.
+Each value is a file of its own, named `<name>.<random>`, that impd never writes again, with one
+exception: the file of an [oauth secret](#oauth-secrets) holds its tokens as JSON, and each refresh
+rewrites that same file in place through a temp file, an fsync, a rename and an fsync of the
+directory, so a crash leaves the old state or the new one. The secret's row names the file, and a
+replace or a rebind switches the row to a new one in the transaction that changes the rules. A
+request reads the row and then exactly that file: it gets the old rules with the old value, or the
+new with the new. If the file is gone by then, the request gets no credential (a 403); the broker
+never falls back to another file.
 
 impd removes the file a replace or a delete displaced once the transaction commits, and only that
 file, so a deleted secret's value does not stay on disk. The transaction also records that file, and
@@ -133,10 +138,80 @@ undone ([storage cleanup](./operations.md#storage-cleanup)).
 | `anthropic` | `api.anthropic.com`: `x-api-key`                                                                                             | `ANTHROPIC_API_KEY`        |
 | `npm`       | `registry.npmjs.org`: `Bearer`                                                                                               | `NPM_TOKEN`                |
 | `custom`    | `--hosts a.example.com,b.example.com`, with `--header` (default `authorization`), `--scheme bearer\|basic\|raw` and `--user` | none                       |
+| `oauth`     | As `custom`, and the value is a refresh token ([oauth secrets](#oauth-secrets))                                              | none                       |
 
 Some tools refuse to run without a token: `gh` with none stops at `gh auth login`. So the guest gets
 the placeholder variables, set to `imp-broker-placeholder`. The broker drops whatever the guest
 sends in the header and sets the real value.
+
+## OAuth secrets
+
+A token that expires and is renewed from a refresh token cannot be a `custom` secret: its value
+would go stale. Kind `oauth` holds the refresh token in impd. impd exchanges it for an access token
+at the token endpoint before the old one expires, stores each rotated refresh token, and the broker
+sets the current access token on the granted hosts. The guest only ever holds the placeholder.
+
+Codex signed in with a ChatGPT account is an example. Its `auth.json` holds the refresh token:
+
+```sh
+jq -r .tokens.refresh_token auth.json | imp secret add codex --kind oauth --hosts chatgpt.com \
+  --token-url https://auth.openai.com/oauth/token --client-id <Codex client id> --token-format json
+imp grant dev codex
+```
+
+| Flag             | Meaning                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| `--token-url`    | The token endpoint, `https` only. impd posts to it from the host, never from an imp.        |
+| `--client-id`    | The client the refresh token was issued to.                                                 |
+| `--token-format` | `form` (default, `application/x-www-form-urlencoded`) or `json` for the token request body. |
+
+`--hosts`, `--header`, `--scheme` and `--user` are as for `custom`. The request carries
+`grant_type=refresh_token`, `refresh_token` and `client_id`, and impd reads `access_token`,
+`refresh_token`, `id_token` and `expires_in` from the answer. A field the answer leaves out keeps
+its old value. The expiry is `expires_in`, else the `exp` of the access token if it is a JWT, else
+unknown.
+
+Add the secret from a refresh token you will not use again. The first refresh rotates it, so any
+other copy of the sign-in (a file, a password manager) goes stale and must not be used again.
+
+### Refresh schedule and states
+
+impd checks every minute and once at start. A secret is refreshed when:
+
+- it is `pending`, or has no access token: at once;
+- its expiry is unknown: when the last refresh is more than an hour old;
+- otherwise: when less than the smaller of 24 hours and half the token's lifetime is left. A
+  240-hour token is refreshed with 24 hours left, so an impd stopped for an upgrade does not hand
+  out an expired token.
+
+impd never refreshes because a guest got a 401. `imp secret refresh <name>` (`secrets.refresh`)
+forces one now, waits for it and prints the result; a refresh already running is the one it waits
+for. A refresh and a replace or a delete of the same secret never run together.
+
+| State         | Meaning                                                                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ready`       | There is an access token. `imp secret ls` shows `ready until <time>`.                                                                                       |
+| `pending`     | No refresh has worked yet. A transient error (a 5xx, a network error, a timeout, an answer impd cannot read) is retried after 1, 2, 4 ... up to 30 minutes. |
+| `needs_login` | The endpoint refused the refresh token for good: HTTP 401, `invalid_grant`, `refresh_token_expired`, `refresh_token_reused` or `refresh_token_invalidated`. |
+
+A transient error on a `ready` secret keeps the secret `ready` and its tokens, and sets the error.
+After a permanent error impd stops refreshing; a `needs_login` secret whose access token is still
+valid keeps sending it. Sign in again and run `imp secret add <name> ... --replace` with the new
+refresh token, or `imp secret refresh <name>` to try once more.
+
+Adding the secret runs the first refresh after the secret is saved and answers when it ends. A first
+refresh that fails still answers: `imp secret add` prints `pending` or `needs_login` with the reason
+on stderr. The reason is a short code such as `invalid_grant` or `HTTP 503`, never a response body.
+
+A restore of an older database or value file brings back a refresh token the endpoint has already
+rotated. It shows as `needs_login`; add the secret again with `--replace`.
+
+The API shows an oauth secret's token URL, client id, status, expiry, last refresh and error, and
+`idClaims`: the payload of the ID token, without `at_hash`, `c_hash`, `nonce`, `sid` and `jti`.
+These are identifiers such as an email or an account id, not credentials, but any token that can
+list secrets (even a read token) sees them. No token value is ever in the API, the CLI output, the
+database or the logs; a log line says only whether the refresh token rotated and when the access
+token expires.
 
 ## How it works
 
@@ -257,7 +332,7 @@ an impd that checks. A client that sends the `start` itself must check the same.
 | Place                            | What is there                                                                                                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `<data>/secrets/<name>.<random>` | The value, mode 0600 in a 0700 directory, written by a temp file and a rename ([value files](#value-files)); an older impd's file is `<name>`. Never in an imp's disk, snapshot or backup. |
-| The database                     | The name, kind, hosts and grants. Never a value.                                                                                                                                           |
+| The database                     | The name, kind, hosts and grants, and an oauth secret's token URL and client id. Never a value.                                                                                            |
 | The API, the CLI, logs           | Never a value. A failed `imp secret add` logs the error but not the value.                                                                                                                 |
 | The guest, its snapshots         | The placeholder and the public CA bundle only.                                                                                                                                             |
 | `imp audit`                      | Time, imp, secret, method, host, path without the query, status, bytes, time.                                                                                                              |
@@ -281,5 +356,7 @@ Values are not encrypted at rest: the key would sit on the same disk. The audit 
   | An exec or SSH command started before `imp grant` | The same: start it again.                                                                                                                                                        |
 
 - The terminator serves HTTP/1.1 only, so clients fall back from HTTP/2. WebSocket upgrades to a
-  granted host are not supported.
+  granted host are not supported: a request with `Upgrade: websocket` gets `426 Upgrade Required`
+  with `websocket upgrades are not supported through the broker`, before any credential lookup and
+  without reaching the host, so a client that tries a WebSocket first falls back to HTTPS at once.
 - A host takes exact names: no wildcards, and no IP addresses.

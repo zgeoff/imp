@@ -91,7 +91,7 @@ imp fork box box-2                # a second copy to try something else in
 | `expose <name>`, `unexpose <name>`        | serve the imp to the internet on your domain (`--auth token\|basic`)      |
 | `image build`, `add`, `ls`, `rm`          | manage images                                                             |
 | `template create`, `ls`, `rm`             | make an image from an imp's disk, to create imps from                     |
-| `secret add`, `ls`, `rm`                  | store API tokens in impd, never in a guest                                |
+| `secret add`, `ls`, `refresh`, `rm`       | store API tokens in impd, never in a guest; renew OAuth ones              |
 | `grant`, `revoke`, `grants`, `audit`      | let an imp use a token through the host-side broker                       |
 | `events [name]`                           | follow impd's events as JSON lines                                        |
 | `mcp --prefix <p>`                        | serve imps to a coding agent as MCP tools over stdio                      |

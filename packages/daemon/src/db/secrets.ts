@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { BrokerRuleSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, EgressPolicy, GrantNotCopied, SecretKind } from '@imp/api';
+import { BrokerRuleSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
+import type { BrokerRule, EgressPolicy, GrantNotCopied, OAuthConfig, SecretKind } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { parseStoredPolicy } from './egress';
@@ -19,6 +19,9 @@ export interface SecretRecord {
   readonly kind: SecretKind;
   readonly rules: readonly BrokerRule[];
 
+  // the token endpoint and client of kind oauth; null for the others
+  readonly oauth: OAuthConfig | null;
+
   // random, kept by a replace; a secret made again under the name gets
   // another (docs/guides/tokens.md#granting-secrets)
   readonly generation: string;
@@ -32,6 +35,9 @@ export interface NewSecret {
   readonly name: string;
   readonly kind: SecretKind;
   readonly rules: readonly BrokerRule[];
+
+  // required for kind oauth, absent or null for the others
+  readonly oauth?: OAuthConfig | null | undefined;
 
   // written before the row, so a row never names a file that is not there
   readonly valueFile: string;
@@ -105,6 +111,7 @@ export async function createSecret(
       name: secret.name,
       kind: secret.kind,
       rules: JSON.stringify(secret.rules),
+      oauth: formatOAuthConfig(secret.oauth),
       generation: createGeneration(),
       value_file: secret.valueFile,
       created_at: Date.now(),
@@ -153,6 +160,7 @@ export function upsertSecret(
       .set({
         kind: secret.kind,
         rules: JSON.stringify(secret.rules),
+        oauth: formatOAuthConfig(secret.oauth),
         value_file: secret.valueFile,
         ...(!isRotation && { generation: createGeneration() }),
       })
@@ -508,10 +516,30 @@ function createGeneration(): string {
 // What a request depends on besides the value: the kind and the rules, with
 // the rules in host order, so a reorder is the same binding
 function isSameBinding(
-  a: Readonly<Pick<NewSecret, 'kind' | 'rules'>>,
-  b: Readonly<Pick<NewSecret, 'kind' | 'rules'>>,
+  a: Readonly<Pick<NewSecret, 'kind' | 'rules' | 'oauth'>>,
+  b: Readonly<Pick<NewSecret, 'kind' | 'rules' | 'oauth'>>,
 ): boolean {
-  return a.kind === b.kind && toBindingKey(a.rules) === toBindingKey(b.rules);
+  return (
+    a.kind === b.kind &&
+    toBindingKey(a.rules) === toBindingKey(b.rules) &&
+    formatOAuthConfig(a.oauth) === formatOAuthConfig(b.oauth)
+  );
+}
+
+// the oauth config as stored, its keys in a fixed order so two equal ones
+// compare equal
+function formatOAuthConfig(oauth: Readonly<OAuthConfig> | null | undefined): string | null {
+  return oauth === null || oauth === undefined
+    ? null
+    : JSON.stringify({
+        tokenUrl: oauth.tokenUrl,
+        clientId: oauth.clientId,
+        tokenFormat: oauth.tokenFormat,
+      });
+}
+
+function parseOAuth(json: string | null): OAuthConfig | null {
+  return json === null ? null : OAuthConfigSchema.parse(JSON.parse(json));
 }
 
 function toBindingKey(rules: readonly BrokerRule[]): string {
@@ -527,6 +555,7 @@ function toSecretRecord(row: Readonly<SecretRow>): SecretRecord {
     name: row.name,
     kind: parseKind(row.kind),
     rules: parseRules(row.rules),
+    oauth: parseOAuth(row.oauth),
     generation: row.generation,
     valueFile: row.value_file,
     createdAt: new Date(row.created_at),

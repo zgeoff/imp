@@ -142,6 +142,10 @@ interface SecretsTable {
   // the file in <dataDir>/secrets that holds the value; a replace writes a
   // new one and switches to it with the rules
   value_file: string;
+
+  // OAuthConfig as JSON ({ tokenUrl, clientId, tokenFormat }); null unless kind
+  // is oauth
+  oauth: Generated<string | null>;
 }
 
 // A value file a committed delete or replace displaced, until it is removed
