@@ -2,10 +2,11 @@
 
 ## [0.40.0](https://github.com/zgeoff/imp/compare/v0.39.0...v0.40.0) (2026-10-07)
 
-
 ### Features
 
-* **broker:** send a custom secret's requests to a set upstream ([#236](https://github.com/zgeoff/imp/issues/236)) ([a16a6ff](https://github.com/zgeoff/imp/commit/a16a6ffc19f5c7e8f3b08f3f54d9fe8f0e0ef978))
+- **broker:** send a custom secret's requests to a set upstream
+  ([#236](https://github.com/zgeoff/imp/issues/236))
+  ([a16a6ff](https://github.com/zgeoff/imp/commit/a16a6ffc19f5c7e8f3b08f3f54d9fe8f0e0ef978))
 
 ## [0.39.0](https://github.com/zgeoff/imp/compare/v0.38.1...v0.39.0) (2026-10-07)
 
