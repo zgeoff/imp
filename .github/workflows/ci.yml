@@ -279,15 +279,33 @@ jobs:
           TARBALL: ${{ steps.pack.outputs.tarball }}
         run: scripts/check-client-runtimes.sh "$TARBALL"
 
-  # Boots real microVMs: the fast end-to-end set (scripts/test-e2e.sh --only
-  # fast) against a dev instance on the runner's own KVM. A required check,
-  # and release-please waits for it (docs/guides/development.md#ci).
-  e2e:
+  # Boots real microVMs: the fast end-to-end set in its three groups
+  # (FAST_GROUPS in test/e2e/lib/suites.ts, scripts/test-e2e.sh --group N),
+  # each against a dev instance on its own runner's KVM. The `e2e` job below
+  # is the required check over all three.
+  e2e-group:
+    name: e2e (group ${{ matrix.group }})
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     # a cache miss rebuilds the guest kernel, about 10 minutes on 4 cores
     timeout-minutes: 25
+    strategy:
+      # every group reports, so one failure does not hide another's
+      fail-fast: false
+      matrix:
+        include:
+          # the dashboard suite's browser
+          - group: 1
+            browser: true
+            host-tests: false
+          # HOST_TESTS_GROUP in suites.ts: the host tests run once
+          - group: 2
+            browser: false
+            host-tests: true
+          - group: 3
+            browser: false
+            host-tests: false
     env:
       # the fast set at reduced size for a 4-core, 16 GB runner
       E2E_RAM_BUDGET_MIB: 4096
@@ -300,8 +318,9 @@ jobs:
       IMP_HOST_IMAGE: imp-host:dev
       IMP_HOST_IMAGE_READY: 1
       # PRs read the caches main writes; their own writes would only crowd
-      # the repo's cache quota
-      WRITE_CACHE: ${{ github.event_name == 'push' }}
+      # the repo's cache quota. One group writes on main, so three writers
+      # never race on the same scopes
+      WRITE_CACHE: ${{ github.event_name == 'push' && matrix.group == 1 }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -376,6 +395,7 @@ jobs:
       # Plain `bun test` skips them on runners that restrict unprivileged
       # namespaces; here a skip fails.
       - name: Host networking tests
+        if: matrix.host-tests
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends nftables
@@ -389,6 +409,7 @@ jobs:
       # The dashboard suite's browser. The locked Playwright pins its Chromium
       # build, so its version keys the cache; on a miss the suite downloads it.
       - name: Read the Playwright version
+        if: matrix.browser
         id: playwright
         working-directory: packages/dashboard
         run:
@@ -396,6 +417,7 @@ jobs:
           >>"$GITHUB_OUTPUT"
 
       - name: Cache Playwright Browsers
+        if: matrix.browser
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -410,7 +432,7 @@ jobs:
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.
       - name: End-to-end tests
-        run: scripts/test-e2e.sh --only fast
+        run: scripts/test-e2e.sh --group ${{ matrix.group }}
 
       # The steps below also run after a failure or a timeout, with or
       # without a container, so none of them may fail the job.
@@ -426,7 +448,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-results
+          name: e2e-results-${{ matrix.group }}
           # the dashboard suite's Playwright traces and screenshots
           path: |
             .cache/e2e/
@@ -438,6 +460,23 @@ jobs:
       - name: Remove the dev instance
         if: always()
         run: docker rm -f imp-dev || true
+
+  # The required check and release-please's gate: every e2e group passed. It
+  # runs whatever they did, so a group that failed, was cancelled or was
+  # skipped fails it, and never passes as a skip.
+  e2e:
+    if: always()
+    needs: [e2e-group]
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Require every e2e group to pass
+        env:
+          RESULT: ${{ needs.e2e-group.result }}
+        run: |
+          echo "e2e groups: $RESULT"
+          test "$RESULT" = success
 
   # The ZFS storage backend on real pools: scripts/test-zfs.sh runs its tests
   # on a throwaway pool in a sparse file, with the zfs module Ubuntu's kernel
@@ -518,8 +557,8 @@ jobs:
       - name: ZFS backend tests
         run: sudo env "PATH=$PATH" IMP_ZFS_TEST_DIR= scripts/test-zfs.sh
 
-      # reads the caches only: the required e2e job writes the same scopes on
-      # push, and two writers at once can fail its build
+      # reads the caches only: e2e group 1 writes the same scopes on push, and
+      # two writers at once can fail its build
       - name: Build kernel, system drive and host image
         uses: ./.github/actions/e2e-build
         with:
