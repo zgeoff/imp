@@ -5,48 +5,52 @@ import {
   readSmallestOwnedMib,
 } from './firecracker-memory';
 
-const JAILED = '/firecracker --id';
-
-test('owned memory is Pss_Anon plus Pss_Shmem over every VM; full PSS is summed apart', () => {
+test('#parseFirecrackerMemory sums Pss_Anon plus Pss_Shmem as owned memory over every VM, and full PSS apart', () => {
   // two VMs restored from one template: each has 2.6 MiB of its own binary
   // and a share of the template's clean pages on top of what it owns
-  const output = [`330000 300000 8 ${JAILED} imp-a`, `300000 270000 8 ${JAILED} imp-b`, ''].join(
-    '\n',
-  );
+  const output =
+    '330000 300000 8 /firecracker --id imp-a\n300000 270000 8 /firecracker --id imp-b\n';
 
-  const memory = parseFirecrackerMemory(output);
-
-  expect(memory.pssMib).toBe(Math.floor(630_000 / 1024));
-  expect(memory.ownedMib).toBe(Math.floor(570_016 / 1024));
-  expect(memory.count).toBe(2);
-
-  expect(memory.ownedByImpMib).toEqual(
-    new Map([
-      ['imp-a', Math.floor(300_008 / 1024)],
-      ['imp-b', Math.floor(270_008 / 1024)],
+  expect(parseFirecrackerMemory(output)).toStrictEqual({
+    pssMib: 615,
+    ownedMib: 556,
+    count: 2,
+    ownedByImpMib: new Map([
+      ['imp-a', 292],
+      ['imp-b', 263],
     ]),
+  });
+});
+
+test('#parseFirecrackerMemory throws when a VM has no Pss_Anon line, rather than count it as 0', () => {
+  expect(() =>
+    parseFirecrackerMemory(
+      '2048 1024 0 /firecracker --id imp-a\n4096 - 0 /firecracker --id imp-b\n',
+    ),
+  ).toThrowWithMessage(
+    Error,
+    "smaps_rollup without Pss, Pss_Anon and Pss_Shmem: '4096 - 0 /firecracker --id imp-b'",
   );
 });
 
-test('it throws when a VM has no Pss_Anon line, rather than count it as 0', () => {
-  expect(() =>
-    parseFirecrackerMemory(`2048 1024 0 ${JAILED} imp-a\n4096 - 0 ${JAILED} imp-b\n`),
-  ).toThrow('Pss_Anon');
+test('#parseFirecrackerMemory throws on a line without three sizes', () => {
+  expect(() => parseFirecrackerMemory('4096\n')).toThrowWithMessage(
+    Error,
+    "smaps_rollup without Pss, Pss_Anon and Pss_Shmem: '4096'",
+  );
 });
 
-test('it throws on a line without three sizes', () => {
-  expect(() => parseFirecrackerMemory('4096\n')).toThrow('Pss_Anon');
+test('#parseFirecrackerMemory counts a VM with no imp in its command line in the totals, under no imp', () => {
+  expect(parseFirecrackerMemory('2048 1024 0 /usr/local/bin/firecracker\n')).toStrictEqual({
+    pssMib: 2,
+    ownedMib: 1,
+    count: 1,
+    ownedByImpMib: new Map(),
+  });
 });
 
-test('a VM with no imp in its command line counts in the totals, under no imp', () => {
-  const memory = parseFirecrackerMemory('2048 1024 0 /usr/local/bin/firecracker\n');
-
-  expect(memory.ownedMib).toBe(1);
-  expect(memory.ownedByImpMib.size).toBe(0);
-});
-
-test('it reads no VMs as zero', () => {
-  expect(parseFirecrackerMemory('')).toEqual({
+test('#parseFirecrackerMemory reads no VMs as zero', () => {
+  expect(parseFirecrackerMemory('')).toStrictEqual({
     pssMib: 0,
     ownedMib: 0,
     count: 0,
@@ -54,28 +58,24 @@ test('it reads no VMs as zero', () => {
   });
 });
 
-test('the per-imp figure comes from smaps when impd still shows a stale one', () => {
-  // impd's last sample of imp 2 came before its fill: 195 MiB in `imp ls`
-  const impdRamMib = new Map([
-    ['imp-1', 321],
-    ['imp-2', 195],
-  ]);
-
+test('#readSmallestOwnedMib takes the smallest figure from smaps', () => {
+  // impd's last sample of imp-2 came before its fill and showed 195 MiB;
+  // smaps shows what it owns now
   const memory = parseFirecrackerMemory(
-    `340000 328704 8 ${JAILED} imp-1\n300000 284672 8 ${JAILED} imp-2\n`,
+    '340000 328704 8 /firecracker --id imp-1\n300000 284672 8 /firecracker --id imp-2\n',
   );
 
-  const perImp = readSmallestOwnedMib(['imp-1', 'imp-2'], memory);
-
-  expect(perImp).toBe(278);
-  expect(perImp).not.toBe(Math.min(...impdRamMib.values()));
+  expect(readSmallestOwnedMib(['imp-1', 'imp-2'], memory)).toBe(278);
 });
 
-test('an imp with no Firecracker throws', () => {
-  expect(() => readSmallestOwnedMib(['imp-9'], parseFirecrackerMemory(''))).toThrow('imp-9');
+test('#readSmallestOwnedMib throws for an imp with no Firecracker', () => {
+  expect(() => readSmallestOwnedMib(['imp-9'], parseFirecrackerMemory(''))).toThrowWithMessage(
+    Error,
+    'no Firecracker for imp imp-9',
+  );
 });
 
-test('a jailed VM names its imp with the --id the jailer passes on', () => {
+test('#readImpIdFromArgv reads a jailed VM’s imp from the --id the jailer passes on', () => {
   const argv = [
     '/firecracker',
     '--id',
@@ -89,7 +89,8 @@ test('a jailed VM names its imp with the --id the jailer passes on', () => {
   expect(readImpIdFromArgv(argv)).toBe('abc123');
 });
 
-test('an unjailed VM (IMP_JAILER=false) names its imp in its API socket path', () => {
+test('#readImpIdFromArgv reads an unjailed VM’s imp from its API socket path', () => {
+  // IMP_JAILER=false: no --id
   const argv = [
     '/usr/local/bin/firecracker',
     '--api-sock',
@@ -97,4 +98,8 @@ test('an unjailed VM (IMP_JAILER=false) names its imp in its API socket path', (
   ];
 
   expect(readImpIdFromArgv(argv)).toBe('abc123');
+});
+
+test('#readImpIdFromArgv reads no imp from a VM with neither --id nor an imp socket', () => {
+  expect(readImpIdFromArgv(['/usr/local/bin/firecracker'])).toBeNull();
 });

@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { createImpClient } from '../../../packages/client/src/index';
+import type { ImpClient } from '../../../packages/client/src/index';
 import type { CommandResult, DevInstance } from './instance';
 import { REPO_ROOT, instance, readToken, runCommand } from './instance';
 
@@ -109,6 +111,13 @@ export async function readImpEnv(target: DevInstance = instance): Promise<Record
   const impToken = await readImpToken(target);
 
   return { IMP_URL: target.apiUrl, IMP_TOKEN: impToken };
+}
+
+// impd's API client, as the run's root token reaches the instance
+export async function createInstanceClient(target: DevInstance = instance): Promise<ImpClient> {
+  const token = await readImpToken(target);
+
+  return createImpClient({ url: target.apiUrl, token });
 }
 
 export interface ImpRunOptions {

@@ -3,8 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
-import { startFakeUpstream } from '../lib/fake-upstream';
-import type { FakeUpstream } from '../lib/fake-upstream';
 import { resolveImageName } from '../lib/fixtures';
 import type { ImpRunOptions } from '../lib/imp-cli';
 import {
@@ -22,6 +20,8 @@ import { readToken, runInContainer } from '../lib/instance';
 import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
 import type { MoveHosts } from '../lib/move-hosts';
 import { setupSuite } from '../lib/setup-suite';
+import { startStubUpstream } from '../lib/start-stub-upstream';
+import type { StubUpstream } from '../lib/start-stub-upstream';
 import { waitFor } from '../lib/wait-for';
 
 // Moves between A and B on a Docker network (lib/move-hosts.ts), allowed
@@ -48,7 +48,7 @@ const HOST_A = 'a';
 // tells which broker sent a call
 const tokens = { a: `e2e-a-${randomUUID()}`, b: `e2e-b-${randomUUID()}` };
 let hosts: MoveHosts;
-let upstream: FakeUpstream;
+let upstream: StubUpstream;
 
 // what `imp new --place --json` and `imp ls --all --json` print, in part
 const PlacedSchema = z.object({ host: z.string(), imp: z.object({ name: z.string() }) });
@@ -193,7 +193,7 @@ async function createSecrets(): Promise<void> {
 
 beforeAll(async () => {
   hosts = await startMoveHosts({ tailnet: false }, prefix);
-  upstream = await startFakeUpstream(hosts.gateway, tokens.b);
+  upstream = await startStubUpstream(hosts.gateway, tokens.b);
 
   writeUpstreamsFile(hosts.a);
   writeUpstreamsFile(hosts.b);
@@ -215,7 +215,7 @@ afterAll(async () => {
 
   await tryImp(['secret', 'rm', secret]);
 
-  await upstream[Symbol.asyncDispose]();
+  await upstream.stop();
 
   rmSync(join(hosts.a.dataDir, 'broker-test-upstreams.json'), { force: true });
   rmSync(join(hosts.b.dataDir, 'broker-test-upstreams.json'), { force: true });

@@ -1,19 +1,10 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  statfsSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { Subprocess } from 'bun';
 import * as z from 'zod';
 import { findBootFallbacks } from './lib/boot-fallbacks';
 import { config } from './lib/config';
 import { createMissingImages } from './lib/fixtures';
-import { listImageNames, readInfo, runImp } from './lib/imp-cli';
+import { createInstanceClient, listImageNames, readInfo, runImp } from './lib/imp-cli';
 import { removeImpsWithPrefix } from './lib/imps';
 import {
   LIB_SCRIPT,
@@ -34,17 +25,25 @@ import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
 import { checkPrivileges } from './lib/privileges';
+import { resetBaseline } from './lib/reset-baseline';
+import { runSuite, stopSuiteGroup } from './lib/run-suite';
+import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
-import { SUITES, buildSuiteArgv } from './lib/suites';
+import { FAST_GROUPS, SUITES, buildSuiteArgv } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
+import { resolveWipeTarget } from './lib/wipe-target';
+import type { WipeTarget } from './lib/wipe-target';
+import { ZFS_OWNER_FILE, resetZfsRoot } from './lib/zfs-owner';
+import type { ZfsCommandResult } from './lib/zfs-owner';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
-  scripts/test-e2e.sh [--only SUITES] [--clean | --reuse] [--keep]
+  scripts/test-e2e.sh [--only SUITES | --group N] [--clean | --reuse] [--keep]
 
   --only    comma-separated suites or sets (default: acceptance)
             suites: ${SUITES.map((suite) => suite.name).join(' ')}
             sets:   acceptance (all, tailscale required), fast (the CI subset)
+  --group   one of the fast set's ${String(FAST_GROUPS.length)} CI groups, 1 to ${String(FAST_GROUPS.length)}
   --clean   full reset first: tailnet logout, remove the dev container, wipe
             its data dir (XFS file, db, images, imps, checkpoints), and the
             moves suites' second host and its data dir
@@ -75,8 +74,9 @@ interface Section {
 const MetricSchema = z.record(z.string(), z.unknown());
 let interrupted = false;
 
-// the suite process running now, so a signal can stop it
-let running: Subprocess | null = null;
+// the pid of the suite process running now, which leads its group, so a
+// signal can stop it
+let running: number | null = null;
 
 // as scripts/dev.sh resolves it: a relative IMP_DEV_DATA is relative to the
 // caller's directory
@@ -90,42 +90,39 @@ function resolveDataPath(): string {
   return resolve(process.cwd(), configured);
 }
 
-// The data dir to wipe, or null when it does not exist. The reset deletes it
-// as root, so it must sit under <repo>/.data/ or hold an imp.xfs.
-function resolveWipeTarget(path: string): string | null {
-  if (!existsSync(path)) {
-    return null;
-  }
+// zpool and zfs as root, from the host image, as the data wipe runs
+async function runHostZfs(argv: readonly string[]): Promise<ZfsCommandResult> {
+  // scripts/lib.sh knows how the host image builds
+  await runChecked(['bash', '-c', 'source "$1" && ensure_host_image', 'bash', LIB_SCRIPT]);
 
-  const data = realpathSync(path);
+  return runCommand(['docker', 'run', '--rm', '--privileged', getHostImage(), ...argv]);
+}
 
-  const dataRoot = existsSync(join(REPO_ROOT, '.data'))
-    ? realpathSync(join(REPO_ROOT, '.data'))
-    : null;
-
-  const underDataRoot = dataRoot !== null && data.startsWith(`${dataRoot}/`);
-
-  if (!underDataRoot && !existsSync(join(data, 'imp.xfs'))) {
-    throw new Error(
-      `refusing to wipe ${data}: it is not under ${join(REPO_ROOT, '.data')} and holds no imp.xfs`,
-    );
-  }
-
-  return data;
+// the wipe's target for a data dir, as this run's instance stores it
+function resolveDataWipe(path: string): Promise<WipeTarget | null> {
+  return resolveWipeTarget({
+    path,
+    repoRoot: REPO_ROOT,
+    storageBackend: process.env['IMP_STORAGE_BACKEND'],
+    zfsRoot: process.env['IMP_ZFS_ROOT'],
+    run: runHostZfs,
+  });
 }
 
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
-  const data = resolveWipeTarget(resolveDataPath());
+  const data = await resolveDataWipe(resolveDataPath());
 
   // the moves suites' second host keeps its data between runs, which spares
   // its image seed; a reset takes it too, so no old migration outlives a
   // rebase that renumbered it
-  const hostB = resolveWipeTarget(`${resolveDataPath()}-mv-b`);
+  const hostB = await resolveDataWipe(`${resolveDataPath()}-mv-b`);
+
+  const targets = [data, hostB].filter((target) => target !== null);
 
   console.log(
-    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${[data, hostB].filter((dir) => dir !== null).join(' and ') || 'nothing'}`,
+    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${targets.map((target) => target.dir).join(' and ') || 'nothing'}`,
   );
 
   const container = await runCommand(['docker', 'inspect', instance.container]);
@@ -142,13 +139,17 @@ async function resetInstance(): Promise<void> {
   await runDevScript('down');
   await runCommand(['docker', 'rm', '-f', `${instance.container}-mv-b`]);
 
-  for (const dir of [data, hostB]) {
-    if (dir !== null) {
-      await removeDataFiles(dir);
+  for (const target of targets) {
+    await removeDataFiles(target.dir);
+
+    if (target.zfs !== null) {
+      await resetZfsRoot(target.zfs, runHostZfs);
     }
   }
 }
 
+// every file in the data dir but the ZFS owner file, which the next reset
+// still needs to prove the dir
 async function removeDataFiles(data: string): Promise<void> {
   const hostImage = getHostImage();
 
@@ -166,7 +167,7 @@ async function removeDataFiles(data: string): Promise<void> {
     hostImage,
     'bash',
     '-c',
-    'for dev in $(losetup -n -O NAME -j /d/imp.xfs 2>/dev/null); do losetup -d "$dev" || true; done; find /d -mindepth 1 -delete',
+    `for dev in $(losetup -n -O NAME -j /d/imp.xfs 2>/dev/null); do losetup -d "$dev" || true; done; find /d -mindepth 1 ! -path /d/${ZFS_OWNER_FILE} -delete`,
   ]);
 }
 
@@ -214,6 +215,12 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     await startPebble();
   }
 
+  await startInstance(args);
+}
+
+// up with the run's tuning, checked, at the baseline, with the images the
+// run's suites need
+async function startInstance(args: HarnessArgs): Promise<void> {
   await runDevScript('up');
   await checkPrivileges(instance.container);
 
@@ -229,8 +236,8 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     );
   }
 
-  // leftovers of an aborted --keep run would skew RAM numbers
-  await removeImpsWithPrefix(PREFIX);
+  // leftovers of an aborted or --keep run would skew RAM numbers
+  await resetSuites(SUITES.map((suite) => suite.prefix));
 
   if (args.suites.includes('scale')) {
     checkScaleHeadroom();
@@ -259,31 +266,36 @@ function stopRun(signal: NodeJS.Signals): void {
   interrupted = true;
 
   if (running !== null) {
-    process.kill(-running.pid, signal);
+    stopSuiteGroup(running, signal);
   }
 }
 
-async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
-  const started = new Date();
+// Every imp, network, secret, token, OAuth client and image the suites named
+// with these prefixes goes; the fixture images stay.
+async function resetSuites(prefixes: readonly string[]): Promise<void> {
+  await resetBaseline({
+    client: await createInstanceClient(),
+    prefixes,
+    dataDir: resolveDataPath(),
+  });
+}
 
-  const proc = Bun.spawn([...buildSuiteArgv(process.execPath, name)], {
+async function runSuiteProcess(name: string, args: HarnessArgs): Promise<number> {
+  const exitCode = await runSuite({
+    argv: buildSuiteArgv(process.execPath, name),
     cwd: REPO_ROOT,
-    detached: true,
-    stdout: 'inherit',
-    stderr: 'inherit',
     env: {
       ...process.env,
-      E2E_SUITES: args.suites.join(','),
       E2E_KEEP: args.keep ? '1' : '0',
       E2E_ACCEPTANCE: args.acceptance ? '1' : '0',
       E2E_METRICS_FILE: METRICS_FILE,
     },
+    onStart: (pid) => {
+      running = pid;
+    },
   });
 
-  running = proc;
-
-  const exitCode = await proc.exited;
-
+  // gone: a signal during the reset has no group to stop
   running = null;
 
   if (exitCode !== 0 && !interrupted) {
@@ -292,14 +304,12 @@ async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
     console.log(`== impd log tail\n${tail}`);
   }
 
-  const isClean = await checkNoBootFallbacks(name, started);
+  return exitCode;
+}
 
-  // --bail skips the suite's afterAll; scale's imps stay for restart
-  if (exitCode !== 0 && !args.keep && !(name === 'scale' && args.suites.includes('restart'))) {
-    await removeSuiteImps(name);
-  }
-
-  return exitCode === 0 && isClean;
+// a suite's number in the acceptance order, as results.json names it
+function findSuiteIndex(name: string): number {
+  return SUITES.findIndex((suite) => suite.name === name) + 1;
 }
 
 // chaos kills firecracker on purpose, so a restore there may fall back
@@ -330,18 +340,6 @@ async function checkNoBootFallbacks(name: string, since: Readonly<Date>): Promis
   console.log(`== ${name}: a boot template ${verdict}\n${fallbacks.join('\n')}`);
 
   return isAllowed;
-}
-
-async function removeSuiteImps(name: string): Promise<void> {
-  const suite = SUITES.find((candidate) => candidate.name === name);
-
-  try {
-    await removeImpsWithPrefix(suite?.prefix ?? `${PREFIX}${name}-`);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-
-    console.error(`    could not remove the ${name} suite's imps: ${reason}`);
-  }
 }
 
 async function runTimed(
@@ -499,21 +497,59 @@ async function main(): Promise<number> {
   });
 
   const sections: Section[] = [setup];
+  let stoppedBecause: string | null = null;
 
   if (setup.verdict === 'PASS') {
-    for (const name of args.suites) {
-      if (interrupted) {
-        break;
-      }
+    const startedAt = new Map<string, Date>();
 
-      const index = SUITES.findIndex((suite) => suite.name === name) + 1;
+    const run = await runSuites({
+      names: args.suites,
+      prefixOf: (name) =>
+        SUITES.find((suite) => suite.name === name)?.prefix ?? `${PREFIX}${name}-`,
+      keep: args.keep,
+      runSuite: (name) => runSuiteProcess(name, args),
+      checkSuite: (name) => checkNoBootFallbacks(name, startedAt.get(name) ?? new Date()),
+      reset: resetSuites,
+      reboot: () => runDevScript('reboot'),
 
-      const section = await runTimed(index, name, () => runSuite(name, args));
+      // a fresh instance: the container and data dir go, and come back
+      // with the run's settings, baseline and images
+      recreate: async () => {
+        await resetInstance();
+        await startInstance(args);
+      },
+      isInterrupted: () => interrupted,
+      now: Date.now,
+      onSuiteStart: (name) => {
+        startedAt.set(name, new Date());
+        console.log(`== [${String(findSuiteIndex(name))}] ${name}`);
+      },
+      onSuiteEnd: (result) => {
+        const section: Section = {
+          index: findSuiteIndex(result.name),
+          name: result.name,
+          verdict: result.passed ? 'PASS' : 'FAIL',
+          ms: result.ms,
+        };
 
-      sections.push(section);
+        sections.push(section);
+        console.log(`== ${formatSection(section)}`);
+      },
+      log: (line) => {
+        console.error(line);
+      },
+    });
+
+    stoppedBecause = run.stoppedBecause;
+
+    if (stoppedBecause !== null && stoppedBecause !== 'interrupted') {
+      console.error(`== the run stopped: ${stoppedBecause}`);
     }
 
-    if (!args.keep) {
+    // an instance that could not be made anew has nothing left to tidy
+    const isUp = stoppedBecause === null || stoppedBecause === 'interrupted';
+
+    if (!args.keep && isUp) {
       await removeLeftovers(args.suites);
     }
   }
@@ -530,7 +566,12 @@ async function main(): Promise<number> {
     console.log(`   ${formatSection(section)}`);
   }
 
-  const passed = sections.every((section) => section.verdict === 'PASS') && !interrupted;
+  const passed = checkRunPassed({
+    passed: sections.map((section) => section.verdict === 'PASS'),
+    stoppedBecause,
+    interrupted,
+  });
+
   const verdict = passed ? '== PASS' : '== FAIL';
 
   console.log(verdict);

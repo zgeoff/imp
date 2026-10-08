@@ -124,7 +124,11 @@ test("an uploaded context's files, ENV and WORKDIR reach the imp, less what .doc
   await createImp(built, '--image', built, '--memory', '512');
 
   const seen = await runShellInImp(built, 'cat /etc/e2e-marker; echo "$E2E"; pwd; ls ctx');
-  const session = await runConsole(built, [{ afterMs: 1000, line: 'exit 4' }]);
+
+  const session = await runConsole(built, [
+    { after: null, line: 'echo console-$((2 + 2))' },
+    { after: 'console-4', line: 'exit 4' },
+  ]);
 
   expect(seen).toBe('built\nyes\n/srv\nDockerfile\nkept.txt');
   expect(session.exitCode).toBe(4);

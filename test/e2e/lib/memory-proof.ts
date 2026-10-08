@@ -24,14 +24,19 @@ function buildIdentityScript(pid: string): string {
 export async function startMemoryProof(name: string): Promise<MemoryProof> {
   const token = randomBytes(16).toString('hex');
 
+  // httpd forks into the background: the script polls for its pid, for up
+  // to 5 s
   const identity = await runShellInImp(
     name,
     [
       'mkdir -p /run/proof && mount -t tmpfs -o size=1m tmpfs /run/proof',
       `echo ${token} > /run/proof/index.html`,
       'setsid httpd -p 8080 -h /run/proof </dev/null >/dev/null 2>&1',
-      'sleep 0.3',
-      'pid=$(pidof httpd)',
+      'tries=0',
+      'until pid=$(pidof httpd); do',
+      '  tries=$((tries + 1)) && [ "$tries" -lt 50 ] || { echo "no httpd after 5 s" >&2; exit 1; }',
+      '  sleep 0.1',
+      'done',
       buildIdentityScript('$pid'),
     ].join('\n'),
   );

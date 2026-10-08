@@ -15,7 +15,6 @@ import {
   createImp,
   holdImp,
   readGuestFile,
-  registerImp,
   removeImps,
   waitForExec,
   writeGuestFile,
@@ -139,8 +138,6 @@ test('restoring a stopped imp leaves it stopped', async () => {
 test('a fork from a checkpoint and a fork from the live disk are independent imps', async () => {
   await writeGuestFile(source, '/root/f', 'v2');
 
-  registerImp(fromCheckpoint);
-
   let started = Date.now();
 
   await runImp('fork', source, fromCheckpoint, '--from', 'cp1');
@@ -157,8 +154,6 @@ test('a fork from a checkpoint and a fork from the live disk are independent imp
   expect(unchanged).toBe('v2');
 
   await assertIndependent(source, fromCheckpoint, 'cp');
-
-  registerImp(fromLive);
 
   started = Date.now();
 

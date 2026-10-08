@@ -4,14 +4,14 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { utils } from 'ssh2';
 import { resolveImageName } from '../lib/fixtures';
-import { startGitSshServer } from '../lib/git-ssh-server';
-import type { GitSshServer } from '../lib/git-ssh-server';
 import { readInfo, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
 import { createImp } from '../lib/imps';
 import { readContainerGateway, runChecked, runCommand, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { SSH_HOST, runSsh, setupSshClient, startLocalSshAgent, startSsh } from '../lib/ssh';
 import type { LocalSshAgent, SshClient } from '../lib/ssh';
+import { startStubGitSshServer } from '../lib/start-stub-git-ssh-server';
+import type { StubGitSshServer } from '../lib/start-stub-git-ssh-server';
 import { waitFor } from '../lib/wait-for';
 
 // ssh-agent forwarding (docs/guides/ssh.md): the agent on this machine signs
@@ -22,20 +22,20 @@ const prefix = setupSuite('ssh-agent');
 const name = `${prefix}a`;
 let client: SshClient;
 let laptop: LocalSshAgent;
-let git: GitSshServer;
+let git: StubGitSshServer;
 let gateway: string;
 
 beforeAll(async () => {
   client = await setupSshClient();
   laptop = await startLocalSshAgent(client);
   gateway = await readContainerGateway();
-  git = await startGitSshServer(gateway, client.dir, laptop.publicKey);
+  git = await startStubGitSshServer(gateway, client.dir, laptop.publicKey);
 
   await createImp(name, '--image', resolveImageName('e2e-git'), '--memory', '256');
 }, 120_000);
 
 afterAll(async () => {
-  await git[Symbol.asyncDispose]();
+  await git.stop();
   await laptop[Symbol.asyncDispose]();
   await client.cleanup();
 });

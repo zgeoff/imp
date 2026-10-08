@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { config } from './config';
 
 // the harness drives scripts/dev.sh and scripts/imp from this checkout
 export const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
@@ -151,9 +152,9 @@ export function getHostImage(): string {
   return image;
 }
 
-// Passes dev.sh's output through, so a slow `up` shows progress. Tuning
-// variables in this process's env reach impd, then the instance's, then
-// the call's.
+// Passes dev.sh's output through, so a slow `up` shows progress. impd gets
+// the run's RAM budget and idle timeout (config.ts), then the tuning
+// variables in this process's env, then the instance's, then the call's.
 export async function runDevScript(
   command: string,
   target: DevInstance = instance,
@@ -164,7 +165,13 @@ export async function runDevScript(
   const proc = Bun.spawn([DEV_SCRIPT, command], {
     stdout: 'inherit',
     stderr: 'inherit',
-    env: { ...process.env, ...target.env, ...env },
+    env: {
+      IMP_RAM_BUDGET_MIB: String(config.ramBudgetMib),
+      IMP_IDLE_TIMEOUT_S: String(config.idleTimeoutS),
+      ...process.env,
+      ...target.env,
+      ...env,
+    },
   });
 
   const exitCode = await proc.exited;

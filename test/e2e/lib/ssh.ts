@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import type { CommandResult } from './instance';
 import { REPO_ROOT, instance, runChecked, runCommand, runInContainer } from './instance';
+import { waitFor } from './wait-for';
 
 // the Host aliases the suite's ssh config defines: the gateway with the
 // authorized key, and with a key it does not authorize
@@ -221,15 +222,15 @@ export async function startLocalSshAgent(
 }
 
 async function waitForSocket(path: string): Promise<void> {
-  const deadline = Date.now() + 5000;
-
-  while (!existsSync(path)) {
-    if (Date.now() > deadline) {
-      throw new Error(`ssh-agent did not make ${path}`);
-    }
-
-    await Bun.sleep(20);
-  }
+  await waitFor(
+    `ssh-agent to make ${path}`,
+    () => {
+      if (!existsSync(path)) {
+        throw new Error('no socket yet');
+      }
+    },
+    { intervalMs: 20, timeoutMs: 5000 },
+  );
 }
 
 // The IPv6 link-local address of the host end of the tap whose IPv4

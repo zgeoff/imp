@@ -1,52 +1,84 @@
 import { expect, test } from 'bun:test';
-import { readRejection } from './read-rejection';
 import { waitFor } from './wait-for';
 
-test('it returns the value of an attempt that succeeds at once', async () => {
+test('it resolves with the value of an attempt that succeeds at once', async () => {
   const value = await waitFor('the answer', () => 42);
 
   expect(value).toBe(42);
 });
 
 test('it retries until the attempt stops throwing and resolves with its value', async () => {
-  let ready = false;
-
-  setTimeout(() => {
-    ready = true;
-  }, 60);
+  let attempts = 0;
 
   const value = await waitFor(
     'readiness',
     () => {
-      if (!ready) {
+      attempts += 1;
+
+      if (attempts < 3) {
         throw new Error('not ready yet');
       }
 
       return 'done';
     },
-    { intervalMs: 10 },
+    { wait: () => Promise.resolve() },
   );
 
   expect(value).toBe('done');
 });
 
-test('it names what it waited for and the last failure once the deadline passes', async () => {
+test('it waits the interval between retries', async () => {
   let attempts = 0;
+  const waits: number[] = [];
 
-  const wait = waitFor(
-    'the flaky thing',
+  await waitFor(
+    'readiness',
     () => {
-      attempts++;
-      throw new Error(`attempt ${String(attempts)} failed`);
+      attempts += 1;
+
+      if (attempts < 3) {
+        throw new Error('not ready yet');
+      }
     },
-    { intervalMs: 10, timeoutMs: 80 },
+    {
+      intervalMs: 25,
+      wait: (ms) => {
+        waits.push(ms);
+
+        return Promise.resolve();
+      },
+    },
   );
 
-  const error = await readRejection(wait);
+  expect(waits).toStrictEqual([25, 25]);
+});
 
-  expect(error).toBeInstanceOf(Error);
+test('it names what it waited for and the last failure once the deadline passes', () => {
+  // each retry moves the clock on by its interval, so the fourth attempt is
+  // the first at the deadline
+  const clock = { nowMs: 1000 };
+  let attempts = 0;
 
-  expect(String(error)).toMatch(
-    /^Error: timed out after 80 ms waiting for the flaky thing: attempt \d+ failed$/,
+  const pending = waitFor(
+    'the flaky thing',
+    () => {
+      attempts += 1;
+      throw new Error(`attempt ${String(attempts)} failed`);
+    },
+    {
+      intervalMs: 20,
+      timeoutMs: 60,
+      now: () => clock.nowMs,
+      wait: (ms) => {
+        clock.nowMs += ms;
+
+        return Promise.resolve();
+      },
+    },
+  );
+
+  expect(pending).rejects.toThrowWithMessage(
+    Error,
+    'timed out after 60 ms waiting for the flaky thing: attempt 4 failed',
   );
 });

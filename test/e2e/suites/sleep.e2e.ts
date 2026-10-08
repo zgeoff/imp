@@ -16,7 +16,6 @@ import { createImp, holdImp } from '../lib/imps';
 import { checkFirecrackerRunning } from '../lib/instance';
 import type { MemoryProof } from '../lib/memory-proof';
 import { checkMemoryProof, startMemoryProof } from '../lib/memory-proof';
-import { readRejection } from '../lib/read-rejection';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 import {
@@ -207,10 +206,9 @@ test('the proxy answers 404 for an unknown imp and 502 when nothing listens', as
   await runInImp(name, 'pkill', '-x', 'httpd');
 
   const refused = await sendProxyRequest(name);
-  const upgradeError = await readRejection(openProxySocket(name));
 
   expect(refused.status).toBe(502);
-  expect(String(upgradeError)).toMatch(/closed/);
+  expect(openProxySocket(name)).rejects.toThrow(/closed/);
 });
 
 test('WebSockets relay text and binary both ways, with an early message and a subprotocol', async () => {

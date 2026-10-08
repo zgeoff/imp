@@ -79,12 +79,14 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 scripts/test-e2e.sh                          # the acceptance set: every suite
 scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
+scripts/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
 
 | Flag      | Effect                                                                                                                                  |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `--only`  | Comma-separated suites or sets. `acceptance` (the default) is every suite; `fast` is the CI subset.                                     |
+| `--group` | One of the three groups the `fast` set splits into (`FAST_GROUPS` in `test/e2e/lib/suites.ts`): `1`, `2` or `3`.                        |
 | `--clean` | Logs the instance out of the tailnet, removes the container and wipes its data dir, and the moves suites' second host and its data dir. |
 | `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                                                          |
 | `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                                                                |
@@ -234,7 +236,7 @@ Lefthook installs the hooks with `bun install`.
 | `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                             |
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                         |
 | `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                  |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                                               |
+| `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                              |
 | `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                 |
 
 The `checks` job also runs `bun run lint:docs`, which fails when a code comment cites a docs page or
@@ -255,9 +257,11 @@ On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASI
 
 ### The e2e job
 
-The `e2e` job boots real Firecracker guests on a standard `ubuntu-24.04` runner (4 cores, 16 GB),
-which exposes `/dev/kvm`. `scripts/check-kvm.sh` runs first, so a runner without KVM fails in
-seconds with the reason. The job then:
+The `fast` set runs in three groups (`FAST_GROUPS` in `test/e2e/lib/suites.ts`), one `e2e-group` job
+per group, each on its own runner. The `e2e` job is the required check: it fails when any group
+failed, was cancelled or was skipped. Each group boots real Firecracker guests on a standard
+`ubuntu-24.04` runner (4 cores, 16 GB), which exposes `/dev/kvm`. `scripts/check-kvm.sh` runs first,
+so a runner without KVM fails in seconds with the reason. The job then:
 
 1. builds the guest kernel and the system drive from the `system-files` stage, with the release's
    GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/version` or
@@ -265,27 +269,28 @@ seconds with the reason. The job then:
    GB quota). A cold kernel build takes about 10 minutes, so the job's timeout is 25.
 2. builds the dev host image as `imp-host:dev` with a cache of its own (scope `imp-dev`). The `e2e`
    and `zfs` jobs in `ci.yml` set `IMP_HOST_IMAGE=imp-host:dev` and `IMP_HOST_IMAGE_READY=1`, so
-   `scripts/dev.sh` uses that image instead of building it again. Only runs on `main` write these
-   caches; pull requests only read them. Steps 1 and 2 are the composite action
-   `.github/actions/e2e-build`, which the `zfs` job uses too.
+   `scripts/dev.sh` uses that image instead of building it again. Only group 1's run on `main`
+   writes these caches, so three writers never race; pull requests only read them. Steps 1 and 2 are
+   the composite action `.github/actions/e2e-build`, which the `zfs` job uses too.
 3. restores the Playwright browser cache (`~/.cache/ms-playwright`), keyed on the Playwright version
-   in `bun.lock`, which pins the Chromium build. The dashboard suite installs that Chromium's
-   headless shell when the cache misses.
-4. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
+   in `bun.lock`, which pins the Chromium build, in the group with the dashboard suite only. The
+   dashboard suite installs that Chromium's headless shell when the cache misses.
+4. runs `scripts/test-e2e.sh --group N` with `E2E_RAM_BUDGET_MIB=4096`,
    `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
-   key in CI, and a missed timing limit only warns.
+   key in CI, and a missed timing limit only warns. The host networking tests run in group 2 only
+   (`HOST_TESTS_GROUP`).
 
 The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
 the lifecycle, checkpoints, disks, sleep and backups suites on a pool in a sparse file. The job
 summary shows the ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
 
-After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
+After a pass, a failure or a timeout, each group saves an `e2e-results-N` artifact (14 days):
 `results.json`, `metrics.jsonl`, `impd.log` (the dev container's whole log) and the dashboard
 suite's Playwright traces and screenshots. A failed suite also prints the last 40 lines of impd's
-log inline. Download the artifact with `gh run download <run-id> -n e2e-results`.
+log inline. Download one with `gh run download <run-id> -n e2e-results-1`.
 
-The job is a required check, and `release-please` waits for it. It became one after it passed on
-every push to `main` from its first run (#2).
+The `e2e` job is a required check, and `release-please` waits for it. It became one after it passed
+on every push to `main` from its first run (#2).
 
 If GitHub-hosted runners lose KVM, move the job to an ephemeral, dedicated self-hosted runner and
 run it only on push to `main`, never on pull requests. Never use the deploy box. The repo is public,

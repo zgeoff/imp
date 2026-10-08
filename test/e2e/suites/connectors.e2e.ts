@@ -3,13 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
-import { startFakeUpstream } from '../lib/fake-upstream';
-import type { FakeUpstream } from '../lib/fake-upstream';
 import { resolveImageName } from '../lib/fixtures';
 import { requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
 import { createImp, holdImp, removeImps } from '../lib/imps';
 import { instance, readContainerGateway, runChecked, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
+import { startStubUpstream } from '../lib/start-stub-upstream';
+import type { StubUpstream } from '../lib/start-stub-upstream';
 import { writeMetric } from '../lib/write-metric';
 
 // The credential broker in a real guest (docs/guides/connectors.md): a fake
@@ -44,13 +44,13 @@ const AuditSchema = z.array(
   }),
 );
 
-let upstream: FakeUpstream;
+let upstream: StubUpstream;
 let repo: string;
 
 beforeAll(async () => {
   const gateway = await readContainerGateway();
 
-  upstream = await startFakeUpstream(gateway, token);
+  upstream = await startStubUpstream(gateway, token);
   repo = await upstream.createRepo('acme/repo.git');
 
   writeFileSync(
@@ -80,7 +80,7 @@ afterAll(async () => {
   await tryImp(['secret', 'rm', oauthSecret]);
   await tryImp(['secret', 'rm', upstreamSecret]);
 
-  await upstream[Symbol.asyncDispose]();
+  await upstream.stop();
 });
 
 test('a secret goes in on stdin and never comes back out of the API', async () => {
