@@ -35,10 +35,12 @@ import { startPebble, stopPebble } from './lib/pebble';
 import { checkPrivileges } from './lib/privileges';
 import { resetBaseline } from './lib/reset-baseline';
 import { runSuite, stopSuiteGroup } from './lib/run-suite';
-import { runSuites } from './lib/run-suites';
+import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
 import { FAST_GROUPS, SUITES, buildSuiteArgv } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
+import { ZFS_OWNER_FILE, readZfsOwner, resetZfsRoot } from './lib/zfs-owner';
+import type { ZfsCommandResult, ZfsOwner } from './lib/zfs-owner';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
@@ -94,9 +96,24 @@ function resolveDataPath(): string {
   return resolve(process.cwd(), configured);
 }
 
+// A data dir the reset may wipe, and the ZFS root it may empty with it
+interface WipeTarget {
+  readonly dir: string;
+  readonly zfs: ZfsOwner | null;
+}
+
+// zpool and zfs as root, from the host image, as the data wipe runs
+async function runHostZfs(argv: readonly string[]): Promise<ZfsCommandResult> {
+  // scripts/lib.sh knows how the host image builds
+  await runChecked(['bash', '-c', 'source "$1" && ensure_host_image', 'bash', LIB_SCRIPT]);
+
+  return runCommand(['docker', 'run', '--rm', '--privileged', getHostImage(), ...argv]);
+}
+
 // The data dir to wipe, or null when it does not exist. The reset deletes it
-// as root, so it must sit under <repo>/.data/ or hold an imp.xfs.
-function resolveWipeTarget(path: string): string | null {
+// as root, so it must sit under <repo>/.data/, hold an imp.xfs, or, on the
+// ZFS backend, provably belong with this run's pool (zfs-owner.ts).
+async function resolveWipeTarget(path: string): Promise<WipeTarget | null> {
   if (!existsSync(path)) {
     return null;
   }
@@ -109,27 +126,42 @@ function resolveWipeTarget(path: string): string | null {
 
   const underDataRoot = dataRoot !== null && data.startsWith(`${dataRoot}/`);
 
-  if (!underDataRoot && !existsSync(join(data, 'imp.xfs'))) {
-    throw new Error(
-      `refusing to wipe ${data}: it is not under ${join(REPO_ROOT, '.data')} and holds no imp.xfs`,
-    );
+  if (underDataRoot || existsSync(join(data, 'imp.xfs'))) {
+    return { dir: data, zfs: null };
   }
 
-  return data;
+  if (process.env['IMP_STORAGE_BACKEND'] === 'zfs') {
+    const zfs = await readZfsOwner({
+      dataDir: data,
+      zfsRoot: process.env['IMP_ZFS_ROOT'],
+      run: runHostZfs,
+    });
+
+    if (zfs !== null) {
+      return { dir: data, zfs };
+    }
+  }
+
+  throw new Error(
+    `refusing to wipe ${data}: it is not under ${join(REPO_ROOT, '.data')}, holds no imp.xfs, ` +
+      "and is no data dir of this run's ZFS pool",
+  );
 }
 
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
-  const data = resolveWipeTarget(resolveDataPath());
+  const data = await resolveWipeTarget(resolveDataPath());
 
   // the moves suites' second host keeps its data between runs, which spares
   // its image seed; a reset takes it too, so no old migration outlives a
   // rebase that renumbered it
-  const hostB = resolveWipeTarget(`${resolveDataPath()}-mv-b`);
+  const hostB = await resolveWipeTarget(`${resolveDataPath()}-mv-b`);
+
+  const targets = [data, hostB].filter((target) => target !== null);
 
   console.log(
-    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${[data, hostB].filter((dir) => dir !== null).join(' and ') || 'nothing'}`,
+    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${targets.map((target) => target.dir).join(' and ') || 'nothing'}`,
   );
 
   const container = await runCommand(['docker', 'inspect', instance.container]);
@@ -146,13 +178,17 @@ async function resetInstance(): Promise<void> {
   await runDevScript('down');
   await runCommand(['docker', 'rm', '-f', `${instance.container}-mv-b`]);
 
-  for (const dir of [data, hostB]) {
-    if (dir !== null) {
-      await removeDataFiles(dir);
+  for (const target of targets) {
+    await removeDataFiles(target.dir);
+
+    if (target.zfs !== null) {
+      await resetZfsRoot(target.zfs, runHostZfs);
     }
   }
 }
 
+// every file in the data dir but the ZFS owner file, which the next reset
+// still needs to prove the dir
 async function removeDataFiles(data: string): Promise<void> {
   const hostImage = getHostImage();
 
@@ -170,7 +206,7 @@ async function removeDataFiles(data: string): Promise<void> {
     hostImage,
     'bash',
     '-c',
-    'for dev in $(losetup -n -O NAME -j /d/imp.xfs 2>/dev/null); do losetup -d "$dev" || true; done; find /d -mindepth 1 -delete',
+    `for dev in $(losetup -n -O NAME -j /d/imp.xfs 2>/dev/null); do losetup -d "$dev" || true; done; find /d -mindepth 1 ! -path /d/${ZFS_OWNER_FILE} -delete`,
   ]);
 }
 
@@ -569,7 +605,12 @@ async function main(): Promise<number> {
     console.log(`   ${formatSection(section)}`);
   }
 
-  const passed = sections.every((section) => section.verdict === 'PASS') && stoppedBecause === null;
+  const passed = checkRunPassed({
+    passed: sections.map((section) => section.verdict === 'PASS'),
+    stoppedBecause,
+    interrupted,
+  });
+
   const verdict = passed ? '== PASS' : '== FAIL';
 
   console.log(verdict);

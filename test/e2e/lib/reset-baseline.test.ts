@@ -347,43 +347,63 @@ test('it removes what any of several prefixes names', async () => {
 test('it never removes what another owner named, a near-miss prefix included', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'e2e-tiny-0123abcd', 'rootfs.ext4'), 'rootfs');
+  for (const name of ['e2e-tiny-0123abcd', 'e2e-xy-img']) {
+    await Bun.write(join(ctx.dataDir, 'images', name, 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'e2e-tiny-0123abcd',
-    ref: 'tiny:1',
-    digest: 'sha256:e2e-tiny-0123abcd',
-    sizeBytes: 6,
-  });
+    await createImage(ctx.db, { name, ref: `${name}:1`, digest: `sha256:${name}`, sizeBytes: 6 });
+  }
 
   await ctx.client.imps.create({ name: 'e2e-y-dev', image: 'e2e-tiny-0123abcd' });
   await ctx.client.imps.create({ name: 'e2e-xy-dev' });
   await ctx.client.networks.create({ name: 'lab' });
   await ctx.client.networks.create({ name: 'e2e-xy-lab' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_owner' });
+  await ctx.client.secrets.add({ name: 'e2e-xy-gh', kind: 'github', value: 'ghp_near' });
   await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
   await ctx.client.tokens.create({ name: 'e2e-xy-reader', scope: 'read' });
 
-  await ctx.client.oauth.clients.add({
-    name: 'conn',
-    redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
-  });
+  for (const name of ['conn', 'e2e-xy-conn']) {
+    await ctx.client.oauth.clients.add({
+      name,
+      redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
+    });
+  }
+
+  // every kind, read the same way before and after
+  const readNames = async () => {
+    const imps = await ctx.client.imps.list();
+    const images = await ctx.client.images.list();
+    const networks = await ctx.client.networks.list();
+    const secrets = await ctx.client.secrets.list();
+    const tokens = await ctx.client.tokens.list();
+    const clients = await ctx.client.oauth.clients.list();
+
+    return {
+      imps: imps.map((imp) => imp.name).toSorted(),
+      images: images.map((image) => image.name).toSorted(),
+      networks: networks.map((network) => network.name).toSorted(),
+      secrets: secrets.map((secret) => secret.name).toSorted(),
+      tokens: tokens.map((token) => token.name).toSorted(),
+      clients: clients.map((client) => client.name).toSorted(),
+    };
+  };
+
+  const before = await readNames();
 
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
-  const imps = await ctx.client.imps.list();
-  const images = await ctx.client.images.list();
-  const networks = await ctx.client.networks.list();
-  const secrets = await ctx.client.secrets.list();
-  const tokens = await ctx.client.tokens.list();
-  const clients = await ctx.client.oauth.clients.list();
+  const after = await readNames();
 
-  expect(imps.map((imp) => imp.name)).toIncludeSameMembers(['e2e-y-dev', 'e2e-xy-dev']);
-  expect(images.map((image) => image.name)).toIncludeSameMembers(['ubuntu', 'e2e-tiny-0123abcd']);
-  expect(networks.map((network) => network.name)).toIncludeSameMembers(['lab', 'e2e-xy-lab']);
-  expect(secrets.map((secret) => secret.name)).toStrictEqual(['gh']);
-  expect(tokens.map((token) => token.name)).toIncludeSameMembers(['reader', 'e2e-xy-reader']);
-  expect(clients.map((client) => client.name)).toStrictEqual(['conn']);
+  expect(before).toStrictEqual({
+    imps: ['e2e-xy-dev', 'e2e-y-dev'],
+    images: ['e2e-tiny-0123abcd', 'e2e-xy-img', 'ubuntu'],
+    networks: ['e2e-xy-lab', 'lab'],
+    secrets: ['e2e-xy-gh', 'gh'],
+    tokens: ['e2e-xy-reader', 'reader'],
+    clients: ['conn', 'e2e-xy-conn'],
+  });
+
+  expect(after).toStrictEqual(before);
 });
 
 test('it fails when impd refuses to remove what the prefix names', async () => {

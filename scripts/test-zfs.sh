@@ -9,7 +9,8 @@
 # CI job runs it on a GitHub runner; on a host, scripts/zfs-host-test.sh does.
 #
 # Env: IMP_ZFS_TEST_DIR (default a new temp dir) holds the pool file and
-#      the mount point; it may exist, but not its pool.img or mnt.
+#      the mount point; it may exist, but not its pool.img or mnt, and it is
+#      made with its parents when it does not.
 #      IMP_ZFS_TEST_GIB (default 4) sizes the pool file.
 #      IMP_ZFS_MODULE_VERSION_FILE (default /sys/module/zfs/version) is
 #      where the loaded module's version is read, for the script's tests.
@@ -17,7 +18,9 @@
 # The run owns only what it creates: it refuses a pool name that is taken,
 # or a pool.img or mnt already in the work dir, before it touches anything,
 # and its cleanup releases only what it made, so a failed step never takes
-# another run's pool, file or mount.
+# another run's pool, file or mount. It destroys the pool only when
+# `zpool status -P` shows its vdev is this run's pool.img, and never removes
+# a pool.img that a pool still uses.
 set -euo pipefail
 
 fail() {
@@ -52,14 +55,20 @@ fi
 
 echo "test-zfs: zfs $(cat "$module_version") (module), $(zfs version | head -1) (userland)"
 
-# what this run made, so cleanup releases that and nothing else
+# what this run made, so cleanup releases that and nothing else; the pool
+# is proven by its vdev instead, since a signal during its create runs the
+# trap only once the create has finished
 made_work=
 made_mnt=
 made_img=
-made_pool=
 
 # the test run, when it runs, so a signal can stop it first
 child=
+
+# uses_img [POOL]: POOL, or any pool, lists this run's pool.img as a vdev
+uses_img() {
+  zpool status -P "$@" 2>/dev/null | awk -v img="$img" '$1 == img { found = 1 } END { exit !found }'
+}
 
 # In reverse order. Everything under $mnt is unmounted before the pool goes:
 # the tests mount datasets there, and a test that fails can leave them. A
@@ -74,13 +83,18 @@ cleanup() {
   if [ -n "$made_mnt" ]; then
     umount -R "$mnt" 2>/dev/null || true
   fi
-  if [ -n "$made_pool" ] && ! zpool destroy -f "$pool"; then
-    echo "test-zfs: could not destroy $pool; its file stays at $work/pool.img" >&2
+  if [ -n "$made_img" ] && uses_img "$pool" && ! zpool destroy -f "$pool"; then
+    echo "test-zfs: could not destroy $pool; its file stays at $img" >&2
     [ "$status" != 0 ] || status=1
     exit "$status"
   fi
   if [ -n "$made_img" ]; then
-    rm -f "$work/pool.img"
+    if uses_img; then
+      echo "test-zfs: a pool still uses $img; it stays" >&2
+      [ "$status" != 0 ] || status=1
+      exit "$status"
+    fi
+    rm -f "$img"
   fi
   if [ -n "$made_mnt" ]; then
     rmdir "$mnt" 2>/dev/null || true
@@ -95,10 +109,13 @@ if [ -z "$work" ]; then
   work=$(mktemp -d)
   made_work=1
 elif [ ! -d "$work" ]; then
-  mkdir "$work"
+  mkdir -p "$work"
   made_work=1
 fi
+# absolute, as zpool status -P prints the vdev
+work=$(cd "$work" && pwd)
 mnt=$work/mnt
+img=$work/pool.img
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -107,13 +124,12 @@ trap 'exit 130' INT
 # path that appeared since the checks above is refused, never taken over
 mkdir "$mnt"
 made_mnt=1
-(set -o noclobber && : >"$work/pool.img")
+(set -o noclobber && : >"$img")
 made_img=1
-truncate -s "${gib}G" "$work/pool.img"
+truncate -s "${gib}G" "$img"
 # the properties deploy/bootstrap.sh gives the imp root dataset
 zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
-  "$pool" "$work/pool.img"
-made_pool=1
+  "$pool" "$img"
 zfs create -o mountpoint=legacy "$pool/imp"
 mount -t zfs "$pool/imp" "$mnt"
 

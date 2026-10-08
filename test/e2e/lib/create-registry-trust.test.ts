@@ -49,14 +49,17 @@ test('#createRegistryTrust refuses a registry whose directory is already there, 
   await mkdir(owned, { recursive: true });
   await writeFile(join(owned, 'ca.crt'), 'another owner');
 
-  expect(
-    createRegistryTrust({
-      registry: 'imp-e2e-registry.test:43210',
-      certPath: ctx.certPath,
-      certsRoot: ctx.certsRoot,
-      asRoot: [],
-    }),
-  ).rejects.toThrow(/^refusing to trust imp-e2e-registry\.test:43210: mkdir: /);
+  const attempt = createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: ctx.certPath,
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  // settled before the directory is read
+  await Promise.allSettled([attempt]);
+
+  expect(attempt).rejects.toThrow(/^refusing to trust imp-e2e-registry\.test:43210: mkdir: /);
 
   const kept = await readFile(join(owned, 'ca.crt'), 'utf8');
 
@@ -121,22 +124,87 @@ test('#createRegistryTrust removes once, so a directory made again after the rem
 test('#createRegistryTrust removes the directory it made when the certificate copy fails', async () => {
   const ctx = await setupTest();
 
-  expect(
-    createRegistryTrust({
-      registry: 'imp-e2e-registry.test:43210',
-      certPath: join(ctx.dir, 'missing.pem'),
-      certsRoot: ctx.certsRoot,
-      asRoot: [],
-    }),
-  ).rejects.toThrow(/^cp .* exited 1: /);
+  const attempt = createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: join(ctx.dir, 'missing.pem'),
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  // settled before the directory is read
+  await Promise.allSettled([attempt]);
+
+  expect(attempt).rejects.toThrow(/^cp .* exited 1: /);
 
   const left = await readdir(ctx.certsRoot);
 
   expect(left).toBeEmpty();
 });
 
-test('#createRegistryTrust writes an owner file that names this process', async () => {
+test('#createRegistryTrust writes an owner file with this process’s pid and start time', async () => {
   const ctx = await setupTest();
+
+  // this process's stat, whose 22nd field is its start time
+  const procRoot = join(ctx.dir, 'proc');
+
+  await mkdir(join(procRoot, String(process.pid)), { recursive: true });
+
+  await writeFile(
+    join(procRoot, String(process.pid), 'stat'),
+    `${String(process.pid)} (bun test) S ${Array.from({ length: 18 }, () => '0').join(' ')} 4242 0\n`,
+  );
+
+  const trust = await createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: ctx.certPath,
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+    procRoot,
+  });
+
+  const text = await readFile(join(trust.dir, OWNER_FILE), 'utf8');
+
+  const owner: unknown = JSON.parse(text);
+
+  expect(owner).toStrictEqual({ pid: process.pid, startTime: '4242' });
+});
+
+test('#createRegistryTrust makes nothing when this process’s start time is unreadable', async () => {
+  const ctx = await setupTest();
+
+  const procRoot = join(ctx.dir, 'proc');
+
+  await mkdir(procRoot);
+
+  const attempt = createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: ctx.certPath,
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+    procRoot,
+  });
+
+  await Promise.allSettled([attempt]);
+
+  expect(attempt).rejects.toThrow(
+    "refusing to trust imp-e2e-registry.test:43210: this process's start time is unreadable",
+  );
+
+  expect(existsSync(ctx.certsRoot)).toBeFalse();
+});
+
+test('#createRegistryTrust takes over the directory an exited run of this harness left', async () => {
+  const ctx = await setupTest();
+
+  const gone = Bun.spawn(['true']);
+
+  await gone.exited;
+
+  const stale = join(ctx.certsRoot, 'imp-e2e-registry.test:43210');
+
+  await mkdir(stale, { recursive: true });
+  await writeFile(join(stale, 'ca.crt'), 'an earlier run');
+  await writeFile(join(stale, OWNER_FILE), JSON.stringify({ pid: gone.pid, startTime: '1' }));
 
   const trust = await createRegistryTrust({
     registry: 'imp-e2e-registry.test:43210',
@@ -145,12 +213,33 @@ test('#createRegistryTrust writes an owner file that names this process', async 
     asRoot: [],
   });
 
-  const text = await readFile(join(trust.dir, OWNER_FILE), 'utf8');
+  const trusted = await readFile(join(trust.dir, 'ca.crt'), 'utf8');
 
-  const owner: unknown = JSON.parse(text);
+  expect(trusted).toBe('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+});
 
-  expect(owner).toMatchObject({ pid: process.pid });
-  expect(owner).toHaveProperty('startTime', expect.stringMatching(/^\d+$/));
+test('#createRegistryTrust removes what exited runs left on other ports of the same host', async () => {
+  const ctx = await setupTest();
+
+  const gone = Bun.spawn(['true']);
+
+  await gone.exited;
+
+  const stale = join(ctx.certsRoot, 'imp-e2e-registry.test:40001');
+
+  await mkdir(stale, { recursive: true });
+  await writeFile(join(stale, OWNER_FILE), JSON.stringify({ pid: gone.pid, startTime: '1' }));
+
+  await createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: ctx.certPath,
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  const left = await readdir(ctx.certsRoot);
+
+  expect(left).toStrictEqual(['imp-e2e-registry.test:43210']);
 });
 
 test('#removeStaleRegistryTrusts removes a directory whose owner no longer runs', async () => {
@@ -193,6 +282,47 @@ test('#removeStaleRegistryTrusts keeps a directory whose owner still runs', asyn
 
   expect(removed).toBeEmpty();
   expect(existsSync(trust.dir)).toBeTrue();
+});
+
+test('#removeStaleRegistryTrusts removes a directory whose pid now runs another process', async () => {
+  const ctx = await setupTest();
+
+  // this process's pid, with a start time it never had: the pid was reused
+  const reused = join(ctx.certsRoot, 'imp-e2e-registry.test:40004');
+
+  await mkdir(reused, { recursive: true });
+  await writeFile(join(reused, OWNER_FILE), JSON.stringify({ pid: process.pid, startTime: '1' }));
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toStrictEqual([reused]);
+  expect(existsSync(reused)).toBeFalse();
+});
+
+test('#removeStaleRegistryTrusts keeps a directory whose owner file records no start time', async () => {
+  const ctx = await setupTest();
+
+  const gone = Bun.spawn(['true']);
+
+  await gone.exited;
+
+  const unproven = join(ctx.certsRoot, 'imp-e2e-registry.test:40005');
+
+  await mkdir(unproven, { recursive: true });
+  await writeFile(join(unproven, OWNER_FILE), JSON.stringify({ pid: gone.pid, startTime: null }));
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toBeEmpty();
+  expect(existsSync(unproven)).toBeTrue();
 });
 
 test('#removeStaleRegistryTrusts keeps a directory with no owner file', async () => {

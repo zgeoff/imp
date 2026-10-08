@@ -284,12 +284,16 @@ test.skipIf(!KSM_READY)(
       async () => {
         const mib = await readAwakePssMib();
 
-        expect(mib).toBeLessThanOrEqual(BUDGET_MIB);
+        if (mib > BUDGET_MIB) {
+          throw new Error(`${String(mib)} MiB awake, over the ${String(BUDGET_MIB)} MiB budget`);
+        }
 
         return mib;
       },
       { timeoutMs: ENFORCE_WITHIN_MS, intervalMs: 500 },
     );
+
+    expect(awakeMib).toBeLessThanOrEqual(BUDGET_MIB);
 
     const rows = await listImps();
 

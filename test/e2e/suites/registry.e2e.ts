@@ -3,7 +3,7 @@ import { lookup } from 'node:dns/promises';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
-import { createRegistryTrust, removeStaleRegistryTrusts } from '../lib/create-registry-trust';
+import { createRegistryTrust } from '../lib/create-registry-trust';
 import { runImp, tryImp } from '../lib/imp-cli';
 import { REPO_ROOT, runChecked, runCommand, runDevScript } from '../lib/instance';
 import { writeRegistryIndex } from '../lib/registry-index';
@@ -126,9 +126,6 @@ beforeAll(async () => {
   const port = published.trim().split('\n')[0]?.split(':').at(-1) ?? '';
 
   registry = `${REGISTRY_NAME}:${port}`;
-
-  // what an earlier run that bailed or was killed left in certs.d
-  await removeStaleRegistryTrusts({ name: REGISTRY_NAME });
 }, 600_000);
 
 afterAll(async () => {

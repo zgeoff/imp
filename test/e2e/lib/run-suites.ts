@@ -60,13 +60,14 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
     const started = deps.now();
 
-    const exitCode = await deps.runSuite(name);
-    const isClean = await deps.checkSuite(name);
+    const verdict = await runChecked(deps, name);
 
     const prefix = deps.prefixOf(name);
     const isKeptForRestart = name === 'scale' && deps.names.includes('restart');
     const prefixes = [prefix, ...carried];
 
+    // a suite kept for restart is never reset here, so a fresh instance
+    // never has a carry to drop
     carried = isKeptForRestart ? [prefix] : [];
 
     let isRestored = true;
@@ -74,7 +75,7 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
     if (!deps.keep && !isKeptForRestart) {
       try {
-        if (exitCode !== 0 && !deps.isInterrupted()) {
+        if (!verdict.isPassed && !deps.isInterrupted()) {
           await deps.reboot();
         }
 
@@ -89,9 +90,6 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
     if (!isRestored && !deps.isInterrupted()) {
       try {
         await deps.recreate();
-
-        // a fresh instance holds nothing to carry
-        carried = [];
       } catch (error) {
         stoppedBecause = `the instance could not be made anew after ${name}: ${readReason(error)}`;
       }
@@ -99,7 +97,7 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
     const result = {
       name,
-      passed: exitCode === 0 && isClean && isRestored,
+      passed: verdict.isPassed && verdict.isClean && isRestored,
       ms: deps.now() - started,
     };
 
@@ -111,5 +109,47 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
     }
   }
 
-  return { results, stoppedBecause: null };
+  return { results, stoppedBecause: deps.isInterrupted() ? 'interrupted' : null };
+}
+
+interface SuiteVerdict {
+  readonly isPassed: boolean;
+  readonly isClean: boolean;
+}
+
+// A suite that throws, or whose checks throw, fails like one that exits
+// non-zero, and the run goes on.
+async function runChecked(deps: Readonly<RunSuitesDeps>, name: string): Promise<SuiteVerdict> {
+  let isPassed = false;
+
+  try {
+    const exitCode = await deps.runSuite(name);
+
+    isPassed = exitCode === 0;
+  } catch (error) {
+    deps.log(`    the ${name} suite could not run: ${readReason(error)}`);
+  }
+
+  try {
+    const isClean = await deps.checkSuite(name);
+
+    return { isPassed, isClean };
+  } catch (error) {
+    deps.log(`    the ${name} suite's checks failed: ${readReason(error)}`);
+
+    return { isPassed, isClean: false };
+  }
+}
+
+export interface RunVerdictInput {
+  // each section's verdict, setup included
+  readonly passed: readonly boolean[];
+  readonly stoppedBecause: string | null;
+  readonly interrupted: boolean;
+}
+
+// A run passes only when every section passed, nothing stopped it, and no
+// signal came, even one after the last suite ended.
+export function checkRunPassed(input: Readonly<RunVerdictInput>): boolean {
+  return input.passed.every(Boolean) && input.stoppedBecause === null && !input.interrupted;
 }

@@ -39,17 +39,19 @@ test('#runSuite returns the exit code of a suite that fails', async () => {
   expect(exitCode).toBe(3);
 });
 
-test('#stopSuiteGroup stops a running suite through its group', async () => {
+test('#stopSuiteGroup stops a running suite and the processes it started', async () => {
   const ctx = await setupTest();
 
   const marker = join(ctx.dir, 'started');
   const started = Promise.withResolvers<number>();
 
+  // a suite that starts a child of its own, as the imp CLI calls do, and
+  // writes the child's pid once it runs
   const running = runSuite({
     argv: [
       process.execPath,
       '-e',
-      'await Bun.write(process.argv[1], "imp"); setInterval(() => {}, 1000)',
+      'const child = Bun.spawn(["sleep", "1000"]); await Bun.write(process.argv[1], String(child.pid)); setInterval(() => {}, 1000)',
       marker,
     ],
     cwd: ctx.dir,
@@ -61,13 +63,31 @@ test('#stopSuiteGroup stops a running suite through its group', async () => {
 
   const pid = await started.promise;
 
-  await waitFor(() => readFile(marker), { timeoutMs: 10_000 });
+  const grandchild = await waitFor(
+    async () => {
+      const text = await readFile(marker, 'utf8');
 
-  stopSuiteGroup(pid, 'SIGINT');
+      // a pid, not a file caught half written
+      expect(text).toMatch(/^[1-9]\d*$/);
+
+      return Number(text);
+    },
+    { timeoutMs: 10_000 },
+  );
+
+  stopSuiteGroup(pid, 'SIGTERM');
 
   const exitCode = await running;
 
   expect(exitCode).not.toBe(0);
+
+  // gone: signal 0 to its pid finds no process
+  await waitFor(
+    () => {
+      expect(() => process.kill(grandchild, 0)).toThrow(/ESRCH/);
+    },
+    { timeoutMs: 10_000 },
+  );
 });
 
 test('#stopSuiteGroup treats a group that already exited as stopped', async () => {

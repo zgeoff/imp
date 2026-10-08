@@ -153,3 +153,35 @@ test('it never lets the required e2e check swallow a failure', () => {
 
   expect(runs).not.toInclude('|| true');
 });
+
+test('it lets every group finish, so one failure does not hide another', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  expect(jobs['e2e-group'].strategy['fail-fast']).toBeFalse();
+});
+
+test('it hands the cache writer flag to the build inputs step', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  const step = jobs['e2e-group'].steps.find(
+    (candidate) => candidate.name === 'Build kernel, system drive and host image',
+  );
+
+  expect(step?.with?.['write-cache']).toBe(`\${{ env.WRITE_CACHE }}`);
+});
+
+test('it runs exactly the result check in the required e2e step', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  const step = jobs.e2e.steps.find(
+    (candidate) => candidate.name === 'Require every e2e group to pass',
+  );
+
+  expect(step?.run).toBe('echo "e2e groups: $RESULT"\ntest "$RESULT" = success\n');
+});

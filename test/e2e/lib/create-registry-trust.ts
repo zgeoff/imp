@@ -62,16 +62,28 @@ async function runAs(
   }
 }
 
-// Makes the engine trust a registry's certificate through Docker's fixed
-// certs.d path, in a directory this call makes: it refuses an existing one
-// untouched, and removes only its own, never certsRoot.
+// Trusts a registry's certificate through Docker's certs.d path, in a
+// directory this call makes after it sweeps the host's stale ones; it
+// refuses one still there, and removes only its own, never certsRoot.
 export async function createRegistryTrust(
   options: Readonly<RegistryTrustOptions>,
 ): Promise<RegistryTrust> {
   const certsRoot = options.certsRoot ?? '/etc/docker/certs.d';
   const asRoot = options.asRoot ?? ['sudo', '--non-interactive'];
+  const procRoot = options.procRoot ?? '/proc';
   const dir = join(certsRoot, options.registry);
+  const startTime = readStartTime(procRoot, process.pid);
 
+  // a directory whose owner cannot be proven later is one no run may remove
+  if (startTime === null) {
+    throw new Error(
+      `refusing to trust ${options.registry}: this process's start time is unreadable`,
+    );
+  }
+
+  const host = options.registry.slice(0, options.registry.lastIndexOf(':'));
+
+  await removeStaleRegistryTrusts({ name: host, certsRoot, asRoot, procRoot });
   await runAs(asRoot, ['mkdir', '--parents', certsRoot]);
 
   // no --parents: mkdir fails on a directory that is already there, so the
@@ -94,10 +106,7 @@ export async function createRegistryTrust(
     await runAs(asRoot, ['rm', '--recursive', '--force', dir]);
   };
 
-  const owner = JSON.stringify({
-    pid: process.pid,
-    startTime: readStartTime(options.procRoot ?? '/proc', process.pid),
-  });
+  const owner = JSON.stringify({ pid: process.pid, startTime });
 
   // a failed write leaves no half-made directory behind
   try {
@@ -133,9 +142,9 @@ export interface StaleTrustOptions {
   readonly procRoot?: string;
 }
 
-// Removes the trust directories an earlier run of this harness left, such as
-// one a suite that bailed or was killed never removed: only a directory whose
-// owner file names a process that no longer runs. Returns what it removed.
+// Removes the <name>:* directories whose owner file parses and whose pid's
+// start time is not the recorded one (gone, or reused); any other proves
+// nothing and stays. Returns what it removed.
 export async function removeStaleRegistryTrusts(
   options: Readonly<StaleTrustOptions>,
 ): Promise<readonly string[]> {

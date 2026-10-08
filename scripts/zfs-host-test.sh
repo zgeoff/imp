@@ -24,10 +24,13 @@
 #      IMP_ZFS_MODULE_VERSION_FILE (default /sys/module/zfs/version) is
 #      where the loaded module's version is read, for the script's tests.
 #
-# The run owns only what it creates: it refuses a bench pool name that is
-# taken, or a bench.img already in the work dir, before it touches anything,
-# and its cleanup releases only what it made. The work dir holds the results,
-# so it stays.
+# The run owns only what it creates: before it touches anything it refuses a
+# bench pool name that is taken, a bench.img or data dir already in the work
+# dir, and an imp-zfs container that is already there. Its cleanup releases
+# only what it made: it destroys the pool only when `zpool status -P` shows
+# its vdev is this run's bench.img, and never removes a bench.img a pool
+# still uses. The work dir holds the results, so it stays, and a second run
+# in the same dir is refused for its data dir.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -42,16 +45,29 @@ pool=impbench$$
 gib=${IMP_ZFS_BENCH_GIB:-40}
 module_version=${IMP_ZFS_MODULE_VERSION_FILE:-/sys/module/zfs/version}
 
+export IMP_DEV_NAME=imp-zfs
+
 [ -r "$module_version" ] || fail "load the zfs module first (sudo modprobe zfs)"
 
-# a generated name is not ownership: refuse one that is already in use, and
-# a work dir that already holds a bench pool file
+# a generated or fixed name is not ownership: refuse one that is already in
+# use, and a work dir that already holds a bench pool file or a data dir
 if sudo zpool list "$pool" >/dev/null 2>&1; then
   fail "a pool named $pool already exists; refusing to touch it"
 fi
 if [ -e "$work/bench.img" ] || [ -L "$work/bench.img" ]; then
   fail "$work/bench.img already exists; refusing to touch it"
 fi
+if [ -e "$work/data" ] || [ -L "$work/data" ]; then
+  fail "$work/data already exists; refusing to touch it"
+fi
+if docker container inspect "$IMP_DEV_NAME" >/dev/null 2>&1; then
+  fail "a container named $IMP_DEV_NAME already exists; refusing to touch it"
+fi
+
+mkdir -p "$work"
+# absolute, as zpool status -P prints the vdev
+work=$(cd "$work" && pwd)
+img=$work/bench.img
 
 echo "zfs-host-test: zfs module $(cat "$module_version"); results in $work"
 
@@ -60,33 +76,50 @@ if [ "${IMP_ZFS_TEST_UNIT:-1}" != 0 ]; then
   rmdir "$work/unit" 2>/dev/null || true
 fi
 
-export IMP_DEV_NAME=imp-zfs
 export IMP_DEV_PORT_OFFSET=${IMP_DEV_PORT_OFFSET:-300}
 export IMP_DEV_DATA=$work/data
 export IMP_STORAGE_BACKEND=zfs
 export IMP_ZFS_ROOT=$pool/imp
 
-# what this run made, so cleanup releases that and nothing else
+# what this run made, so cleanup releases that and nothing else; the pool is
+# proven by its vdev instead, since a signal during its create runs the trap
+# only once the create has finished
 made_img=
-made_pool=
 started_instance=
+
+# the e2e run, while it runs, so a signal can stop it first
+child=
+
+# uses_img [POOL]: POOL, or any pool, lists this run's bench.img as a vdev
+uses_img() {
+  sudo zpool status -P "$@" 2>/dev/null | awk -v img="$img" '$1 == img { found = 1 } END { exit !found }'
+}
 
 # In reverse order; the results stay in $work. A pool that will not go keeps
 # its file, so it can still be imported and destroyed by hand, and the run
 # fails.
 cleanup() {
   local status=$?
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
   if [ -n "$started_instance" ]; then
     docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
     "$IMP_ROOT/scripts/dev.sh" down || true
   fi
-  if [ -n "$made_pool" ] && ! sudo zpool destroy -f "$pool"; then
-    echo "zfs-host-test: could not destroy $pool; its file stays at $work/bench.img" >&2
+  if [ -n "$made_img" ] && uses_img "$pool" && ! sudo zpool destroy -f "$pool"; then
+    echo "zfs-host-test: could not destroy $pool; its file stays at $img" >&2
     [ "$status" != 0 ] || status=1
     exit "$status"
   fi
   if [ -n "$made_img" ]; then
-    sudo rm -f "$work/bench.img"
+    if uses_img; then
+      echo "zfs-host-test: a pool still uses $img; it stays" >&2
+      [ "$status" != 0 ] || status=1
+      exit "$status"
+    fi
+    sudo rm -f "$img"
   fi
   exit "$status"
 }
@@ -94,17 +127,22 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-# a noclobber create fails on an existing path, so a file that appeared
-# since the check above is refused, never taken over
-(set -o noclobber && : >"$work/bench.img")
+# mkdir without -p and a noclobber create fail on an existing path, so a
+# path that appeared since the checks above is refused, never taken over
+mkdir "$work/data"
+(set -o noclobber && : >"$img")
 made_img=1
-truncate -s "${gib}G" "$work/bench.img"
+truncate -s "${gib}G" "$img"
 # what deploy/bootstrap.sh gives the root dataset; impd sets recordsize=16K
 # on the datasets that hold disks
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
-  "$pool" "$work/bench.img"
-made_pool=1
+  "$pool" "$img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
+
+# what test/e2e/main.ts proves before it wipes this run's data dir and
+# datasets to make the instance anew
+printf '{"pool":"%s","root":"%s","vdev":"%s"}\n' "$pool" "$IMP_ZFS_ROOT" "$img" \
+  >"$work/data/imp-e2e-zfs-owner"
 
 # summarize LABEL REGEX: count, min, median and max of the ms in each match
 summarize() {
@@ -130,14 +168,23 @@ report() {
   sudo zfs list -r -o name,used,refer,compressratio,recordsize "$pool"
 }
 
+# In the background, so a TERM or INT reaches the trap at once and cleanup
+# stops the run before it stops the instance; its output goes through tee,
+# whose own exit is awaited so the log is whole before the report reads it.
 # A failed suite still gets its report; the script then exits with the
 # suites' status.
-set +e
 started_instance=1
-"$IMP_ROOT/scripts/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" 2>&1 |
-  tee "$work/e2e.log"
-status=${PIPESTATUS[0]}
+exec 3> >(tee "$work/e2e.log")
+tee_pid=$!
+"$IMP_ROOT/scripts/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" >&3 2>&1 &
+child=$!
+set +e
+wait "$child"
+status=$?
 set -e
+child=
+exec 3>&-
+wait "$tee_pid" || true
 
 docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
 

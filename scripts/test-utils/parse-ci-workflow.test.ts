@@ -8,6 +8,7 @@ test('it reads the e2e group matrix, the e2e aggregate and release-please', () =
     '    env:',
     `      WRITE_CACHE: \${{ github.event_name == 'push' && matrix.group == 1 }}`,
     '    strategy:',
+    '      fail-fast: false',
     '      matrix:',
     '        include:',
     '          - { group: 1, browser: true, host-tests: false }',
@@ -15,6 +16,9 @@ test('it reads the e2e group matrix, the e2e aggregate and release-please', () =
     '      - name: Host networking tests',
     '        if: matrix.host-tests',
     '        run: bun run test:host',
+    '      - name: Build inputs',
+    '        with:',
+    `          write-cache: \${{ env.WRITE_CACHE }}`,
     '      - name: Upload results',
     '        with:',
     `          name: e2e-results-\${{ matrix.group }}`,
@@ -32,9 +36,13 @@ test('it reads the e2e group matrix, the e2e aggregate and release-please', () =
   expect(parseCiWorkflow(yaml)).toStrictEqual({
     'e2e-group': {
       env: { WRITE_CACHE: `\${{ github.event_name == 'push' && matrix.group == 1 }}` },
-      strategy: { matrix: { include: [{ group: 1, browser: true, 'host-tests': false }] } },
+      strategy: {
+        'fail-fast': false,
+        matrix: { include: [{ group: 1, browser: true, 'host-tests': false }] },
+      },
       steps: [
         { name: 'Host networking tests', if: 'matrix.host-tests', run: 'bun run test:host' },
+        { name: 'Build inputs', with: { 'write-cache': `\${{ env.WRITE_CACHE }}` } },
         { name: 'Upload results', with: { name: `e2e-results-\${{ matrix.group }}` } },
       ],
     },
@@ -69,6 +77,7 @@ test('it throws on a matrix row without its host-tests flag', () => {
     '  e2e-group:',
     '    env: { WRITE_CACHE: "false" }',
     '    strategy:',
+    '      fail-fast: false',
     '      matrix:',
     '        include:',
     '          - { group: 1, browser: true }',
@@ -90,6 +99,7 @@ test('it throws on an e2e aggregate without its if condition', () => {
     '  e2e-group:',
     '    env: { WRITE_CACHE: "false" }',
     '    strategy:',
+    '      fail-fast: false',
     '      matrix:',
     '        include: []',
     '    steps: []',
@@ -108,6 +118,7 @@ test('it throws on an e2e-group job without its WRITE_CACHE env', () => {
     'jobs:',
     '  e2e-group:',
     '    strategy:',
+    '      fail-fast: false',
     '      matrix:',
     '        include: []',
     '    steps: []',
@@ -120,4 +131,24 @@ test('it throws on an e2e-group job without its WRITE_CACHE env', () => {
   ].join('\n');
 
   expect(() => parseCiWorkflow(yaml)).toThrowWithMessage(Error, /"env"/u);
+});
+
+test('it throws on a matrix strategy without its fail-fast setting', () => {
+  const yaml = [
+    'jobs:',
+    '  e2e-group:',
+    '    env: { WRITE_CACHE: "false" }',
+    '    strategy:',
+    '      matrix:',
+    '        include: []',
+    '    steps: []',
+    '  e2e:',
+    '    if: always()',
+    '    needs: []',
+    '    steps: []',
+    '  release-please:',
+    '    needs: []',
+  ].join('\n');
+
+  expect(() => parseCiWorkflow(yaml)).toThrowWithMessage(Error, /"fail-fast"/u);
 });
