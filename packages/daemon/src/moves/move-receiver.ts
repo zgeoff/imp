@@ -649,7 +649,9 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       .where('id', '=', row.id)
       .execute();
 
-    deps.log(`impd: move: ${header.imp.name}: received, waiting for the commit`);
+    const form = header.streams === null ? 'files' : 'zfs streams';
+
+    deps.log(`impd: move: ${header.imp.name}: received as ${form}, waiting for the commit`);
 
     return { status: 200, body: receipt };
   };

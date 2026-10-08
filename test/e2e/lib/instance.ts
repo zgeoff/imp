@@ -214,8 +214,11 @@ export async function readImpdLogTail(lines: number): Promise<string> {
 
 // what impd logged from `since` on; throws when docker cannot read the log,
 // as an empty log would read as a clean one
-export async function readImpdLogSince(since: Readonly<Date>): Promise<string> {
-  const argv = ['docker', 'logs', '--since', since.toISOString(), instance.container];
+export async function readImpdLogSince(
+  since: Readonly<Date>,
+  target: Readonly<DevInstance> = instance,
+): Promise<string> {
+  const argv = ['docker', 'logs', '--since', since.toISOString(), target.container];
 
   const result = await runCommand(argv);
 
