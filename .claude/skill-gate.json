@@ -1,0 +1,11 @@
+{
+  "ignore": ["node_modules/", "dist/", ".cache/"],
+  "gates": [
+    { "match": "**/*.test.{ts,tsx}", "skills": ["testing", "project-testing"] },
+    { "match": "**/*_test.go", "skills": ["testing", "project-testing"] },
+    { "match": "test/**", "skills": ["testing", "project-testing"] },
+    { "match": "**/test-utils/**", "skills": ["testing", "project-testing"] },
+    { "match": "scripts/test-*.sh", "skills": ["testing", "project-testing"] },
+    { "match": "deploy/nixos/tests/**", "skills": ["testing", "project-testing"] }
+  ]
+}
