@@ -224,15 +224,22 @@ func TestTapThatStopsReadingIsDroppedAsSlow(t *testing.T) {
 	m := newTestManager(t)
 	viewer := startLogged(t, m, "main", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done")
 	viewer.started(t)
+	drained := make(chan struct{})
+	// registered after the viewer's own, so it runs first: the viewer's
+	// close ends its frames, and so this drain
+	t.Cleanup(func() {
+		viewer.conn.Close()
+		joined(t, drained, "the viewer's drain")
+	})
 	go func() {
+		defer close(drained)
 		for range viewer.frames {
 		}
 	}()
 	guest, conn := net.Pipe()
-	t.Cleanup(func() { conn.Close() })
 	assert.NilError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
 
-	go m.Serve(proto.Request{Op: proto.OpSessionTap, Session: "main"}, guest, proto.NewReader(guest), proto.NewWriter(guest))
+	served := runServe(t, m, proto.Request{Op: proto.OpSessionTap, Session: "main"}, guest, conn)
 
 	r := proto.NewReader(conn)
 	f, err := r.Next()
@@ -245,13 +252,19 @@ func TestTapThatStopsReadingIsDroppedAsSlow(t *testing.T) {
 	assert.Check(t, cmp.Equal(taps(m, "main"), 0), "taps after the tap fell behind")
 	info, _ := find(m, "main")
 	assert.Check(t, info.Attached, "the viewer went with the tap")
-	for {
+	// the tap, once it reads again, finds DETACHED slow at the end
+	var detached proto.Frame
+	for detached.Type != proto.TypeDetached {
 		f, err := r.Next()
 		assert.NilError(t, err, "the tap ended without DETACHED")
-		if f.Type == proto.TypeDetached {
-			assert.Check(t, cmp.Equal(decode[proto.Detached](t, f).Reason, proto.DetachSlow))
-			return
-		}
+		detached = f
+	}
+	assert.Check(t, cmp.Equal(decode[proto.Detached](t, detached).Reason, proto.DetachSlow))
+	select {
+	case err := <-served:
+		assert.Check(t, err, "Serve")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dropped tap's Serve did not return")
 	}
 }
 

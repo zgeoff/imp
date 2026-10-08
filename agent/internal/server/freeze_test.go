@@ -1,7 +1,9 @@
 package server
 
 import (
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -10,6 +12,7 @@ import (
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 )
 
 // fakeIoctl records the ioctls freeze and thaw issue.
@@ -100,6 +103,64 @@ func TestStaleAutoThawLeavesALaterFreezeFrozen(t *testing.T) {
 	assert.Check(t, s.frozen, "the later freeze still holds")
 }
 
+// lockWaiters reports whether a goroutine running fn is blocked taking a
+// sync.Mutex, from the runtime's own stacks.
+func lockWaiters(fn string) bool {
+	buf := make([]byte, 1<<20)
+	stacks := string(buf[:runtime.Stack(buf, true)])
+	for _, g := range strings.Split(stacks, "\n\n") {
+		if strings.Contains(g, fn) && strings.Contains(g, "sync.(*Mutex).Lock") {
+			return true
+		}
+	}
+	return false
+}
+
+// A timer that fires while freezeMu is held waits for the lock, then finds
+// its freeze thawed and a new one in place, and leaves the new one frozen.
+func TestAutoThawThatFiresWhileTheLockIsHeldWaitsAndThenLeavesALaterFreeze(t *testing.T) {
+	var f fakeIoctl
+	f.install(t)
+	var callbacks []func()
+	prev := afterFunc
+	afterFunc = func(d time.Duration, fn func()) *time.Timer {
+		callbacks = append(callbacks, fn)
+		return prev(time.Hour, func() {})
+	}
+	t.Cleanup(func() { afterFunc = prev })
+	s := &Server{}
+	assert.NilError(t, s.freeze(time.Millisecond))
+	t.Cleanup(func() { s.thaw() })
+	autoThaw := callbacks[0]
+	s.freezeMu.Lock()
+	fired := make(chan struct{})
+	// the timer fires: its callback runs on a goroutine of its own
+	go func() {
+		defer close(fired)
+		autoThaw()
+	}()
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if lockWaiters("server.(*Server).freeze.func1") {
+			return poll.Success()
+		}
+		return poll.Continue("the callback is not waiting on freezeMu yet")
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(time.Millisecond))
+
+	thawErr := s.thawLocked()
+	s.freezeMu.Unlock()
+	freezeErr := s.freeze(time.Hour)
+	select {
+	case <-fired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the callback never took the lock")
+	}
+
+	assert.Check(t, thawErr)
+	assert.Check(t, freezeErr)
+	assert.Check(t, cmp.DeepEqual(f.get(), []uint{fiFreeze, fiThaw, fiFreeze}))
+	assert.Check(t, s.frozen, "the later freeze still holds")
+}
+
 func TestFreezeRefusesASecondFreezeAsFrozen(t *testing.T) {
 	var f fakeIoctl
 	f.install(t)
@@ -111,6 +172,21 @@ func TestFreezeRefusesASecondFreezeAsFrozen(t *testing.T) {
 
 	assert.Check(t, cmp.ErrorIs(err, errFrozen))
 	assert.Check(t, cmp.DeepEqual(f.get(), []uint{fiFreeze}), "the refused freeze issued no ioctl")
+}
+
+func TestThawThawsASecondFreeze(t *testing.T) {
+	var f fakeIoctl
+	f.install(t)
+	s := &Server{}
+	assert.NilError(t, s.freeze(time.Hour))
+	assert.NilError(t, s.thaw())
+	assert.NilError(t, s.freeze(time.Hour))
+
+	err := s.thaw()
+
+	assert.Check(t, err)
+	assert.Check(t, cmp.DeepEqual(f.get(), []uint{fiFreeze, fiThaw, fiFreeze, fiThaw}))
+	assert.Check(t, !s.frozen, "the second freeze still holds")
 }
 
 func TestFreezeSucceedsAgainAfterAThaw(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,7 +40,13 @@ func TestServeListensAgainAfterAFailedAccept(t *testing.T) {
 	assert.NilError(t, err)
 	t.Cleanup(func() { good.Close() })
 	var calls atomic.Int32
+	// Serve never returns once it listens; after the test, listen ends its
+	// goroutine instead, so cleanup can join it.
+	var stopped atomic.Bool
 	listen := func() (net.Listener, error) {
+		if stopped.Load() {
+			runtime.Goexit()
+		}
 		switch calls.Add(1) {
 		case 1:
 			return failListener{}, nil
@@ -51,7 +58,21 @@ func TestServeListensAgainAfterAFailedAccept(t *testing.T) {
 	}
 
 	served := make(chan error, 1)
-	go func() { served <- (&Server{}).Serve(listen) }()
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		served <- (&Server{}).Serve(listen)
+	}()
+	t.Cleanup(func() {
+		stopped.Store(true)
+		// the next Accept fails, and Serve's relisten ends the goroutine
+		good.Close()
+		select {
+		case <-exited:
+		case <-time.After(5 * time.Second):
+			t.Error("Serve's goroutine did not end")
+		}
+	})
 
 	c, err := net.DialTimeout("tcp", good.Addr().String(), time.Second)
 	assert.NilError(t, err)

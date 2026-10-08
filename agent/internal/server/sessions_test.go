@@ -24,8 +24,19 @@ import (
 func request(t *testing.T, s *Server, req proto.Request) (proto.Frame, net.Conn) {
 	t.Helper()
 	guest, conn := net.Pipe()
-	go s.handle(guest)
-	t.Cleanup(func() { conn.Close() })
+	handled := make(chan struct{})
+	go func() {
+		defer close(handled)
+		s.handle(guest)
+	}()
+	t.Cleanup(func() {
+		conn.Close()
+		select {
+		case <-handled:
+		case <-time.After(5 * time.Second):
+			t.Error("handle did not return after the host closed")
+		}
+	})
 	assert.NilError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
 	assert.NilError(t, proto.NewWriter(conn).WriteJSON(proto.TypeRequest, req))
 	f, err := proto.NewReader(conn).Next()

@@ -60,15 +60,47 @@ func connect(t *testing.T, m *Manager, req proto.Request) *host {
 	return serve(t, m, req, guest, conn)
 }
 
-func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *host {
+// runServe runs m.Serve on guest and returns the channel its result comes
+// on. Cleanup closes the host's end, conn, and waits for Serve to return.
+func runServe(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) chan error {
 	t.Helper()
-	t.Cleanup(func() { conn.Close() })
-	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 1024), served: make(chan error, 1)}
+	served := make(chan error, 1)
+	exited := make(chan struct{})
+	t.Cleanup(func() {
+		conn.Close()
+		joined(t, exited, "Serve")
+	})
 	go func() {
-		h.served <- m.Serve(req, guest, proto.NewReader(guest), proto.NewWriter(guest))
+		defer close(exited)
+		served <- m.Serve(req, guest, proto.NewReader(guest), proto.NewWriter(guest))
 		guest.Close()
 	}()
+	return served
+}
+
+// joined waits for done to close, as a goroutine the test started does
+// once it ends, and fails the test if it does not.
+func joined(t *testing.T, done <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Errorf("%s did not end after the host closed", what)
+	}
+}
+
+func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *host {
+	t.Helper()
+	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 1024)}
+	h.served = runServe(t, m, req, guest, conn)
+	read := make(chan struct{})
+	// runs before runServe's cleanup, which closes conn and ends the reader
+	t.Cleanup(func() {
+		conn.Close()
+		joined(t, read, "the host's frame reader")
+	})
 	go func() {
+		defer close(read)
 		defer close(h.frames)
 		r := proto.NewReader(conn)
 		for {
@@ -295,11 +327,8 @@ func TestServeHandsTheSessionOnFromAHalfOpenViewer(t *testing.T) {
 	shortenLastWrite(t)
 	m := newTestManager(t)
 	guest, conn := net.Pipe()
-	t.Cleanup(func() { conn.Close() })
-	stuck := &host{conn: conn, served: make(chan error, 1)}
-	go func() {
-		stuck.served <- m.Serve(proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, proto.NewReader(guest), proto.NewWriter(guest))
-	}()
+	stuck := &host{conn: conn}
+	stuck.served = runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, conn)
 	waitFor(t, "the session", func() bool { _, ok := find(m, "main"); return ok })
 
 	second := attach(t, m, "main")
@@ -514,11 +543,7 @@ func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
 func TestServeDropsAViewerThatStopsReading(t *testing.T) {
 	m := newTestManager(t)
 	guest, conn := net.Pipe()
-	t.Cleanup(func() { conn.Close() })
-	slow := &host{conn: conn, w: proto.NewWriter(conn), served: make(chan error, 1)}
-	go func() {
-		slow.served <- m.Serve(proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, proto.NewReader(guest), proto.NewWriter(guest))
-	}()
+	runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
 
 	waitFor(t, "the viewer to be dropped", func() bool { info, ok := find(m, "main"); return ok && !info.Attached })
 

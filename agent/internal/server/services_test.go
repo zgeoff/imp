@@ -26,7 +26,12 @@ func TestServicesOpsReplyWithTheSupervisorsErrorCode(t *testing.T) {
 		{name: "logs of no service", req: proto.Request{Op: proto.OpServicesLogs, Service: "imp-test-none", Lines: 10}, code: proto.ErrNoService},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Server{Services: services.New(&proc.Direct{Reaper: testReaper}, fsroot.Host, imagecfg.NewLive(imagecfg.Config{}))}
+			// the supervisor's paths resolve in a root of the test's own,
+			// never in the host's /etc/imp/services.d
+			root, err := fsroot.Open(t.TempDir())
+			assert.NilError(t, err)
+			t.Cleanup(func() { root.Close() })
+			s := &Server{Services: services.New(&proc.Direct{Reaper: testReaper}, root, imagecfg.NewLive(imagecfg.Config{}))}
 
 			resp := roundTrip(t, s, tc.req)
 
