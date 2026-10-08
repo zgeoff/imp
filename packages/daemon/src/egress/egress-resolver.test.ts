@@ -17,7 +17,7 @@ import {
 
 // In 10.66.0.0/16, slot 0's guest is 10.66.0.2 and slot 1's 10.66.0.6.
 
-test('#createQueryHandler admits the CNAME chain and its A records, and caps the TTLs', async () => {
+test('#createQueryHandler admits the CNAME chain and its A records, and nothing off the chain', async () => {
   const egress = buildStubEgressService({
     verdicts: { 1: { 'registry.npmjs.org': 'admit' } },
     upstream: {
@@ -32,24 +32,18 @@ test('#createQueryHandler admits the CNAME chain and its A records, and caps the
 
   const handle = createQueryHandler(egress.deps);
 
-  const reply = await handle(
-    '10.66.0.6',
-    buildMockDnsQuery({ name: 'Registry.NPMJS.org.', type: 'A' }),
-  );
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'Registry.NPMJS.org.', type: 'A' }));
 
-  expect({ admitted: egress.admitted, reply: dnsPacket.decode(Buffer.from(reply)) }).toMatchObject({
-    admitted: [
-      {
-        slot: 1,
-        names: ['registry.npmjs.org', 'npm.cdn.test'],
-        answers: [
-          { address: '104.16.0.1', ttlS: 200_000 },
-          { address: '104.16.0.2', ttlS: 60 },
-        ],
-      },
-    ],
-    reply: { answers: [{ ttl: 300 }, { ttl: 86_400 }, { ttl: 60 }, { ttl: 60 }] },
-  });
+  expect(egress.admitted).toStrictEqual([
+    {
+      slot: 1,
+      names: ['registry.npmjs.org', 'npm.cdn.test'],
+      answers: [
+        { address: '104.16.0.1', ttlS: 200_000 },
+        { address: '104.16.0.2', ttlS: 60 },
+      ],
+    },
+  ]);
 });
 
 test('#createQueryHandler caps each TTL of a reply at maxTtlS', async () => {
@@ -103,11 +97,9 @@ test('#createQueryHandler forwards an admitted query of another type without a s
 
   const reply = await handle('10.66.0.6', query);
 
-  expect({ reply, forwarded: egress.forwarded, admitted: egress.admitted }).toStrictEqual({
-    reply: buildMockDnsReply(query),
-    forwarded: ['github.com'],
-    admitted: [],
-  });
+  expect(reply).toStrictEqual(buildMockDnsReply(query));
+  expect(egress.forwarded).toStrictEqual(['github.com']);
+  expect(egress.admitted).toStrictEqual([]);
 });
 
 test('#createQueryHandler drops the addresses a public imp may not reach from every section of a screened reply', async () => {
@@ -140,18 +132,17 @@ test('#createQueryHandler drops the addresses a public imp may not reach from ev
   const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'rebind.test', type: 'A' }));
 
   // the chain stays, TTLs as they came: no set holds a public imp's answers
-  expect({ reply: dnsPacket.decode(Buffer.from(reply)), admitted: egress.admitted }).toMatchObject({
-    reply: {
-      answers: [
-        { type: 'CNAME', data: 'inside.test', ttl: 300 },
-        { type: 'A', data: '93.184.215.14', ttl: 60 },
-        { type: 'AAAA', data: '2606:2800:21f:cb07::1', ttl: 60 },
-      ],
-      authorities: [{ type: 'A', data: '93.184.215.53' }],
-      additionals: [],
-    },
-    admitted: [],
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({
+    answers: [
+      { type: 'CNAME', data: 'inside.test', ttl: 300 },
+      { type: 'A', data: '93.184.215.14', ttl: 60 },
+      { type: 'AAAA', data: '2606:2800:21f:cb07::1', ttl: 60 },
+    ],
+    authorities: [{ type: 'A', data: '93.184.215.53' }],
+    additionals: [],
   });
+
+  expect(egress.admitted).toStrictEqual([]);
 });
 
 test('#createQueryHandler replies only once the addresses are in nft', async () => {
@@ -187,10 +178,8 @@ test('#createQueryHandler replies only once the addresses are in nft', async () 
 
   await reply;
 
-  expect({ beforeWritten, after: state.replied }).toStrictEqual({
-    beforeWritten: false,
-    after: true,
-  });
+  expect(beforeWritten).toBeFalse();
+  expect(state.replied).toBeTrue();
 });
 
 test('#createQueryHandler refuses a denied name with EDE 18, and never sends it upstream', async () => {
@@ -199,17 +188,14 @@ test('#createQueryHandler refuses a denied name with EDE 18, and never sends it 
 
   const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'example.org', type: 'A' }));
 
-  expect({
-    reply: dnsPacket.decode(Buffer.from(reply)),
-    ede: Buffer.from(reply.subarray(-6)).toString('hex'),
-    forwarded: egress.forwarded,
-  }).toMatchObject({
-    reply: { rcode: 'REFUSED', questions: [{ name: 'example.org', type: 'A', class: 'IN' }] },
-
-    // option 15, two bytes long, info code 18
-    ede: '000f00020012',
-    forwarded: [],
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({
+    rcode: 'REFUSED',
+    questions: [{ name: 'example.org', type: 'A', class: 'IN' }],
   });
+
+  // option 15, two bytes long, info code 18
+  expect(Buffer.from(reply.subarray(-6)).toString('hex')).toBe('000f00020012');
+  expect(egress.forwarded).toStrictEqual([]);
 });
 
 test('#createQueryHandler refuses a denied name with no OPT record when the query had none', async () => {
@@ -236,10 +222,8 @@ test.each(['10.66.0.7', '10.66.0.5', '10.66.0.2', '192.0.2.1'])(
 
     const reply = await handle(source, buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
-    expect({
-      reply: dnsPacket.decode(Buffer.from(reply)),
-      forwarded: egress.forwarded,
-    }).toMatchObject({ reply: { rcode: 'REFUSED' }, forwarded: [] });
+    expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'REFUSED' });
+    expect(egress.forwarded).toStrictEqual([]);
   },
 );
 
@@ -253,10 +237,8 @@ test('#createQueryHandler refuses a query with two questions, and never sends it
 
   const reply = await handle('10.66.0.6', twice);
 
-  expect({
-    reply: dnsPacket.decode(Buffer.from(reply)),
-    forwarded: egress.forwarded,
-  }).toMatchObject({ reply: { rcode: 'REFUSED' }, forwarded: [] });
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'REFUSED' });
+  expect(egress.forwarded).toStrictEqual([]);
 });
 
 test('#createQueryHandler answers AAAA with no data and never sends it upstream when imps have no IPv6', async () => {
@@ -265,11 +247,9 @@ test('#createQueryHandler answers AAAA with no data and never sends it upstream 
 
   const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'AAAA' }));
 
-  expect({
-    reply: dnsPacket.decode(Buffer.from(reply)),
-    forwarded: egress.forwarded,
-    admitted: egress.admitted,
-  }).toMatchObject({ reply: { rcode: 'NOERROR', answers: [] }, forwarded: [], admitted: [] });
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'NOERROR', answers: [] });
+  expect(egress.forwarded).toStrictEqual([]);
+  expect(egress.admitted).toStrictEqual([]);
 });
 
 test('#createQueryHandler admits an allowed AAAA answer as it does an A one when imps have IPv6', async () => {
@@ -309,13 +289,11 @@ test('#createQueryHandler forwards the name of a host the broker serves, and add
 
   await handle('10.66.0.6', buildMockDnsQuery({ name: 'api.github.com', type: 'A' }));
 
-  expect({ forwarded: egress.forwarded, admitted: egress.admitted }).toStrictEqual({
-    forwarded: ['api.github.com'],
-    admitted: [],
-  });
+  expect(egress.forwarded).toStrictEqual(['api.github.com']);
+  expect(egress.admitted).toStrictEqual([]);
 });
 
-test('#createQueryHandler refuses a slot past its burst until its bucket refills', async () => {
+test('#createQueryHandler refuses a slot past its burst', async () => {
   const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'answer' } } });
 
   const handle = createQueryHandler({
@@ -323,26 +301,33 @@ test('#createQueryHandler refuses a slot past its burst until its bucket refills
     readRate: () => ({ burst: 2, perSecond: 1 }),
   });
 
-  const replies: Uint8Array[] = [];
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
-  for (let count = 0; count < 3; count += 1) {
-    const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+  const limited = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
-    replies.push(reply);
-  }
+  expect(dnsPacket.decode(Buffer.from(limited))).toMatchObject({ rcode: 'REFUSED' });
+});
+
+test('#createQueryHandler answers a slot past its burst again once its bucket refills', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'answer' } } });
+
+  const handle = createQueryHandler({
+    ...egress.deps,
+    readRate: () => ({ burst: 2, perSecond: 1 }),
+  });
+
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  const limited = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
   egress.advance(1000);
 
   const refilled = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
-  replies.push(refilled);
-
-  expect(replies.map((reply) => dnsPacket.decode(Buffer.from(reply)))).toMatchObject([
-    { rcode: 'NOERROR' },
-    { rcode: 'NOERROR' },
-    { rcode: 'REFUSED' },
-    { rcode: 'NOERROR' },
-  ]);
+  expect(dnsPacket.decode(Buffer.from(limited))).toMatchObject({ rcode: 'REFUSED' });
+  expect(dnsPacket.decode(Buffer.from(refilled))).toMatchObject({ rcode: 'NOERROR' });
 });
 
 test('#createQueryHandler refuses a rate-limited query plainly, with no EDE 18', async () => {
@@ -397,17 +382,13 @@ test("#createQueryHandler answers a peer's name itself, with authority, whatever
     buildMockDnsQuery({ name: 'Web.Lab.Internal.', type: 'A' }),
   );
 
-  expect({
-    reply: dnsPacket.decode(Buffer.from(reply)),
-    forwarded: egress.forwarded,
-  }).toMatchObject({
-    reply: {
-      rcode: 'NOERROR',
-      flag_aa: true,
-      answers: [{ type: 'A', name: 'web.lab.internal', data: '10.66.0.2' }],
-    },
-    forwarded: [],
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({
+    rcode: 'NOERROR',
+    flag_aa: true,
+    answers: [{ type: 'A', name: 'web.lab.internal', data: '10.66.0.2' }],
   });
+
+  expect(egress.forwarded).toStrictEqual([]);
 });
 
 test("#createQueryHandler answers AAAA for a peer's name with no data, and never sends it upstream, with IPv6", async () => {
@@ -427,10 +408,8 @@ test("#createQueryHandler answers AAAA for a peer's name with no data, and never
     buildMockDnsQuery({ name: 'web.lab.internal', type: 'AAAA' }),
   );
 
-  expect({
-    reply: dnsPacket.decode(Buffer.from(reply)),
-    forwarded: egress.forwarded,
-  }).toMatchObject({ reply: { rcode: 'NOERROR', answers: [] }, forwarded: [] });
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'NOERROR', answers: [] });
+  expect(egress.forwarded).toStrictEqual([]);
 });
 
 // slot 2 (10.66.0.10) is on no network; nobody is no peer on lab
@@ -453,10 +432,8 @@ test.each([
 
     const reply = await handle(source, buildMockDnsQuery({ name, type: 'A' }));
 
-    expect({
-      reply: dnsPacket.decode(Buffer.from(reply)),
-      forwarded: egress.forwarded,
-    }).toMatchObject({ reply: { rcode: 'NXDOMAIN' }, forwarded: [] });
+    expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'NXDOMAIN' });
+    expect(egress.forwarded).toStrictEqual([]);
   },
 );
 
@@ -470,10 +447,11 @@ test('#createQueryHandler answers SERVFAIL and logs why when no upstream answers
 
   const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
-  expect({ reply: dnsPacket.decode(Buffer.from(reply)), logs: egress.logs }).toMatchObject({
-    reply: { rcode: 'SERVFAIL' },
-    logs: ['impd: egress: github.com for slot 1: no upstream resolver answered'],
-  });
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'SERVFAIL' });
+
+  expect(egress.logs).toStrictEqual([
+    'impd: egress: github.com for slot 1: no upstream resolver answered',
+  ]);
 });
 
 test('#createQueryHandler answers SERVFAIL and logs why when the set cannot take the answer', async () => {
@@ -489,10 +467,11 @@ test('#createQueryHandler answers SERVFAIL and logs why when the set cannot take
 
   const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
-  expect({ reply: dnsPacket.decode(Buffer.from(reply)), logs: egress.logs }).toMatchObject({
-    reply: { rcode: 'SERVFAIL' },
-    logs: ['impd: egress: github.com for slot 1: nft exited 1: set is full'],
-  });
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({ rcode: 'SERVFAIL' });
+
+  expect(egress.logs).toStrictEqual([
+    'impd: egress: github.com for slot 1: nft exited 1: set is full',
+  ]);
 });
 
 test('#startResolverServer answers over UDP, through an upstream whose truncated reply goes again over TCP', async () => {
@@ -503,7 +482,7 @@ test('#startResolverServer answers over UDP, through an upstream whose truncated
     verdicts: { 0: { 'registry.npmjs.org': 'admit' } },
   });
 
-  using upstream = await startStubDnsUpstream({
+  const upstream = await startStubDnsUpstream({
     port: ports.take(),
     answers: [{ type: 'A', name: 'registry.npmjs.org', ttl: 60, data: '104.16.0.1' }],
     udp: 'truncate',
@@ -546,13 +525,12 @@ test('#startResolverServer answers over UDP, through an upstream whose truncated
 
   const received = await reply.promise;
 
-  expect({
-    reply: dnsPacket.decode(Buffer.from(received)),
-    asked: upstream.queries.map((query) => query.transport),
-  }).toMatchObject({
-    reply: { id: 7, answers: [{ type: 'A', data: '104.16.0.1' }] },
-    asked: ['udp', 'tcp'],
+  expect(dnsPacket.decode(Buffer.from(received))).toMatchObject({
+    id: 7,
+    answers: [{ type: 'A', data: '104.16.0.1' }],
   });
+
+  expect(upstream.queries.map((query) => query.transport)).toStrictEqual(['udp', 'tcp']);
 });
 
 test('#startResolverServer answers a TCP query that comes in two writes', async () => {
@@ -597,13 +575,17 @@ test('#startResolverServer answers a TCP query that comes in two writes', async 
 
   const received = await framed.promise;
 
-  expect({
-    length: received.readUInt16BE(0),
-    reply: dnsPacket.decode(received.subarray(2)),
-  }).toMatchObject({
-    length: received.byteLength - 2,
-    reply: { id: 7, answers: [{ type: 'A', data: '140.82.112.3' }] },
+  // the stub upstream answers with the query's own id, which the handler keeps
+  const reply = buildMockDnsReply(query, {
+    answers: [{ type: 'A', name: 'github.com', ttl: 60, data: '140.82.112.3' }],
   });
+
+  const expected = Buffer.alloc(2 + reply.byteLength);
+
+  expected.writeUInt16BE(reply.byteLength, 0);
+  expected.set(reply, 2);
+
+  expect(received).toStrictEqual(expected);
 });
 
 test('#startResolverServer answers each of several TCP queries that share one write', async () => {
@@ -657,55 +639,142 @@ test('#startResolverServer answers each of several TCP queries that share one wr
   expect(egress.forwarded.toSorted()).toStrictEqual(['a.test', 'b.test']);
 });
 
-test('#startResolverServer closes a TCP client idle past idleS, and caps the clients of one slot', async () => {
-  const egress = buildStubEgressService({ subnet: '127.0.0.0/16' });
+test("#startResolverServer closes at once a TCP client past its slot's cap, and serves another slot's", async () => {
+  const egress = buildStubEgressService({
+    subnet: '127.0.0.0/16',
+    verdicts: { 0: { 'github.com': 'answer' }, 1: { 'github.com': 'answer' } },
+  });
 
   // UDP and TCP on one number: a picked port, not 0
   const server = await startResolverServer(
     findFreePorts(1).take(),
     parseSubnet('127.0.0.0/16'),
     createQueryHandler(egress.deps),
-    { log: () => {}, limits: { idleS: 1, maxPerSlot: 2 } },
+    { log: () => {}, limits: { idleS: 60, maxPerSlot: 2 } },
   );
 
   onTestFinished(() => {
     server.stop();
   });
 
-  // slot 0's guest is 127.0.0.2, slot 1's 127.0.0.6
-  const sockets = ['127.0.0.2', '127.0.0.2', '127.0.0.2', '127.0.0.6'].map((from) => {
-    const socket = connect({ host: '127.0.0.1', port: server.port, localAddress: from });
+  const query = buildMockDnsQuery({ name: 'github.com', type: 'A', id: 7 });
+  const framed = Buffer.alloc(2 + query.byteLength);
 
-    socket.on('error', () => {});
+  framed.writeUInt16BE(query.byteLength, 0);
+  framed.set(query, 2);
 
-    onTestFinished(() => {
-      socket.destroy();
-    });
+  // slot 0's guest is 127.0.0.2, slot 1's 127.0.0.6: each client asks once,
+  // and settles on its reply or on its close, whichever comes first
+  const outcomes = await Promise.all(
+    ['127.0.0.2', '127.0.0.2', '127.0.0.2', '127.0.0.6'].map((from) => {
+      const outcome = Promise.withResolvers<'answered' | 'closed'>();
 
-    return socket;
-  });
+      const socket = connect({ host: '127.0.0.1', port: server.port, localAddress: from }, () => {
+        socket.write(framed);
+      });
 
-  const closes = sockets.map(
-    (socket) =>
-      new Promise<void>((resolve) => {
-        socket.once('close', () => {
-          resolve();
-        });
-      }),
+      onTestFinished(() => {
+        socket.destroy();
+      });
+
+      socket.on('error', () => {});
+
+      socket.once('data', () => {
+        outcome.resolve('answered');
+      });
+
+      socket.once('close', () => {
+        outcome.resolve('closed');
+      });
+
+      return outcome.promise;
+    }),
   );
 
-  await Promise.race(closes);
-
-  // one of slot 0's three went at once; the rest, slot 1's too, stay to idle
-  const openAtCap = sockets.map((socket) => !socket.destroyed);
-
-  await Promise.all(closes);
-
-  expect({ open: openAtCap.filter(Boolean).length, otherSlot: openAtCap[3] }).toStrictEqual({
-    open: 3,
-    otherSlot: true,
-  });
+  expect(outcomes.slice(0, 3).toSorted()).toStrictEqual(['answered', 'answered', 'closed']);
+  expect(outcomes[3]).toBe('answered');
 });
+
+// Bun checks socket deadlines on a sweep of about four seconds, so a 1 s
+// idleS closes the client after four to eight
+test('#startResolverServer closes a TCP client idle past idleS', async () => {
+  const ports = findFreePorts(2);
+
+  const egress = buildStubEgressService({
+    subnet: '127.0.0.0/16',
+    verdicts: { 0: { 'github.com': 'answer' } },
+  });
+
+  // idleS is whole seconds, so 1 is the shortest
+  const short = await startResolverServer(
+    ports.take(),
+    parseSubnet('127.0.0.0/16'),
+    createQueryHandler(egress.deps),
+    { log: () => {}, limits: { idleS: 1, maxPerSlot: 2 } },
+  );
+
+  onTestFinished(() => {
+    short.stop();
+  });
+
+  // the control: a client of the same age that may idle for a minute
+  const long = await startResolverServer(
+    ports.take(),
+    parseSubnet('127.0.0.0/16'),
+    createQueryHandler(egress.deps),
+    { log: () => {}, limits: { idleS: 60, maxPerSlot: 2 } },
+  );
+
+  onTestFinished(() => {
+    long.stop();
+  });
+
+  const closed = Promise.withResolvers<void>();
+  const connected = Promise.withResolvers<void>();
+
+  // slot 0's guest is 127.0.0.2
+  const idle = connect({ host: '127.0.0.1', port: short.port, localAddress: '127.0.0.2' });
+
+  onTestFinished(() => {
+    idle.destroy();
+  });
+
+  idle.on('error', () => {});
+
+  idle.once('close', () => {
+    closed.resolve();
+  });
+
+  const control = connect(
+    { host: '127.0.0.1', port: long.port, localAddress: '127.0.0.2' },
+    connected.resolve,
+  );
+
+  onTestFinished(() => {
+    control.destroy();
+  });
+
+  await connected.promise;
+  await closed.promise;
+
+  const query = buildMockDnsQuery({ name: 'github.com', type: 'A', id: 7 });
+  const framed = Buffer.alloc(2 + query.byteLength);
+  const reply = Promise.withResolvers<Buffer>();
+
+  framed.writeUInt16BE(query.byteLength, 0);
+  framed.set(query, 2);
+
+  control.once('data', (chunk: Buffer) => {
+    reply.resolve(chunk);
+  });
+
+  control.write(framed);
+
+  const answered = await reply.promise;
+
+  expect(idle.destroyed).toBeTrue();
+  expect(dnsPacket.decode(answered.subarray(2))).toMatchObject({ id: 7, rcode: 'NOERROR' });
+}, 15_000);
 
 test('#startResolverServer stays up when a guest goes before its reply, and logs nothing of the ICMP error', async () => {
   const ports = findFreePorts(1);
@@ -714,9 +783,12 @@ test('#startResolverServer stays up when a guest goes before its reply, and logs
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
 
-  const report = createSocketErrorReport((message) => {
-    logs.push(message);
-  }, Date.now);
+  const report = createSocketErrorReport(
+    (message) => {
+      logs.push(message);
+    },
+    () => 0,
+  );
 
   // holds the first reply until its guest has closed its port
   const server = await startResolverServer(
@@ -779,7 +851,8 @@ test('#startResolverServer stays up when a guest goes before its reply, and logs
 
   const answered = await reply.promise;
 
-  expect({ answered, logs }).toStrictEqual({ answered: query, logs: [] });
+  expect(answered).toStrictEqual(query);
+  expect(logs).toStrictEqual([]);
 });
 
 test('#createSocketErrorReport logs nothing of an ICMP error or an unreachable guest', () => {

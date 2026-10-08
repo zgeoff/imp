@@ -1,3 +1,4 @@
+import { onTestFinished } from 'bun:test';
 import { buildMockDnsReply } from './build-mock-dns-message';
 import type { MockDnsRecord } from './build-mock-dns-message';
 
@@ -34,9 +35,9 @@ function readId(query: Uint8Array): number {
   return ((query[0] ?? 0) << 8) | (query[1] ?? 0);
 }
 
-// An upstream DNS server on loopback, over UDP and over TCP with RFC 1035's
-// two-byte length in front of each message. `queries` holds each query it
-// read, in order. A test picks each side's behaviour itself.
+// An upstream DNS server on loopback, over UDP and TCP (RFC 1035 framing).
+// `queries` holds each query it read, in order; a test picks each side's
+// behaviour. Its sockets close when the test finishes.
 export async function startStubDnsUpstream(options: Readonly<StubDnsUpstreamOptions>) {
   const queries: StubDnsQueryRecord[] = [];
   const answers = options.answers ?? [];
@@ -65,6 +66,10 @@ export async function startStubDnsUpstream(options: Readonly<StubDnsUpstreamOpti
         queries.push({ transport: 'udp', id: readId(query) });
       },
     },
+  });
+
+  onTestFinished(() => {
+    udp.close();
   });
 
   const tcp = Bun.listen<{ buffered: Buffer }>({
@@ -107,12 +112,9 @@ export async function startStubDnsUpstream(options: Readonly<StubDnsUpstreamOpti
     },
   });
 
-  return {
-    port: udp.port,
-    queries: queries as readonly StubDnsQueryRecord[],
-    [Symbol.dispose]: (): void => {
-      udp.close();
-      tcp.stop(true);
-    },
-  };
+  onTestFinished(() => {
+    tcp.stop(true);
+  });
+
+  return { port: udp.port, queries: queries as readonly StubDnsQueryRecord[] };
 }

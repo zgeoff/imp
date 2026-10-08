@@ -8,18 +8,26 @@ test('#record adds a new address to the set', () => {
   expect(change).toStrictEqual({ added: ['140.82.112.3'], removed: [] });
 });
 
-test('#record adds nothing for an address the set holds, and extends its expiry', () => {
+test('#record adds nothing for an address the set holds', () => {
   const sets = createEgressSets({ minTtlS: 300, maxTtlS: 86_400, maxPerSlot: 3 });
 
   sets.record(1, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }], 0);
 
   const change = sets.record(1, ['github.com'], [{ address: '140.82.112.3', ttlS: 600 }], 1000);
 
+  expect(change).toStrictEqual({ added: [], removed: [] });
+});
+
+test('#record extends the expiry of an address the set holds', () => {
+  const sets = createEgressSets({ minTtlS: 300, maxTtlS: 86_400, maxPerSlot: 3 });
+
+  sets.record(1, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }], 0);
+  sets.record(1, ['github.com'], [{ address: '140.82.112.3', ttlS: 600 }], 1000);
+
   // 1 s plus 600 s
-  expect({ change, held: sets.listAnswers(1, 1000) }).toStrictEqual({
-    change: { added: [], removed: [] },
-    held: [{ names: ['github.com'], address: '140.82.112.3', ttlS: 600 }],
-  });
+  expect(sets.listAnswers(1, 1000)).toStrictEqual([
+    { names: ['github.com'], address: '140.82.112.3', ttlS: 600 },
+  ]);
 });
 
 test('#sweep keeps an address until its TTL, raised to the minimum, runs out', () => {
@@ -27,14 +35,18 @@ test('#sweep keeps an address until its TTL, raised to the minimum, runs out', (
 
   sets.record(1, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }], 0);
 
-  const early = sets.sweep(299_999);
+  expect(sets.sweep(299_999)).toStrictEqual(new Map());
+});
+
+test('#sweep drops an address once its TTL, raised to the minimum, runs out', () => {
+  const sets = createEgressSets({ minTtlS: 300, maxTtlS: 86_400, maxPerSlot: 3 });
+
+  sets.record(1, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }], 0);
+
   const due = sets.sweep(300_000);
 
-  expect({ early, due, left: sets.listAddresses(1) }).toStrictEqual({
-    early: new Map(),
-    due: new Map([[1, ['140.82.112.3']]]),
-    left: [],
-  });
+  expect(due).toStrictEqual(new Map([[1, ['140.82.112.3']]]));
+  expect(sets.listAddresses(1)).toStrictEqual([]);
 });
 
 test('#sweep drops an address at the maximum TTL, whatever longer TTL it came with', () => {
@@ -55,11 +67,9 @@ test('#isAlias holds each name of the CNAME chain after the first, in its own sl
     0,
   );
 
-  expect([
-    sets.isAlias(2, 'registry.npmjs.org.cdn.cloudflare.net', 1000),
-    sets.isAlias(2, 'registry.npmjs.org', 1000),
-    sets.isAlias(3, 'registry.npmjs.org.cdn.cloudflare.net', 1000),
-  ]).toStrictEqual([true, false, false]);
+  expect(sets.isAlias(2, 'registry.npmjs.org.cdn.cloudflare.net', 1000)).toBeTrue();
+  expect(sets.isAlias(2, 'registry.npmjs.org', 1000)).toBeFalse();
+  expect(sets.isAlias(3, 'registry.npmjs.org.cdn.cloudflare.net', 1000)).toBeFalse();
 });
 
 test('#sweep drops an alias whose TTL ran out', () => {
@@ -88,10 +98,12 @@ test('#record drops what expires soonest from a full set, never the answer being
     0,
   );
 
-  expect({ change, held: sets.listAddresses(1) }).toStrictEqual({
-    change: { added: ['192.0.2.4', '192.0.2.5'], removed: ['192.0.2.2', '192.0.2.1'] },
-    held: ['192.0.2.3', '192.0.2.4', '192.0.2.5'],
+  expect(change).toStrictEqual({
+    added: ['192.0.2.4', '192.0.2.5'],
+    removed: ['192.0.2.2', '192.0.2.1'],
   });
+
+  expect(sets.listAddresses(1)).toStrictEqual(['192.0.2.3', '192.0.2.4', '192.0.2.5']);
 });
 
 test('#prune keeps the addresses a remaining name covers, and drops every alias', () => {
@@ -103,11 +115,9 @@ test('#prune keeps the addresses a remaining name covers, and drops every alias'
 
   const removed = sets.prune(1, (name) => name === 'other.test');
 
-  expect({
-    removed,
-    held: sets.listAddresses(1),
-    alias: sets.isAlias(1, 'npm.cdn.test', 0),
-  }).toStrictEqual({ removed: ['192.0.2.2'], held: ['192.0.2.1'], alias: false });
+  expect(removed).toStrictEqual(['192.0.2.2']);
+  expect(sets.listAddresses(1)).toStrictEqual(['192.0.2.1']);
+  expect(sets.isAlias(1, 'npm.cdn.test', 0)).toBeFalse();
 });
 
 test('#prune removes nothing from a slot that holds nothing', () => {
@@ -122,10 +132,8 @@ test('#clear empties the slot', () => {
   sets.record(1, ['github.com', 'gh.cdn.test'], [{ address: '192.0.2.1', ttlS: 300 }], 0);
   sets.clear(1);
 
-  expect({ held: sets.listAddresses(1), alias: sets.isAlias(1, 'gh.cdn.test', 0) }).toStrictEqual({
-    held: [],
-    alias: false,
-  });
+  expect(sets.listAddresses(1)).toStrictEqual([]);
+  expect(sets.isAlias(1, 'gh.cdn.test', 0)).toBeFalse();
 });
 
 test('#listAnswers gives each held address its names and the whole seconds it has left', () => {

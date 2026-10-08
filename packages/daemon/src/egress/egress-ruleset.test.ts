@@ -463,7 +463,8 @@ test('#buildRuleset writes no public sets without a public slot', () => {
     setSize: 4096,
   });
 
-  expect([script.includes('public4'), script.includes('uplinks')]).toStrictEqual([false, false]);
+  expect(script).not.toInclude('public4');
+  expect(script).not.toInclude('uplinks');
 });
 
 test('#buildRuleset checks the source /128 of a slot with IPv6', () => {

@@ -1,12 +1,16 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { connect } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { buildMockDnsQuery, buildMockDnsReply } from './build-mock-dns-message';
 import { findFreePorts } from './find-free-ports';
 import { startStubDnsUpstream } from './start-stub-dns-upstream';
 
 test('it answers a UDP query with its records, under the query id', async () => {
-  using upstream = await startStubDnsUpstream({
+  const upstream = await startStubDnsUpstream({
     port: findFreePorts(1).take(),
     answers: [{ type: 'A', name: 'example.com', ttl: 60, data: '192.0.2.1' }],
   });
@@ -29,16 +33,19 @@ test('it answers a UDP query with its records, under the query id', async () => 
 
   client.send(query, upstream.port, '127.0.0.1');
 
-  expect({ reply: await reply.promise, queries: upstream.queries }).toStrictEqual({
-    reply: buildMockDnsReply(query, {
+  const received = await reply.promise;
+
+  expect(received).toStrictEqual(
+    buildMockDnsReply(query, {
       answers: [{ type: 'A', name: 'example.com', ttl: 60, data: '192.0.2.1' }],
     }),
-    queries: [{ transport: 'udp', id: 7 }],
-  });
+  );
+
+  expect(upstream.queries).toStrictEqual([{ transport: 'udp', id: 7 }]);
 });
 
 test('it answers a truncated UDP reply with TC set and no records', async () => {
-  using upstream = await startStubDnsUpstream({
+  const upstream = await startStubDnsUpstream({
     port: findFreePorts(1).take(),
     answers: [{ type: 'A', name: 'example.com', ttl: 60, data: '192.0.2.1' }],
     udp: 'truncate',
@@ -68,7 +75,7 @@ test('it answers a truncated UDP reply with TC set and no records', async () => 
 });
 
 test('it answers a UDP query with the next id when told to', async () => {
-  using upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'wrong-id' });
+  const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'wrong-id' });
 
   const query = buildMockDnsQuery({ name: 'example.com', type: 'A', id: 7 });
   const reply = Promise.withResolvers<Uint8Array>();
@@ -94,7 +101,7 @@ test('it answers a UDP query with the next id when told to', async () => {
 });
 
 test('it reads a dropped UDP query and sends nothing back', async () => {
-  using upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'drop' });
+  const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'drop' });
 
   const received: string[] = [];
   const fence = Promise.withResolvers<void>();
@@ -133,14 +140,12 @@ test('it reads a dropped UDP query and sends nothing back', async () => {
 
   await fence.promise;
 
-  expect({ received, queries: upstream.queries }).toStrictEqual({
-    received: ['fence'],
-    queries: [{ transport: 'udp', id: 7 }],
-  });
+  expect(received).toStrictEqual(['fence']);
+  expect(upstream.queries).toStrictEqual([{ transport: 'udp', id: 7 }]);
 });
 
 test('it answers a TCP query that comes in two writes, with the length in front', async () => {
-  using upstream = await startStubDnsUpstream({
+  const upstream = await startStubDnsUpstream({
     port: findFreePorts(1).take(),
     answers: [{ type: 'A', name: 'example.com', ttl: 60, data: '192.0.2.1' }],
   });
@@ -173,14 +178,14 @@ test('it answers a TCP query that comes in two writes, with the length in front'
   framed.writeUInt16BE(expected.byteLength, 0);
   framed.set(expected, 2);
 
-  expect({ reply: await reply.promise, queries: upstream.queries }).toStrictEqual({
-    reply: framed,
-    queries: [{ transport: 'tcp', id: 7 }],
-  });
+  const received = await reply.promise;
+
+  expect(received).toStrictEqual(framed);
+  expect(upstream.queries).toStrictEqual([{ transport: 'tcp', id: 7 }]);
 });
 
 test('it closes a TCP connection at once without a reply when told to hang up', async () => {
-  using upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), tcp: 'hang-up' });
+  const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), tcp: 'hang-up' });
 
   const query = buildMockDnsQuery({ name: 'example.com', type: 'A', id: 7, edns: false });
   const framed = Buffer.alloc(2 + query.byteLength);
@@ -208,14 +213,12 @@ test('it closes a TCP connection at once without a reply when told to hang up', 
 
   await closed.promise;
 
-  expect({ received, queries: upstream.queries }).toStrictEqual({
-    received: [],
-    queries: [{ transport: 'tcp', id: 7 }],
-  });
+  expect(received).toStrictEqual([]);
+  expect(upstream.queries).toStrictEqual([{ transport: 'tcp', id: 7 }]);
 });
 
 test('it holds a dropped TCP query open without a reply', async () => {
-  using upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), tcp: 'drop' });
+  const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), tcp: 'drop' });
 
   const query = buildMockDnsQuery({ name: 'example.com', type: 'A', id: 7, edns: false });
   const framed = Buffer.alloc(2 + query.byteLength);
@@ -240,11 +243,12 @@ test('it holds a dropped TCP query open without a reply', async () => {
     expect(upstream.queries).toHaveLength(1);
   });
 
-  expect({ received, open: !socket.destroyed }).toStrictEqual({ received: [], open: true });
+  expect(received).toStrictEqual([]);
+  expect(socket.destroyed).toBeFalse();
 });
 
 test('it answers a TCP query with the next id when told to', async () => {
-  using upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), tcp: 'wrong-id' });
+  const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), tcp: 'wrong-id' });
 
   const query = buildMockDnsQuery({ name: 'example.com', type: 'A', id: 7, edns: false });
   const framed = Buffer.alloc(2 + query.byteLength);
@@ -271,7 +275,7 @@ test('it answers a TCP query with the next id when told to', async () => {
 });
 
 test('it listens on the loopback address it is given', async () => {
-  using upstream = await startStubDnsUpstream({
+  const upstream = await startStubDnsUpstream({
     port: findFreePorts(1).take(),
     hostname: '127.0.0.2',
   });
@@ -297,4 +301,32 @@ test('it listens on the loopback address it is given', async () => {
   const from = await reply.promise;
 
   expect(from).toBe('127.0.0.2');
+});
+
+test('it frees its port when the test that started it finishes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'stub-dns-upstream-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const port = findFreePorts(1).take();
+
+  const run = runChildTests(
+    dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      `import { startStubDnsUpstream } from ${JSON.stringify(join(import.meta.dir, 'start-stub-dns-upstream.ts'))};`,
+      `test('it starts', async () => { await startStubDnsUpstream({ port: ${String(port)} }); });`,
+      "test('it finds the port free', async () => {",
+      `  const udp = await Bun.udpSocket({ hostname: '127.0.0.1', port: ${String(port)} });`,
+      `  const tcp = Bun.listen({ hostname: '127.0.0.1', port: ${String(port)}, socket: { data: () => {} } });`,
+      '  const ports = [udp.port, tcp.port];',
+      '  udp.close();',
+      '  tcp.stop(true);',
+      `  expect(ports).toStrictEqual([${String(port)}, ${String(port)}]);`,
+      '});',
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });

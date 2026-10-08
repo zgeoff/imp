@@ -36,12 +36,13 @@ test('it forwards a query to an upstream that answers with the records for its n
 
   const reply = await egress.deps.forward(query);
 
-  expect({ reply, forwarded: egress.forwarded }).toStrictEqual({
-    reply: buildMockDnsReply(query, {
+  expect(reply).toStrictEqual(
+    buildMockDnsReply(query, {
       answers: [{ type: 'A', name: 'github.com', ttl: 60, data: '140.82.112.3' }],
     }),
-    forwarded: ['GitHub.com'],
-  });
+  );
+
+  expect(egress.forwarded).toStrictEqual(['GitHub.com']);
 });
 
 test('it records each set write', async () => {
@@ -74,10 +75,8 @@ test('it answers the network names of its members', () => {
 test('it screens only the addresses it is given', () => {
   const egress = buildStubEgressService({ screened: ['10.0.0.1'] });
 
-  expect([egress.deps.isScreened('10.0.0.1'), egress.deps.isScreened('10.0.0.2')]).toStrictEqual([
-    true,
-    false,
-  ]);
+  expect(egress.deps.isScreened('10.0.0.1')).toBeTrue();
+  expect(egress.deps.isScreened('10.0.0.2')).toBeFalse();
 });
 
 test('it moves its clock only when told to', () => {

@@ -1,19 +1,23 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
+import type { runCommand } from '../process/run-command';
 import { runConntrackFlush, runForwardRulesList, runPairFlush } from './egress-commands';
 
-test('#runForwardRulesList reads the FORWARD chain from iptables -S', async () => {
-  const runs: (readonly string[])[] = [];
+test('#runForwardRulesList runs iptables -S FORWARD', async () => {
+  const run = mock<typeof runCommand>(() =>
+    Promise.resolve({ exitCode: 0, stdout: '-P FORWARD ACCEPT\n', stderr: '' }),
+  );
 
-  const rules = await runForwardRulesList((argv) => {
-    runs.push(argv);
+  await runForwardRulesList(run);
 
-    return Promise.resolve({ exitCode: 0, stdout: '-P FORWARD ACCEPT\n', stderr: '' });
-  });
+  expect(run).toHaveBeenCalledExactlyOnceWith(['iptables', '-S', 'FORWARD']);
+});
 
-  expect({ rules, runs }).toStrictEqual({
-    rules: '-P FORWARD ACCEPT\n',
-    runs: [['iptables', '-S', 'FORWARD']],
-  });
+test('#runForwardRulesList reads the FORWARD chain as iptables prints it', async () => {
+  const rules = await runForwardRulesList(() =>
+    Promise.resolve({ exitCode: 0, stdout: '-P FORWARD ACCEPT\n', stderr: '' }),
+  );
+
+  expect(rules).toBe('-P FORWARD ACCEPT\n');
 });
 
 test('#runForwardRulesList rejects with the exit code and what iptables said', () => {
@@ -27,34 +31,33 @@ test('#runForwardRulesList rejects with the exit code and what iptables said', (
 });
 
 test('#runPairFlush deletes the flows of a pair in both directions', async () => {
-  const runs: (readonly string[])[] = [];
+  const run = mock<typeof runCommand>(() =>
+    Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
+  );
 
-  await runPairFlush('10.66.0.2', '10.66.0.6', (argv) => {
-    runs.push(argv);
+  await runPairFlush('10.66.0.2', '10.66.0.6', run);
 
-    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
-  });
-
-  expect(runs).toStrictEqual([
-    ['conntrack', '-D', '-s', '10.66.0.2', '-d', '10.66.0.6'],
-    ['conntrack', '-D', '-s', '10.66.0.6', '-d', '10.66.0.2'],
+  expect(run.mock.calls).toStrictEqual([
+    [['conntrack', '-D', '-s', '10.66.0.2', '-d', '10.66.0.6']],
+    [['conntrack', '-D', '-s', '10.66.0.6', '-d', '10.66.0.2']],
   ]);
 });
 
-test('#runPairFlush takes a direction with no flows as done', async () => {
-  const runs: (readonly string[])[] = [];
-
-  await runPairFlush('10.66.0.2', '10.66.0.6', (argv) => {
-    runs.push(argv);
-
-    return Promise.resolve({
+test('#runPairFlush takes a direction with no flows as done, and goes on to the other', async () => {
+  const run = mock<typeof runCommand>(() =>
+    Promise.resolve({
       exitCode: 1,
       stdout: '',
       stderr: 'conntrack v1.4.8 (conntrack-tools): 0 flow entries have been deleted.\n',
-    });
-  });
+    }),
+  );
 
-  expect(runs).toHaveLength(2);
+  await runPairFlush('10.66.0.2', '10.66.0.6', run);
+
+  expect(run.mock.calls).toStrictEqual([
+    [['conntrack', '-D', '-s', '10.66.0.2', '-d', '10.66.0.6']],
+    [['conntrack', '-D', '-s', '10.66.0.6', '-d', '10.66.0.2']],
+  ]);
 });
 
 test('#runPairFlush rejects with the direction that failed', () => {
@@ -68,15 +71,13 @@ test('#runPairFlush rejects with the direction that failed', () => {
 });
 
 test('#runConntrackFlush deletes the flows from the guest', async () => {
-  const runs: (readonly string[])[] = [];
+  const run = mock<typeof runCommand>(() =>
+    Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
+  );
 
-  await runConntrackFlush('10.66.0.2', (argv) => {
-    runs.push(argv);
+  await runConntrackFlush('10.66.0.2', run);
 
-    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
-  });
-
-  expect(runs).toStrictEqual([['conntrack', '-D', '-s', '10.66.0.2']]);
+  expect(run).toHaveBeenCalledExactlyOnceWith(['conntrack', '-D', '-s', '10.66.0.2']);
 });
 
 test('#runConntrackFlush takes a guest with no flows as done', () => {

@@ -74,6 +74,9 @@ export interface EgressDeps {
   readonly forward?: DnsForward;
   readonly resolveExact?: (name: string) => Promise<readonly AddressAnswer[]>;
   readonly now?: () => number;
+
+  // runs `run` every `ms` until the returned stop; setInterval by default
+  readonly repeat?: (run: () => void, ms: number) => () => void;
 }
 
 export interface EgressService {
@@ -139,6 +142,7 @@ interface HostNetwork {
 
 export function createEgressService(deps: EgressDeps): EgressService {
   const now = deps.now ?? Date.now;
+  const repeat = deps.repeat ?? startInterval;
   const write = createNftWriter(deps.runNft ?? runNft);
   const flushConnections = deps.flushConnections ?? ((guestIp) => runConntrackFlush(guestIp));
   const flushPair = deps.flushPair ?? ((first, second) => runPairFlush(first, second));
@@ -174,7 +178,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     released: Set<number>;
     unenforced: string | null;
     server: ResolverServer | null;
-    sweep: Timer | null;
+    stopSweep: (() => void) | null;
 
     // what a public imp's DNS answers leave out, as of the last table
     isScreened: (address: string) => boolean;
@@ -190,7 +194,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     released: new Set(),
     unenforced: null,
     server: null,
-    sweep: null,
+    stopSweep: null,
     isScreened: createRangeChecker(privateRanges, [
       ...BLOCKED_RANGES6,
       ...DOCUMENTATION_RANGES6,
@@ -545,7 +549,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
         { log: deps.log, now },
       );
 
-      state.sweep = setInterval(() => {
+      state.stopSweep = repeat(() => {
         void runLoggedSweep();
       }, SWEEP_MS);
 
@@ -556,10 +560,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
     stop: () => {
       state.server?.stop();
-
-      if (state.sweep !== null) {
-        clearInterval(state.sweep);
-      }
+      state.stopSweep?.();
     },
 
     requirePolicy,
@@ -762,6 +763,14 @@ function isPeerAccept(rule: string): boolean {
     rule.includes('--mark 0x1000000/0x1000000') &&
     rule.endsWith('-j ACCEPT')
   );
+}
+
+function startInterval(run: () => void, ms: number): () => void {
+  const timer = setInterval(run, ms);
+
+  return () => {
+    clearInterval(timer);
+  };
 }
 
 // A records, and with IPv6 AAAA too; a name with no AAAA still resolves

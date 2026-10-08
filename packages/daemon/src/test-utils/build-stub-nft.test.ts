@@ -87,9 +87,7 @@ test('it holds a matched script until the test releases it', async () => {
 
   await run;
 
-  expect({ reached, before, after: nft.scripts }).toStrictEqual({
-    reached: 'slow\n',
-    before: [],
-    after: ['slow\n'],
-  });
+  expect(reached).toBe('slow\n');
+  expect(before).toStrictEqual([]);
+  expect(nft.scripts).toStrictEqual(['slow\n']);
 });
