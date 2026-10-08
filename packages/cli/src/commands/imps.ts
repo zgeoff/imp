@@ -8,7 +8,7 @@ import { defineCommand } from '../define-command';
 import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
 import { listSavedTargets, runOnHosts } from '../fan-out';
-import type { SavedTarget } from '../fan-out';
+import type { SavedTarget, StartTimer } from '../fan-out';
 import {
   formatExposeResult,
   formatHostImps,
@@ -17,6 +17,7 @@ import {
   formatJson,
   formatOutput,
 } from '../format-output';
+import type { CliEnv } from '../host-store';
 import { parseDuration } from '../parse-duration';
 import { formatPolicy, parsePolicy } from '../parse-policy';
 import { parsePublicAuth } from '../parse-public-auth';
@@ -324,21 +325,46 @@ export const lsCommand = defineCommand({
         throw new UsageError('--all lists every saved host; drop --host');
       }
 
-      await listAllImps(context.args.json === true, context.args.builders === true);
+      const code = await listAllImps({
+        env: process.env,
+        isJson: context.args.json === true,
+        hasBuilders: context.args.builders === true,
+        print: console.log,
+        printError: console.error,
+      });
+
+      if (code !== 0) {
+        process.exitCode = code;
+      }
     } catch (error) {
       printError(error);
     }
   },
 });
 
-// One list per saved host, at once. What came back is printed, JSON or
-// table, then one line per host that failed; docs/guides/hosts.md#one-view
-// gives the exit codes.
-async function listAllImps(json: boolean, builders: boolean): Promise<void> {
-  const input = builders ? { builders: true } : undefined;
+interface AllImpsRun {
+  // where the saved hosts are read from
+  readonly env: CliEnv;
+  readonly isJson: boolean;
+  readonly hasBuilders: boolean;
+  readonly print: (line: string) => void;
+  readonly printError: (line: string) => void;
 
-  const answers = await runOnHosts(listSavedTargets(process.env), (client, signal) =>
-    client.imps.list(input, { signal }),
+  // each host's timeout; runOnHosts' timer by default
+  readonly startTimer?: StartTimer;
+}
+
+// One list per saved host, at once. What came back is printed, JSON or
+// table, then one line per host that failed; the result is the exit code
+// docs/guides/hosts.md#one-view gives.
+export async function listAllImps(run: Readonly<AllImpsRun>): Promise<number> {
+  const input = run.hasBuilders ? { builders: true } : undefined;
+
+  const answers = await runOnHosts(
+    listSavedTargets(run.env),
+    (client, signal) => client.imps.list(input, { signal }),
+    undefined,
+    run.startTimer,
   );
 
   const imps = answers.flatMap((answer) =>
@@ -349,17 +375,19 @@ async function listAllImps(json: boolean, builders: boolean): Promise<void> {
     'error' in answer ? [{ host: answer.host, message: answer.error }] : [],
   );
 
-  const output = json ? formatJson({ imps, errors }) : formatHostImps(imps);
+  const output = run.isJson ? formatJson({ imps, errors }) : formatHostImps(imps);
 
-  console.log(output);
+  run.print(output);
 
   for (const error of errors) {
-    console.error(`imp: ${error.host}: ${error.message}`);
+    run.printError(`imp: ${error.host}: ${error.message}`);
   }
 
-  if (errors.length > 0) {
-    process.exitCode = errors.length === answers.length ? 1 : PARTIAL_CODE;
+  if (errors.length === 0) {
+    return 0;
   }
+
+  return errors.length === answers.length ? 1 : PARTIAL_CODE;
 }
 
 export const startCommand = defineCommand({

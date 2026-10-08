@@ -1,87 +1,129 @@
 import { expect, test } from 'bun:test';
-import { PromptCancelledError, readHiddenToken } from './read-token';
-import type { TokenInput } from './read-token';
+import { PromptCancelledError, readToken } from './read-token';
+import { buildStubSignals } from './test-utils/build-stub-signals';
+import { buildStubTerminal } from './test-utils/build-stub-terminal';
 
-// a terminal that records raw mode and lets the test type
-function setupTest() {
-  const listeners = new Set<(chunk: Uint8Array | string) => void>();
-
-  const modes: boolean[] = [];
+test('it reads a typed token up to Enter with echo off, then puts the terminal back', async () => {
+  const terminal = buildStubTerminal();
   const written: string[] = [];
 
-  const input: TokenInput = {
-    isTTY: true,
-    setRawMode: (raw) => modes.push(raw),
-    on: (_, listener) => listeners.add(listener),
-    off: (_, listener) => listeners.delete(listener),
-    resume: () => null,
-    pause: () => null,
-  };
-
-  return {
-    input,
-    modes,
-    written,
-    listeners,
-    write: (text: string) => {
+  const reading = readToken('token: ', {
+    input: terminal.stdin,
+    write: (text) => {
       written.push(text);
     },
-    type: (text: string) => {
-      for (const listener of listeners) {
-        listener(text);
-      }
+    readPiped: () => Promise.resolve(''),
+    signals: buildStubSignals().signals,
+  });
+
+  terminal.stdin.write('secrx\u007Ft\r');
+
+  const token = await reading;
+
+  expect(token).toBe('secrt');
+  expect(terminal.modes).toStrictEqual([true, false]);
+  expect(written).toStrictEqual(['token: ', '\n']);
+  expect(terminal.stdin.listenerCount('data')).toBe(0);
+});
+
+test('it keeps arrow keys, Esc, Tab and bracketed-paste markers out of the token', async () => {
+  const terminal = buildStubTerminal();
+
+  const reading = readToken('token: ', {
+    input: terminal.stdin,
+    write: () => {},
+    readPiped: () => Promise.resolve(''),
+    signals: buildStubSignals().signals,
+  });
+
+  terminal.stdin.write('\u001B[200~pas\u001B[Dte\u001B[201~\u001BOA\t\u001B-x\u0001\r');
+
+  const token = await reading;
+
+  expect(token).toBe('pastex');
+});
+
+test('it cancels on Ctrl-C and puts the terminal back', () => {
+  const terminal = buildStubTerminal();
+
+  const reading = readToken('token: ', {
+    input: terminal.stdin,
+    write: () => {},
+    readPiped: () => Promise.resolve(''),
+    signals: buildStubSignals().signals,
+  });
+
+  terminal.stdin.write('sec\u0003');
+
+  expect(reading).rejects.toThrow(PromptCancelledError);
+  expect(terminal.modes).toStrictEqual([true, false]);
+});
+
+test('it cancels on a signal from elsewhere and stops listening for signals', () => {
+  const terminal = buildStubTerminal();
+  const signals = buildStubSignals();
+
+  const reading = readToken('token: ', {
+    input: terminal.stdin,
+    write: () => {},
+    readPiped: () => Promise.resolve(''),
+    signals: signals.signals,
+  });
+
+  signals.send('SIGHUP');
+
+  expect(reading).rejects.toThrow(PromptCancelledError);
+  expect(terminal.modes).toStrictEqual([true, false]);
+  expect(signals.listening()).toBeEmpty();
+});
+
+test('it writes the prompt it is given', async () => {
+  const terminal = buildStubTerminal();
+  const written: string[] = [];
+
+  const reading = readToken('value for gh: ', {
+    input: terminal.stdin,
+    write: (text) => {
+      written.push(text);
     },
-  };
-}
+    readPiped: () => Promise.resolve(''),
+    signals: buildStubSignals().signals,
+  });
 
-test('it reads up to Enter with echo off, handles backspace, and restores the terminal', async () => {
-  const ctx = setupTest();
-  const token = readHiddenToken(ctx.input, ctx.write);
+  terminal.stdin.write('\r');
 
-  ctx.type('secrx\u007Ft');
-  ctx.type('\r');
+  await reading;
 
-  const value = await token;
-
-  expect(value).toBe('secrt');
-  expect(ctx.modes).toEqual([true, false]);
-  expect(ctx.written).toEqual(['token: ', '\n']);
-  expect(ctx.listeners.size).toBe(0);
+  expect(written).toStrictEqual(['value for gh: ', '\n']);
 });
 
-test('arrow keys, Esc, Tab and bracketed-paste markers never enter the token', async () => {
-  const ctx = setupTest();
-  const token = readHiddenToken(ctx.input, ctx.write);
+test('it reads the first line of piped stdin, trimmed, when stdin is no terminal', async () => {
+  const terminal = buildStubTerminal();
 
-  ctx.type('\u001B[200~pas\u001B[Dte\u001B[201~');
-  ctx.type('\u001BOA\t\u001B-x\u0001\r');
+  terminal.stdin.isTTY = false;
 
-  const value = await token;
+  const token = await readToken('token: ', {
+    input: terminal.stdin,
+    write: () => {},
+    readPiped: () => Promise.resolve('  ghp_token \nsecond line\n'),
+    signals: buildStubSignals().signals,
+  });
 
-  expect(value).toBe('pastex');
+  expect(token).toBe('ghp_token');
+  expect(terminal.modes).toBeEmpty();
 });
 
-test('Ctrl-C cancels and restores the terminal', async () => {
-  const ctx = setupTest();
-  const token = readHiddenToken(ctx.input, ctx.write);
+test('it reads an empty token from empty piped stdin', async () => {
+  const terminal = buildStubTerminal();
 
-  ctx.type('sec\u0003');
+  terminal.stdin.isTTY = false;
 
-  const rejection = await token.catch((error: unknown) => error);
+  const token = await readToken('token: ', {
+    input: terminal.stdin,
+    write: () => {},
+    readPiped: () => Promise.resolve(''),
+    signals: buildStubSignals().signals,
+  });
 
-  expect(rejection).toBeInstanceOf(PromptCancelledError);
-  expect(ctx.modes).toEqual([true, false]);
-});
-
-test('a SIGINT from elsewhere restores the terminal too', async () => {
-  const ctx = setupTest();
-  const token = readHiddenToken(ctx.input, ctx.write);
-
-  process.emit('SIGINT');
-
-  const rejection = await token.catch((error: unknown) => error);
-
-  expect(rejection).toBeInstanceOf(PromptCancelledError);
-  expect(ctx.modes).toEqual([true, false]);
-  expect(process.listenerCount('SIGINT')).toBe(0);
+  expect(token).toBe('');
 });

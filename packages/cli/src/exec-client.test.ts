@@ -1,715 +1,1624 @@
-import { afterEach, expect, mock, spyOn, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EXEC_CHANNELS } from '@imp/api';
+import {
+  FRAME_TYPES,
+  decodeJsonPayload,
+  encodeFrame,
+  encodeJsonFrame,
+} from '@imp/daemon/src/agent-client/frame-codec';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
+import {
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createImpClient } from '@zgeoff/imp-client';
+import * as z from 'zod';
 import { runExec } from './exec-client';
 import type { ExecIo } from './exec-client';
-import { startFakeImpd } from './fake-impd';
-import type { FakeImpd, FakeImpdPeer, FakeImpdReceived } from './fake-impd';
+import { buildStubCongestedSocket } from './test-utils/build-stub-congested-socket';
+import { buildStubExecPeer } from './test-utils/build-stub-exec-peer';
+import { buildStubTerminal } from './test-utils/build-stub-terminal';
+import { startCli } from './test-utils/start-cli';
+import { startStubPrefixProxy } from './test-utils/start-stub-prefix-proxy';
 
-const BOX = { host: null, name: 'box', argv: ['cmd'], tty: false } as const;
+// impd, booted on stand-ins and listening on a loopback port, with a
+// running imp `box` whose agent each test starts on `vsockPath`
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-afterEach(() => {
-  mock.restore();
-});
+  onTestFinished(() => stack.disposeAsync());
 
-// a non-terminal stdin the test writes, and the output the client wrote
-function setupIo(impd: Pick<FakeImpd, 'token' | 'url'>, overrides: Partial<ExecIo> = {}) {
+  const dataDir = await mkdtemp(join(tmpdir(), 'exec-client-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  // the system drive impd boots imps with
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the CLI sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  // a test may stop impd's listener itself; this stop is the fallback
+  stack.defer(async () => {
+    if (app.server !== null) {
+      await app.stop(true);
+    }
+  });
+
+  const port = app.server?.port;
+
+  invariant(port);
+
+  const url = `http://127.0.0.1:${String(port)}`;
+
+  // the image the imp is created from
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const imp = await createImpClient({ url, token: 'root-token' }).imps.create({ name: 'box' });
+
+  const paths = buildImpPaths(dataDir, imp.id);
+  const identity = readVmIdentity(paths);
+
+  invariant(identity);
+
+  // an agent that runs sessions, tools and outer execs; the stub VMM records
+  // an older one
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
+
   const stdin = new PassThrough();
 
   const output: string[] = [];
-  const errors = spyOn(console, 'error').mockImplementation(() => {});
-
-  // a loop sets up several; each reads only its own lines
-  errors.mockClear();
+  const errors: string[] = [];
 
   const io: ExecIo = {
-    env: { IMP_URL: impd.url, IMP_TOKEN: impd.token },
+    env: { IMP_URL: url, IMP_TOKEN: 'root-token' },
     stdin,
     writeOutput: (fd, data) => {
       output.push(`${String(fd)}:${new TextDecoder().decode(data)}`);
     },
-    ...overrides,
+    printError: (line) => {
+      errors.push(line);
+    },
   };
 
   return {
+    stack,
+    impd,
+    url,
+    port,
+    vsockPath: paths.vsockSocket,
     io,
     stdin,
     output,
-    readErrors: () => errors.mock.calls.map((call) => String(call[0])),
+    errors,
   };
 }
 
-// starts every command, then lets `then` script the rest
-function startThen(then: (peer: FakeImpdPeer, message: FakeImpdReceived) => void) {
-  return (peer: FakeImpdPeer, message: FakeImpdReceived): void => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7 });
+test('it streams output and stdin and exits with the command’s code', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('out')));
+      socket.write(encodeFrame(FRAME_TYPES.stderr, new TextEncoder().encode('err')));
     }
 
-    then(peer, message);
-  };
-}
-
-test('it streams output and stdin and exits with the command code', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer, message) => {
-      if (message['type'] === 'start') {
-        peer.sendFrame(EXEC_CHANNELS.stdout, 'out');
-        peer.sendFrame(EXEC_CHANNELS.stderr, 'err');
-      }
-
-      if (message['type'] === 'stdin_eof') {
-        peer.send({ type: 'exit', code: 3, signal: null });
-      }
-    }),
-  );
-
-  const ctx = setupIo(impd);
-  const code = runExec(BOX, ctx.io);
-
-  await impd.waitFor((received) => received.length === 1);
+    if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 3, signal: 0 }));
+    }
+  });
 
   ctx.stdin.end('typed');
 
-  const exitCode = await code;
+  const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
 
-  expect(exitCode).toBe(3);
-  expect(ctx.output).toEqual(['1:out', '2:err']);
+  const [request] = agent.received;
 
-  expect(impd.received).toEqual([
+  invariant(request);
+
+  expect(code).toBe(3);
+  expect(ctx.output).toStrictEqual(['1:out', '2:err']);
+  expect(decodeJsonPayload(request)).toStrictEqual({ op: 'exec', argv: ['cmd'], tty: false });
+
+  expect(
+    agent.received.slice(1).map((frame) => [frame.type, new TextDecoder().decode(frame.payload)]),
+  ).toStrictEqual([
+    [FRAME_TYPES.stdin, 'typed'],
+    [FRAME_TYPES.stdinEof, ''],
+  ]);
+});
+
+test('it runs an exec in the agent, outside the container, when asked for outer', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+  });
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['ls', '/user'], tty: false, outer: true },
+    ctx.io,
+  );
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(code).toBe(0);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'exec.outer',
+    argv: ['ls', '/user'],
+    tty: false,
+  });
+});
+
+test('it names the cause and runs nothing when impd refuses a required broker', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+  });
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false, require: ['broker'] },
+    ctx.io,
+  );
+
+  expect(code).toBe(255);
+
+  expect(ctx.errors as unknown).toStrictEqual([
+    expect.stringMatching(
+      /^imp: PRECONDITION_FAILED: the broker is not ready for this exec: .*no grant/u,
+    ) as unknown,
+  ]);
+
+  expect(agent.received).toBeEmpty();
+});
+
+test.each([
+  ['SIGKILL', 9, 137],
+  ['a numbered signal', 34, 162],
+])('it exits 128 + n when %s ends the command', async (_name, signal, expected) => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal }));
+  });
+
+  const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
+
+  expect(code).toBe(expected);
+});
+
+test.each([[null], ['SIGNOPE']])(
+  'it exits 255 when impd faults with an exit of no code and the signal %p',
+  async (signal) => {
+    const peer = buildStubExecPeer((link, message) => {
+      if (message.type === 'start') {
+        link.send({ type: 'started', pid: 7 });
+        link.send({ type: 'exit', code: null, signal });
+      }
+    });
+
+    const errors: string[] = [];
+
+    const code = await runExec(
+      { host: null, name: 'box', argv: ['cmd'], tty: false },
+      {
+        env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+        stdin: new PassThrough(),
+        writeOutput: () => {},
+        printError: (line) => {
+          errors.push(line);
+        },
+        connect: peer.connect,
+      },
+    );
+
+    expect(code).toBe(255);
+    expect(errors).toStrictEqual(['imp: impd reported an exit with no code and no known signal']);
+  },
+);
+
+test('it sends stdin once when impd faults by repeating started', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 7 });
+      link.send({ type: 'started', pid: 7 });
+    }
+
+    if (message.type === 'stdin_eof') {
+      link.send({ type: 'exit', code: 0, signal: null });
+    }
+  });
+
+  const stdin = new PassThrough();
+
+  stdin.end('typed');
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      stdin,
+      writeOutput: () => {},
+      printError: () => {},
+      connect: peer.connect,
+    },
+  );
+
+  expect(code).toBe(0);
+
+  expect(peer.received).toStrictEqual([
     { type: 'start', name: 'box', argv: ['cmd'], tty: false },
-    { stdin: 'typed' },
+    { type: 'stdin', text: 'typed', bytes: 5 },
     { type: 'stdin_eof' },
   ]);
 });
 
-test('an exec in the agent sends outer through to impd', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer, message) => {
-      if (message['type'] === 'start') {
-        peer.send({ type: 'exit', code: 0, signal: null });
-      }
-    }),
-  );
-
-  const ctx = setupIo(impd);
-
-  const exitCode = await runExec({ ...BOX, argv: ['ls', '/user'], outer: true }, ctx.io);
-
-  expect(exitCode).toBe(0);
-
-  expect(impd.received[0]).toEqual({
-    type: 'start',
-    name: 'box',
-    argv: ['ls', '/user'],
-    tty: false,
-    outer: true,
-  });
-});
-
-test('a required broker goes to impd, and its refusal names the cause', async () => {
-  const detail = 'the imp has no grant, so impd sets no broker variables';
-
-  await using impd = startFakeImpd((peer) => {
-    peer.send({
-      type: 'error',
-      code: 'PRECONDITION_FAILED',
-      message: `the broker is not ready for this exec: ${detail}`,
-      data: { reason: 'broker_not_ready', detail },
-    });
-  });
-
-  const ctx = setupIo(impd);
-
-  const exitCode = await runExec({ ...BOX, require: ['broker'] }, ctx.io);
-
-  expect(exitCode).toBe(255);
-  expect(impd.received[0]).toMatchObject({ type: 'start', require: ['broker'] });
-
-  expect(ctx.readErrors()).toEqual([
-    `imp: PRECONDITION_FAILED: the broker is not ready for this exec: ${detail}`,
-  ]);
-
-  expect(ctx.output).toEqual([]);
-});
-
-test('it exits 128 + n for a signal, a numbered one included', async () => {
-  for (const [signal, expected] of [
-    ['SIGKILL', 137],
-    ['SIG34', 162],
-  ] as const) {
-    await using impd = startFakeImpd(
-      startThen((peer) => {
-        peer.send({ type: 'exit', code: null, signal });
-      }),
-    );
-
-    const exitCode = await runExec(BOX, setupIo(impd).io);
-
-    expect(exitCode).toBe(expected);
-  }
-});
-
-test('it exits 255 for an exit with neither a code nor a known signal', async () => {
-  for (const signal of [null, 'SIGNOPE']) {
-    await using impd = startFakeImpd(
-      startThen((peer) => {
-        peer.send({ type: 'exit', code: null, signal });
-      }),
-    );
-
-    const exitCode = await runExec(BOX, setupIo(impd).io);
-
-    expect(exitCode).toBe(255);
-  }
-});
-
-test('it ignores a repeated started, so stdin goes over once', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer, message) => {
-      if (message['type'] === 'start') {
-        peer.send({ type: 'started', pid: 7 });
-      }
-
-      if (message['type'] === 'stdin_eof') {
-        peer.send({ type: 'exit', code: 0, signal: null });
-      }
-    }),
-  );
-
-  const ctx = setupIo(impd);
-  const code = runExec(BOX, ctx.io);
-
-  await impd.waitFor((received) => received.length === 1);
-
-  ctx.stdin.end('typed');
-
-  const exitCode = await code;
-
-  expect(exitCode).toBe(0);
-  expect(impd.received.slice(1)).toEqual([{ stdin: 'typed' }, { type: 'stdin_eof' }]);
-});
-
 test('it exits 255 for an IMP_URL that is not an http URL', async () => {
-  const ctx = setupIo({ url: 'localhost:7070', token: 'x' });
+  const errors: string[] = [];
 
-  const exitCode = await runExec(BOX, ctx.io);
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: 'localhost:7070', IMP_TOKEN: 'root-token' },
+      stdin: new PassThrough(),
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+    },
+  );
 
-  expect(exitCode).toBe(255);
-  expect(ctx.readErrors()).toEqual(['imp: IMP_URL is not an http(s) URL: localhost:7070']);
+  expect(code).toBe(255);
+  expect(errors).toStrictEqual(['imp: IMP_URL is not an http(s) URL: localhost:7070']);
 });
 
-test('it exits 127 when the command cannot start, and 255 for other refusals', async () => {
-  for (const [code, expected] of [
-    ['EXEC_FAILED', 127],
-    ['NOT_FOUND', 255],
-  ] as const) {
-    await using impd = startFakeImpd((peer) => {
-      peer.send({ type: 'error', code, message: 'nope' });
-    });
+test('it exits 127 when the command cannot start', async () => {
+  const ctx = await setupTest();
 
-    const ctx = setupIo(impd);
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'EXEC_FAILED', message: 'cmd: not found' },
+      }),
+    );
+  });
 
-    const exitCode = await runExec(BOX, ctx.io);
+  const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
 
-    expect(exitCode).toBe(expected);
-    expect(ctx.readErrors()).toEqual([`imp: ${code}: nope`]);
-  }
+  expect(code).toBe(127);
+  expect(ctx.errors).toStrictEqual(['imp: EXEC_FAILED: cmd: not found']);
+});
+
+test('it exits 255 and names the refusal for an imp impd does not have', async () => {
+  const ctx = await setupTest();
+  const code = await runExec({ host: null, name: 'nope', argv: ['cmd'], tty: false }, ctx.io);
+
+  expect(code).toBe(255);
+
+  expect(ctx.errors as unknown).toStrictEqual([
+    expect.stringMatching(/^imp: NOT_FOUND: .*nope/u) as unknown,
+  ]);
 });
 
 test('it explains INNER_DOWN and exits 255', async () => {
-  await using impd = startFakeImpd((peer) => {
-    peer.send({ type: 'error', code: 'INNER_DOWN', message: 'the inner container is down' });
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'INNER_DOWN', message: 'the inner container is down' },
+      }),
+    );
   });
 
-  const ctx = setupIo(impd);
+  const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
 
-  const exitCode = await runExec(BOX, ctx.io);
+  expect(code).toBe(255);
 
-  const [error] = ctx.readErrors();
-
-  expect(exitCode).toBe(255);
-
-  expect(error).toStartWith(
-    'imp: INNER_DOWN: the inner container is down (the container in the imp',
-  );
+  expect(ctx.errors).toStrictEqual([
+    'imp: INNER_DOWN: the inner container is down (the container in the imp starts again on its own; imp stop and imp start, or imp restore, bring it back)',
+  ]);
 });
 
-test('it ends the session on a bad frame or bad JSON, and closes the socket', async () => {
-  const replies: readonly ((peer: FakeImpdPeer) => void)[] = [
-    (peer) => {
-      peer.sendFrame(9, 'x');
-    },
-    (peer) => {
-      peer.sendText('{not json');
-    },
-    (peer) => {
-      peer.sendFrame(EXEC_CHANNELS.stdin, 'x');
-    },
-  ];
-
-  for (const reply of replies) {
-    await using impd = startFakeImpd(startThen(reply));
-
-    const ctx = setupIo(impd);
-
-    const exitCode = await runExec(BOX, ctx.io);
-
-    expect(exitCode).toBe(255);
-    expect(ctx.readErrors()[0]).toStartWith('imp: bad message from impd: ');
-
-    await impd.closed;
-  }
-});
-
-test('it exits 255 when the connection drops after started without an exit', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer) => {
-      peer.close(1011, 'agent gone');
-    }),
-  );
-
-  const ctx = setupIo(impd);
-
-  const exitCode = await runExec(BOX, ctx.io);
-
-  expect(exitCode).toBe(255);
-  expect(ctx.readErrors()).toEqual(['imp: exec connection closed (agent gone)']);
-});
-
-test('it tells a rejected token apart from an unreachable impd', async () => {
-  await using impd = startFakeImpd(() => {});
-
-  const rejected = setupIo({ url: impd.url, token: 'wrong' });
-
-  const exitCode = await runExec(BOX, rejected.io);
-
-  expect(exitCode).toBe(255);
-  expect(rejected.readErrors()[0]).toStartWith('imp: unauthorized: set IMP_TOKEN');
-
-  const gone = startFakeImpd(() => {}, '/imp');
-
-  await gone[Symbol.asyncDispose]();
-
-  const unreachable = setupIo(gone);
-
-  const unreachableCode = await runExec(BOX, unreachable.io);
-
-  expect(unreachableCode).toBe(255);
-  expect(unreachable.readErrors()[0]).toStartWith(`imp: cannot reach impd at ${gone.url} (`);
-});
-
-test('it keeps the IMP_URL path prefix', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer) => {
-      peer.send({ type: 'exit', code: 0, signal: null });
-    }),
-    '/imp',
-  );
-
-  const exitCode = await runExec(BOX, setupIo(impd).io);
-
-  expect(exitCode).toBe(0);
-  expect(impd.paths).toEqual(['/imp/exec']);
-});
-
-test('it exits 141 quietly when its output goes away, and closes the socket', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer) => {
-      peer.sendFrame(EXEC_CHANNELS.stdout, 'out');
-    }),
-  );
-
-  const ctx = setupIo(impd, {
-    writeOutput: () => {
-      throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
-    },
+test('it ends the session and closes the socket when impd faults with a frame on an unknown channel', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 7 });
+      link.sendFrame(9, 'x');
+    }
   });
 
-  const exitCode = await runExec(BOX, ctx.io);
+  const errors: string[] = [];
 
-  expect(exitCode).toBe(141);
-  expect(ctx.readErrors()).toEqual([]);
-
-  await impd.closed;
-});
-
-test('it pauses stdin while the socket buffer is high and resumes once it drains', async () => {
-  await using impd = startFakeImpd(
-    startThen((peer, message) => {
-      if (message['type'] === 'stdin_eof') {
-        peer.send({ type: 'exit', code: 0, signal: null });
-      }
-    }),
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      stdin: new PassThrough(),
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+      connect: peer.connect,
+    },
   );
 
-  const buffer = { bytes: 0 };
+  expect(code).toBe(255);
 
-  const ctx = setupIo(impd, {
-    connect: (url, headers) => {
-      const ws = new WebSocket(url, { headers });
+  expect(errors as unknown).toStrictEqual([
+    expect.stringMatching(/^imp: bad message from impd: /u) as unknown,
+  ]);
 
-      Object.defineProperty(ws, 'bufferedAmount', { get: () => buffer.bytes });
+  await expect(peer.closed).toResolve();
+});
 
-      return ws;
-    },
+test('it ends the session and closes the socket when impd faults with text that is not JSON', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 7 });
+      link.sendText('{not json');
+    }
   });
 
-  const code = runExec(BOX, ctx.io);
+  const errors: string[] = [];
 
-  await impd.waitFor((received) => received.length === 1);
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      stdin: new PassThrough(),
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+      connect: peer.connect,
+    },
+  );
 
-  buffer.bytes = 2 * 1_048_576;
+  expect(code).toBe(255);
+
+  expect(errors as unknown).toStrictEqual([
+    expect.stringMatching(/^imp: bad message from impd: /u) as unknown,
+  ]);
+
+  await expect(peer.closed).toResolve();
+});
+
+test('it ends the session and closes the socket when impd faults with a frame on the stdin channel', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 7 });
+      link.sendFrame(EXEC_CHANNELS.stdin, 'x');
+    }
+  });
+
+  const errors: string[] = [];
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      stdin: new PassThrough(),
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+      connect: peer.connect,
+    },
+  );
+
+  expect(code).toBe(255);
+
+  expect(errors as unknown).toStrictEqual([
+    expect.stringMatching(/^imp: bad message from impd: /u) as unknown,
+  ]);
+
+  await expect(peer.closed).toResolve();
+});
+
+test('it exits 255 when the agent connection drops after started without an exit', async () => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+  });
+
+  const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
+
+  expect(code).toBe(255);
+  expect(ctx.errors).toStrictEqual(['imp: the agent connection closed before the process exited']);
+});
+
+test('it exits 255 and gives the reason when impd faults by closing after started without an exit', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 7 });
+      link.close(1011, 'agent gone');
+    }
+  });
+
+  const errors: string[] = [];
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      stdin: new PassThrough(),
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+      connect: peer.connect,
+    },
+  );
+
+  expect(code).toBe(255);
+  expect(errors).toStrictEqual(['imp: exec connection closed (agent gone)']);
+});
+
+test('it exits 255 with the token hint when impd rejects the token', async () => {
+  const ctx = await setupTest();
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    { ...ctx.io, env: { IMP_URL: ctx.url, IMP_TOKEN: 'wrong-token' } },
+  );
+
+  expect(code).toBe(255);
+
+  expect(ctx.errors as unknown).toStrictEqual([
+    expect.stringMatching(/^imp: unauthorized: set IMP_TOKEN/u) as unknown,
+  ]);
+});
+
+test('it exits 255 and names the address when nothing listens there', async () => {
+  // a port that a probe held a moment ago and nothing holds now
+  const port = findFreePorts(1).take();
+  const url = `http://127.0.0.1:${String(port)}`;
+  const errors: string[] = [];
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      env: { IMP_URL: url, IMP_TOKEN: 'root-token' },
+      stdin: new PassThrough(),
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+    },
+  );
+
+  expect(code).toBe(255);
+  expect(errors).toStrictEqual([`imp: cannot reach impd at ${url} (the connection failed)`]);
+});
+
+test('it keeps the IMP_URL path prefix of an impd behind a proxy', async () => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+  });
+
+  // a reverse proxy that serves impd under /imp, and nothing outside it
+  const proxy = startStubPrefixProxy(ctx.stack, { target: ctx.url, prefix: '/imp' });
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    { ...ctx.io, env: { IMP_URL: proxy.url, IMP_TOKEN: 'root-token' } },
+  );
+
+  expect(code).toBe(0);
+  expect(proxy.paths).toStrictEqual(['/imp/exec']);
+});
+
+test('it exits 141 quietly and stops the command when its output goes away', async () => {
+  const ctx = await setupTest();
+
+  const agentClosed = Promise.withResolvers<void>();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.on('close', () => {
+      agentClosed.resolve();
+    });
+
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('out')));
+  });
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      ...ctx.io,
+      writeOutput: () => {
+        throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+      },
+    },
+  );
+
+  expect(code).toBe(141);
+  expect(ctx.errors).toBeEmpty();
+
+  await expect(agentClosed.promise).toResolve();
+});
+
+test('it exits 255 and names the failure when an output write fails other than by a closed pipe', async () => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('out')));
+  });
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      ...ctx.io,
+      writeOutput: () => {
+        throw Object.assign(new Error('write ENOSPC'), { code: 'ENOSPC' });
+      },
+    },
+  );
+
+  expect(code).toBe(255);
+  expect(ctx.errors).toStrictEqual(['imp: write ENOSPC']);
+});
+
+// on the exec peer: real impd sends detached only after started, and every
+// started reopens the window to attach again; only impd's protocol fault of a
+// detached before started ends a session as lost once that window is over
+test('it exits 255 and says the connection was lost once the window to attach again is over, after impd sends a detached before started', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 7, session: 'main', created: true });
+    }
+
+    link.send({ type: 'detached', reason: 'lost' });
+  });
+
+  const terminal = buildStubTerminal();
+  const errors: string[] = [];
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    {
+      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      stdin: terminal.stdin,
+      writeOutput: () => {},
+      printError: (line) => {
+        errors.push(line);
+      },
+      connect: peer.connect,
+      isAttachedElsewhere: () => Promise.resolve(false),
+
+      // a window that is over by the time the first attach fails
+      reattachWindowMs: 0,
+      wait: () => Promise.resolve(),
+    },
+  );
+
+  expect(code).toBe(255);
+  expect(peer.received.map((message) => message.type)).toStrictEqual(['start', 'attach']);
+
+  expect(errors).toStrictEqual([
+    'imp: detached, the connection was lost: session main (imp attach box main)',
+  ]);
+});
+
+test('it pauses stdin while the socket buffers more than the high-water mark', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    }
+  });
+
+  const congested = { socket: null as ReturnType<typeof buildStubCongestedSocket> | null };
+
+  void runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      ...ctx.io,
+      connect: (url, headers) => {
+        const stub = buildStubCongestedSocket(new WebSocket(url, { headers: { ...headers } }));
+
+        // the CLI is still running when the test ends; its socket goes first
+        ctx.stack.defer(() => {
+          stub.socket.close();
+        });
+
+        congested.socket = stub;
+
+        return stub.socket;
+      },
+    },
+  );
+
+  await waitFor(() => {
+    expect(agent.received).toHaveLength(1);
+  });
+
+  invariant(congested.socket);
+
+  congested.socket.queued.bytes = 2 * 1_048_576;
 
   ctx.stdin.write('first');
 
-  await impd.waitFor((received) => received.length === 2);
+  await waitFor(() => {
+    expect(agent.received).toHaveLength(2);
+  });
 
-  expect(ctx.stdin.isPaused()).toBe(true);
-
-  buffer.bytes = 0;
-
-  ctx.stdin.write('second');
-
-  await impd.waitFor((received) => received.length === 3);
-
-  expect(ctx.stdin.isPaused()).toBe(false);
-  expect(impd.received.slice(1)).toEqual([{ stdin: 'first' }, { stdin: 'second' }]);
-
-  ctx.stdin.end();
-
-  const exitCode = await code;
-
-  expect(exitCode).toBe(0);
+  expect(ctx.stdin.isPaused()).toBeTrue();
 });
 
-const SESSION_BOX = {
-  host: null,
-  name: 'box',
-  argv: ['sh'],
-  tty: true,
-  session: { name: 'main', attachOnly: false, detachKey: 0x1d },
-} as const;
+test('it resumes stdin once the socket buffer drains', async () => {
+  const ctx = await setupTest();
 
-// a stdin that claims to be a terminal and logs its raw mode
-function setupTerminal(impd: Pick<FakeImpd, 'token' | 'url'>, overrides: Partial<ExecIo> = {}) {
-  const raw: boolean[] = [];
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    }
 
-  const stdin = Object.assign(new PassThrough(), {
-    isTTY: true,
-    setRawMode: (mode: boolean) => {
-      raw.push(mode);
+    if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+    }
+  });
+
+  const congested = { socket: null as ReturnType<typeof buildStubCongestedSocket> | null };
+
+  const exiting = runExec(
+    { host: null, name: 'box', argv: ['cmd'], tty: false },
+    {
+      ...ctx.io,
+      connect: (url, headers) => {
+        const stub = buildStubCongestedSocket(new WebSocket(url, { headers: { ...headers } }));
+
+        congested.socket = stub;
+
+        return stub.socket;
+      },
     },
-  });
-
-  const io = setupIo(impd, {
-    stdin,
-    reattachDelayMs: 5,
-    isAttachedElsewhere: () => Promise.resolve(false),
-    ...overrides,
-  });
-
-  return { ...io, stdin, raw };
-}
-
-test('a session starts with its name, and a detach key detaches without a signal', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
-    }
-  });
-
-  const ctx = setupTerminal(impd);
-  const code = runExec(SESSION_BOX, ctx.io);
-
-  await impd.waitFor((received) => received.length === 1);
-
-  ctx.stdin.write('ls\u001Dmore');
-
-  const exitCode = await code;
-
-  await impd.closed;
-
-  expect(exitCode).toBe(0);
-
-  expect(impd.received).toEqual([
-    { type: 'start', name: 'box', argv: ['sh'], tty: true, session: 'main' },
-    { stdin: 'ls' },
-  ]);
-
-  expect(ctx.raw).toEqual([true, false]);
-  expect(ctx.output.at(-1)).toStartWith('1:');
-  expect(ctx.output.at(-1)).toContain('\u001B[>4;0m');
-  expect(ctx.readErrors()).toEqual(['imp: detached from session main (imp attach box main)']);
-});
-
-test('an attach sends attach, and clears the screen before the replay', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'attach') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: false });
-      peer.sendFrame(EXEC_CHANNELS.stdout, 'replay');
-      peer.send({ type: 'exit', code: 0, signal: null });
-    }
-  });
-
-  const ctx = setupTerminal(impd);
-
-  const exitCode = await runExec(
-    { ...SESSION_BOX, argv: [], session: { ...SESSION_BOX.session, attachOnly: true } },
-    ctx.io,
   );
 
-  expect(exitCode).toBe(0);
-  expect(impd.received).toEqual([{ type: 'attach', name: 'box', session: 'main' }]);
-  expect(ctx.output.slice(0, 2)).toEqual(['1:\u001B[H\u001B[2J', '1:replay']);
+  await waitFor(() => {
+    expect(agent.received).toHaveLength(1);
+  });
+
+  invariant(congested.socket);
+
+  congested.socket.queued.bytes = 2 * 1_048_576;
+
+  ctx.stdin.write('first');
+
+  await waitFor(() => {
+    expect(ctx.stdin.isPaused()).toBeTrue();
+  });
+
+  congested.socket.queued.bytes = 0;
+
+  ctx.stdin.end('second');
+
+  const code = await exiting;
+
+  expect(code).toBe(0);
+
+  expect(
+    agent.received
+      .filter((frame) => frame.type === FRAME_TYPES.stdin)
+      .map((frame) => new TextDecoder().decode(frame.payload)),
+  ).toStrictEqual(['first', 'second']);
 });
 
-test('a lost session or an impd restart attaches again by itself', async () => {
-  for (const drop of [
-    (peer: FakeImpdPeer) => {
-      peer.send({ type: 'detached', reason: 'lost' });
-    },
-    (peer: FakeImpdPeer) => {
-      peer.close(1012, 'impd is restarting');
-    },
-    (peer: FakeImpdPeer) => {
-      peer.send({ type: 'detached', reason: 'slow' });
-    },
-  ]) {
-    await using impd = startFakeImpd((peer, message) => {
-      if (message['type'] === 'start') {
-        peer.send({ type: 'started', pid: 7, session: 'main', created: true });
+test('it starts a named session and detaches on the detach key without a signal', async () => {
+  const ctx = await setupTest();
 
-        drop(peer);
-      }
+  const agentClosed = Promise.withResolvers<void>();
 
-      if (message['type'] === 'attach') {
-        peer.send({ type: 'started', pid: 7, session: 'main', created: false });
-        peer.send({ type: 'exit', code: 4, signal: null });
-      }
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.on('close', () => {
+        agentClosed.resolve();
+      });
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  terminal.stdin.write('ls\u001Dmore');
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin },
+  );
+
+  await agentClosed.promise;
+
+  const [request, ...rest] = agent.received;
+
+  invariant(request);
+
+  expect(code).toBe(0);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'exec',
+    argv: ['sh'],
+    tty: true,
+    session: 'main',
+  });
+
+  expect(rest.map((frame) => [frame.type, new TextDecoder().decode(frame.payload)])).toStrictEqual([
+    [FRAME_TYPES.stdin, 'ls'],
+  ]);
+
+  expect(terminal.modes).toStrictEqual([true, false]);
+  expect(ctx.output.at(-1)).toStartWith('1:');
+  expect(ctx.output.at(-1)).toInclude('\u001B[>4;0m');
+  expect(ctx.errors).toStrictEqual(['imp: detached from session main (imp attach box main)']);
+});
+
+test('it detaches on the detach key in its kitty form', async () => {
+  const ctx = await setupTest();
+
+  const agentClosed = Promise.withResolvers<void>();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.on('close', () => {
+        agentClosed.resolve();
+      });
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  terminal.stdin.write('ls\u001B[93;5umore');
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin },
+  );
+
+  await agentClosed.promise;
+
+  expect(code).toBe(0);
+
+  expect(
+    agent.received.slice(1).map((frame) => [frame.type, new TextDecoder().decode(frame.payload)]),
+  ).toStrictEqual([[FRAME_TYPES.stdin, 'ls']]);
+});
+
+test('it clears the screen before the replay of a session it attaches to', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: false }));
+    socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('replay')));
+    socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+  });
+
+  const terminal = buildStubTerminal();
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: [],
+      tty: true,
+      session: { name: 'main', attachOnly: true, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin },
+  );
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(code).toBe(0);
+  expect(decodeJsonPayload(request)).toStrictEqual({ op: 'session.attach', session: 'main' });
+  expect(ctx.output.slice(0, 2)).toStrictEqual(['1:\u001B[H\u001B[2J', '1:replay']);
+});
+
+test('it attaches again by itself when impd loses the agent connection of a session', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, request, frames) => {
+    if (frames.length > 1) {
+      return;
+    }
+
+    const op = z.looseObject({ op: z.string() }).parse(decodeJsonPayload(request)).op;
+
+    if (op === 'activity') {
+      socket.end(
+        encodeJsonFrame(FRAME_TYPES.response, {
+          tcp_established: 0,
+          exec_sessions: 0,
+          load1: 0,
+          sessions: [],
+        }),
+      );
+    } else if (op === 'exec') {
+      socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }));
+    } else {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: false }),
+      );
+
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 4, signal: 0 }));
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin, wait: () => Promise.resolve() },
+  );
+
+  expect(code).toBe(4);
+
+  expect(
+    agent.received
+      .filter((frame) => frame.type === FRAME_TYPES.request)
+      .map((frame) => z.looseObject({ op: z.string() }).parse(decodeJsonPayload(frame)).op),
+  ).toStrictEqual(['exec', 'activity', 'session.attach']);
+
+  expect(ctx.output.join('')).toInclude('lost the connection to session main; attaching again');
+});
+
+test('it attaches again by itself when the terminal fell behind', async () => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket, request, frames) => {
+    if (frames.length > 1) {
+      return;
+    }
+
+    const op = z.looseObject({ op: z.string() }).parse(decodeJsonPayload(request)).op;
+
+    if (op === 'activity') {
+      socket.end(
+        encodeJsonFrame(FRAME_TYPES.response, {
+          tcp_established: 0,
+          exec_sessions: 0,
+          load1: 0,
+          sessions: [],
+        }),
+      );
+    } else if (op === 'exec') {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
+
+      socket.write(encodeJsonFrame(FRAME_TYPES.detached, { reason: 'slow' }));
+    } else {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: false }),
+      );
+
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 4, signal: 0 }));
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin, wait: () => Promise.resolve() },
+  );
+
+  expect(code).toBe(4);
+  expect(ctx.output.join('')).toInclude('lost the connection to session main; attaching again');
+});
+
+test('it attaches again by itself when impd restarts under a session', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, request, frames) => {
+    if (frames.length > 1) {
+      return;
+    }
+
+    const op = z.looseObject({ op: z.string() }).parse(decodeJsonPayload(request)).op;
+
+    if (op === 'activity') {
+      socket.end(
+        encodeJsonFrame(FRAME_TYPES.response, {
+          tcp_established: 0,
+          exec_sessions: 0,
+          load1: 0,
+          sessions: [],
+        }),
+      );
+    } else if (op === 'exec') {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
+    } else {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: false }),
+      );
+
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 4, signal: 0 }));
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  // the CLI's pause before it attaches again: impd comes back on its port
+  const wait = (): Promise<void> => {
+    ctx.impd.api.app.listen({ port: ctx.port, hostname: '127.0.0.1' });
+
+    return Promise.resolve();
+  };
+
+  const exiting = runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin, wait },
+  );
+
+  // the session started: the terminal went raw
+  await waitFor(() => {
+    expect(terminal.modes).toStrictEqual([true]);
+  });
+
+  await ctx.impd.api.app.stop(true);
+
+  const code = await exiting;
+
+  expect(code).toBe(4);
+
+  expect(
+    agent.received
+      .filter((frame) => frame.type === FRAME_TYPES.request)
+      .map((frame) => z.looseObject({ op: z.string() }).parse(decodeJsonPayload(frame)).op),
+  ).toStrictEqual(['exec', 'activity', 'session.attach']);
+
+  expect(ctx.output.join('')).toInclude('lost the connection to session main; attaching again');
+});
+
+test('it sends keys typed while it attaches again to the new session', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, request, frames) => {
+    const op = z.looseObject({ op: z.string() }).parse(decodeJsonPayload(request)).op;
+
+    if (op === 'activity') {
+      socket.end(
+        encodeJsonFrame(FRAME_TYPES.response, {
+          tcp_established: 0,
+          exec_sessions: 0,
+          load1: 0,
+          sessions: [],
+        }),
+      );
+    } else if (op === 'exec') {
+      socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }));
+    } else if (frames.length === 1) {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: false }),
+      );
+    } else {
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+    }
+  });
+
+  const terminal = buildStubTerminal();
+  const pause = Promise.withResolvers<void>();
+
+  const exiting = runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin, wait: () => pause.promise },
+  );
+
+  await waitFor(() => {
+    expect(ctx.output.join('')).toInclude('attaching again');
+  });
+
+  terminal.stdin.write('typed');
+  pause.resolve();
+
+  const code = await exiting;
+
+  expect(code).toBe(0);
+
+  expect(
+    agent.received
+      .filter((frame) => frame.type === FRAME_TYPES.stdin)
+      .map((frame) => new TextDecoder().decode(frame.payload)),
+  ).toStrictEqual(['typed']);
+
+  expect(ctx.output.join('')).toInclude('imp: attached again to session main');
+});
+
+test.each([['\u001D'], ['\u001B[93;5u'], ['\u001B[27;5;93~']])(
+  'it detaches on the detach key %p while it attaches again',
+  async (key) => {
+    const ctx = await setupTest();
+
+    await startStubAgent(ctx.vsockPath, (socket) => {
+      socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }));
     });
 
-    const ctx = setupTerminal(impd);
+    const terminal = buildStubTerminal();
 
-    const exitCode = await runExec(SESSION_BOX, ctx.io);
+    const exiting = runExec(
+      {
+        host: null,
+        name: 'box',
+        argv: ['sh'],
+        tty: true,
+        session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+      },
 
-    expect(exitCode).toBe(4);
-    expect(impd.received.map((message) => message['type'])).toEqual(['start', 'attach']);
-    expect(ctx.output.join('')).toContain('lost the connection to session main; attaching again');
-  }
-});
+      // the pause before the next try never ends
+      { ...ctx.io, stdin: terminal.stdin, wait: () => new Promise<void>(() => {}) },
+    );
 
-test('keys typed while it attaches again reach the new session', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
-      peer.send({ type: 'detached', reason: 'lost' });
-    }
+    await waitFor(() => {
+      expect(ctx.output.join('')).toInclude('attaching again');
+    });
 
-    if (message['type'] === 'attach') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: false });
-    }
+    terminal.stdin.write(`typed${key}`);
 
-    if (message['stdin'] === 'typed') {
-      peer.send({ type: 'exit', code: 0, signal: null });
-    }
+    const code = await exiting;
+
+    expect(code).toBe(0);
+    expect(ctx.errors).toStrictEqual(['imp: detached from session main (imp attach box main)']);
+  },
+);
+
+test('it gives up with 130 on ctrl-c while it attaches again', async () => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }));
   });
 
-  const ctx = setupTerminal(impd, { reattachDelayMs: 50 });
-  const code = runExec(SESSION_BOX, ctx.io);
+  const terminal = buildStubTerminal();
 
-  await waitForOutput(ctx.output, 'attaching again');
-
-  ctx.stdin.write('typed');
-
-  const exitCode = await code;
-
-  expect(exitCode).toBe(0);
-
-  expect(impd.received).toEqual([
-    { type: 'start', name: 'box', argv: ['sh'], tty: true, session: 'main' },
-    { type: 'attach', name: 'box', session: 'main' },
-    { stdin: 'typed' },
-  ]);
-
-  expect(ctx.output.join('')).toContain('imp: attached again to session main');
-});
-
-// a session that drops at its start and never comes back
-function startLostSession(peer: FakeImpdPeer, message: FakeImpdReceived): void {
-  if (message['type'] === 'start') {
-    peer.send({ type: 'started', pid: 7, session: 'main', created: true });
-    peer.send({ type: 'detached', reason: 'lost' });
-  }
-}
-
-async function waitForOutput(output: readonly string[], text: string): Promise<void> {
-  while (!output.join('').includes(text)) {
-    await Bun.sleep(1);
-  }
-}
-
-test('the detach key, in any of its forms, works while it attaches again', async () => {
-  for (const key of ['\u001D', '\u001B[93;5u', '\u001B[27;5;93~']) {
-    await using impd = startFakeImpd(startLostSession);
-
-    const ctx = setupTerminal(impd, { reattachDelayMs: 60_000 });
-    const code = runExec(SESSION_BOX, ctx.io);
-
-    await waitForOutput(ctx.output, 'attaching again');
-
-    ctx.stdin.write(`typed${key}`);
-
-    const exitCode = await code;
-
-    expect(exitCode).toBe(0);
-    expect(ctx.readErrors()).toEqual(['imp: detached from session main (imp attach box main)']);
-  }
-});
-
-test('ctrl-c while it attaches again gives up with 130', async () => {
-  await using impd = startFakeImpd(startLostSession);
-
-  const ctx = setupTerminal(impd, { reattachDelayMs: 60_000 });
-  const code = runExec(SESSION_BOX, ctx.io);
-
-  await waitForOutput(ctx.output, 'attaching again');
-
-  ctx.stdin.write('\u0003');
-
-  const exitCode = await code;
-
-  expect(exitCode).toBe(130);
-});
-
-test('it does not attach again once another client attached', async () => {
-  await using impd = startFakeImpd(startLostSession);
-
-  const asked: string[] = [];
-
-  const ctx = setupTerminal(impd, {
-    isAttachedElsewhere: (imp, session) => {
-      asked.push(`${imp}/${session}`);
-
-      return Promise.resolve(true);
+  const exiting = runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
     },
+
+    // the pause before the next try never ends
+    { ...ctx.io, stdin: terminal.stdin, wait: () => new Promise<void>(() => {}) },
+  );
+
+  await waitFor(() => {
+    expect(ctx.output.join('')).toInclude('attaching again');
   });
 
-  const exitCode = await runExec(SESSION_BOX, ctx.io);
+  terminal.stdin.write('\u0003');
 
-  expect(exitCode).toBe(254);
-  expect(asked).toEqual(['box/main']);
-  expect(impd.received.map((message) => message['type'])).toEqual(['start']);
+  const code = await exiting;
 
-  expect(ctx.readErrors()).toEqual([
+  expect(code).toBe(130);
+});
+
+test('it exits 254 without attaching again once another client attached', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, request) => {
+    const op = z.looseObject({ op: z.string() }).parse(decodeJsonPayload(request)).op;
+
+    if (op === 'activity') {
+      socket.end(
+        encodeJsonFrame(FRAME_TYPES.response, {
+          tcp_established: 0,
+          exec_sessions: 1,
+          load1: 0,
+          sessions: [
+            {
+              name: 'main',
+              pid: 7,
+              argv: ['sh'],
+              state: 'running',
+              attached: true,
+              cols: 80,
+              rows: 24,
+              started_unix_ms: 0,
+            },
+          ],
+        }),
+      );
+    } else {
+      socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }));
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin, wait: () => Promise.resolve() },
+  );
+
+  expect(code).toBe(254);
+
+  expect(
+    agent.received
+      .filter((frame) => frame.type === FRAME_TYPES.request)
+      .map((frame) => z.looseObject({ op: z.string() }).parse(decodeJsonPayload(frame)).op),
+  ).toStrictEqual(['exec', 'activity']);
+
+  expect(ctx.errors).toStrictEqual([
     'imp: another client attached to session main (imp attach box main)',
   ]);
 });
 
-test('a detach key in its kitty form detaches', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
-    }
+test('it exits 254 without attaching again when another client takes the session over', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }));
+    socket.write(encodeJsonFrame(FRAME_TYPES.detached, { reason: 'taken_over' }));
   });
 
-  const ctx = setupTerminal(impd);
-  const code = runExec(SESSION_BOX, ctx.io);
+  const terminal = buildStubTerminal();
 
-  await impd.waitFor((received) => received.length === 1);
+  const code = await runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    { ...ctx.io, stdin: terminal.stdin, wait: () => Promise.resolve() },
+  );
 
-  ctx.stdin.write('ls\u001B[93;5umore');
+  expect(code).toBe(254);
+  expect(agent.received).toHaveLength(1);
 
-  const exitCode = await code;
-
-  await impd.closed;
-
-  expect(exitCode).toBe(0);
-  expect(impd.received.slice(1)).toEqual([{ stdin: 'ls' }]);
-});
-
-test('it waits longer before each new try', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    startLostSession(peer, message);
-
-    if (message['type'] === 'attach') {
-      peer.close(1011, 'no agent');
-    }
-  });
-
-  const ctx = setupTerminal(impd, { reattachDelayMs: 20, reattachWindowMs: 400 });
-
-  await runExec(SESSION_BOX, ctx.io);
-
-  // 20, 40, 80 and 160 ms fit in the window; without the backoff, about 20
-  const attaches = impd.received.filter((message) => message['type'] === 'attach');
-
-  expect(attaches.length).toBeGreaterThanOrEqual(3);
-  expect(attaches.length).toBeLessThanOrEqual(5);
-});
-
-test('a takeover ends the CLI without attaching again', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
-      peer.send({ type: 'detached', reason: 'taken_over' });
-    }
-  });
-
-  const ctx = setupTerminal(impd);
-
-  const exitCode = await runExec(SESSION_BOX, ctx.io);
-
-  expect(exitCode).toBe(254);
-  expect(impd.received.map((message) => message['type'])).toEqual(['start']);
-
-  expect(ctx.readErrors()).toEqual([
+  expect(ctx.errors).toStrictEqual([
     'imp: another client attached to session main (imp attach box main)',
   ]);
 });
 
-test('a session that cannot be attached again within the window fails', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
-      peer.send({ type: 'detached', reason: 'lost' });
-    }
+test('it doubles the pause before each try, up to 8 s, while impd stays down under a session', async () => {
+  const ctx = await setupTest();
 
-    // the imp does not come back
-    if (message['type'] === 'attach') {
-      peer.close(1011, 'no agent');
-    }
-  });
-
-  const ctx = setupTerminal(impd, { reattachWindowMs: 50 });
-
-  const exitCode = await runExec(SESSION_BOX, ctx.io);
-
-  expect(exitCode).toBe(255);
-  expect(impd.received.filter((message) => message['type'] === 'attach').length).toBeGreaterThan(1);
-  expect(ctx.readErrors().at(-1)).toBe('imp: exec connection closed (no agent)');
-});
-
-test('a plain exec has no detach key, and a lost connection is not attached again', async () => {
-  await using impd = startFakeImpd((peer, message) => {
-    if (message['type'] === 'start') {
-      peer.send({ type: 'started', pid: 7 });
-    }
-
-    if (message['stdin'] === '\u001D') {
-      peer.close(1012, 'impd is restarting');
+  // an agent whose session runs on until impd goes away
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
     }
   });
 
-  const ctx = setupTerminal(impd);
-  const code = runExec({ ...BOX, tty: true }, ctx.io);
+  const terminal = buildStubTerminal();
+  const clock = { nowMs: Date.UTC(2026, 0, 1) };
+  const pauses: number[] = [];
 
-  await impd.waitFor((received) => received.length === 1);
+  const exiting = runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    {
+      ...ctx.io,
+      stdin: terminal.stdin,
+      isAttachedElsewhere: () => Promise.resolve(false),
+      reattachWindowMs: 20_000,
+      now: () => clock.nowMs,
+      wait: (ms) => {
+        pauses.push(ms);
 
-  ctx.stdin.write('\u001D');
+        clock.nowMs += ms;
 
-  const exitCode = await code;
+        return Promise.resolve();
+      },
+    },
+  );
 
-  expect(exitCode).toBe(255);
-  expect(impd.received.map((message) => message['type'] ?? 'stdin')).toEqual(['start', 'stdin']);
+  // the session started: the terminal went raw
+  await waitFor(() => {
+    expect(terminal.modes).toStrictEqual([true]);
+  });
+
+  await ctx.impd.api.app.stop(true);
+
+  await exiting;
+
+  expect(pauses).toStrictEqual([1000, 2000, 4000, 8000, 8000]);
+  expect(agent.received).toHaveLength(1);
 });
+
+test('it fails with the last reason once the window to attach again is over, while impd stays down under a session', async () => {
+  const ctx = await setupTest();
+
+  // an agent whose session runs on until impd goes away
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
+    }
+  });
+
+  const terminal = buildStubTerminal();
+  const clock = { nowMs: Date.UTC(2026, 0, 1) };
+  const errors: string[] = [];
+
+  const exiting = runExec(
+    {
+      host: null,
+      name: 'box',
+      argv: ['sh'],
+      tty: true,
+      session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+    },
+    {
+      ...ctx.io,
+      stdin: terminal.stdin,
+      printError: (line) => {
+        errors.push(line);
+      },
+      isAttachedElsewhere: () => Promise.resolve(false),
+      reattachWindowMs: 1500,
+      now: () => clock.nowMs,
+      wait: (ms) => {
+        clock.nowMs += ms;
+
+        return Promise.resolve();
+      },
+    },
+  );
+
+  // the session started: the terminal went raw
+  await waitFor(() => {
+    expect(terminal.modes).toStrictEqual([true]);
+  });
+
+  await ctx.impd.api.app.stop(true);
+
+  const code = await exiting;
+
+  expect(code).toBe(255);
+  expect(agent.received).toHaveLength(1);
+  expect(errors).toStrictEqual([`imp: cannot reach impd at ${ctx.url} (the connection failed)`]);
+});
+
+test('it sends the detach key as input to a plain exec and never attaches it again', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    } else {
+      socket.destroy();
+    }
+  });
+
+  const terminal = buildStubTerminal();
+
+  terminal.stdin.write('\u001D');
+
+  const code = await runExec(
+    { host: null, name: 'box', argv: ['sh'], tty: true },
+    { ...ctx.io, stdin: terminal.stdin, wait: () => Promise.resolve() },
+  );
+
+  expect(code).toBe(255);
+
+  expect(
+    agent.received.map((frame) => [frame.type, new TextDecoder().decode(frame.payload)]) as unknown,
+  ).toStrictEqual([
+    [FRAME_TYPES.request, expect.any(String) as unknown],
+    [FRAME_TYPES.stdin, '\u001D'],
+  ]);
+});
+
+test('it ends the CLI at once on a signal before impd answers the start, without sending it', async () => {
+  const ctx = await setupTest();
+
+  // the agent never answers the start, as when impd hangs waking the imp
+  const agent = await startStubAgent(ctx.vsockPath, () => {});
+
+  const cli = startCli({
+    args: ['exec', 'box', '--', 'sleep', '60'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  ctx.stack.defer(() => {
+    cli.kill();
+  });
+
+  // a cold bun start on a loaded machine can take seconds
+  await waitFor(
+    () => {
+      expect(agent.received).toHaveLength(1);
+    },
+    { timeoutMs: 20_000 },
+  );
+
+  cli.kill('SIGTERM');
+
+  const code = await cli.exited;
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(code).toBe(143);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'exec',
+    argv: ['sleep', '60'],
+    tty: false,
+  });
+
+  expect(agent.received).toHaveLength(1);
+}, 20_000);
+
+test('it sends the first SIGINT to the command and ends the CLI on the second', async () => {
+  const ctx = await setupTest();
+
+  // the command ignores SIGINT, so only the second one ends anything
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    }
+  });
+
+  const cli = startCli({
+    args: ['exec', 'box', '--', 'sleep', '60'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  ctx.stack.defer(() => {
+    cli.kill();
+  });
+
+  // stdin is /dev/null, so its end follows started; a cold bun start on a
+  // loaded machine can take seconds
+  await waitFor(
+    () => {
+      expect(agent.received).toPartiallyContain({ type: FRAME_TYPES.stdinEof });
+    },
+    { timeoutMs: 20_000 },
+  );
+
+  cli.kill('SIGINT');
+
+  await waitFor(() => {
+    expect(agent.received).toPartiallyContain({ type: FRAME_TYPES.signal });
+  });
+
+  cli.kill('SIGINT');
+
+  const code = await cli.exited;
+
+  expect(code).toBe(130);
+
+  expect(
+    agent.received
+      .filter((frame) => frame.type === FRAME_TYPES.signal)
+      .map((frame) => decodeJsonPayload(frame)),
+  ).toStrictEqual([{ signal: 2 }]);
+}, 20_000);
+
+test('it takes the terminal out of raw mode when an output write calls process.exit', async () => {
+  const ctx = await setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+    socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('out')));
+  });
+
+  // a process of its own, for process.exit: a terminal on stdin that logs
+  // its mode, and output that exits
+  const script = `
+      import { PassThrough } from 'node:stream';
+      import { runExec } from ${JSON.stringify(join(import.meta.dir, 'exec-client.ts'))};
+
+      const stdin = Object.assign(new PassThrough(), {
+        isTTY: true,
+        setRawMode: (mode) => console.error('raw ' + mode),
+      });
+
+      await runExec({ host: null, name: 'box', argv: ['sh'], tty: true }, {
+        env: process.env,
+        stdin,
+        writeOutput: () => process.exit(3),
+      });
+    `;
+
+  const child = Bun.spawn(['bun', '-e', script], {
+    env: { PATH: process.env['PATH'] ?? '', IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    stdin: 'ignore',
+    stderr: 'pipe',
+  });
+
+  ctx.stack.defer(() => {
+    child.kill();
+  });
+
+  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+
+  expect(code).toBe(3);
+  expect(stderr).toBe('raw true\nraw false\n');
+}, 20_000);

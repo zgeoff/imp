@@ -1,44 +1,81 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/client';
 import { listSavedTargets, runOnHosts } from './fan-out';
-import type { SavedTarget } from './fan-out';
 import { writeHostConfig } from './host-store';
+import { buildMockSavedTarget } from './test-utils/build-mock-saved-target';
+import { UsageError } from './usage-error';
 
-function buildTarget(host: string): SavedTarget {
-  return { host, config: { url: `http://${host}:7070`, token: 'secret', host } };
+function setupTest() {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-fan-out-'));
+
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // where config.json keeps the saved hosts
+  return { env: { XDG_CONFIG_HOME: dir } };
 }
 
-test('each host answers or fails alone, and a silent one costs the timeout', async () => {
+test('#runOnHosts gives each host its own answer or error, and a silent one the timeout', async () => {
   const signals: AbortSignal[] = [];
-  const started = performance.now();
+  const timers: { readonly fire: () => void; isCancelled: boolean }[] = [];
 
-  const answers = await runOnHosts(
-    [buildTarget('box'), buildTarget('laptop'), buildTarget('old')],
+  const replies = [
+    () => Promise.resolve('imps'),
+
+    // never answers, and never watches the signal
+    () => new Promise<string>(() => {}),
+    () => Promise.reject(new ORPCError('UNAUTHORIZED', { status: 401 })),
+  ];
+
+  const startTimer = mock((_ms: number, fire: () => void) => {
+    const timer = { fire, isCancelled: false };
+
+    timers.push(timer);
+
+    return () => {
+      timer.isCancelled = true;
+    };
+  });
+
+  const answers = runOnHosts(
+    [
+      buildMockSavedTarget({ host: 'box' }),
+      buildMockSavedTarget({ host: 'laptop' }),
+      buildMockSavedTarget({ host: 'old', config: { url: 'http://old:7070' } }),
+    ],
     (_client, signal) => {
       signals.push(signal);
 
-      const host = signals.length;
+      const reply = replies.shift();
 
-      if (host === 1) {
-        return Promise.resolve('imps');
-      }
+      invariant(reply);
 
-      if (host === 2) {
-        // never answers, and never watches the signal
-        return new Promise<string>(() => {});
-      }
-
-      return Promise.reject(new ORPCError('UNAUTHORIZED', { status: 401 }));
+      return reply();
     },
     50,
+    startTimer,
   );
 
-  expect(performance.now() - started).toBeLessThan(1000);
+  // box and old settle on their own; then the silent host's timer runs out
+  await waitFor(() => {
+    expect(timers.filter((timer) => timer.isCancelled)).toHaveLength(2);
+  });
 
-  expect(answers).toEqual([
+  const silentTimer = timers.find((timer) => !timer.isCancelled);
+
+  invariant(silentTimer);
+
+  silentTimer.fire();
+
+  const settled = await answers;
+
+  expect(settled).toStrictEqual([
     { host: 'box', value: 'imps' },
     { host: 'laptop', error: 'no answer in 0.05 s' },
     {
@@ -47,15 +84,73 @@ test('each host answers or fails alone, and a silent one costs the timeout', asy
         'unauthorized: old (http://old:7070) refused the token; run imp login http://old:7070 --name old',
     },
   ]);
-
-  // each host's requests end with its answer; the silent one's by the timeout
-  expect(signals.map((signal) => signal.aborted)).toEqual([true, true, true]);
 });
 
-test('a call that fails aborts the requests still open beside it', async () => {
+test('#runOnHosts gives each host a timer of the timeout', async () => {
+  const startTimer = mock<(ms: number, fire: () => void) => () => void>(() => () => {});
+
+  await runOnHosts([buildMockSavedTarget()], () => Promise.resolve('imps'), 50, startTimer);
+
+  expect(startTimer).toHaveBeenCalledExactlyOnceWith(50, expect.any(Function));
+});
+
+test('#runOnHosts aborts each host’s requests once its answer is in, the silent one’s by the timeout', async () => {
+  const signals: AbortSignal[] = [];
+  const fires: (() => void)[] = [];
+
+  const replies = [
+    () => Promise.resolve('imps'),
+    () => new Promise<string>(() => {}),
+    () => Promise.reject(new Error('no such procedure')),
+  ];
+
+  const answers = runOnHosts(
+    [buildMockSavedTarget(), buildMockSavedTarget(), buildMockSavedTarget()],
+    (_client, signal) => {
+      signals.push(signal);
+
+      const reply = replies.shift();
+
+      invariant(reply);
+
+      return reply();
+    },
+    50,
+    (_ms, fire) => {
+      fires.push(fire);
+
+      return () => {};
+    },
+  );
+
+  await waitFor(() => {
+    expect(signals.filter((signal) => signal.aborted)).toHaveLength(2);
+  });
+
+  const [, silentFire] = fires;
+
+  invariant(silentFire);
+  silentFire();
+
+  await answers;
+
+  expect(signals).toSatisfyAll((signal: AbortSignal) => signal.aborted);
+});
+
+test('#runOnHosts waits on the real clock when no timer is passed', async () => {
+  const answers = await runOnHosts(
+    [buildMockSavedTarget({ host: 'laptop' })],
+    () => new Promise<string>(() => {}),
+    1,
+  );
+
+  expect(answers).toStrictEqual([{ host: 'laptop', error: 'no answer in 0.001 s' }]);
+});
+
+test('#runOnHosts aborts the requests still open beside a call that fails', async () => {
   const signals: AbortSignal[] = [];
 
-  const answers = await runOnHosts([buildTarget('box')], (_client, signal) => {
+  const answers = await runOnHosts([buildMockSavedTarget({ host: 'box' })], (_client, signal) => {
     signals.push(signal);
 
     // one request rejects at once while the other never settles
@@ -65,30 +160,32 @@ test('a call that fails aborts the requests still open beside it', async () => {
     ]);
   });
 
-  expect(answers).toEqual([{ host: 'box', error: 'no such procedure' }]);
-  expect(signals.map((signal) => signal.aborted)).toEqual([true]);
+  expect(answers).toStrictEqual([{ host: 'box', error: 'no such procedure' }]);
+  expect(signals).toSatisfyAll((signal: AbortSignal) => signal.aborted);
 });
 
-test('the saved hosts come in name order, and none at all is a usage error', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-fan-out-'));
-  const env = { XDG_CONFIG_HOME: dir };
+test('#listSavedTargets lists the saved hosts in name order', () => {
+  const ctx = setupTest();
 
-  try {
-    expect(() => listSavedTargets(env)).toThrow('no saved hosts (see imp login)');
+  writeHostConfig(ctx.env, {
+    current: 'zeta',
+    hosts: {
+      zeta: { url: 'http://zeta:7070', token: 'z' },
+      alpha: { url: 'http://alpha:7070', token: null },
+    },
+  });
 
-    writeHostConfig(env, {
-      current: 'zeta',
-      hosts: {
-        zeta: { url: 'http://zeta:7070', token: 'z' },
-        alpha: { url: 'http://alpha:7070', token: null },
-      },
-    });
+  expect(listSavedTargets(ctx.env)).toStrictEqual([
+    { host: 'alpha', config: { url: 'http://alpha:7070', token: null, host: 'alpha' } },
+    { host: 'zeta', config: { url: 'http://zeta:7070', token: 'z', host: 'zeta' } },
+  ]);
+});
 
-    expect(listSavedTargets(env)).toEqual([
-      { host: 'alpha', config: { url: 'http://alpha:7070', token: null, host: 'alpha' } },
-      { host: 'zeta', config: { url: 'http://zeta:7070', token: 'z', host: 'zeta' } },
-    ]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('#listSavedTargets rejects a config with no saved hosts', () => {
+  const ctx = setupTest();
+
+  expect(() => listSavedTargets(ctx.env)).toThrowWithMessage(
+    UsageError,
+    'no saved hosts (see imp login)',
+  );
 });

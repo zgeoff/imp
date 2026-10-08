@@ -1,242 +1,483 @@
-import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  FRAME_TYPES,
+  encodeFrame,
+  encodeJsonFrame,
+} from '@imp/daemon/src/agent-client/frame-codec';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
+import {
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
+import { invariant } from '@imp/test-utils/invariant';
+import { createImpClient } from '@zgeoff/imp-client';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
+import { runCli } from '../test-utils/start-cli';
 
-const MAIN = join(import.meta.dir, '..', 'main.ts');
-const TOKEN = 'login-secret-token';
+// The CLI's home, and a real impd on a loopback port that the CLI child
+// reaches as a user's would
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// An impd that answers system.info for the right token and 401 otherwise,
-// and records the tokens it saw.
-function startImpd() {
-  const seen: string[] = [];
+  onTestFinished(() => stack.disposeAsync());
 
-  const server = Bun.serve({
-    port: 0,
-    fetch: (request) => {
-      seen.push(request.headers.get('authorization') ?? '');
+  const dir = await mkdtemp(join(tmpdir(), 'imp-login-'));
 
-      if (request.headers.get('authorization') !== `Bearer ${TOKEN}`) {
-        return Response.json({ json: { message: 'unauthorized' } }, { status: 401 });
-      }
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-      return Response.json({ json: [] });
-    },
+  // the CLI's home: config.json lives under XDG_CONFIG_HOME
+  const env = { HOME: dir, XDG_CONFIG_HOME: dir };
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'imp-login-impd-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
-  return { url: `http://localhost:${String(server.port)}`, seen, server };
+  // the system drive impd boots imps with
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the token impd takes
+    rootToken: 'login-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so impd never reads this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await app.stop(true);
+  });
+
+  invariant(app.server?.port);
+
+  return { env, db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
 }
 
-function setupTest() {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-login-'));
-  const impd = startImpd();
-  const env = { XDG_CONFIG_HOME: dir };
+test('it saves the host as current when impd accepts the token', async () => {
+  const ctx = await setupTest();
 
-  return {
-    env,
-    impd,
+  const login = await runCli({
+    args: ['login', ctx.url, '--name', 'home'],
+    env: ctx.env,
+    stdin: 'login-token\n',
+  });
 
-    // runs the CLI as a user would, with `stdin` piped in
-    run: async (
-      args: readonly string[],
-      stdin = '',
-      extraEnv: Readonly<Record<string, string>> = {},
-    ) => {
-      const child = Bun.spawn(['bun', MAIN, ...args], {
-        env: { PATH: process.env['PATH'] ?? '', HOME: dir, ...env, ...extraEnv },
-        stdin: new TextEncoder().encode(stdin),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ]);
-
-      return { stdout, stderr, code };
-    },
-    [Symbol.asyncDispose]: async () => {
-      await impd.server.stop(true);
-
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
-
-test('login checks the token, saves the host as current, and never prints the token', async () => {
-  await using ctx = setupTest();
-
-  const login = await ctx.run(['login', ctx.impd.url, '--name', 'home'], `${TOKEN}\n`);
-
-  expect(login).toEqual({
-    stdout: `logged in to ${ctx.impd.url} as home, now the current host\n`,
+  expect(login).toStrictEqual({
+    stdout: `logged in to ${ctx.url} as home, now the current host\n`,
     stderr: '',
     code: 0,
   });
 
-  expect(ctx.impd.seen).toEqual([`Bearer ${TOKEN}`]);
-
-  expect(readHostConfig(ctx.env)).toEqual({
+  expect(readHostConfig(ctx.env)).toStrictEqual({
     current: 'home',
-    hosts: { home: { url: ctx.impd.url, token: TOKEN } },
+    hosts: { home: { url: ctx.url, token: 'login-token' } },
   });
-
-  const ls = await ctx.run(['hosts']);
-
-  expect(ls.stdout).toBe(
-    `   NAME  URL${' '.repeat(ctx.impd.url.length - 3)}  TOKEN\n*  home  ${ctx.impd.url}  saved\n`,
-  );
-
-  expect(ls.stdout + ls.stderr).not.toContain(TOKEN);
 });
 
-test('a refused token, an empty token or an unreachable impd saves nothing', async () => {
-  await using ctx = setupTest();
+test('it lists the saved hosts without their tokens', async () => {
+  const ctx = await setupTest();
 
-  const refused = await ctx.run(['login', ctx.impd.url], 'wrong\n');
-  const empty = await ctx.run(['login', ctx.impd.url], '\n');
-  const unreachable = await ctx.run(['login', 'http://127.0.0.1:1'], `${TOKEN}\n`);
+  writeHostConfig(ctx.env, {
+    current: 'home',
+    hosts: { home: { url: 'https://home.example', token: 'login-token' } },
+  });
 
-  expect(refused).toEqual({
+  const listed = await runCli({ args: ['hosts'], env: ctx.env });
+
+  expect(listed).toStrictEqual({
+    stdout: '   NAME  URL                   TOKEN\n*  home  https://home.example  saved\n',
+    stderr: '',
+    code: 0,
+  });
+});
+
+test('it saves nothing when impd refuses the token', async () => {
+  const ctx = await setupTest();
+  const login = await runCli({ args: ['login', ctx.url], env: ctx.env, stdin: 'wrong\n' });
+
+  expect(login).toStrictEqual({
     stdout: '',
-    stderr: `imp: ${ctx.impd.url} refused the token; nothing saved\n`,
+    stderr: `imp: ${ctx.url} refused the token; nothing saved\n`,
     code: 1,
   });
 
-  expect(empty).toMatchObject({ stderr: 'imp: no token given; nothing saved\n', code: 2 });
-  expect(unreachable.stderr).toStartWith('imp: cannot check the token with http://127.0.0.1:1: ');
-  expect(unreachable.stderr).toEndWith('; nothing saved\n');
-  expect(unreachable.code).toBe(1);
-  expect(readHostConfig(ctx.env)).toEqual({ current: null, hosts: {} });
+  expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
-test('--no-verify saves without asking impd, and plain http to another machine warns', async () => {
-  await using ctx = setupTest();
+test('it saves nothing when the token is empty', async () => {
+  const ctx = await setupTest();
 
-  const login = await ctx.run(['login', 'http://imp.example:7070', '--no-verify'], 'tok\n');
+  // nothing listens there: a check would fail on the connection instead
+  const login = await runCli({ args: ['login', 'http://127.0.0.1:1'], env: ctx.env, stdin: '\n' });
 
-  expect(login).toEqual({
+  expect(login).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: no token given; nothing saved\n',
+    code: 2,
+  });
+
+  expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
+});
+
+test('it saves nothing when impd is out of reach', async () => {
+  const ctx = await setupTest();
+
+  const login: unknown = await runCli({
+    args: ['login', 'http://127.0.0.1:1'],
+    env: ctx.env,
+    stdin: 'login-token\n',
+  });
+
+  expect(login).toStrictEqual({
+    stdout: '',
+    stderr: expect.stringMatching(
+      /^imp: cannot check the token with http:\/\/127\.0\.0\.1:1: .+; nothing saved\n$/u,
+    ) as unknown,
+    code: 1,
+  });
+
+  expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
+});
+
+test('it saves without asking impd and warns of plain http under --no-verify', async () => {
+  const ctx = await setupTest();
+
+  const login = await runCli({
+    args: ['login', 'http://imp.example:7070', '--no-verify'],
+    env: ctx.env,
+    stdin: 'login-token\n',
+  });
+
+  expect(login).toStrictEqual({
     stdout: 'logged in to http://imp.example:7070 as imp, now the current host\n',
     stderr:
       'imp: warning: http://imp.example:7070 is plain http; the token crosses the network unencrypted\n',
     code: 0,
   });
 
-  expect(ctx.impd.seen).toEqual([]);
+  expect(readHostConfig(ctx.env)).toStrictEqual({
+    current: 'imp',
+    hosts: { imp: { url: 'http://imp.example:7070', token: 'login-token' } },
+  });
 });
 
-test('login on a damaged config.json fails and leaves the file as it was', async () => {
-  await using ctx = setupTest();
+test('it leaves a damaged config.json as it was and asks impd nothing on login', async () => {
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, { current: null, hosts: {} });
-  writeFileSync(resolveConfigPath(ctx.env), '{ damaged', { mode: 0o600 });
 
-  const login = await ctx.run(['login', ctx.impd.url], `${TOKEN}\n`);
+  await writeFile(resolveConfigPath(ctx.env), '{ damaged', { mode: 0o600 });
 
-  expect(login.code).toBe(2);
-  expect(login.stderr).toContain('is not valid JSON; fix or remove it');
-  expect(readFileSync(resolveConfigPath(ctx.env), 'utf8')).toBe('{ damaged');
-  expect(ctx.impd.seen).toEqual([]);
+  // nothing listens there: a check would fail on the connection instead
+  const login: unknown = await runCli({
+    args: ['login', 'http://127.0.0.1:1'],
+    env: ctx.env,
+    stdin: 'login-token\n',
+  });
+
+  expect(login).toStrictEqual({
+    stdout: '',
+    stderr: expect.stringMatching(/is not valid JSON; fix or remove it\n$/u) as unknown,
+    code: 2,
+  });
+
+  const config = await readFile(resolveConfigPath(ctx.env), 'utf8');
+
+  expect(config).toBe('{ damaged');
 });
 
-test('host use and rm switch and forget hosts', async () => {
-  await using ctx = setupTest();
+test('it makes a saved host current on host use', async () => {
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'home',
     hosts: {
-      home: { url: 'https://home.example', token: 'a' },
-      work: { url: ctx.impd.url, token: 'b' },
+      home: { url: 'https://home.example', token: 'home-token' },
+      work: { url: 'https://work.example', token: 'work-token' },
     },
   });
 
-  const use = await ctx.run(['host', 'use', 'work']);
+  const used = await runCli({ args: ['host', 'use', 'work'], env: ctx.env });
 
-  expect(use).toMatchObject({ code: 0 });
+  expect(used.code).toBe(0);
   expect(readHostConfig(ctx.env).current).toBe('work');
+});
 
-  const useUnknown = await ctx.run(['host', 'use', 'nope']);
+test('it refuses a host use of a host it has not saved', async () => {
+  const ctx = await setupTest();
 
-  expect(useUnknown).toEqual({
+  writeHostConfig(ctx.env, {
+    current: 'home',
+    hosts: { home: { url: 'https://home.example', token: 'home-token' } },
+  });
+
+  const used = await runCli({ args: ['host', 'use', 'nope'], env: ctx.env });
+
+  expect(used).toStrictEqual({
     stdout: '',
     stderr: 'imp: no saved host nope (see imp host ls)\n',
     code: 2,
   });
 
-  const rm = await ctx.run(['host', 'rm', 'work']);
+  expect(readHostConfig(ctx.env).current).toBe('home');
+});
 
-  expect(rm).toMatchObject({ code: 0 });
+test('it forgets the current host and clears current on host rm', async () => {
+  const ctx = await setupTest();
 
-  expect(readHostConfig(ctx.env)).toEqual({
+  writeHostConfig(ctx.env, {
+    current: 'work',
+    hosts: {
+      home: { url: 'https://home.example', token: 'home-token' },
+      work: { url: 'https://work.example', token: 'work-token' },
+    },
+  });
+
+  const removed = await runCli({ args: ['host', 'rm', 'work'], env: ctx.env });
+
+  expect(removed.code).toBe(0);
+
+  expect(readHostConfig(ctx.env)).toStrictEqual({
     current: null,
-    hosts: { home: { url: 'https://home.example', token: 'a' } },
+    hosts: { home: { url: 'https://home.example', token: 'home-token' } },
   });
 });
 
-test('--host picks a saved host, and a 401 names it', async () => {
-  await using ctx = setupTest();
+test('it sends the saved token of --host over IMP_TOKEN, with a note', async () => {
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: null,
-    hosts: { work: { url: ctx.impd.url, token: 'stale' } },
+    hosts: { work: { url: ctx.url, token: 'login-token' } },
   });
 
-  const result = await ctx.run(['--host', 'work', 'ls'], '', { IMP_TOKEN: 'ignored' });
+  const listed = await runCli({
+    args: ['--host', 'work', 'ls', '--json'],
+    env: { ...ctx.env, IMP_TOKEN: 'ignored' },
+  });
 
-  expect(ctx.impd.seen).toEqual(['Bearer stale']);
+  expect(listed).toStrictEqual({
+    stdout: '[]\n',
+    stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+    code: 0,
+  });
+});
 
-  expect(result).toEqual({
+test('it names the --host in a 401 for a saved token impd refuses', async () => {
+  const ctx = await setupTest();
+
+  writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
+
+  const listed = await runCli({ args: ['--host', 'work', 'ls'], env: ctx.env });
+
+  expect(listed).toStrictEqual({
     stdout: '',
-    stderr: [
-      'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
-      `imp: unauthorized: work (${ctx.impd.url}) refused the token; run imp login ${ctx.impd.url} --name work\n`,
-    ].join(''),
+    stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
     code: 1,
   });
+});
 
-  const exec = await ctx.run(['--host', 'work', 'exec', 'box', '--', 'true']);
+test('it names the --host when impd refuses the saved token on exec’s socket', async () => {
+  const ctx = await setupTest();
 
-  expect(exec).toEqual({
-    stdout: '',
-    stderr: `imp: unauthorized: work (${ctx.impd.url}) refused the token; run imp login ${ctx.impd.url} --name work\n`,
-    code: 255,
+  writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
+
+  const exec = await runCli({
+    args: ['--host', 'work', 'exec', 'box', '--', 'true'],
+    env: ctx.env,
   });
 
-  // exec's own socket and its follow-up check both carry the saved token
-  expect(new Set(ctx.impd.seen)).toEqual(new Set(['Bearer stale']));
+  expect(exec).toStrictEqual({
+    stdout: '',
+    stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
+    code: 255,
+  });
+});
 
-  const noName = await ctx.run(['ls', '--host']);
+test('it sends the saved token of --host over IMP_TOKEN on exec’s socket', async () => {
+  const ctx = await setupTest();
 
-  expect(noName).toEqual({
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const imp = await createImpClient({ url: ctx.url, token: 'login-token' }).imps.create({
+    name: 'box',
+  });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
+
+  invariant(identity);
+
+  // an agent that runs outer execs; the stub VMM records an older one
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
+
+  await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('ran')));
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+    }
+  });
+
+  writeHostConfig(ctx.env, {
+    current: null,
+    hosts: { work: { url: ctx.url, token: 'login-token' } },
+  });
+
+  const exec = await runCli({
+    args: ['--host', 'work', 'exec', 'box', '--', 'true'],
+    env: { ...ctx.env, IMP_TOKEN: 'ignored' },
+  });
+
+  expect(exec).toStrictEqual({
+    stdout: 'ran',
+    stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+    code: 0,
+  });
+});
+
+test('it refuses --host without a saved host name', async () => {
+  const ctx = await setupTest();
+  const listed = await runCli({ args: ['ls', '--host'], env: ctx.env });
+
+  expect(listed).toStrictEqual({
     stdout: '',
     stderr: 'imp: --host needs a saved host name (see imp host ls)\n',
     code: 2,
   });
 });
 
-test('--host leaves --version and --help to work alone', async () => {
-  await using ctx = setupTest();
+test('it prints the version with --host and no saved host', async () => {
+  const ctx = await setupTest();
+  const version: unknown = await runCli({ args: ['--host', 'work', '--version'], env: ctx.env });
 
-  const version = await ctx.run(['--host', 'work', '--version']);
-  const help = await ctx.run(['--host', 'work', '--help']);
-
-  expect(version).toMatchObject({ stderr: '', code: 0 });
-  expect(version.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
-  expect(help.stdout).toContain('--host');
-  expect(help.code).toBe(0);
+  expect(version).toStrictEqual({
+    stdout: expect.stringMatching(/^\d+\.\d+\.\d+\n$/u) as unknown,
+    stderr: '',
+    code: 0,
+  });
 });
 
-test('exec prints one line, not a stack, when config.json cannot be read', async () => {
-  await using ctx = setupTest();
+test('it prints the help with --host and no saved host', async () => {
+  const ctx = await setupTest();
+  const help: unknown = await runCli({ args: ['--host', 'work', '--help'], env: ctx.env });
 
-  mkdirSync(resolveConfigPath(ctx.env), { recursive: true });
+  expect(help).toStrictEqual({
+    stdout: expect.stringContaining('--host') as unknown,
+    stderr: '',
+    code: 0,
+  });
+});
 
-  const exec = await ctx.run(['exec', 'box', '--', 'true']);
+test('it prints one line, not a stack, when exec cannot read config.json', async () => {
+  const ctx = await setupTest();
 
-  expect(exec.code).toBe(255);
-  expect(exec.stderr.trimEnd().split('\n')).toHaveLength(1);
-  expect(exec.stderr).toContain('EISDIR');
+  await mkdir(resolveConfigPath(ctx.env), { recursive: true });
+
+  const exec: unknown = await runCli({ args: ['exec', 'box', '--', 'true'], env: ctx.env });
+
+  expect(exec).toStrictEqual({
+    stdout: '',
+    stderr: expect.stringMatching(/^imp: [^\n]*EISDIR[^\n]*\n$/u) as unknown,
+    code: 255,
+  });
 });

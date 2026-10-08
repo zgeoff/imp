@@ -1,90 +1,47 @@
-import { expect, test } from 'bun:test';
-import type { Identity, SystemInfo } from '@imp/api';
+import { expect, mock, test } from 'bun:test';
+import { buildMockSystemInfo } from '@imp/api/test-utils/build-mock-system-info';
 import { ORPCError } from '@orpc/client';
-import type { HostAnswer } from './fan-out';
 import { buildRanking, createPlaced, readFreeMib } from './place-imp';
-import type { HostProbe, PlaceRequest } from './place-imp';
+import { buildMockHostProbe } from './test-utils/build-mock-host-probe';
 
-const REQUEST: PlaceRequest = {
-  name: 'dev',
-  image: null,
-  memoryMib: null,
-  cpuLimit: null,
-  policyMode: null,
-  networks: [],
-  needsWholeHost: false,
-};
+test('#buildRanking ranks the host with the most free RAM first, a tie in name order', () => {
+  const ram = { ramUsedMib: 0, ramReservedMib: 0, ramSleepingMib: 0 };
 
-const MANAGE: Identity = {
-  kind: 'token',
-  name: 'root',
-  scope: 'manage',
-  imps: null,
-  grantable: [],
-};
-
-function buildInfo(change: Partial<SystemInfo> = {}): SystemInfo {
-  return {
-    version: '0.12.0',
-    ramBudgetMib: 8192,
-    ramUsedMib: 0,
-    ramReservedMib: 0,
-    ramCommittedMib: 0,
-    ramSleepingMib: 0,
-    awakeCount: 0,
-    impCount: 0,
-    sessionCount: 0,
-    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
-    firecrackerVersion: null,
-    guestKernel: { version: null, sha256: 'k' },
-    systemDrive: { sha256: 's' },
-    storage: {
-      backend: 'xfs',
-      usedBytes: 0,
-      availableBytes: 1,
-      reserveBytes: 0,
-      pendingBytes: 0,
-      isLow: false,
-      impDiskBytes: 0,
-    },
-    tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
-    cpu: { hostCpus: 4, limitsEnforced: true },
-    defaults: { memoryMib: 2048, image: 'base' },
-    egress: { isEnforced: true },
-    ...change,
-  };
-}
-
-function buildAnswer(host: string, change: Partial<HostProbe> = {}): HostAnswer<HostProbe> {
-  return {
-    host,
-    value: {
-      info: buildInfo(),
-      identity: MANAGE,
-      images: ['base', 'ubuntu'],
-      imps: [],
+  const ranking = buildRanking(
+    [
+      {
+        host: 'a',
+        value: buildMockHostProbe({
+          info: { ...ram, ramBudgetMib: 8192, ramUsedMib: 4096 },
+        }),
+      },
+      {
+        host: 'b',
+        value: buildMockHostProbe({
+          info: { ...ram, ramBudgetMib: 16_384, ramReservedMib: 1024 },
+        }),
+      },
+      {
+        host: 'c',
+        value: buildMockHostProbe({ info: { ...ram, ramBudgetMib: 8192 } }),
+      },
+      {
+        host: 'd',
+        value: buildMockHostProbe({ info: { ...ram, ramBudgetMib: 8192 } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
       networks: [],
-      ...change,
+      needsWholeHost: false,
     },
-  };
-}
+  );
 
-function buildTestRanking(
-  answers: readonly HostAnswer<HostProbe>[],
-  change: Partial<PlaceRequest> = {},
-) {
-  return buildRanking(answers, { ...REQUEST, ...change });
-}
-
-test('the host with the most free RAM comes first, a tie in name order', () => {
-  const ranking = buildTestRanking([
-    buildAnswer('a', { info: buildInfo({ ramUsedMib: 4096 }) }),
-    buildAnswer('b', { info: buildInfo({ ramBudgetMib: 16_384, ramReservedMib: 1024 }) }),
-    buildAnswer('c'),
-    buildAnswer('d'),
-  ]);
-
-  expect(ranking).toEqual({
+  expect(ranking).toStrictEqual({
     ranked: [
       { host: 'b', freeMib: 15_360 },
       { host: 'c', freeMib: 8192 },
@@ -95,141 +52,535 @@ test('the host with the most free RAM comes first, a tie in name order', () => {
   });
 });
 
-test("free RAM counts every sleeper's memory as taken", () => {
-  const info = buildInfo({ ramUsedMib: 1000, ramReservedMib: 500, ramSleepingMib: 4096 });
+test("#readFreeMib counts every sleeper's memory as taken", () => {
+  const info = buildMockSystemInfo({
+    ramBudgetMib: 8192,
+    ramUsedMib: 1000,
+    ramReservedMib: 500,
+    ramSleepingMib: 4096,
+  });
 
   expect(readFreeMib(info)).toBe(8192 - 1000 - 500 - 4096);
-
-  // an impd from before ramSleepingMib counts none
-  expect(readFreeMib({ ...info, ramSleepingMib: undefined })).toBe(8192 - 1500);
-
-  const ranking = buildTestRanking([
-    buildAnswer('sleepy', { info }),
-    buildAnswer('busy', {
-      info: buildInfo({ ramUsedMib: 4096 }),
-    }),
-  ]);
-
-  expect(ranking.ranked.map((host) => host.host)).toEqual(['busy', 'sleepy']);
 });
 
-test('a host that did not answer is dropped with its error', () => {
-  const ranking = buildTestRanking([
-    { host: 'laptop', error: 'no answer in 5 s' },
-    buildAnswer('box'),
-  ]);
+test('#readFreeMib counts no sleepers for an impd from before ramSleepingMib', () => {
+  const { ramSleepingMib, ...info } = buildMockSystemInfo({
+    ramBudgetMib: 8192,
+    ramUsedMib: 1000,
+    ramReservedMib: 500,
+  });
 
-  expect(ranking.dropped).toEqual([{ host: 'laptop', reason: 'no answer in 5 s' }]);
-  expect(ranking.ranked.map((host) => host.host)).toEqual(['box']);
+  expect(readFreeMib(info)).toBe(8192 - 1000 - 500);
 });
 
-test('a host without the image, or without a default image, is dropped', () => {
-  const answers = [
-    buildAnswer('has', { images: ['myapp'] }),
-    buildAnswer('lacks'),
-    buildAnswer('none', { info: buildInfo({ defaults: { memoryMib: 2048, image: null } }) }),
-  ];
+test('#buildRanking ranks a host below another when its sleepers take more RAM', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'sleepy',
+        value: buildMockHostProbe({
+          info: {
+            ramBudgetMib: 8192,
+            ramUsedMib: 1000,
+            ramReservedMib: 500,
+            ramSleepingMib: 4096,
+          },
+        }),
+      },
+      {
+        host: 'busy',
+        value: buildMockHostProbe({
+          info: {
+            ramBudgetMib: 8192,
+            ramUsedMib: 4096,
+            ramReservedMib: 0,
+            ramSleepingMib: 0,
+          },
+        }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
 
-  expect(buildTestRanking(answers, { image: 'myapp' }).dropped).toEqual([
-    { host: 'lacks', reason: 'it has no image myapp' },
-    { host: 'none', reason: 'it has no image myapp' },
+  expect(ranking.ranked).toStrictEqual([
+    { host: 'busy', freeMib: 4096 },
+    { host: 'sleepy', freeMib: 2596 },
   ]);
+});
 
-  // no --image: each host's own default, which must exist there
-  expect(buildTestRanking(answers).dropped).toEqual([
-    { host: 'has', reason: 'it has no image base' },
+test('#buildRanking drops a host that did not answer, with its error', () => {
+  const ranking = buildRanking(
+    [
+      { host: 'laptop', error: 'no answer in 5 s' },
+      { host: 'box', value: buildMockHostProbe() },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  const received: unknown = ranking;
+
+  expect(received).toStrictEqual({
+    ranked: [{ host: 'box', freeMib: expect.any(Number) as unknown }],
+    dropped: [{ host: 'laptop', reason: 'no answer in 5 s' }],
+  });
+});
+
+test('#buildRanking drops a host without the image asked for', () => {
+  const ranking = buildRanking(
+    [
+      { host: 'has', value: buildMockHostProbe({ images: ['myapp'] }) },
+      { host: 'lacks', value: buildMockHostProbe({ images: ['base'] }) },
+    ],
+    {
+      name: 'dev',
+      image: 'myapp',
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([{ host: 'lacks', reason: 'it has no image myapp' }]);
+});
+
+test('#buildRanking drops a host without its own default image when none is asked', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'has',
+        value: buildMockHostProbe({
+          info: { defaults: { image: 'base' } },
+          images: ['myapp'],
+        }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([{ host: 'has', reason: 'it has no image base' }]);
+});
+
+test('#buildRanking drops a host with no default image when none is asked', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'none',
+        value: buildMockHostProbe({
+          info: { defaults: { image: null } },
+          images: ['myapp'],
+        }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
     { host: 'none', reason: 'it has no default image; name one with --image' },
   ]);
 });
 
-test('a host whose budget is below the memory is dropped, with its default when none is asked', () => {
-  const small = buildAnswer('small', {
-    info: buildInfo({ ramBudgetMib: 1024, defaults: { memoryMib: 512, image: 'base' } }),
-  });
+test('#buildRanking keeps a small host whose budget fits its default memory', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'small',
+        value: buildMockHostProbe({
+          info: { ramBudgetMib: 1024, defaults: { memoryMib: 512 } },
+        }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
 
-  const big = buildAnswer('big');
+  expect(ranking.dropped).toBeEmpty();
+});
 
-  expect(buildTestRanking([small, big]).dropped).toEqual([]);
+test('#buildRanking drops a host whose budget is below the memory asked', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'small',
+        value: buildMockHostProbe({
+          info: { ramBudgetMib: 1024, defaults: { memoryMib: 512 } },
+        }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: 2048,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
 
-  expect(buildTestRanking([small, big], { memoryMib: 2048 }).dropped).toEqual([
+  expect(ranking.dropped).toStrictEqual([
     { host: 'small', reason: 'its RAM budget of 1024 MiB is below 2048 MiB' },
   ]);
+});
 
-  const tight = buildAnswer('tight', { info: buildInfo({ ramBudgetMib: 1024 }) });
+test('#buildRanking drops a host whose budget is below its own default memory', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'tight',
+        value: buildMockHostProbe({
+          info: { ramBudgetMib: 1024, defaults: { memoryMib: 2048 } },
+        }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
 
-  expect(buildTestRanking([tight]).dropped).toEqual([
+  expect(ranking.dropped).toStrictEqual([
     { host: 'tight', reason: 'its RAM budget of 1024 MiB is below 2048 MiB' },
   ]);
 });
 
-test('a host that cannot enforce a box or none policy is dropped for one', () => {
-  const open = buildAnswer('open', { info: buildInfo({ egress: { isEnforced: false } }) });
+test.each([['open'], [null]] as const)(
+  '#buildRanking keeps a host that cannot enforce egress for the %p policy',
+  (policyMode) => {
+    const ranking = buildRanking(
+      [
+        {
+          host: 'open',
+          value: buildMockHostProbe({
+            info: { egress: { isEnforced: false } },
+          }),
+        },
+      ],
+      {
+        name: 'dev',
+        image: null,
+        memoryMib: null,
+        cpuLimit: null,
+        policyMode,
+        networks: [],
+        needsWholeHost: false,
+      },
+    );
 
-  expect(buildTestRanking([open], { policyMode: 'open' }).dropped).toEqual([]);
-  expect(buildTestRanking([open]).dropped).toEqual([]);
+    expect(ranking.dropped).toBeEmpty();
+  },
+);
 
-  expect(buildTestRanking([open], { policyMode: 'box' }).dropped).toEqual([
+test('#buildRanking drops a host that cannot enforce a box policy', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'open',
+        value: buildMockHostProbe({ info: { egress: { isEnforced: false } } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: 'box',
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
     { host: 'open', reason: 'it cannot enforce a box egress policy' },
   ]);
 });
 
-test('a host that predates the public policy, or cannot enforce it, is dropped for one', () => {
-  const current = buildInfo({
-    features: { sessionOffsets: true, leases: true, publicEgress: true },
+test('#buildRanking drops a host that predates the public policy', () => {
+  const older = buildMockHostProbe({ info: { version: '0.12.0' }, withoutInfo: ['features'] });
+
+  const ranking = buildRanking([{ host: 'older', value: older }], {
+    name: 'dev',
+    image: null,
+    memoryMib: null,
+    cpuLimit: null,
+    policyMode: 'public',
+    networks: [],
+    needsWholeHost: false,
   });
 
-  const hosts = [
-    buildAnswer('older'),
-    buildAnswer('unenforced', { info: { ...current, egress: { isEnforced: false } } }),
-    buildAnswer('current', { info: current }),
-  ];
-
-  const ranking = buildTestRanking(hosts, { policyMode: 'public' });
-
-  expect(ranking.dropped).toEqual([
+  expect(ranking.dropped).toStrictEqual([
     { host: 'older', reason: 'impd 0.12.0 predates the public egress policy' },
-    { host: 'unenforced', reason: 'it cannot enforce a public egress policy' },
   ]);
-
-  expect(ranking.ranked.map((host) => host.host)).toEqual(['current']);
 });
 
-test('a host with low storage, too few cores or a missing network is dropped', () => {
-  const low = buildAnswer('low', {
-    info: buildInfo({ storage: { ...buildInfo().storage, isLow: true } }),
+test('#buildRanking drops a host that cannot enforce a public policy', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'unenforced',
+        value: buildMockHostProbe({ info: { egress: { isEnforced: false } } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: 'public',
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
+    { host: 'unenforced', reason: 'it cannot enforce a public egress policy' },
+  ]);
+});
+
+test('#buildRanking keeps a current host for a public policy', () => {
+  const ranking = buildRanking([{ host: 'current', value: buildMockHostProbe() }], {
+    name: 'dev',
+    image: null,
+    memoryMib: null,
+    cpuLimit: null,
+    policyMode: 'public',
+    networks: [],
+    needsWholeHost: false,
   });
 
-  const netted = buildAnswer('netted', { networks: ['lab'] });
+  expect(ranking.dropped).toBeEmpty();
+});
 
-  expect(buildTestRanking([low, netted], { cpuLimit: 6, networks: ['lab'] }).dropped).toEqual([
-    { host: 'low', reason: 'its storage is low' },
-    { host: 'netted', reason: 'it has 4 cores, fewer than the CPU limit' },
+test('#buildRanking drops a host with low storage', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'low',
+        value: buildMockHostProbe({ info: { storage: { isLow: true } } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([{ host: 'low', reason: 'its storage is low' }]);
+});
+
+test('#buildRanking drops a host with fewer cores than the CPU limit', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'small',
+        value: buildMockHostProbe({ info: { cpu: { hostCpus: 4 } } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: 6,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
+    { host: 'small', reason: 'it has 4 cores, fewer than the CPU limit' },
   ]);
+});
 
-  expect(
-    buildTestRanking([netted, buildAnswer('bare')], { networks: ['lab', 'ci'] }).dropped,
-  ).toEqual([
+test('#buildRanking drops a host without each network asked for, naming the missing ones', () => {
+  const ranking = buildRanking(
+    [
+      { host: 'netted', value: buildMockHostProbe({ networks: ['lab'] }) },
+      { host: 'bare', value: buildMockHostProbe() },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: ['lab', 'ci'],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
     { host: 'netted', reason: 'it has no network ci' },
     { host: 'bare', reason: 'it has no network lab, ci' },
   ]);
 });
 
-test('a host whose token cannot create the imp is dropped', () => {
-  const read = buildAnswer('read', { identity: { ...MANAGE, scope: 'read' } });
-  const limited = buildAnswer('limited', { identity: { ...MANAGE, imps: ['ci-*'] } });
+test('#buildRanking drops a host whose token has read scope', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'read',
+        value: buildMockHostProbe({ identity: { scope: 'read' } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
 
-  expect(buildTestRanking([read, limited]).dropped).toEqual([
+  expect(ranking.dropped).toStrictEqual([
     { host: 'read', reason: 'its token has read scope, not manage' },
+  ]);
+});
+
+test("#buildRanking drops a host whose token may not touch the imp's name", () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'limited',
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
+      },
+    ],
+    {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
     { host: 'limited', reason: 'its token may not touch dev (ci-*)' },
   ]);
+});
 
-  expect(buildTestRanking([limited], { name: 'ci-1' }).ranked).toHaveLength(1);
+test("#buildRanking keeps a host whose token patterns match the imp's name", () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'limited',
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
+      },
+    ],
+    {
+      name: 'ci-1',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
 
-  expect(buildTestRanking([limited], { name: null }).dropped).toEqual([
+  const ranked: unknown = ranking.ranked;
+
+  expect(ranked).toStrictEqual([{ host: 'limited', freeMib: expect.any(Number) as unknown }]);
+});
+
+test('#buildRanking drops a host whose limited token cannot create an unnamed imp', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'limited',
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
+      },
+    ],
+    {
+      name: null,
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
     { host: 'limited', reason: 'its token is limited to some imps, so the imp needs a name' },
   ]);
+});
 
-  expect(buildTestRanking([limited], { name: 'ci-1', needsWholeHost: true }).dropped).toEqual([
+test('#buildRanking drops a host whose limited token cannot take --public or --net', () => {
+  const ranking = buildRanking(
+    [
+      {
+        host: 'limited',
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
+      },
+    ],
+    {
+      name: 'ci-1',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: true,
+    },
+  );
+
+  expect(ranking.dropped).toStrictEqual([
     {
       host: 'limited',
       reason: 'its token is limited to some imps, which --public and --net need it not to be',
@@ -237,108 +588,205 @@ test('a host whose token cannot create the imp is dropped', () => {
   ]);
 });
 
-test('an impd from before placement is dropped', () => {
-  const old = buildAnswer('old', { info: buildInfo({ defaults: undefined }) });
+test('#buildRanking drops an impd from before placement', () => {
+  const old = buildMockHostProbe({ info: { version: '0.12.0' }, withoutInfo: ['defaults'] });
 
-  expect(buildTestRanking([old]).dropped).toEqual([
+  const ranking = buildRanking([{ host: 'old', value: old }], {
+    name: 'dev',
+    image: null,
+    memoryMib: null,
+    cpuLimit: null,
+    policyMode: null,
+    networks: [],
+    needsWholeHost: false,
+  });
+
+  expect(ranking.dropped).toStrictEqual([
     { host: 'old', reason: 'impd 0.12.0 is too old to place on; upgrade it or use --host' },
   ]);
 });
 
-test('a name another host has already ends placement', () => {
-  expect(() => buildTestRanking([buildAnswer('a'), buildAnswer('b', { imps: ['dev'] })])).toThrow(
-    'dev exists on b already; pick another name',
-  );
-
-  // a generated name is impd's to pick
-  expect(
-    buildTestRanking([buildAnswer('b', { imps: ['dev'] })], { name: null }).ranked,
-  ).toHaveLength(1);
-});
-
-function buildRamError() {
-  return new ORPCError('RAM_BUDGET_EXCEEDED', {
-    status: 503,
-    message: 'Not enough RAM budget, even after sleeping idle imps',
-  });
-}
-
-function buildRejection(error: Error): Promise<never> {
-  return Promise.reject(error);
-}
-
-const RANKED = [
-  { host: 'a', freeMib: 3 },
-  { host: 'b', freeMib: 2 },
-  { host: 'c', freeMib: 1 },
-];
-
-test('a RAM refusal moves on to the next host, and each host gets one create', async () => {
-  const creates: string[] = [];
-  const refusals: string[] = [];
-
-  const placed = await createPlaced(
-    RANKED,
-    (host) => {
-      creates.push(host);
-
-      return host === 'a' ? Promise.reject(buildRamError()) : Promise.resolve(`imp on ${host}`);
-    },
-    (host, message) => {
-      refusals.push(`${host}: ${message}`);
-    },
-  );
-
-  expect(placed).toEqual({ host: 'b', value: 'imp on b' });
-  expect(creates).toEqual(['a', 'b']);
-  expect(refusals).toEqual(['a: Not enough RAM budget, even after sleeping idle imps']);
-});
-
-test('any other failure, a timeout too, ends placement with no second create', async () => {
-  const failures: readonly Error[] = [
-    new Error('no answer in 5 s'),
-    new ORPCError('NOT_FOUND', { message: 'no image myapp' }),
-    new ORPCError('FORBIDDEN', { message: 'not allowed' }),
+test('#buildRanking rejects a name another host has already', () => {
+  const answers = [
+    { host: 'a', value: buildMockHostProbe() },
+    { host: 'b', value: buildMockHostProbe({ imps: ['dev'] }) },
   ];
 
-  for (const failure of failures) {
-    const creates: string[] = [];
-
-    const placed = createPlaced(
-      RANKED,
-      (host) => {
-        creates.push(host);
-
-        return buildRejection(failure);
-      },
-      () => {},
-    );
-
-    const rejection = await placed.catch((error: unknown) => error);
-
-    expect(rejection).toBe(failure);
-    expect(creates).toEqual(['a']);
-  }
+  expect(() =>
+    buildRanking(answers, {
+      name: 'dev',
+      image: null,
+      memoryMib: null,
+      cpuLimit: null,
+      policyMode: null,
+      networks: [],
+      needsWholeHost: false,
+    }),
+  ).toThrowWithMessage(Error, 'dev exists on b already; pick another name');
 });
 
-test('when every host refuses for RAM, placement says so', async () => {
-  const creates: string[] = [];
+test('#buildRanking leaves a generated name to impd though a host has an imp of that name', () => {
+  const ranking = buildRanking([{ host: 'b', value: buildMockHostProbe({ imps: ['dev'] }) }], {
+    name: null,
+    image: null,
+    memoryMib: null,
+    cpuLimit: null,
+    policyMode: null,
+    networks: [],
+    needsWholeHost: false,
+  });
 
-  const placed = createPlaced(
-    RANKED,
-    (host) => {
-      creates.push(host);
+  const ranked: unknown = ranking.ranked;
 
-      return Promise.reject(buildRamError());
-    },
+  expect(ranked).toStrictEqual([{ host: 'b', freeMib: expect.any(Number) as unknown }]);
+});
+
+test('#createPlaced moves on to the next host after a RAM refusal, with one create per host', async () => {
+  const create = mock((host: string) =>
+    host === 'a'
+      ? Promise.reject(
+          new ORPCError('RAM_BUDGET_EXCEEDED', {
+            status: 503,
+            message: 'Not enough RAM budget, even after sleeping idle imps',
+          }),
+        )
+      : Promise.resolve(`imp on ${host}`),
+  );
+
+  const placed = await createPlaced(
+    [
+      { host: 'a', freeMib: 3 },
+      { host: 'b', freeMib: 2 },
+      { host: 'c', freeMib: 1 },
+    ],
+    create,
     () => {},
   );
 
-  const rejection = await placed.catch((error: unknown) => error);
+  expect(placed).toStrictEqual({ host: 'b', value: 'imp on b' });
+  expect(create.mock.calls).toStrictEqual([['a'], ['b']]);
+});
 
-  expect(String(rejection)).toBe(
-    'Error: every host that could take the imp turned it away for RAM',
+test('#createPlaced reports each RAM refusal with its host', async () => {
+  const onRefusal = mock<(host: string, message: string) => void>();
+
+  await createPlaced(
+    [
+      { host: 'a', freeMib: 3 },
+      { host: 'b', freeMib: 2 },
+      { host: 'c', freeMib: 1 },
+    ],
+    (host) =>
+      host === 'a'
+        ? Promise.reject(
+            new ORPCError('RAM_BUDGET_EXCEEDED', {
+              status: 503,
+              message: 'Not enough RAM budget, even after sleeping idle imps',
+            }),
+          )
+        : Promise.resolve(`imp on ${host}`),
+    onRefusal,
   );
 
-  expect(creates).toEqual(['a', 'b', 'c']);
+  expect(onRefusal).toHaveBeenCalledExactlyOnceWith(
+    'a',
+    'Not enough RAM budget, even after sleeping idle imps',
+  );
+});
+
+test('#createPlaced ends placement on a timeout, with no second create', () => {
+  const failure = new Error('no answer in 5 s');
+
+  const create = mock<(host: string) => Promise<string>>(() => Promise.reject(failure));
+
+  const placed = createPlaced(
+    [
+      { host: 'a', freeMib: 3 },
+      { host: 'b', freeMib: 2 },
+      { host: 'c', freeMib: 1 },
+    ],
+    create,
+    () => {},
+  );
+
+  expect(placed).rejects.toBe(failure);
+  expect(create.mock.calls).toStrictEqual([['a']]);
+});
+
+test('#createPlaced ends placement on a missing image, with no second create', () => {
+  const failure = new ORPCError('NOT_FOUND', { message: 'no image myapp' });
+
+  const create = mock<(host: string) => Promise<string>>(() => Promise.reject(failure));
+
+  const placed = createPlaced(
+    [
+      { host: 'a', freeMib: 3 },
+      { host: 'b', freeMib: 2 },
+      { host: 'c', freeMib: 1 },
+    ],
+    create,
+    () => {},
+  );
+
+  expect(placed).rejects.toBe(failure);
+  expect(create.mock.calls).toStrictEqual([['a']]);
+});
+
+test('#createPlaced ends placement on a refusal other than RAM, with no second create', () => {
+  const failure = new ORPCError('FORBIDDEN', { message: 'not allowed' });
+
+  const create = mock<(host: string) => Promise<string>>(() => Promise.reject(failure));
+
+  const placed = createPlaced(
+    [
+      { host: 'a', freeMib: 3 },
+      { host: 'b', freeMib: 2 },
+      { host: 'c', freeMib: 1 },
+    ],
+    create,
+    () => {},
+  );
+
+  expect(placed).rejects.toBe(failure);
+  expect(create.mock.calls).toStrictEqual([['a']]);
+});
+
+test('#createPlaced rejects when every host refuses for RAM', () => {
+  const create = mock<(host: string) => Promise<string>>(() =>
+    Promise.reject(
+      new ORPCError('RAM_BUDGET_EXCEEDED', {
+        status: 503,
+        message: 'Not enough RAM budget, even after sleeping idle imps',
+      }),
+    ),
+  );
+
+  const placed = createPlaced(
+    [
+      { host: 'a', freeMib: 3 },
+      { host: 'b', freeMib: 2 },
+      { host: 'c', freeMib: 1 },
+    ],
+    create,
+    () => {},
+  );
+
+  expect(placed).rejects.toThrowWithMessage(
+    Error,
+    'every host that could take the imp turned it away for RAM',
+  );
+
+  expect(create.mock.calls).toStrictEqual([['a'], ['b'], ['c']]);
+});
+
+test('#createPlaced rejects an empty ranking without a create', () => {
+  const create = mock<(host: string) => Promise<string>>(() => Promise.resolve('imp'));
+  const placed = createPlaced([], create, () => {});
+
+  expect(placed).rejects.toThrowWithMessage(
+    Error,
+    'every host that could take the imp turned it away for RAM',
+  );
+
+  expect(create).not.toHaveBeenCalled();
 });

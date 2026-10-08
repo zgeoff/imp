@@ -179,10 +179,12 @@ const grantCommand = defineCommand({
   subCommands: { ls: grantLsCommand, rm: grantRmCommand },
 });
 
-// how approve asks: whether stdin is a terminal, and the question itself
+// how approve asks: whether stdin is a terminal, the question itself, and
+// where it shows the sign-in and the outcome (stderr)
 interface ApprovePrompt {
   readonly isTerminal: boolean;
   readonly confirm: (question: string) => Promise<boolean>;
+  readonly show: (line: string) => void;
 }
 
 // the calls approve makes, so a test can pass a fake impd
@@ -216,8 +218,8 @@ export async function runApprove(
 
   const where = request.imps === undefined ? "the token's imps" : request.imps.join(',');
 
-  console.error(formatOAuthApproval(approval));
-  console.error(`it gets:      ${request.scope} on ${where}`);
+  prompt.show(formatOAuthApproval(approval));
+  prompt.show(`it gets:      ${request.scope} on ${where}`);
 
   if (!request.isConfirmed) {
     const isApproved = await prompt.confirm('Approve this sign-in? [y/N] ');
@@ -233,7 +235,7 @@ export async function runApprove(
     ...(request.imps !== undefined && { imps: [...request.imps] }),
   });
 
-  console.error(
+  prompt.show(
     `imp: approved: ${approval.client} gets ${request.scope} on ${where}; press Continue on the sign-in page`,
   );
 }
@@ -272,6 +274,9 @@ const approveCommand = defineCommand({
       await runApprove(client, request, {
         isTerminal: process.stdin.isTTY,
         confirm: (question) => readConfirmation(question),
+        show: (line) => {
+          console.error(line);
+        },
       });
     }),
 });

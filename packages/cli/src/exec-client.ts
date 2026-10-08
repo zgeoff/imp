@@ -66,6 +66,15 @@ export interface ExecIo {
   // whether another client is attached to the session; it must not wake
   // the imp
   readonly isAttachedElsewhere?: (imp: string, session: string) => Promise<boolean>;
+
+  // the lines the CLI prints about the session itself; console.error by
+  // default
+  readonly printError?: (line: string) => void;
+
+  // the clock the reattach window is judged by, and the pause between tries;
+  // Date.now and Bun.sleep by default
+  readonly now?: () => number;
+  readonly wait?: (ms: number) => Promise<void>;
 }
 
 // Exit codes as ssh and shells use them (the README has the table): 127
@@ -117,13 +126,16 @@ function openWebSocket(url: string, headers: Readonly<Record<string, string>>): 
 // and resolves with the exit code for this process. A session attaches
 // again by itself when impd restarts or the imp sleeps under it.
 export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO): Promise<number> {
+  const printError = io.printError ?? console.error;
+  const now = io.now ?? Date.now;
+  const wait = io.wait ?? Bun.sleep;
   let config: CliConfig;
 
   try {
     config = loadCliConfig(io.env, options.host);
   } catch (error) {
     // a usage error, or a config.json that cannot be read (EACCES, EISDIR)
-    console.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
+    printError(`imp: ${error instanceof Error ? error.message : String(error)}`);
 
     return Promise.resolve(IMP_FAILED_CODE);
   }
@@ -260,8 +272,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
   const handleDetachKey = (): void => {
     stopSession(0);
-
-    console.error(`imp: detached from ${formatSession(options.name, session?.name ?? '')}`);
+    printError(`imp: detached from ${formatSession(options.name, session?.name ?? '')}`);
   };
 
   const sendStdin = (chunk: Uint8Array): void => {
@@ -404,7 +415,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
       return false;
     }
 
-    if (state.reattachUntil !== null && Date.now() >= state.reattachUntil) {
+    if (state.reattachUntil !== null && now() >= state.reattachUntil) {
       return false;
     }
 
@@ -444,7 +455,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
         stopSession(result.code);
 
         if (result.message !== null) {
-          console.error(`imp: ${result.message}`);
+          printError(`imp: ${result.message}`);
         }
 
         return;
@@ -453,7 +464,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
       const sessionName = session?.name ?? '';
 
       if (state.reattachUntil === null) {
-        state.reattachUntil = Date.now() + (io.reattachWindowMs ?? REATTACH_WINDOW_MS);
+        state.reattachUntil = now() + (io.reattachWindowMs ?? REATTACH_WINDOW_MS);
 
         // stdin reads on, for the detach key and ctrl-c
         if (state.draining) {
@@ -465,7 +476,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
         writeNotice(`lost the connection to session ${sessionName}; attaching again`);
       }
 
-      await Bun.sleep(readReattachDelay());
+      await wait(readReattachDelay());
 
       // a terminal that was away must not take the session from a newer one
       const elsewhere = state.ended ? false : await isAttachedElsewhere(options.name, sessionName);
@@ -476,10 +487,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
       if (elsewhere) {
         stopSession(TAKEN_OVER_CODE);
-
-        console.error(
-          `imp: another client attached to ${formatSession(options.name, sessionName)}`,
-        );
+        printError(`imp: another client attached to ${formatSession(options.name, sessionName)}`);
 
         return;
       }

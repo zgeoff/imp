@@ -108,7 +108,7 @@ export function createImpPresenter(
     // a running imp's current span counts too
     const awakeMs =
       imp.awakeMs +
-      (imp.awakeSince === null ? 0 : Math.max(0, Date.now() - imp.awakeSince.getTime()));
+      (imp.awakeSince === null ? 0 : Math.max(0, context.now() - imp.awakeSince.getTime()));
 
     api.resources = { wakeCount: imp.wakeCount, awakeMs };
 

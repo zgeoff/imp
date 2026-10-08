@@ -399,6 +399,30 @@ progress and keepalive timers of `createMcpServer` and `createHttpTransport` tak
 the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks
 only when the test says so.
 
+The cli package's tests that talk to impd boot it with `createImpd` in their file's `setupTest()`
+and spawn the real binary (`packages/cli/src/test-utils/start-cli.ts`) against its app on a loopback
+port; the parser, formatter, config and other pure tests boot nothing. The stand-ins in
+`packages/cli/src/test-utils/` sit in front of the real app or replace only a transport:
+
+- `start-stub-older-impd.ts` (over `build-stub-older-impd-fetch.ts`): an older release. It drops
+  named feature flags or the whole features object from `system.info`, sends a procedure the release
+  lacked to impd's own not-found, drops named events of a stream, and records each procedure it
+  forwards.
+- `start-stub-newer-impd.ts` (over `build-stub-newer-impd-fetch.ts`): a newer release that adds
+  named fields to a procedure's answer.
+- `start-stub-info-fault-impd.ts`: drops the connection of each `system.info` call and forwards the
+  rest.
+- `start-stub-tunnel-fault-proxy.ts`: forwards `/tunnel` sockets and sends one a message the
+  protocol does not know.
+- `start-stub-silent-host.ts`: takes requests and never answers.
+- `start-stub-prefix-proxy.ts`: serves the real app under a path prefix, HTTP and WebSocket.
+- `build-stub-exec-peer.ts`: an in-memory `/exec` socket that sends the literal frames a test
+  scripts, for protocol faults impd never sends; `exec-client.ts` takes it through `io.connect` and
+  `cp/open-tool-exec.ts` through `connect`.
+- `start-stub-service-agent.ts`: the guest agent's services API on the imp's vsock path.
+- `start-warm-move-hosts.ts`: `createMoveHosts(stack, { isShared: true })` with both apps on
+  loopback, because two impds in one process cannot share the data dir a warm move needs.
+
 Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
 `host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
 ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.
@@ -479,8 +503,8 @@ file leaves every host on its real origin.
 2. To mount the small filesystem.
 3. Passwordless, for the `registry` suite.
 4. For `tailscale` and `moves-tailnet`.
-5. Optional: `packages/cli/src/image/pack-build-context.docker.test.ts` runs the real
-   `docker buildx` and skips when it is missing.
+5. Optional: `packages/cli/src/image/run-image-build.docker.test.ts` runs the real `docker buildx`
+   and skips when it is missing.
 
 - `IMP_HOST_TESTS=required` makes the `canUnshare` probe (`packages/daemon/src/test-utils/`) of each
   `*.host.test.ts` test true, so a missing tool or namespace fails the test instead of skipping it.

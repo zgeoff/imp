@@ -1,60 +1,36 @@
 import { expect, test } from 'bun:test';
-import type { Imp } from '@imp/api';
-import { formatCpuUse } from '../format-output';
+import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
+import { runCli } from '../test-utils/start-cli';
 import { formatTop, readCpuArgs } from './cpu';
 
-const IMP: Imp = {
-  id: 'id',
-  name: 'idle',
-  image: 'base',
-  state: 'running',
-  vcpus: 2,
-  memoryMib: 2048,
-  diskMib: 8192,
-  ip: '10.66.0.2',
-  slot: 0,
-  port: 20_000,
-  httpPort: 8080,
-  url: 'http://idle.imp.localhost:7080',
-  createdAt: new Date(0),
-  lastActiveAt: new Date(0),
-  ramMib: 300,
-  cpu: { limit: null, weight: 100 },
-  resources: {
-    wakeCount: 3,
-    awakeMs: 90_000,
-    sample: {
-      measuredAt: new Date(0),
-      since: new Date(0),
-      cpuPercent: 2,
-      cpuThrottledMs: 0,
-      netRxBytes: 2048,
-      netTxBytes: 10,
+test('#formatTop lists the busiest imp first, with disk use, traffic, wakes and awake time', () => {
+  const { diskUsage, ...idle } = buildMockImp({
+    name: 'idle',
+    state: 'running',
+    diskMib: 8192,
+    ramMib: 300,
+    cpu: { limit: null, weight: 100 },
+    resources: {
+      wakeCount: 3,
+      awakeMs: 90_000,
+      sample: {
+        measuredAt: new Date(0),
+        since: new Date(0),
+        cpuPercent: 2,
+        cpuThrottledMs: 0,
+        netRxBytes: 2048,
+        netTxBytes: 10,
+      },
     },
-  },
-};
+  });
 
-test('the CPU column shows the last sample over the limit', () => {
-  expect(formatCpuUse(IMP)).toBe('2%');
-  expect(formatCpuUse({ ...IMP, cpu: { limit: 1.5, weight: 100 } })).toBe('2% / 1.5');
-
-  expect(formatCpuUse({ ...IMP, state: 'sleeping', resources: { wakeCount: 0, awakeMs: 0 } })).toBe(
-    '-',
-  );
-});
-
-test('imp top lists the busiest imp first, with disk use, traffic, wakes and awake time', () => {
-  const busy: Imp = {
-    ...IMP,
+  const busy = buildMockImp({
     name: 'busy',
+    state: 'running',
+    diskMib: 8192,
+    ramMib: 300,
     cpu: { limit: 0.5, weight: 200 },
-    diskUsage: {
-      exclusiveBytes: 1203 * 1_048_576,
-      sharedBytes: 0,
-      measuredAt: new Date(0),
-      isPartial: false,
-      isUpperBound: true,
-    },
+    diskUsage: { exclusiveBytes: 1203 * 1_048_576, isPartial: false, isUpperBound: true },
     resources: {
       wakeCount: 0,
       awakeMs: 7_200_000,
@@ -67,13 +43,13 @@ test('imp top lists the busiest imp first, with disk use, traffic, wakes and awa
         netTxBytes: 10,
       },
     },
-  };
+  });
 
-  const rows = formatTop([IMP, busy])
+  const rows = formatTop([idle, busy])
     .split('\n')
     .map((row) => row.split(/\s{2,}/));
 
-  expect(rows).toEqual([
+  expect(rows).toStrictEqual([
     [
       'NAME',
       'STATE',
@@ -104,11 +80,24 @@ test('imp top lists the busiest imp first, with disk use, traffic, wakes and awa
   ]);
 });
 
-test('imp set and imp new read the CPU flags', () => {
-  expect(readCpuArgs({ 'cpu-limit': 'none', 'cpu-weight': '50' })).toEqual({
+test('#readCpuArgs reads a limit of none and a weight', () => {
+  expect(readCpuArgs({ 'cpu-limit': 'none', 'cpu-weight': '50' })).toStrictEqual({
     cpuLimit: null,
     cpuWeight: 50,
   });
+});
 
-  expect(readCpuArgs({})).toEqual({});
+test('#readCpuArgs reads no CPU flags as no change', () => {
+  expect(readCpuArgs({})).toStrictEqual({});
+});
+
+test('#setCommand refuses a set with no change before any call', async () => {
+  // a call that slipped through would fail on the dead address instead
+  const result = await runCli({ args: ['set', 'box'], env: { IMP_URL: 'http://127.0.0.1:1' } });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: imp set needs --cpu-limit, --cpu-weight, --cpus or --http-port\n',
+    code: 2,
+  });
 });

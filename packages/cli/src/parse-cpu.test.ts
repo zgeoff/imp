@@ -1,16 +1,37 @@
 import { expect, test } from 'bun:test';
 import { parseCpuLimit, parseCpuWeight } from './parse-cpu';
+import { UsageError } from './usage-error';
 
-test('a CPU limit is cores from 0.1, or none', () => {
-  expect(parseCpuLimit('1.5')).toBe(1.5);
-  expect(parseCpuLimit('.5')).toBe(0.5);
-  expect(parseCpuLimit('none')).toBeNull();
-  expect(() => parseCpuLimit('0.05')).toThrow('at least 0.1');
-  expect(() => parseCpuLimit('two')).toThrow('--cpu-limit takes cores');
+test.each([
+  ['1.5', 1.5],
+  ['.5', 0.5],
+  ['0.1', 0.1],
+])('#parseCpuLimit reads %p as %p cores', (text, cores) => {
+  expect(parseCpuLimit(text)).toBe(cores);
 });
 
-test('a CPU weight is a whole number from 1 to 10000', () => {
-  expect(parseCpuWeight('200')).toBe(200);
-  expect(() => parseCpuWeight('0')).toThrow('from 1 to 10000');
-  expect(() => parseCpuWeight('1.5')).toThrow('from 1 to 10000');
+test('#parseCpuLimit reads none as no limit', () => {
+  expect(parseCpuLimit('none')).toBeNull();
+});
+
+test.each(['0.05', 'two', '-1', ''])('#parseCpuLimit rejects %p as a usage error', (text) => {
+  expect(() => parseCpuLimit(text)).toThrowWithMessage(
+    UsageError,
+    `--cpu-limit takes cores, at least 0.1 (such as 1.5), or none, not ${text}`,
+  );
+});
+
+test.each([
+  ['1', 1],
+  ['200', 200],
+  ['10000', 10_000],
+])('#parseCpuWeight reads %p as the weight %p', (text, weight) => {
+  expect(parseCpuWeight(text)).toBe(weight);
+});
+
+test.each(['0', '1.5', '10001', 'heavy'])('#parseCpuWeight rejects %p as a usage error', (text) => {
+  expect(() => parseCpuWeight(text)).toThrowWithMessage(
+    UsageError,
+    `--cpu-weight takes a whole number from 1 to 10000, not ${text}`,
+  );
 });

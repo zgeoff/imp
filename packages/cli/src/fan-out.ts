@@ -9,6 +9,9 @@ import { UsageError } from './usage-error';
 // how long one saved host gets to answer before the rest go on without it
 const HOST_TIMEOUT_MS = 5000;
 
+// starts a timer that fires once after `ms`, and returns its cancel
+export type StartTimer = (ms: number, fire: () => void) => () => void;
+
 // a saved host, as loadCliConfig would give it for `--host <name>`
 export interface SavedTarget {
   readonly host: string;
@@ -33,13 +36,14 @@ export function listSavedTargets(env: CliEnv): SavedTarget[] {
     .toSorted((first, second) => first.host.localeCompare(second.host));
 }
 
-// Calls every host at once and waits for each, but no longer than the
-// timeout: a sleeping laptop or a host off the tailnet costs the timeout,
-// never a hang. The answers keep the targets' order.
+// Calls every host at once and waits for each, no longer than the timeout
+// that `startTimer` runs: a sleeping laptop costs the timeout, never a hang.
+// The answers keep the targets' order.
 export function runOnHosts<T>(
   targets: readonly SavedTarget[],
   call: (client: ImpClient, signal: AbortSignal) => Promise<T>,
   timeoutMs = HOST_TIMEOUT_MS,
+  startTimer: StartTimer = startTimeout,
 ): Promise<HostAnswer<T>[]> {
   return Promise.all(
     targets.map(async (target): Promise<HostAnswer<T>> => {
@@ -47,6 +51,7 @@ export function runOnHosts<T>(
         const value = await runWithTimeout(
           (signal) => call(createImpClient(target.config), signal),
           timeoutMs,
+          startTimer,
         );
 
         return { host: target.host, value };
@@ -63,21 +68,30 @@ export function runOnHosts<T>(
 async function runWithTimeout<T>(
   call: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
+  startTimer: StartTimer,
 ): Promise<T> {
   const controller = new AbortController();
 
   const expired = Promise.withResolvers<never>();
 
-  const timer = setTimeout(() => {
+  const cancelTimer = startTimer(timeoutMs, () => {
     controller.abort();
     expired.reject(new Error(`no answer in ${String(timeoutMs / 1000)} s`));
-  }, timeoutMs);
+  });
 
   try {
     return await Promise.race([call(controller.signal), expired.promise]);
   } finally {
-    clearTimeout(timer);
+    cancelTimer();
 
     controller.abort();
   }
+}
+
+function startTimeout(ms: number, fire: () => void): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
 }

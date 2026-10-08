@@ -59,10 +59,13 @@ export function checkHostName(name: string): string {
   return name;
 }
 
-// The saved hosts, or none when there is no config file yet. A file that
-// does not parse is an error, never an empty config: `imp login` would
-// otherwise write over every host in it.
-export function readHostConfig(env: CliEnv): HostConfig {
+// The saved hosts, or none without a config file. A file that does not parse
+// is an error, never an empty config, which `imp login` would write over.
+// `warn` gets the warning about a file others can read.
+export function readHostConfig(
+  env: CliEnv,
+  warn: (line: string) => void = console.error,
+): HostConfig {
   const path = resolveConfigPath(env);
   let text: string;
 
@@ -76,7 +79,7 @@ export function readHostConfig(env: CliEnv): HostConfig {
     throw error;
   }
 
-  checkSharedMode(path);
+  checkSharedMode(path, warn);
 
   let parsed: unknown;
 
@@ -137,8 +140,8 @@ function resolveWritePath(path: string): string {
 
 // the file holds tokens: say so when someone else can read it, but leave the
 // mode to its owner
-function checkSharedMode(path: string): void {
+function checkSharedMode(path: string, warn: (line: string) => void): void {
   if ((statSync(path).mode & 0o077) !== 0) {
-    console.error(`imp: warning: ${path} is readable by other users; run chmod 600 ${path}`);
+    warn(`imp: warning: ${path} is readable by other users; run chmod 600 ${path}`);
   }
 }

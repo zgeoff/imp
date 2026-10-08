@@ -8,6 +8,7 @@ import {
   encodeExecFrame,
 } from '@imp/api';
 import type { ExecClientMessage, ExecServerMessage, ExecTool } from '@imp/api';
+import type { ExecSocket } from '@zgeoff/imp-client';
 import { buildWebSocketUrl } from '../build-websocket-url';
 import type { CliConfig } from '../cli-config';
 
@@ -35,6 +36,10 @@ export interface ToolExecOptions {
   // window past what this machine wrote
   readonly onStdout: (data: Uint8Array) => Promise<void>;
   readonly onStderr: (data: Uint8Array) => void;
+
+  // opens the socket to impd; Bun's WebSocket, which takes the bearer header,
+  // by default
+  readonly connect?: (url: string, headers: Readonly<Record<string, string>>) => ExecSocket;
 }
 
 // an error from impd, as `CODE: message`
@@ -60,13 +65,17 @@ function parseServerMessage(text: string): ExecServerMessage | null {
   }
 }
 
+function openWebSocket(url: string, headers: Readonly<Record<string, string>>): WebSocket {
+  return new WebSocket(url, { headers: { ...headers } });
+}
+
 // Opens the exec and resolves once the tool started.
 export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> {
   const headers =
     options.config.token === null ? {} : { authorization: `Bearer ${options.config.token}` };
 
-  const ws = new WebSocket(buildWebSocketUrl(options.config.url, EXEC_PATH), { headers });
-
+  const connect = options.connect ?? openWebSocket;
+  const ws = connect(buildWebSocketUrl(options.config.url, EXEC_PATH), headers);
   const started = Promise.withResolvers<void>();
   const exited = Promise.withResolvers<ExecOutcome>();
   const waiter: AckWaiter = { wake: null };
