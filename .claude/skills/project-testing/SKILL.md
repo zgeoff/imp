@@ -405,10 +405,10 @@ The mcp package's tests boot impd's real app with `createImpd` and reach it thro
 `@zgeoff/imp-client`, whose `fetch` is `impd.api.app.handle`. A test that needs a tool call to wait
 holds impd's read of the imps with `buildQueryGate`. One stand-in models an impd release from before
 the fork's grant report: `packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts`
-(`buildStubOlderImpdFetch`) takes `grantsNotCopied` out of the real `imps.fork` answer. The progress
-and keepalive timers of `createMcpServer` and `createHttpTransport` take a `repeat`, and the tests
-pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks only when
-the test says so.
+(`buildStubOlderImpdFetch`) takes `grantsNotCopied` and `grantsError` out of the real `imps.fork`
+answer. The progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a
+`repeat`, and the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`),
+which ticks only when the test says so.
 
 In `mcp/mcp-endpoint.test.ts` and `mcp/stdio.test.ts`, an exec through impd's real app reaches the
 guest through `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path,
