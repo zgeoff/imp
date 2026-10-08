@@ -34,8 +34,43 @@ test('it creates a default host on XFS, off the tailnet, with nothing to boot co
   });
 });
 
-test('it applies overrides on top of the defaults', async () => {
-  const info = await systemInfoCollection.create({ ramBudgetMib: 4096, ramUsedMib: 1024 });
+test('it applies overrides on top of the defaults, nested objects whole', async () => {
+  const info: SystemInfo = await systemInfoCollection.create({
+    ramBudgetMib: 4096,
+    storage: {
+      backend: 'zfs',
+      usedBytes: 1024,
+      availableBytes: 2048,
+      reserveBytes: 512,
+      pendingBytes: 0,
+      isLow: true,
+      impDiskBytes: 256,
+    },
+    tailscale: { enabled: true, state: 'Running', hostname: 'box', ip: '100.64.0.1', names: null },
+  });
 
-  expect(info).toMatchObject({ ramBudgetMib: 4096, ramUsedMib: 1024 });
+  expect(info).toStrictEqual({
+    version: expect.toBeString(),
+    ramBudgetMib: 4096,
+    ramUsedMib: expect.toBeNumber(),
+    ramReservedMib: expect.toBeNumber(),
+    ramCommittedMib: expect.toBeNumber(),
+    awakeCount: expect.toBeNumber(),
+    impCount: expect.toBeNumber(),
+    sessionCount: expect.toBeNumber(),
+    firecrackerVersion: expect.toBeString(),
+    guestKernel: { version: null, sha256: expect.toBeString() },
+    systemDrive: { sha256: expect.toBeString() },
+    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
+    storage: {
+      backend: 'zfs',
+      usedBytes: 1024,
+      availableBytes: 2048,
+      reserveBytes: 512,
+      pendingBytes: 0,
+      isLow: true,
+      impDiskBytes: 256,
+    },
+    tailscale: { enabled: true, state: 'Running', hostname: 'box', ip: '100.64.0.1', names: null },
+  });
 });

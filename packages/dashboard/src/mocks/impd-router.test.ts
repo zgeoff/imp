@@ -21,7 +21,7 @@ test('#imps.list lists the imps in the store, with their dates as dates', async 
   const imp = await impCollection.create({ name: 'web' });
   const listed = await client.imps.list();
 
-  expect(listed).toStrictEqual([{ ...imp }]);
+  expect(listed).toStrictEqual([{ ...imp, leases: { leases: [], otherCount: 0 } }]);
 });
 
 test('#imps.list leaves out the imps outside the patterns of the session', async () => {
@@ -53,7 +53,7 @@ test('#imps.sleep moves the imp to sleeping', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
   await sessionCollection.create({});
-  await impCollection.create({ name: 'web', state: 'running' });
+  await impCollection.create({ name: 'web' });
 
   const slept = await client.imps.sleep({ name: 'web' });
 
@@ -64,7 +64,7 @@ test('#imps.sleep refuses a session with the read scope', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
   await sessionCollection.create({ name: 'viewer', scope: 'read' });
-  await impCollection.create({ name: 'web', state: 'running' });
+  await impCollection.create({ name: 'web' });
 
   expect(client.imps.sleep({ name: 'web' })).rejects.toMatchObject({
     code: 'FORBIDDEN',
@@ -382,7 +382,7 @@ test('#events.stream streams the change a lifecycle call makes', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
   await sessionCollection.create({});
-  await impCollection.create({ name: 'web', state: 'running' });
+  await impCollection.create({ name: 'web' });
 
   const stream = await client.events.stream();
 
@@ -434,14 +434,15 @@ test('#system.info answers the host in the store', async () => {
   expect(info.ramBudgetMib).toBe(4096);
 });
 
-test('#system.info answers a host of default values when the store has none', async () => {
+test('#system.info answers the same host of default values to each read when the store has none', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
   await sessionCollection.create({});
 
-  const info = await client.system.info();
+  const first = await client.system.info();
+  const second = await client.system.info();
 
-  expect(info.storage.backend).toBe('xfs');
+  expect(second).toStrictEqual(first);
 });
 
 test('#tokens.list lists the tokens without their secrets', async () => {
@@ -500,7 +501,7 @@ test('#tokens.update sets the secrets the token may grant', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
   await sessionCollection.create({});
-  await tokenCollection.create({ name: 'ci', grantable: [] });
+  await tokenCollection.create({ name: 'ci' });
 
   const updated = await client.tokens.update({ name: 'ci', grantable: ['npm'] });
 
@@ -540,6 +541,21 @@ test('#tokens.delete rejects a missing token with NOT_FOUND', async () => {
   });
 });
 
+test('#tokens.delete keeps the other tokens when the token it names is missing', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await tokenCollection.create({ name: 'ci' });
+
+  const deleted = await client.tokens.delete({ name: 'gone' }).then(
+    () => 'deleted',
+    () => 'refused',
+  );
+
+  expect(deleted).toBe('refused');
+  expect(tokenCollection.findMany().map((token) => token.name)).toStrictEqual(['ci']);
+});
+
 test('#tokens.whoami answers the identity of the session', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
@@ -554,4 +570,332 @@ test('#tokens.whoami answers the identity of the session', async () => {
     imps: ['dev-*'],
     grantable: [],
   });
+});
+
+test('#imps.list hides image builders', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+  await impCollection.create({ name: 'build-1', kind: 'builder' });
+
+  const listed = await client.imps.list();
+
+  expect(listed.map((imp) => imp.name)).toStrictEqual(['web']);
+});
+
+test('#imps.list shows image builders when asked for them', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'build-1', kind: 'builder' });
+
+  const listed = await client.imps.list({ builders: true });
+
+  expect(listed.map((imp) => imp.name)).toStrictEqual(['build-1']);
+});
+
+test('#imps.get answers the imp with the leases the caller sees', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+
+  const imp = await impCollection.create({ name: 'web' });
+  const got = await client.imps.get({ name: 'web' });
+
+  expect(got).toStrictEqual({ ...imp, leases: { leases: [], otherCount: 0 } });
+});
+
+test('#imps.create rejects a name another imp has with CONFLICT', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  expect(client.imps.create({ name: 'web' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    status: 409,
+    message: 'imp web already exists',
+    data: { kind: 'imp', name: 'web' },
+  });
+});
+
+test('#imps.start boots a stopped imp', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'stopped' });
+
+  const started = await client.imps.start({ name: 'web' });
+
+  expect(started.state).toBe('running');
+});
+
+test('#imps.stop rejects an imp that is still being made with INVALID_STATE', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'creating' });
+
+  expect(client.imps.stop({ name: 'web' })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    status: 409,
+    message: 'cannot stop an imp that is creating (allowed: running, sleeping, error)',
+    data: { state: 'creating', allowed: ['running', 'sleeping', 'error'] },
+  });
+});
+
+test('#imps.stop stops a running imp', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  const stopped = await client.imps.stop({ name: 'web' });
+
+  expect(stopped.state).toBe('stopped');
+});
+
+test('#imps.sleep rejects a stopped imp with INVALID_STATE', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'stopped' });
+
+  expect(client.imps.sleep({ name: 'web' })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    status: 409,
+    data: { state: 'stopped', allowed: ['running'] },
+  });
+});
+
+test('#imps.wake wakes a sleeping imp', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'sleeping' });
+
+  const woken = await client.imps.wake({ name: 'web' });
+
+  expect(woken.state).toBe('running');
+});
+
+test('#imps.wake rejects an imp in error with INVALID_STATE when told not to restart it', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'error' });
+
+  expect(client.imps.wake({ name: 'web', restartError: false })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    data: { state: 'error', allowed: ['running', 'sleeping', 'stopped'] },
+  });
+});
+
+test('#imps.fork answers the grants it did not copy', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  const forked = await client.imps.fork({ source: 'web', name: 'web2' });
+
+  expect(forked.grantsNotCopied).toStrictEqual([]);
+});
+
+test('#checkpoints.restore boots the imp from the checkpoint it names', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'stopped' });
+  await checkpointCollection.create({ imp: 'web', id: 'cp1' });
+
+  const restored = await client.checkpoints.restore({ name: 'web', checkpoint: 'cp1' });
+
+  expect(restored.state).toBe('running');
+});
+
+test('#images.list lists the images in the store', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+
+  const image = await imageCollection.create({ name: 'base' });
+  const listed = await client.images.list();
+
+  expect(listed).toStrictEqual([{ ...image }]);
+});
+
+test('#images.add pulls again an image of the name it already has', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await imageCollection.create({ name: 'node', ref: 'docker.io/library/node:20' });
+  await client.images.add({ name: 'node', ref: 'docker.io/library/node:22' });
+
+  expect(imageCollection.findMany().map((image) => image.ref)).toStrictEqual([
+    'docker.io/library/node:22',
+  ]);
+});
+
+test('#images.add rejects pulling over a template with CONFLICT', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await imageCollection.create({ name: 'node', source: 'imp' });
+
+  expect(
+    client.images.add({ name: 'node', ref: 'docker.io/library/node:22' }),
+  ).rejects.toMatchObject({
+    code: 'CONFLICT',
+    message: 'image node is a template; make it again from an imp, or pick another name',
+    data: { kind: 'image', name: 'node' },
+  });
+});
+
+test('#images.add makes a template from an imp', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  const template = await client.images.add({ name: 'web-tpl', imp: 'web' });
+
+  expect(template).toMatchObject({ name: 'web-tpl', ref: 'imp:web', source: 'imp' });
+});
+
+test('#images.add rejects a template from a missing imp with NOT_FOUND', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+
+  expect(client.images.add({ name: 'web-tpl', imp: 'gone' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    data: { kind: 'imp', name: 'gone' },
+  });
+});
+
+test('#images.add rejects a template over a docker image with CONFLICT', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+  await imageCollection.create({ name: 'node' });
+
+  expect(client.images.add({ name: 'node', imp: 'web' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    message: 'image node is a docker image; give the template a name of its own',
+    data: { kind: 'image', name: 'node' },
+  });
+});
+
+test('#images.delete rejects an image an imp uses with CONFLICT', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await imageCollection.create({ name: 'base' });
+  await impCollection.create({ name: 'web', image: 'base' });
+
+  expect(client.images.delete({ name: 'base' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    message: 'image base is used by 1 imp(s)',
+    data: { kind: 'image', name: 'base' },
+  });
+});
+
+test('#events.stream streams an ImpAdded for an imp it makes', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+
+  const stream = await client.events.stream();
+
+  onTestFinished(() => stream.return(undefined));
+
+  const pending = stream.next();
+
+  await client.imps.create({ name: 'box' });
+
+  const added = await pending;
+
+  expect(added.value).toMatchObject({ ev: 'ImpAdded', reason: 'created', imp: { name: 'box' } });
+});
+
+test('#events.stream streams an ImpRemoved for an imp it destroys', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  const stream = await client.events.stream();
+
+  onTestFinished(() => stream.return(undefined));
+
+  await stream.next();
+  await client.imps.destroy({ name: 'web' });
+
+  const removed = await stream.next();
+
+  expect(removed.value).toMatchObject({ ev: 'ImpRemoved', imp: { name: 'web' } });
+});
+
+test('#events.stream streams a CheckpointAdded for a checkpoint it takes', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  const stream = await client.events.stream();
+
+  onTestFinished(() => stream.return(undefined));
+
+  await stream.next();
+  await client.checkpoints.create({ name: 'web', label: 'v2' });
+
+  const added = await stream.next();
+
+  expect(added.value).toMatchObject({
+    ev: 'CheckpointAdded',
+    name: 'web',
+    checkpoint: { label: 'v2' },
+  });
+});
+
+test('#events.stream streams a CheckpointRemoved for a checkpoint it deletes', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+  await checkpointCollection.create({ imp: 'web', id: 'cp1' });
+
+  const stream = await client.events.stream();
+
+  onTestFinished(() => stream.return(undefined));
+
+  await stream.next();
+  await client.checkpoints.delete({ name: 'web', checkpoint: 'cp1' });
+
+  const removed = await stream.next();
+
+  expect(removed.value).toMatchObject({
+    ev: 'CheckpointRemoved',
+    name: 'web',
+    checkpoint: { id: 'cp1' },
+  });
+});
+
+test('#events.stream snapshots only the imps the patterns of the session allow', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({ imps: ['dev-*'] });
+  await impCollection.create({ name: 'prod' });
+  await impCollection.create({ name: 'dev-web' });
+
+  const stream = await client.events.stream();
+
+  onTestFinished(() => stream.return(undefined));
+
+  const snapshot = await stream.next();
+
+  expect(snapshot.value).toMatchObject({ ev: 'ImpAdded', imp: { name: 'dev-web' } });
 });

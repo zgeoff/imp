@@ -203,7 +203,7 @@ test('it sets a CPU limit on the running imp', async () => {
 
   await impCollection.create({
     name: 'web',
-    cpu: { limit: null, weight: 100 },
+    cpu: { limit: null, weight: 200 },
     resources: buildMockImpResources({ sample: { cpuPercent: 45 } }),
   });
 
@@ -220,6 +220,37 @@ test('it sets a CPU limit on the running imp', async () => {
 
   expect(impCollection.findFirst((query) => query.where({ name: 'web' }))?.cpu).toStrictEqual({
     limit: 0.5,
-    weight: 100,
+    weight: 200,
+  });
+});
+
+test('it sends the weight of the imp beside a new CPU limit', async () => {
+  const user = userEvent.setup();
+  const received = mock<(input: unknown) => void>();
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', cpu: { limit: null, weight: 200 } });
+
+  server.use(
+    http.post(`${RPC_URL}/imps/update`, async (info) => {
+      const input = await readRpcInput(info.request);
+
+      received(input);
+    }),
+  );
+
+  const rendered = renderApp('/imps/web');
+
+  const field = await rendered.findByLabelText('Limit (CPUs)');
+
+  await user.type(field, '0.5');
+  await user.click(rendered.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => {
+    expect(received).toHaveBeenCalledExactlyOnceWith({
+      name: 'web',
+      cpuLimit: 0.5,
+      cpuWeight: 200,
+    });
   });
 });

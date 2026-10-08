@@ -7,7 +7,7 @@ const shape = SystemInfoSchema.shape;
 
 // What system.info says of the host: one row, or these defaults when a test
 // seeds none. A host on XFS, off the tailnet, with nothing to boot cold.
-export const SystemInfoRowSchema = SystemInfoSchema.extend({
+const SystemInfoRowSchema = SystemInfoSchema.extend({
   version: z.string().default(() => faker.system.semver()),
   ramBudgetMib: z
     .int()

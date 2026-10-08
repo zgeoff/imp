@@ -15,7 +15,7 @@ import { renderApp } from '../test-utils/render-app';
 
 test('it lists a running imp with its state, RAM, disk and a sleep button', async () => {
   await sessionCollection.create({});
-  await impCollection.create({ name: 'web', state: 'running', ramMib: 300, diskMib: 32_768 });
+  await impCollection.create({ name: 'web', ramMib: 300, diskMib: 32_768 });
 
   const rendered = renderApp();
 
@@ -82,7 +82,7 @@ test('it moves the row of an imp to the state its lifecycle button asks for', as
   const user = userEvent.setup();
 
   await sessionCollection.create({});
-  await impCollection.create({ name: 'web', state: 'running' });
+  await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();
 
@@ -169,7 +169,7 @@ test('it sends only the fields that were filled in for a new imp', async () => {
 
 test('it shows a change impd streams without waiting for the next poll', async () => {
   await sessionCollection.create({});
-  await impCollection.create({ name: 'web', state: 'running' });
+  await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();
 

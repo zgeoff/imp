@@ -58,7 +58,7 @@ test('it deletes a token after a confirm', async () => {
 });
 
 test('it hides the tokens link from a caller limited to some imps', async () => {
-  await sessionCollection.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+  await sessionCollection.create({ name: 'dev', imps: ['dev-*'] });
 
   const rendered = renderApp('/');
 
@@ -68,7 +68,7 @@ test('it hides the tokens link from a caller limited to some imps', async () => 
 });
 
 test('it links to tokens for a caller that manages the whole host', async () => {
-  await sessionCollection.create({ name: 'root', scope: 'manage', imps: null });
+  await sessionCollection.create({ name: 'root' });
 
   const rendered = renderApp('/');
 

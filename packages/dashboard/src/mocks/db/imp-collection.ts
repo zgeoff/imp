@@ -4,7 +4,7 @@ import { Collection } from '@msw/data';
 import * as z from 'zod';
 
 // impd's imps: a running imp with every optional field left out
-const ImpRowSchema = ImpSchema.extend({
+export const ImpRowSchema = ImpSchema.extend({
   id: z.string().default(() => faker.string.uuid()),
   name: ImpSchema.shape.name.default(() => faker.string.alpha({ length: 8, casing: 'lower' })),
   image: ImpSchema.shape.image.default(() => faker.string.alpha({ length: 6, casing: 'lower' })),

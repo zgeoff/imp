@@ -1,8 +1,10 @@
+import { isSameOrigin } from '@imp/daemon/src/auth/authenticate';
 import { RPCHandler } from '@orpc/server/fetch';
 import { HttpResponse, http } from 'msw';
 import * as z from 'zod';
 import { sessionCollection } from './db/session-collection';
 import { tokenCollection } from './db/token-collection';
+import { impdLogouts } from './impd-events';
 import { impdRouter } from './impd-router';
 
 // the impd that serves the dashboard in the tests (test-setup.ts sets the
@@ -19,28 +21,6 @@ interface RouteContext {
 const LoginSchema = z.object({ token: z.string() });
 
 const rpc = new RPCHandler(impdRouter);
-
-// impd's isSameOrigin (packages/daemon auth/authenticate.ts): Sec-Fetch-Site
-// decides when sent, else an Origin with impd's host; neither is refused
-function isSameOrigin(request: Readonly<Request>): boolean {
-  const site = request.headers.get('sec-fetch-site');
-
-  if (site !== null) {
-    return site === 'same-origin';
-  }
-
-  const origin = request.headers.get('origin');
-
-  if (origin === null) {
-    return false;
-  }
-
-  try {
-    return new URL(origin).host === new URL(request.url).host;
-  } catch {
-    return false;
-  }
-}
 
 function readJson(request: Readonly<Request>): Promise<unknown> {
   return request.json().then(
@@ -65,7 +45,6 @@ async function resolveLoginBody(json: unknown): Promise<Response> {
   sessionCollection.clear();
 
   await sessionCollection.create({
-    kind: 'dashboard',
     name: token.name,
     scope: token.scope,
     imps: token.imps,
@@ -89,24 +68,24 @@ export function resolveLogout(context: RouteContext): Response {
   }
 
   sessionCollection.clear();
+  impdLogouts.logOut();
 
   return new HttpResponse(null, { status: 204 });
 }
 
-// impd's /rpc: the browser's session, or impd's 401 without one; oRPC's own
+// impd's /rpc (packages/daemon build-app.ts): the browser's session, only
+// from impd's own origin and before it expires, or impd's 401; oRPC's own
 // fetch handler answers through impdRouter
-async function resolveRpc(context: RouteContext): Promise<Response> {
-  const session = sessionCollection.findFirst();
+export async function resolveRpc(context: RouteContext): Promise<Response> {
+  const session = isSameOrigin(context.request) ? sessionCollection.findFirst() : undefined;
 
-  if (session === undefined) {
+  if (session === undefined || session.expiresAt.getTime() <= Date.now()) {
     return HttpResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
   const handled = await rpc.handle(context.request, { prefix: '/rpc', context: { session } });
 
-  return handled.matched
-    ? handled.response
-    : HttpResponse.text('no such procedure', { status: 404 });
+  return handled.matched ? handled.response : new Response('not found', { status: 404 });
 }
 
 export const handlers = [
