@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"gotest.tools/v3/assert"
 
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/reaper"
@@ -32,14 +33,27 @@ func (f *fakeInit) die() {
 }
 
 // testManager returns a manager whose starts make fake inits, which it
-// sends on inits, after gate (when set) lets each start go on.
+// sends on inits, after gate (when set) lets each start go on. Its cleanup
+// stops the manager, then ends every fake init it made.
 func testManager(t *testing.T, gate <-chan struct{}) (*Manager, <-chan *fakeInit) {
 	t.Helper()
 	inits := make(chan *fakeInit, 16)
+	var mu sync.Mutex
+	var made []*fakeInit
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, f := range made {
+			f.die()
+		}
+	})
+	// every start opens the same root: the manager's restarts run off the
+	// test goroutine, where t.TempDir cannot fail the test
+	root := t.TempDir()
 	m := &Manager{
 		stopCh:    make(chan struct{}),
 		cgroupDir: t.TempDir(),
-		rootOf:    func(int) string { return t.TempDir() },
+		rootOf:    func(int) string { return root },
 	}
 	m.startInit = func(*os.File) (*initProc, error) {
 		if gate != nil {
@@ -51,7 +65,9 @@ func testManager(t *testing.T, gate <-chan struct{}) (*Manager, <-chan *fakeInit
 		}
 		f := &fakeInit{died: make(chan reaper.Status, 1), sp: pair[1], served: make(chan error, 1), killed: make(chan struct{})}
 		go func() { f.served <- serve(pair[1], &proc.Direct{Reaper: testReaper}) }()
-		t.Cleanup(f.die)
+		mu.Lock()
+		made = append(made, f)
+		mu.Unlock()
 		inits <- f
 		return newInitProc(1<<22, pair[0], f.died, func() error {
 			close(f.killed)
@@ -63,32 +79,46 @@ func testManager(t *testing.T, gate <-chan struct{}) (*Manager, <-chan *fakeInit
 	return m, inits
 }
 
+// receive waits for one value on ch, failing the test after within.
+func receive[T any](t *testing.T, ch <-chan T, within time.Duration, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(within):
+		t.Fatalf("no %s after %s", what, within)
+		var zero T
+		return zero
+	}
+}
+
+func TestLaunchBringsTheContainerUp(t *testing.T) {
+	m, inits := testManager(t, nil)
+
+	m.Launch()
+
+	receive(t, inits, 5*time.Second, "init")
+	assert.DeepEqual(t, m.Status(), Status{Up: true})
+}
+
 func TestARestartRunsOnDownThenOnUp(t *testing.T) {
 	m, inits := testManager(t, nil)
 	events := make(chan string, 4)
 	m.OnDown(func() { events <- "down" })
 	m.OnUp(func() { events <- "up" })
 	m.Launch()
-	first := <-inits
-	if !m.Status().Up {
-		t.Fatal("not up after Launch")
-	}
+	first := receive(t, inits, 5*time.Second, "init")
 
 	first.die()
-	for _, want := range []string{"down", "up"} {
-		select {
-		case got := <-events:
-			if got != want {
-				t.Fatalf("hook %q, want %q", got, want)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatalf("no %q hook", want)
-		}
+
+	// the restart waits out minBackoff
+	got := []string{
+		receive(t, events, 10*time.Second, "hook"),
+		receive(t, events, 10*time.Second, "hook"),
 	}
-	<-inits
-	if st := m.Status(); !st.Up || st.Restarts != 1 {
-		t.Fatalf("status %+v after a restart", st)
-	}
+	assert.DeepEqual(t, got, []string{"down", "up"})
+	receive(t, inits, 5*time.Second, "second init")
+	assert.DeepEqual(t, m.Status(), Status{Up: true, Restarts: 1})
 }
 
 func TestAStopDuringAStartKillsTheNewInit(t *testing.T) {
@@ -96,10 +126,12 @@ func TestAStopDuringAStartKillsTheNewInit(t *testing.T) {
 	m, inits := testManager(t, gate)
 	launched := make(chan struct{})
 	go func() { m.Launch(); close(launched) }()
+
 	m.Stop()
 	close(gate)
-	f := <-inits
-	<-launched
+
+	f := receive(t, inits, 5*time.Second, "init")
+	receive(t, launched, 5*time.Second, "end of Launch")
 	select {
 	case <-f.killed:
 	case <-time.After(5 * time.Second):
@@ -107,23 +139,51 @@ func TestAStopDuringAStartKillsTheNewInit(t *testing.T) {
 	}
 }
 
-func TestOnlyBadStartsCountAndOldOnesExpire(t *testing.T) {
+func TestManagerStartIsErrDownWhileNoContainerRuns(t *testing.T) {
+	m, _ := testManager(t, nil)
+
+	_, err := m.Start(proc.Spec{Argv: []string{"true"}})
+
+	assert.ErrorIs(t, err, ErrDown)
+}
+
+func TestManagerRootIsErrDownWhileNoContainerRuns(t *testing.T) {
+	m, _ := testManager(t, nil)
+
+	_, err := m.Root().ReadFile("etc/passwd")
+
+	assert.ErrorIs(t, err, ErrDown)
+}
+
+func TestBadStartsAreNotExhaustedAtTheLimit(t *testing.T) {
 	var b badStarts
 	now := time.Now()
 	for i := range maxBadStarts {
 		b.add(now.Add(-time.Duration(i) * time.Second))
 	}
-	if b.exhausted(now) {
-		t.Fatalf("%d bad starts exhausted the window", maxBadStarts)
+
+	assert.Assert(t, !b.exhausted(now), "%d bad starts exhausted the window", maxBadStarts)
+}
+
+func TestBadStartsAreExhaustedPastTheLimit(t *testing.T) {
+	var b badStarts
+	now := time.Now()
+	for i := range maxBadStarts + 1 {
+		b.add(now.Add(-time.Duration(i) * time.Second))
 	}
-	b.add(now)
-	if !b.exhausted(now) {
-		t.Fatalf("%d bad starts did not exhaust the window", maxBadStarts+1)
+
+	assert.Assert(t, b.exhausted(now), "%d bad starts did not exhaust the window", maxBadStarts+1)
+}
+
+func TestBadStartsOlderThanTheWindowExpire(t *testing.T) {
+	var b badStarts
+	now := time.Now()
+	for i := range maxBadStarts + 1 {
+		b.add(now.Add(-time.Duration(i) * time.Second))
 	}
-	if b.exhausted(now.Add(restartWindow + time.Minute)) {
-		t.Fatal("bad starts older than the window still count")
-	}
-	if len(b) != 0 {
-		t.Fatalf("%d old bad starts kept", len(b))
-	}
+
+	exhausted := b.exhausted(now.Add(restartWindow + time.Minute))
+
+	assert.Check(t, !exhausted, "bad starts older than the window still count")
+	assert.Check(t, len(b) == 0, "%d old bad starts kept", len(b))
 }

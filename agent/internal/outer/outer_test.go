@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/proc"
 )
@@ -28,6 +30,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// recorder is the agent's runner, keeping each spec it is asked to start.
 type recorder struct{ specs []proc.Spec }
 
 func (r *recorder) Start(s proc.Spec) (*proc.Process, error) {
@@ -35,41 +38,57 @@ func (r *recorder) Start(s proc.Spec) (*proc.Process, error) {
 	return &proc.Process{}, nil
 }
 
-func TestRunnerStartsTheHelper(t *testing.T) {
+// openCgroup stands in for a cgroup leaf with a directory the test owns.
+func openCgroup(t *testing.T) *os.File {
+	t.Helper()
 	cg, err := os.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cg.Close()
-	next := &recorder{}
-	r := Runner{Next: next}
-	if _, err := r.Start(proc.Spec{Argv: []string{"sh", "-c", "true"}, Env: []string{"PATH=/bin"}, Cgroup: cg}); err != nil {
-		t.Fatal(err)
-	}
-	got := next.specs[0]
-	want := []string{"imp-agent", Command, "/bin/sh", "sh", "-c", "true"}
-	if !slices.Equal(got.Argv, want) || !got.Helper || !got.RequireCgroup || got.Cgroup != cg {
-		t.Fatalf("spec = %+v, want the helper %v in the required cgroup", got, want)
-	}
+	assert.NilError(t, err)
+	t.Cleanup(func() { cg.Close() })
+	return cg
 }
 
-func TestRunnerRefuses(t *testing.T) {
-	cg, err := os.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cg.Close()
+func TestRunnerStartsTheCommandThroughTheHelperInItsCgroup(t *testing.T) {
+	cg := openCgroup(t)
 	next := &recorder{}
-	r := Runner{Next: next}
-	if _, err := r.Start(proc.Spec{Argv: []string{"sh"}, Env: []string{"PATH=/bin"}}); err == nil {
-		t.Fatal("started without a cgroup")
-	}
-	if _, err := r.Start(proc.Spec{Argv: []string{"no-such-command"}, Env: []string{"PATH=/bin"}, Cgroup: cg}); err == nil {
-		t.Fatal("started a command that is not on PATH")
-	}
-	if len(next.specs) != 0 {
-		t.Fatalf("specs reached the runner: %+v", next.specs)
-	}
+
+	_, err := Runner{Next: next}.Start(proc.Spec{Argv: []string{"sh", "-c", "true"}, Env: []string{"PATH=/bin"}, Cgroup: cg})
+
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(next.specs, 1))
+	got := next.specs[0]
+	assert.Check(t, cmp.DeepEqual(got.Argv, []string{"imp-agent", Command, "/bin/sh", "sh", "-c", "true"}))
+	assert.Check(t, got.Helper, "the spec does not start the helper")
+	assert.Check(t, got.RequireCgroup, "the spec does not require its cgroup")
+	assert.Check(t, got.Cgroup == cg, "the spec lost its cgroup")
+}
+
+// The refusals' messages are contract: the agent answers EXEC_FAILED with
+// them.
+func TestRunnerRefusesASpecWithoutACgroup(t *testing.T) {
+	next := &recorder{}
+
+	_, err := Runner{Next: next}.Start(proc.Spec{Argv: []string{"sh"}, Env: []string{"PATH=/bin"}})
+
+	assert.Check(t, cmp.Error(err, "an outer exec needs its cgroup"))
+	assert.Check(t, cmp.Len(next.specs, 0), "a spec reached the runner")
+}
+
+func TestRunnerRefusesAnEmptyArgv(t *testing.T) {
+	next := &recorder{}
+
+	_, err := Runner{Next: next}.Start(proc.Spec{Env: []string{"PATH=/bin"}, Cgroup: openCgroup(t)})
+
+	assert.Check(t, cmp.Error(err, "empty argv"))
+	assert.Check(t, cmp.Len(next.specs, 0), "a spec reached the runner")
+}
+
+func TestRunnerRefusesACommandThatIsNotOnPATH(t *testing.T) {
+	next := &recorder{}
+
+	_, err := Runner{Next: next}.Start(proc.Spec{Argv: []string{"no-such-command"}, Env: []string{"PATH=/bin"}, Cgroup: openCgroup(t)})
+
+	assert.Check(t, cmp.Error(err, "no-such-command: executable file not found in $PATH"))
+	assert.Check(t, cmp.Len(next.specs, 0), "a spec reached the runner")
 }
 
 // TestHelperResetsOOMScore: the command, and what it starts, can meet the
@@ -77,21 +96,27 @@ func TestRunnerRefuses(t *testing.T) {
 func TestHelperResetsOOMScore(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "/bin/sh", "sh", "-c", "cat /proc/self/oom_score_adj; true")
 	cmd.Env = append(os.Environ(), helperEnv+"=1")
+
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("helper: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); got != "0" {
-		t.Fatalf("the command's child has oom_score_adj %q, want 0", got)
-	}
+
+	assert.NilError(t, err, "helper output: %s", out)
+	assert.Equal(t, strings.TrimSpace(string(out)), "0", "the command's child has the wrong oom_score_adj")
 }
 
 func TestHelperFailsOnABadPath(t *testing.T) {
 	cmd := exec.Command(os.Args[0], filepath.Join(t.TempDir(), "missing"), "missing")
 	cmd.Env = append(os.Environ(), helperEnv+"=1")
+
 	err := cmd.Run()
+
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 127 {
-		t.Fatalf("err = %v, want exit 127", err)
-	}
+	assert.Assert(t, errors.As(err, &exit), "err = %v, want an exit", err)
+	assert.Equal(t, exit.ExitCode(), 127)
+}
+
+func TestHelperRefusesTooFewArguments(t *testing.T) {
+	err := RunHelper([]string{"/bin/sh"})
+
+	// the usage line is what a person running the helper by hand sees
+	assert.Error(t, err, "usage: imp-agent outer <path> <argv...>")
 }

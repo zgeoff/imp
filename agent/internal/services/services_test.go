@@ -1,16 +1,21 @@
 package services
 
 import (
+	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
-func TestBackoffSequence(t *testing.T) {
+func TestNextBackoffDoublesFromOneSecondUpToTheSixtySecondCap(t *testing.T) {
 	var got []time.Duration
 	backoff := minBackoff
 	for range 9 {
@@ -18,85 +23,119 @@ func TestBackoffSequence(t *testing.T) {
 		wait, backoff = nextBackoff(backoff, 0)
 		got = append(got, wait)
 	}
-	want := []time.Duration{1, 2, 4, 8, 16, 32, 60, 60, 60}
-	for i := range want {
-		if got[i] != want[i]*time.Second {
-			t.Fatalf("waits %v, want %v seconds", got, want)
-		}
-	}
+
+	assert.DeepEqual(t, got, []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
+		32 * time.Second, 60 * time.Second, 60 * time.Second, 60 * time.Second,
+	})
 }
 
-func TestBackoffResetsAfterStableRun(t *testing.T) {
-	tests := []struct {
+func TestNextBackoffResetsAfterAStableRun(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
 		ran        time.Duration
 		wait, next time.Duration
 	}{
-		{stableAfter - time.Millisecond, 32 * time.Second, maxBackoff},
-		{stableAfter, minBackoff, 2 * minBackoff},
-		{time.Hour, minBackoff, 2 * minBackoff},
-	}
-	for _, tt := range tests {
-		wait, next := nextBackoff(32*time.Second, tt.ran)
-		if wait != tt.wait || next != tt.next {
-			t.Errorf("nextBackoff(32s, %s) = %s, %s; want %s, %s", tt.ran, wait, next, tt.wait, tt.next)
-		}
+		{name: "just short of stable keeps doubling", ran: stableAfter - time.Millisecond, wait: 32 * time.Second, next: maxBackoff},
+		{name: "exactly stable resets", ran: stableAfter, wait: minBackoff, next: 2 * minBackoff},
+		{name: "an hour resets", ran: time.Hour, wait: minBackoff, next: 2 * minBackoff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wait, next := nextBackoff(32*time.Second, tc.ran)
+
+			assert.Check(t, cmp.Equal(wait, tc.wait))
+			assert.Check(t, cmp.Equal(next, tc.next))
+		})
 	}
 }
 
-func TestShouldRestart(t *testing.T) {
-	tests := []struct {
+func TestShouldRestartAppliesTheRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
 		policy string
 		failed bool
 		want   bool
 	}{
-		{"always", false, true},
-		{"always", true, true},
-		{"on-failure", false, false},
-		{"on-failure", true, true},
-		{"never", false, false},
-		{"never", true, false},
-	}
-	for _, tt := range tests {
-		if got := shouldRestart(tt.policy, tt.failed); got != tt.want {
-			t.Errorf("shouldRestart(%q, %v) = %v, want %v", tt.policy, tt.failed, got, tt.want)
-		}
+		{name: "always after a clean exit", policy: "always", failed: false, want: true},
+		{name: "always after a failure", policy: "always", failed: true, want: true},
+		{name: "on-failure after a clean exit", policy: "on-failure", failed: false, want: false},
+		{name: "on-failure after a failure", policy: "on-failure", failed: true, want: true},
+		{name: "never after a clean exit", policy: "never", failed: false, want: false},
+		{name: "never after a failure", policy: "never", failed: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, shouldRestart(tc.policy, tc.failed), tc.want)
+		})
 	}
 }
 
-func TestReadDef(t *testing.T) {
-	tests := []struct {
-		file, body string
-		want       Def
-		err        bool
+func TestReadDefTakesTheNameFromTheFileAndFillsTheDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		file string
+		body string
+		want Def
 	}{
-		{"web.json", `{"argv":["httpd"]}`, Def{Name: "web", Argv: []string{"httpd"}, Restart: "always", Source: "image"}, false},
-		// the file name is the name; a name field cannot claim another
-		{"x.json", `{"name":"api","argv":["api"],"restart":"on-failure","source":"api"}`,
-			Def{Name: "x", Argv: []string{"api"}, Restart: "on-failure", Source: "api"}, false},
-		{"empty.json", `{"argv":[]}`, Def{}, true},
-		{"bad.json", `{"argv":["a"],"restart":"sometimes"}`, Def{}, true},
-		{"syntax.json", `{`, Def{}, true},
-	}
-	dir := t.TempDir()
-	for _, tt := range tests {
-		t.Run(tt.file, func(t *testing.T) {
-			p := filepath.Join(dir, tt.file)
-			if err := os.WriteFile(p, []byte(tt.body), 0o644); err != nil {
-				t.Fatal(err)
-			}
+		{
+			name: "defaults",
+			file: "web.json",
+			body: `{"argv":["httpd"]}`,
+			want: Def{Name: "web", Argv: []string{"httpd"}, Restart: "always", Source: "image"},
+		},
+		{
+			// the file name is the name; a name field cannot claim another
+			name: "a name field is ignored",
+			file: "x.json",
+			body: `{"name":"api","argv":["api"],"restart":"on-failure","source":"api"}`,
+			want: Def{Name: "x", Argv: []string{"api"}, Restart: "on-failure", Source: "api"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), tc.file)
+			assert.NilError(t, os.WriteFile(p, []byte(tc.body), 0o644))
+
 			got, err := readDef(fsroot.Host, p)
-			if tt.err {
-				if err == nil {
-					t.Fatalf("readDef = %+v, want an error", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("readDef = %+v, want %+v", got, tt.want)
-			}
+
+			assert.NilError(t, err)
+			assert.DeepEqual(t, got, tc.want)
 		})
 	}
+}
+
+// The messages are contract: Add and Restart hand them back as the
+// BAD_REQUEST message.
+func TestReadDefRejectsADefinitionTheSupervisorCannotRun(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "empty argv", body: `{"argv":[]}`, want: "argv is empty"},
+		{name: "unknown restart policy", body: `{"argv":["a"],"restart":"sometimes"}`, want: `restart "sometimes": want always, on-failure or never`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "svc.json")
+			assert.NilError(t, os.WriteFile(p, []byte(tc.body), 0o644))
+
+			_, err := readDef(fsroot.Host, p)
+
+			assert.Error(t, err, tc.want)
+		})
+	}
+}
+
+func TestReadDefRejectsAFileThatIsNotJSON(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "syntax.json")
+	assert.NilError(t, os.WriteFile(p, []byte(`{`), 0o644))
+
+	_, err := readDef(fsroot.Host, p)
+
+	var syntax *json.SyntaxError
+	assert.Assert(t, errors.As(err, &syntax), "err = %v, want a JSON syntax error", err)
+}
+
+func TestReadDefReportsAMissingFileAsNotExist(t *testing.T) {
+	_, err := readDef(fsroot.Host, filepath.Join(t.TempDir(), "missing.json"))
+
+	assert.ErrorIs(t, err, fs.ErrNotExist)
 }
