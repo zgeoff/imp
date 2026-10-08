@@ -102,17 +102,19 @@ test('it never asks op without IMP_TAILSCALE_OP=1', () => {
   const ctx = setupTest();
   const op = createStubBin(ctx.dir, 'op', "echo 'fake-tskey-for-the-trace-check'");
 
-  Bun.spawnSync(
+  const result = Bun.spawnSync(
     [
       'bash',
       '-c',
-      'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey',
+      'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey; echo "found $?"',
       'bash',
       join(import.meta.dir, '..', '..', '..', 'scripts', 'lib.sh'),
     ],
     { env: { PATH: `${op.bin}:${process.env['PATH'] ?? ''}`, HOME: ctx.dir } },
   );
 
+  // the run reaches its end: sourcing and the lookup left the shell alive
+  expect(result.exitCode).toBe(0);
   expect(readFileSync(op.calls, 'utf8')).toBe('');
 });
 

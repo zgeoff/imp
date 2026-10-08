@@ -34,7 +34,8 @@ import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
 import { checkPrivileges } from './lib/privileges';
 import { resetBaseline } from './lib/reset-baseline';
-import { runSuite } from './lib/run-suite';
+import { runSuite, stopSuiteGroup } from './lib/run-suite';
+import { runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
 import { FAST_GROUPS, SUITES, buildSuiteArgv } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
@@ -217,6 +218,12 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     await startPebble();
   }
 
+  await startInstance(args);
+}
+
+// up with the run's tuning, checked, at the baseline, with the images the
+// run's suites need
+async function startInstance(args: HarnessArgs): Promise<void> {
   await runDevScript('up');
   await checkPrivileges(instance.container);
 
@@ -262,7 +269,7 @@ function stopRun(signal: NodeJS.Signals): void {
   interrupted = true;
 
   if (running !== null) {
-    process.kill(-running, signal);
+    stopSuiteGroup(running, signal);
   }
 }
 
@@ -276,31 +283,8 @@ async function resetSuites(prefixes: readonly string[]): Promise<void> {
   });
 }
 
-// A suite that failed may have left impd rebooted onto its own settings, or
-// down: the next suite gets the run's settings again before the reset. A
-// stopped run runs no next suite, so it only resets.
-async function resetAfter(exitCode: number, prefixes: readonly string[]): Promise<void> {
-  if (exitCode !== 0 && !interrupted) {
-    await runDevScript('reboot');
-  }
-
-  await resetSuites(prefixes);
-}
-
-// scale leaves its imps for restart to re-adopt; restart's reset takes them
-let carried: readonly string[] = [];
-
-async function runOneSuite(name: string, args: HarnessArgs): Promise<boolean> {
-  const started = new Date();
-
-  const suite = SUITES.find((candidate) => candidate.name === name);
-  const prefix = suite?.prefix ?? `${PREFIX}${name}-`;
-  const isKeptForRestart = name === 'scale' && args.suites.includes('restart');
-  const prefixes = [prefix, ...carried];
-
-  carried = isKeptForRestart ? [prefix] : [];
-
-  const outcome = await runSuite({
+async function runSuiteProcess(name: string, args: HarnessArgs): Promise<number> {
+  const exitCode = await runSuite({
     argv: buildSuiteArgv(process.execPath, name),
     cwd: REPO_ROOT,
     env: {
@@ -312,24 +296,23 @@ async function runOneSuite(name: string, args: HarnessArgs): Promise<boolean> {
     onStart: (pid) => {
       running = pid;
     },
-    reset: args.keep || isKeptForRestart ? null : (exitCode) => resetAfter(exitCode, prefixes),
   });
 
+  // gone: a signal during the reset has no group to stop
   running = null;
 
-  if (outcome.exitCode !== 0 && !interrupted) {
+  if (exitCode !== 0 && !interrupted) {
     const tail = await readImpdLogTail(40);
 
     console.log(`== impd log tail\n${tail}`);
   }
 
-  if (outcome.resetError !== null) {
-    console.error(`    the ${name} suite left the baseline dirty: ${outcome.resetError}`);
-  }
+  return exitCode;
+}
 
-  const isClean = await checkNoBootFallbacks(name, started);
-
-  return outcome.exitCode === 0 && outcome.resetError === null && isClean;
+// a suite's number in the acceptance order, as results.json names it
+function findSuiteIndex(name: string): number {
+  return SUITES.findIndex((suite) => suite.name === name) + 1;
 }
 
 // chaos kills firecracker on purpose, so a restore there may fall back
@@ -517,21 +500,59 @@ async function main(): Promise<number> {
   });
 
   const sections: Section[] = [setup];
+  let stoppedBecause: string | null = null;
 
   if (setup.verdict === 'PASS') {
-    for (const name of args.suites) {
-      if (interrupted) {
-        break;
-      }
+    const startedAt = new Map<string, Date>();
 
-      const index = SUITES.findIndex((suite) => suite.name === name) + 1;
+    const run = await runSuites({
+      names: args.suites,
+      prefixOf: (name) =>
+        SUITES.find((suite) => suite.name === name)?.prefix ?? `${PREFIX}${name}-`,
+      keep: args.keep,
+      runSuite: (name) => runSuiteProcess(name, args),
+      checkSuite: (name) => checkNoBootFallbacks(name, startedAt.get(name) ?? new Date()),
+      reset: resetSuites,
+      reboot: () => runDevScript('reboot'),
 
-      const section = await runTimed(index, name, () => runOneSuite(name, args));
+      // a fresh instance: the container and data dir go, and come back
+      // with the run's settings, baseline and images
+      recreate: async () => {
+        await resetInstance();
+        await startInstance(args);
+      },
+      isInterrupted: () => interrupted,
+      now: Date.now,
+      onSuiteStart: (name) => {
+        startedAt.set(name, new Date());
+        console.log(`== [${String(findSuiteIndex(name))}] ${name}`);
+      },
+      onSuiteEnd: (result) => {
+        const section: Section = {
+          index: findSuiteIndex(result.name),
+          name: result.name,
+          verdict: result.passed ? 'PASS' : 'FAIL',
+          ms: result.ms,
+        };
 
-      sections.push(section);
+        sections.push(section);
+        console.log(`== ${formatSection(section)}`);
+      },
+      log: (line) => {
+        console.error(line);
+      },
+    });
+
+    stoppedBecause = run.stoppedBecause;
+
+    if (stoppedBecause !== null && stoppedBecause !== 'interrupted') {
+      console.error(`== the run stopped: ${stoppedBecause}`);
     }
 
-    if (!args.keep) {
+    // an instance that could not be made anew has nothing left to tidy
+    const isUp = stoppedBecause === null || stoppedBecause === 'interrupted';
+
+    if (!args.keep && isUp) {
       await removeLeftovers(args.suites);
     }
   }
@@ -548,7 +569,7 @@ async function main(): Promise<number> {
     console.log(`   ${formatSection(section)}`);
   }
 
-  const passed = sections.every((section) => section.verdict === 'PASS') && !interrupted;
+  const passed = sections.every((section) => section.verdict === 'PASS') && stoppedBecause === null;
   const verdict = passed ? '== PASS' : '== FAIL';
 
   console.log(verdict);

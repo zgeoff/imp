@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { release } from 'node:os';
+import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-governor';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { listImps, readInfo, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
@@ -159,6 +160,10 @@ async function readAwakePssMib(): Promise<number> {
   return pss.reduce((sum, mib) => sum + mib, 0);
 }
 
+// two of the governor's enforce passes, and 2 s for reading every guest's
+// Pss: the most a budget breach may last after the last write
+const ENFORCE_WITHIN_MS = 2 * ENFORCE_INTERVAL_MS + 2000;
+
 function countMib(mibs: readonly number[]): number {
   return mibs.reduce((sum, mib) => sum + mib, 0);
 }
@@ -272,8 +277,8 @@ test.skipIf(!KSM_READY)(
       );
     }
 
-    // the governor's enforce pass brings the guests back within the budget,
-    // as it did within two ticks of the last write
+    // the governor's enforce pass brings the guests back within the budget
+    // within two passes of the last write
     const awakeMib = await waitFor(
       'the governor to keep the guests within the budget',
       async () => {
@@ -283,7 +288,7 @@ test.skipIf(!KSM_READY)(
 
         return mib;
       },
-      { timeoutMs: 12_000, intervalMs: 500 },
+      { timeoutMs: ENFORCE_WITHIN_MS, intervalMs: 500 },
     );
 
     const rows = await listImps();
@@ -291,8 +296,6 @@ test.skipIf(!KSM_READY)(
     const states = rows.filter((row) => names.includes(row.name)).map((row) => row.state);
 
     writeMetric('ksm_after_split', { awakeMib, states });
-
-    expect(awakeMib).toBeLessThanOrEqual(BUDGET_MIB);
 
     for (const name of names) {
       await runImp('rm', name);

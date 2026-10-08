@@ -69,3 +69,11 @@ test('#SUITES gives no suite a prefix that a fixture image name starts with', ()
     fixtures.every((fixture) => !fixture.startsWith(suite.prefix)),
   );
 });
+
+test("#SUITES gives no suite a prefix that starts another suite's prefix", () => {
+  const prefixes = SUITES.map((suite) => suite.prefix);
+
+  expect(prefixes).toSatisfyAll((prefix: string) =>
+    prefixes.every((other) => other === prefix || !other.startsWith(prefix)),
+  );
+});

@@ -21,16 +21,39 @@
 #      lifecycle, disks, backups and boot-templates);
 #      IMP_ZFS_TEST_UNIT=0 skips part 1 (the zfs CI job runs it on its own).
 #      The summary is also written to <dir>/summary.txt.
+#      IMP_ZFS_MODULE_VERSION_FILE (default /sys/module/zfs/version) is
+#      where the loaded module's version is read, for the script's tests.
+#
+# The run owns only what it creates: it refuses a bench pool name that is
+# taken, or a bench.img already in the work dir, before it touches anything,
+# and its cleanup releases only what it made. The work dir holds the results,
+# so it stays.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
+fail() {
+  echo "zfs-host-test: $1" >&2
+  exit 1
+}
+
 work=${IMP_ZFS_TEST_DIR:-$(mktemp -d /var/tmp/imp-zfs.XXXXXX)}
 pool=impbench$$
 gib=${IMP_ZFS_BENCH_GIB:-40}
+module_version=${IMP_ZFS_MODULE_VERSION_FILE:-/sys/module/zfs/version}
 
-[ -r /sys/module/zfs/version ] || { echo "zfs-host-test: load the zfs module first (sudo modprobe zfs)" >&2; exit 1; }
-echo "zfs-host-test: zfs module $(cat /sys/module/zfs/version); results in $work"
+[ -r "$module_version" ] || fail "load the zfs module first (sudo modprobe zfs)"
+
+# a generated name is not ownership: refuse one that is already in use, and
+# a work dir that already holds a bench pool file
+if sudo zpool list "$pool" >/dev/null 2>&1; then
+  fail "a pool named $pool already exists; refusing to touch it"
+fi
+if [ -e "$work/bench.img" ] || [ -L "$work/bench.img" ]; then
+  fail "$work/bench.img already exists; refusing to touch it"
+fi
+
+echo "zfs-host-test: zfs module $(cat "$module_version"); results in $work"
 
 if [ "${IMP_ZFS_TEST_UNIT:-1}" != 0 ]; then
   sudo env "PATH=$PATH" IMP_ZFS_TEST_DIR="$work/unit" "$IMP_ROOT/scripts/test-zfs.sh"
@@ -43,23 +66,44 @@ export IMP_DEV_DATA=$work/data
 export IMP_STORAGE_BACKEND=zfs
 export IMP_ZFS_ROOT=$pool/imp
 
-# The results stay in $work; the pool file goes unless the pool will not.
+# what this run made, so cleanup releases that and nothing else
+made_img=
+made_pool=
+started_instance=
+
+# In reverse order; the results stay in $work. A pool that will not go keeps
+# its file, so it can still be imported and destroyed by hand, and the run
+# fails.
 cleanup() {
-  docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
-  "$IMP_ROOT/scripts/dev.sh" down || true
-  if sudo zpool list "$pool" >/dev/null 2>&1 && ! sudo zpool destroy -f "$pool"; then
-    echo "zfs-host-test: could not destroy $pool; its file stays at $work/bench.img" >&2
-    return
+  local status=$?
+  if [ -n "$started_instance" ]; then
+    docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
+    "$IMP_ROOT/scripts/dev.sh" down || true
   fi
-  sudo rm -f "$work/bench.img"
+  if [ -n "$made_pool" ] && ! sudo zpool destroy -f "$pool"; then
+    echo "zfs-host-test: could not destroy $pool; its file stays at $work/bench.img" >&2
+    [ "$status" != 0 ] || status=1
+    exit "$status"
+  fi
+  if [ -n "$made_img" ]; then
+    sudo rm -f "$work/bench.img"
+  fi
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
+# a noclobber create fails on an existing path, so a file that appeared
+# since the check above is refused, never taken over
+(set -o noclobber && : >"$work/bench.img")
+made_img=1
 truncate -s "${gib}G" "$work/bench.img"
 # what deploy/bootstrap.sh gives the root dataset; impd sets recordsize=16K
 # on the datasets that hold disks
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$work/bench.img"
+made_pool=1
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
 
 # summarize LABEL REGEX: count, min, median and max of the ms in each match
@@ -89,6 +133,7 @@ report() {
 # A failed suite still gets its report; the script then exits with the
 # suites' status.
 set +e
+started_instance=1
 "$IMP_ROOT/scripts/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" 2>&1 |
   tee "$work/e2e.log"
 status=${PIPESTATUS[0]}

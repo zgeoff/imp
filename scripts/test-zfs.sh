@@ -58,17 +58,26 @@ made_mnt=
 made_img=
 made_pool=
 
+# the test run, when it runs, so a signal can stop it first
+child=
+
 # In reverse order. Everything under $mnt is unmounted before the pool goes:
 # the tests mount datasets there, and a test that fails can leave them. A
 # pool that will not go keeps its file, so it can still be imported and
-# destroyed by hand.
+# destroyed by hand, and the run fails.
 cleanup() {
+  local status=$?
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
   if [ -n "$made_mnt" ]; then
     umount -R "$mnt" 2>/dev/null || true
   fi
   if [ -n "$made_pool" ] && ! zpool destroy -f "$pool"; then
     echo "test-zfs: could not destroy $pool; its file stays at $work/pool.img" >&2
-    return
+    [ "$status" != 0 ] || status=1
+    exit "$status"
   fi
   if [ -n "$made_img" ]; then
     rm -f "$work/pool.img"
@@ -79,6 +88,7 @@ cleanup() {
   if [ -n "$made_work" ]; then
     rmdir "$work" 2>/dev/null || true
   fi
+  exit "$status"
 }
 
 if [ -z "$work" ]; then
@@ -90,6 +100,8 @@ elif [ ! -d "$work" ]; then
 fi
 mnt=$work/mnt
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # mkdir without -p and a noclobber create fail on an existing path, so a
 # path that appeared since the checks above is refused, never taken over
@@ -105,5 +117,10 @@ made_pool=1
 zfs create -o mountpoint=legacy "$pool/imp"
 mount -t zfs "$pool/imp" "$mnt"
 
+# in the background, so a TERM or INT reaches the trap at once and cleanup
+# stops the run before it releases the pool
 cd "$repo"
-IMP_TEST_ZFS_ROOT=$pool/imp IMP_TEST_ZFS_DIR=$mnt bun test packages/daemon/src/storage/zfs
+IMP_TEST_ZFS_ROOT=$pool/imp IMP_TEST_ZFS_DIR=$mnt bun test packages/daemon/src/storage/zfs &
+child=$!
+wait "$child"
+child=

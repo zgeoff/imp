@@ -1,7 +1,17 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createStubBin } from './test-utils/create-stub-bin';
 
 function setupTest() {
@@ -314,9 +324,96 @@ test('it keeps the pool file and says so when the pool will not go', () => {
     },
   });
 
+  expect(result.exitCode).toBe(1);
+
   expect(result.stderr.toString().replaceAll(/imptest\d+/g, 'imptestPID')).toBe(
     `test-zfs: could not destroy imptestPID; its file stays at ${work}/pool.img\n`,
   );
 
   expect(existsSync(join(work, 'pool.img'))).toBeTrue();
+});
+
+test('it refuses a pool.img that is a symlink and leaves the link and its target as they were', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+  const target = join(ctx.dir, 'another-pool.img');
+
+  mkdirSync(work);
+  writeFileSync(target, 'another run');
+  symlinkSync(target, join(work, 'pool.img'));
+
+  const zpool = createStubBin(ctx.stubs, 'zpool', 'if [ "$1" = list ]; then exit 1; fi');
+
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    `test-zfs: ${work}/pool.img already exists; refusing to touch it\n`,
+  );
+
+  expect(readlinkSync(join(work, 'pool.img'))).toBe(target);
+  expect(readFileSync(target, 'utf8')).toBe('another run');
+  expect(existsSync(join(work, 'mnt'))).toBeFalse();
+});
+
+test('it stops the test run and releases all it made when it gets SIGTERM', async () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+  const started = join(ctx.dir, 'tests-started');
+
+  mkdirSync(work);
+
+  const zpool = createStubBin(ctx.stubs, 'zpool', 'if [ "$1" = list ]; then exit 1; fi');
+
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+
+  // a test run that holds the pool until something stops it
+  createStubBin(ctx.stubs, 'bun', `: >'${started}'; exec sleep 30`);
+
+  const proc = Bun.spawn([ctx.script], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  onTestFinished(() => {
+    proc.kill('SIGKILL');
+  });
+
+  await waitFor(() => readFileSync(started), { timeoutMs: 10_000 });
+
+  proc.kill('SIGTERM');
+
+  const exitCode = await proc.exited;
+
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+
+  expect(exitCode).toBe(143);
+
+  expect(calls.split('\n').slice(-3)).toStrictEqual([
+    `umount -R ${work}/mnt`,
+    'zpool destroy -f imptestPID',
+    '',
+  ]);
+
+  expect(existsSync(join(work, 'pool.img'))).toBeFalse();
+  expect(existsSync(join(work, 'mnt'))).toBeFalse();
 });

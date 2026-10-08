@@ -1,57 +1,48 @@
-import { expect, mock, onTestFinished, test } from 'bun:test';
-import { existsSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
-import { runSuite } from './run-suite';
+import { runSuite, stopSuiteGroup } from './run-suite';
 
 async function setupTest() {
   const dir = await mkdtemp(join(tmpdir(), 'run-suite-'));
 
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-  return { dir, marker: join(dir, 'left-behind') };
+  return { dir };
 }
 
-test('it resets the baseline after a suite that passes', async () => {
+test('#runSuite returns 0 for a suite that passes', async () => {
   const ctx = await setupTest();
 
-  const outcome = await runSuite({
-    argv: [process.execPath, '-e', 'await Bun.write(process.argv[1], "imp")', ctx.marker],
+  const exitCode = await runSuite({
+    argv: [process.execPath, '-e', 'process.exit(0)'],
     cwd: ctx.dir,
     env: process.env,
     onStart: () => {},
-    reset: () => rm(ctx.marker),
   });
 
-  expect(outcome).toStrictEqual({ exitCode: 0, resetError: null });
-  expect(existsSync(ctx.marker)).toBeFalse();
+  expect(exitCode).toBe(0);
 });
 
-test('it resets the baseline after a suite that fails', async () => {
+test('#runSuite returns the exit code of a suite that fails', async () => {
   const ctx = await setupTest();
 
-  const outcome = await runSuite({
-    argv: [
-      process.execPath,
-      '-e',
-      'await Bun.write(process.argv[1], "imp"); process.exit(1)',
-      ctx.marker,
-    ],
+  const exitCode = await runSuite({
+    argv: [process.execPath, '-e', 'process.exit(3)'],
     cwd: ctx.dir,
     env: process.env,
     onStart: () => {},
-    reset: () => rm(ctx.marker),
   });
 
-  expect(outcome).toStrictEqual({ exitCode: 1, resetError: null });
-  expect(existsSync(ctx.marker)).toBeFalse();
+  expect(exitCode).toBe(3);
 });
 
-test('it resets the baseline after a suite stopped by a signal to its group', async () => {
+test('#stopSuiteGroup stops a running suite through its group', async () => {
   const ctx = await setupTest();
 
+  const marker = join(ctx.dir, 'started');
   const started = Promise.withResolvers<number>();
 
   const running = runSuite({
@@ -59,70 +50,43 @@ test('it resets the baseline after a suite stopped by a signal to its group', as
       process.execPath,
       '-e',
       'await Bun.write(process.argv[1], "imp"); setInterval(() => {}, 1000)',
-      ctx.marker,
+      marker,
     ],
     cwd: ctx.dir,
     env: process.env,
     onStart: (pid) => {
       started.resolve(pid);
     },
-    reset: () => rm(ctx.marker),
   });
 
   const pid = await started.promise;
 
-  await waitFor(() => readFile(ctx.marker), { timeoutMs: 10_000 });
+  await waitFor(() => readFile(marker), { timeoutMs: 10_000 });
 
-  process.kill(-pid, 'SIGINT');
+  stopSuiteGroup(pid, 'SIGINT');
 
-  const outcome = await running;
+  const exitCode = await running;
 
-  expect(outcome.exitCode).not.toBe(0);
-  expect(outcome.resetError).toBeNull();
-  expect(existsSync(ctx.marker)).toBeFalse();
+  expect(exitCode).not.toBe(0);
 });
 
-test('it leaves what a suite made when the run keeps it', async () => {
+test('#stopSuiteGroup treats a group that already exited as stopped', async () => {
   const ctx = await setupTest();
 
-  const outcome = await runSuite({
-    argv: [process.execPath, '-e', 'await Bun.write(process.argv[1], "imp")', ctx.marker],
-    cwd: ctx.dir,
-    env: process.env,
-    onStart: () => {},
-    reset: null,
-  });
+  const started = Promise.withResolvers<number>();
 
-  expect(outcome).toStrictEqual({ exitCode: 0, resetError: null });
-  expect(existsSync(ctx.marker)).toBeTrue();
-});
-
-test('it reports a reset that fails', async () => {
-  const ctx = await setupTest();
-
-  const outcome = await runSuite({
+  await runSuite({
     argv: [process.execPath, '-e', 'process.exit(0)'],
     cwd: ctx.dir,
     env: process.env,
-    onStart: () => {},
-    reset: () => rm(join(ctx.dir, 'missing')),
+    onStart: (pid) => {
+      started.resolve(pid);
+    },
   });
 
-  expect(outcome.resetError).toStartWith('ENOENT');
-});
+  const pid = await started.promise;
 
-test('it hands the reset the code the suite exited with', async () => {
-  const ctx = await setupTest();
-
-  const reset = mock(() => Promise.resolve());
-
-  await runSuite({
-    argv: [process.execPath, '-e', 'process.exit(3)'],
-    cwd: ctx.dir,
-    env: process.env,
-    onStart: () => {},
-    reset,
-  });
-
-  expect(reset).toHaveBeenCalledExactlyOnceWith(3);
+  expect(() => {
+    stopSuiteGroup(pid, 'SIGTERM');
+  }).not.toThrow();
 });

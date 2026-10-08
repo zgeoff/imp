@@ -5,23 +5,10 @@ export interface RunSuiteOptions {
 
   // the suite's pid, once it runs, which leads its process group
   readonly onStart: (pid: number) => void;
-
-  // brings impd back to the baseline once the process ends with this code,
-  // whether it passed, failed or was stopped; null leaves what it made
-  // (--keep, or scale's imps for restart)
-  readonly reset: ((exitCode: number) => Promise<void>) | null;
 }
 
-export interface SuiteOutcome {
-  readonly exitCode: number;
-
-  // why the reset failed, or null when it passed or did not run
-  readonly resetError: string | null;
-}
-
-// Runs one suite file as its own process group, then resets the baseline,
-// so a suite that fails or is stopped leaves nothing for the next.
-export async function runSuite(options: Readonly<RunSuiteOptions>): Promise<SuiteOutcome> {
+// Runs one suite file as its own process group and returns its exit code.
+export function runSuite(options: Readonly<RunSuiteOptions>): Promise<number> {
   const proc = Bun.spawn([...options.argv], {
     cwd: options.cwd,
     detached: true,
@@ -32,16 +19,17 @@ export async function runSuite(options: Readonly<RunSuiteOptions>): Promise<Suit
 
   options.onStart(proc.pid);
 
-  const exitCode = await proc.exited;
+  return proc.exited;
+}
 
-  if (options.reset === null) {
-    return { exitCode, resetError: null };
+// Signals a suite's whole process group; a group already gone (ESRCH) counts
+// as stopped.
+export function stopSuiteGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ESRCH') {
+      throw error;
+    }
   }
-
-  const resetError = await options.reset(exitCode).then(
-    () => null,
-    (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  );
-
-  return { exitCode, resetError };
 }

@@ -4,6 +4,8 @@ const StepSchema = z.looseObject({
   name: z.string().optional(),
   if: z.string().optional(),
   run: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  with: z.looseObject({ name: z.string().optional() }).optional(),
 });
 
 const MatrixRowSchema = z.looseObject({
@@ -15,6 +17,7 @@ const MatrixRowSchema = z.looseObject({
 const MatrixSchema = z.looseObject({ include: z.array(MatrixRowSchema) });
 
 const GroupJobSchema = z.looseObject({
+  env: z.looseObject({ WRITE_CACHE: z.string() }),
   strategy: z.looseObject({ matrix: MatrixSchema }),
   steps: z.array(StepSchema),
 });

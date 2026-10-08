@@ -165,6 +165,9 @@ test('it removes the imps a journey named with its prefix, with their checkpoint
     'disk.ext4',
   );
 
+  const impsBefore = await ctx.client.imps.list();
+  const leasesBefore = await ctx.client.leases.list({});
+
   const hadCheckpointDisk = existsSync(checkpointDisk);
 
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
@@ -172,9 +175,11 @@ test('it removes the imps a journey named with its prefix, with their checkpoint
   const imps = await ctx.client.imps.list();
   const leases = await ctx.client.leases.list({});
 
+  expect(impsBefore.map((row) => row.name)).toStrictEqual(['e2e-x-dev']);
+  expect(leasesBefore.map((lease) => lease.owner.label)).toStrictEqual(['job']);
+  expect(hadCheckpointDisk).toBeTrue();
   expect(imps).toBeEmpty();
   expect(leases).toBeEmpty();
-  expect(hadCheckpointDisk).toBeTrue();
   expect(existsSync(checkpointDisk)).toBeFalse();
 });
 
@@ -183,27 +188,52 @@ test('it removes the networks a journey named with its prefix', async () => {
 
   await ctx.client.networks.create({ name: 'e2e-x-lab' });
 
+  const before = await ctx.client.networks.list();
+
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
-  const networks = await ctx.client.networks.list();
+  const after = await ctx.client.networks.list();
 
-  expect(networks).toBeEmpty();
+  expect(before.map((network) => network.name)).toStrictEqual(['e2e-x-lab']);
+  expect(after).toBeEmpty();
 });
 
-test('it removes the secrets a journey named with its prefix, and their grants', async () => {
+test('it removes the secrets a journey named with its prefix, and their grants to other imps', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.secrets.add({ name: 'e2e-x-gh', kind: 'github', value: 'ghp_e2e' });
   await ctx.client.grants.add({ name: 'dev', secret: 'e2e-x-gh' });
 
+  const secretsBefore = await ctx.client.secrets.list();
+  const grantsBefore = await ctx.client.grants.list({ name: 'dev' });
+
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
   const secrets = await ctx.client.secrets.list();
   const grants = await ctx.client.grants.list({ name: 'dev' });
 
+  expect(secretsBefore.map((secret) => secret.name)).toStrictEqual(['e2e-x-gh']);
+  expect(grantsBefore).toStrictEqual(['e2e-x-gh']);
   expect(secrets).toBeEmpty();
   expect(grants).toBeEmpty();
+});
+
+test('it removes a prefixed imp together with the grants it holds', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_owner' });
+  await ctx.client.grants.add({ name: 'e2e-x-dev', secret: 'gh' });
+
+  const grantsBefore = await ctx.client.grants.list({ name: 'e2e-x-dev' });
+
+  await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
+
+  const secrets = await ctx.client.secrets.list();
+
+  expect(grantsBefore).toStrictEqual(['gh']);
+  expect(secrets.map((secret) => secret.imps)).toStrictEqual([[]]);
 });
 
 test('it removes the tokens a journey named with its prefix', async () => {
@@ -211,11 +241,14 @@ test('it removes the tokens a journey named with its prefix', async () => {
 
   await ctx.client.tokens.create({ name: 'e2e-x-reader', scope: 'read' });
 
+  const before = await ctx.client.tokens.list();
+
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
-  const tokens = await ctx.client.tokens.list();
+  const after = await ctx.client.tokens.list();
 
-  expect(tokens).toBeEmpty();
+  expect(before.map((token) => token.name)).toStrictEqual(['e2e-x-reader']);
+  expect(after).toBeEmpty();
 });
 
 test('it removes the OAuth clients a journey named with its prefix', async () => {
@@ -226,11 +259,14 @@ test('it removes the OAuth clients a journey named with its prefix', async () =>
     redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
   });
 
+  const before = await ctx.client.oauth.clients.list();
+
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
-  const clients = await ctx.client.oauth.clients.list();
+  const after = await ctx.client.oauth.clients.list();
 
-  expect(clients).toBeEmpty();
+  expect(before.map((client) => client.name)).toStrictEqual(['e2e-x-conn']);
+  expect(after).toBeEmpty();
 });
 
 test('it removes the images a journey named with its prefix, after the imps that boot them', async () => {
@@ -247,11 +283,30 @@ test('it removes the images a journey named with its prefix, after the imps that
 
   await ctx.client.imps.create({ name: 'e2e-x-dev', image: 'e2e-x-img' });
 
+  const before = await ctx.client.images.list();
+
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
-  const images = await ctx.client.images.list();
+  const after = await ctx.client.images.list();
 
-  expect(images.map((image) => image.name)).toStrictEqual(['ubuntu']);
+  expect(before.map((image) => image.name)).toIncludeSameMembers(['ubuntu', 'e2e-x-img']);
+  expect(after.map((image) => image.name)).toStrictEqual(['ubuntu']);
+});
+
+test('it removes the templates a journey made from its imps', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+  await ctx.client.images.add({ imp: 'e2e-x-dev', name: 'e2e-x-golden' });
+
+  const before = await ctx.client.images.list();
+
+  await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
+
+  const after = await ctx.client.images.list();
+
+  expect(before.map((image) => image.name)).toIncludeSameMembers(['ubuntu', 'e2e-x-golden']);
+  expect(after.map((image) => image.name)).toStrictEqual(['ubuntu']);
 });
 
 test('it removes the broker test upstreams file a journey wrote', async () => {
@@ -275,18 +330,21 @@ test('it removes what any of several prefixes names', async () => {
   await ctx.client.networks.create({ name: 'e2e-x-lab' });
   await ctx.client.networks.create({ name: 'e2e-y-lab' });
 
+  const before = await ctx.client.networks.list();
+
   await resetBaseline({
     client: ctx.client,
     prefixes: ['e2e-x-', 'e2e-y-'],
     dataDir: ctx.dataDir,
   });
 
-  const networks = await ctx.client.networks.list();
+  const after = await ctx.client.networks.list();
 
-  expect(networks).toBeEmpty();
+  expect(before.map((network) => network.name)).toIncludeSameMembers(['e2e-x-lab', 'e2e-y-lab']);
+  expect(after).toBeEmpty();
 });
 
-test('it never removes what another owner named', async () => {
+test('it never removes what another owner named, a near-miss prefix included', async () => {
   const ctx = await setupTest();
 
   await Bun.write(join(ctx.dataDir, 'images', 'e2e-tiny-0123abcd', 'rootfs.ext4'), 'rootfs');
@@ -299,9 +357,17 @@ test('it never removes what another owner named', async () => {
   });
 
   await ctx.client.imps.create({ name: 'e2e-y-dev', image: 'e2e-tiny-0123abcd' });
+  await ctx.client.imps.create({ name: 'e2e-xy-dev' });
   await ctx.client.networks.create({ name: 'lab' });
+  await ctx.client.networks.create({ name: 'e2e-xy-lab' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_owner' });
   await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+  await ctx.client.tokens.create({ name: 'e2e-xy-reader', scope: 'read' });
+
+  await ctx.client.oauth.clients.add({
+    name: 'conn',
+    redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
+  });
 
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
@@ -310,12 +376,14 @@ test('it never removes what another owner named', async () => {
   const networks = await ctx.client.networks.list();
   const secrets = await ctx.client.secrets.list();
   const tokens = await ctx.client.tokens.list();
+  const clients = await ctx.client.oauth.clients.list();
 
-  expect(imps.map((imp) => imp.name)).toStrictEqual(['e2e-y-dev']);
+  expect(imps.map((imp) => imp.name)).toIncludeSameMembers(['e2e-y-dev', 'e2e-xy-dev']);
   expect(images.map((image) => image.name)).toIncludeSameMembers(['ubuntu', 'e2e-tiny-0123abcd']);
-  expect(networks.map((network) => network.name)).toStrictEqual(['lab']);
+  expect(networks.map((network) => network.name)).toIncludeSameMembers(['lab', 'e2e-xy-lab']);
   expect(secrets.map((secret) => secret.name)).toStrictEqual(['gh']);
-  expect(tokens.map((token) => token.name)).toStrictEqual(['reader']);
+  expect(tokens.map((token) => token.name)).toIncludeSameMembers(['reader', 'e2e-xy-reader']);
+  expect(clients.map((client) => client.name)).toStrictEqual(['conn']);
 });
 
 test('it fails when impd refuses to remove what the prefix names', async () => {

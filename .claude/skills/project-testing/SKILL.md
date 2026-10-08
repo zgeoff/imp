@@ -118,34 +118,45 @@ test skips where its namespace probe fails; `bun run test:host` runs exactly tho
 4. Runs each suite as its own process group (`test/e2e/lib/run-suite.ts`),
    `bun test --config=test/e2e/bunfig.toml --bail --timeout 3600000 ./test/e2e/suites/<name>.e2e.ts`,
    in the order of `SUITES` in `test/e2e/lib/suites.ts`. The first SIGINT or SIGTERM stops the
-   running suite's group and runs no more suites; a second exits at once.
+   running suite's group and runs no more suites; a second exits at once. The harness forgets the
+   suite's group as soon as it exits, before any reset, and `stopSuiteGroup` treats a group that is
+   already gone (`ESRCH`) as stopped, so a signal during a reset does not crash the run.
 5. After each suite, whether it passed, failed or was stopped, resets the baseline for its prefix
    (`e2e-<abbr>-`), unless `--keep`. After a suite that failed, and before that reset, it reboots
    the instance with the run's settings (`scripts/dev.sh reboot`), since the suite may have left
-   impd rebooted onto its own. `scale` keeps its imps when `restart` runs after it, and `restart`'s
-   reset takes them. A reset that fails fails the suite. It also fails a suite when the impd log
-   shows a boot-template fallback (the `chaos` suite may cause one).
+   impd rebooted onto its own; an interrupted run skips that reboot. `scale` keeps its imps when
+   `restart` runs after it, and `restart`'s reset takes them. A reset or reboot that fails fails the
+   suite, and the harness then makes the instance anew (the `--clean` reset below, then up with the
+   run's settings, privilege check, token and fixture images) and runs on; if that fails too, the
+   run stops with the reason and fails. It also fails a suite when the impd log shows a
+   boot-template fallback (the `chaos` suite may cause one). The loop is `runSuites` in
+   `test/e2e/lib/run-suites.ts`, which takes each step as a dependency; `run-suites.test.ts` checks
+   the order of runs, reboots, resets and re-creations.
 6. Writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
    (`E2E_METRICS_FILE`).
 
 The baseline reset, `resetBaseline` in `test/e2e/lib/reset-baseline.ts`, takes impd's client
 (`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It removes
-every imp named with one, and with it the imp's checkpoints, leases, grants, services and sessions;
-then the networks, secrets, OAuth clients, tokens, and images and templates named with one; then
+every imp named with one, and with it the imp's checkpoints, leases and the grants it holds; then
+the networks, secrets, OAuth clients, tokens, and images and templates named with one; then
 `<IMP_DEV_DATA>/broker-test-upstreams.json`. A fixture image (`e2e-<fixture>-<hash>`) carries no
 suite prefix and stays. A removal impd refuses, such as an image another imp boots, rejects the
 reset. `reset-baseline.test.ts` boots impd's real app (`createImpd` on the stub VMM) in process,
-dirties each kind, resets, and reads the lists back; `run-suite.test.ts` checks that a suite process
-that passes, fails, or is stopped by a signal to its group is followed by the reset. What the reset
-does not cover: the instance's own settings (the reboot after a failure restores those), the `moves`
-suites' second host (`removeMoveLeftovers` at the end of a run that includes them), and a registry
-container or SSH key a suite file made.
+makes each of those kinds, resets, and reads every list back before and after; it also checks that
+an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) and an unprefixed OAuth client
+stay. Sessions and services are not proven: making either needs a guest agent, which the stub VMM
+has no stand-in for. What the reset does not cover: the instance's own settings (the reboot after a
+failure restores those), the `moves` suites' second host (`removeMoveLeftovers` at the end of a run
+that includes them), and a registry container or SSH key a suite file made.
 
 A suite file also runs alone against an instance that is up:
 `bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`. Nothing then resets the
 baseline or builds missing fixture images for it; `setupSuite` in `test/e2e/lib/setup-suite.ts` only
 returns the suite's prefix and registers no hooks. `runDevScript` passes the run's
-`IMP_RAM_BUDGET_MIB` and `IMP_IDLE_TIMEOUT_S` (from `config.ts`) under whatever `process.env` sets.
+`IMP_RAM_BUDGET_MIB` and `IMP_IDLE_TIMEOUT_S` (from `config.ts`) under whatever `process.env` sets:
+a suite that reboots the instance onto its own tuning sets them in `process.env`, and that must win.
+So a shell's `IMP_RAM_BUDGET_MIB` or `IMP_IDLE_TIMEOUT_S` wins when a suite file runs alone; through
+`main.ts` the two match the config.
 
 Flags: `--only <suites or sets>`, `--group <1|2|3>`, `--clean`, `--reuse`, `--keep`; `--help` lists
 the suites. The sets live in `SUITE_SETS`: `acceptance` (the default) is every suite, and `fast` is
@@ -226,16 +237,27 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
   name that `zpool list` already shows, and a `pool.img` or `mnt` already in the work dir. It flags
   each thing it makes (work dir, `mnt`, `pool.img`, pool), and its EXIT cleanup releases only those,
   in reverse order: a failed `zpool create` destroys no pool, and a pool that will not go keeps its
-  file. It reads the module's version from `IMP_ZFS_MODULE_VERSION_FILE` (default
-  `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs the script against stub `id`, `zpool`,
-  `zfs`, `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`) in a temp
-  root: a normal release, the three collisions, a failed `zfs create`, a failed `zpool create`, and
-  a failed destroy. `scripts/zfs-host-test.sh` still names its bench pool `impbench<pid>` and
-  destroys any pool of that name on exit.
+  file and fails the run. A `pool.img` that is a symlink is refused too. The tests run in the
+  background, so TERM (exit 143) or INT (130) stops them before cleanup. It reads the module's
+  version from `IMP_ZFS_MODULE_VERSION_FILE` (default `/sys/module/zfs/version`).
+  `scripts/test-zfs.test.ts` runs the script against stub `id`, `zpool`, `zfs`, `mount`, `umount`
+  and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`) in a temp root: a normal release,
+  the collisions (a symlinked `pool.img` included), a failed `zfs create`, a failed `zpool create`,
+  a failed destroy, and a SIGTERM mid-run.
 - **`scripts/zfs-host-test.sh`** runs `test-zfs.sh` (unless `IMP_ZFS_TEST_UNIT=0`), then starts a
   dev instance `imp-zfs` (port offset `IMP_DEV_PORT_OFFSET`, default 300) with
-  `IMP_STORAGE_BACKEND=zfs` on a second sparse pool of `IMP_ZFS_BENCH_GIB` (default 40), runs the
-  suites in `IMP_ZFS_E2E_SUITES` (default `checkpoints,sleep`), and writes `<dir>/summary.txt`.
+  `IMP_STORAGE_BACKEND=zfs` on a second sparse pool `impbench<pid>` of `IMP_ZFS_BENCH_GIB`
+  (default 40) in `<dir>/bench.img`, runs the suites in `IMP_ZFS_E2E_SUITES` (default
+  `checkpoints,sleep`), and writes `<dir>/summary.txt`; `<dir>` keeps the results. Before it touches
+  anything it refuses a bench pool name that `zpool list` already shows, and a `bench.img` (a
+  symlink included) already in the work dir. Its EXIT cleanup releases only what the run made: it
+  collects the impd log and stops the instance only once the run started it, destroys only a pool it
+  created, and removes only a `bench.img` it made. A pool that will not go keeps its file and fails
+  the run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in `test-zfs.sh`.
+  `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh` and stand-in
+  `dev.sh`, `test-e2e.sh` and `test-zfs.sh`, with stub `sudo`, `zpool`, `zfs` and `docker` on
+  `PATH`: a normal release, the pool, file and symlink collisions, a failed `zpool create`, and a
+  failed destroy.
 
 ## CI
 
@@ -244,12 +266,17 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
 - **`checks`** runs `bun test`; the build disk hold on a 4 GiB loop-mounted XFS that it formats,
   mounts with sudo, and names in `IMP_TEST_SMALL_FS`; `bun run test:pebble`; and
   `bun run test:dashboard`.
-- **`e2e`** (a required check) runs `scripts/check-kvm.sh` first, hands the cpu cgroup controller to
-  containers, turns KSM on, picks `/mnt/imp-e2e` or `.data/ci` as `IMP_DEV_DATA`, runs the host
-  networking tests as root with `IMP_HOST_TESTS=required`, builds inputs with
-  `.github/actions/e2e-build`, adds `imp-e2e-registry.test` to `/etc/hosts`, and runs
-  `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096` and no Tailscale key. It uploads
-  `.cache/e2e/` and `packages/dashboard/.test-results/`.
+- **`e2e-group`** runs the end-to-end work as a matrix of three groups, one KVM runner each, with
+  `fail-fast: false` so every group reports. Each runs `scripts/check-kvm.sh` first, hands the cpu
+  cgroup controller to containers, turns KSM on, picks `/mnt/imp-e2e` or `.data/ci` as
+  `IMP_DEV_DATA`, builds inputs with `.github/actions/e2e-build`, adds `imp-e2e-registry.test` to
+  `/etc/hosts`, and runs `scripts/test-e2e.sh --group <n>` with `E2E_RAM_BUDGET_MIB=4096` and no
+  Tailscale key. Only group 2 runs the host networking tests as root with `IMP_HOST_TESTS=required`,
+  only group 1 sets up Playwright's browser (`if: matrix.browser`), and only group 1 on a push to
+  `main` writes the caches. Each uploads `.cache/e2e/` and `packages/dashboard/.test-results/` as
+  `e2e-results-<n>`. `test/e2e/lib/ci-groups.test.ts` pins these against the workflow file.
+- **`e2e`** (a required check) is the aggregate: it needs `e2e-group` and passes only when
+  `needs.e2e-group.result` is `success`.
 - **`zfs`** (not required) runs `scripts/check-kvm.sh`, installs ZFS, runs `scripts/test-zfs.sh`
   with `IMP_ZFS_TEST_DIR` blank, then `scripts/zfs-host-test.sh` with `IMP_ZFS_TEST_UNIT=0` and
   `IMP_ZFS_E2E_SUITES=lifecycle,checkpoints,disks,sleep,backups,boot-templates`.
@@ -428,9 +455,14 @@ file leaves every host on its real origin.
 - The `registry` suite trusts its registry's certificate through Docker's fixed per-registry path,
   `/etc/docker/certs.d/<name>:<port>`, with `createRegistryTrust` in
   `test/e2e/lib/create-registry-trust.ts`. It makes that directory with `sudo mkdir` and no
-  `--parents`, so a directory already there is refused untouched; a failed certificate copy removes
-  the directory again; and its release removes only that directory, once, never
-  `/etc/docker/certs.d` itself. `create-registry-trust.test.ts` runs it in a temp root with no sudo
-  (`certsRoot`, `asRoot`). A suite process killed before its `afterAll` leaves the directory; a
-  later run that gets the same port then refuses it and fails. The suite still removes stale
-  registry containers by the name pattern `e2e-reg-registry-`.
+  `--parents`, so a directory already there is refused untouched; a failed owner-file write or
+  certificate copy removes the directory again; and its release removes only that directory, once,
+  never `/etc/docker/certs.d` itself. `create-registry-trust.test.ts` runs it in a temp root with no
+  sudo (`certsRoot`, `asRoot`). Each test takes the trust itself and releases it with
+  `onTestFinished` right after, since `--bail` skips `afterAll` once any test fails. Taking it
+  writes an owner file, `imp-e2e-owner` (the process's pid and its start time from
+  `/proc/<pid>/stat`), into the directory. A process killed mid-test still leaves the directory; the
+  suite's `beforeAll` then runs `removeStaleRegistryTrusts`, which removes a `<name>:*` directory
+  only when its owner file parses and names a process that is no longer running, and leaves one with
+  no owner file or a live owner. The suite still removes stale registry containers by the name
+  pattern `e2e-reg-registry-`.

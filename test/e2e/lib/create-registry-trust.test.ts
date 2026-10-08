@@ -3,7 +3,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRegistryTrust } from './create-registry-trust';
+import {
+  OWNER_FILE,
+  createRegistryTrust,
+  removeStaleRegistryTrusts,
+} from './create-registry-trust';
 
 async function setupTest() {
   const dir = await mkdtemp(join(tmpdir(), 'registry-trust-'));
@@ -18,7 +22,7 @@ async function setupTest() {
   return { dir, certPath, certsRoot: join(dir, 'certs.d') };
 }
 
-test('it trusts the certificate in a directory named for the registry', async () => {
+test('#createRegistryTrust trusts the certificate in a directory named for the registry', async () => {
   const ctx = await setupTest();
 
   const trust = await createRegistryTrust({
@@ -37,7 +41,7 @@ test('it trusts the certificate in a directory named for the registry', async ()
   expect(trust.dir).toBe(join(ctx.certsRoot, 'imp-e2e-registry.test:43210'));
 });
 
-test('it refuses a registry whose directory is already there, and leaves it as it was', async () => {
+test('#createRegistryTrust refuses a registry whose directory is already there, and leaves it as it was', async () => {
   const ctx = await setupTest();
 
   const owned = join(ctx.certsRoot, 'imp-e2e-registry.test:43210');
@@ -59,7 +63,7 @@ test('it refuses a registry whose directory is already there, and leaves it as i
   expect(kept).toBe('another owner');
 });
 
-test('it removes the directory it made', async () => {
+test('#createRegistryTrust removes the directory it made', async () => {
   const ctx = await setupTest();
 
   const trust = await createRegistryTrust({
@@ -74,7 +78,7 @@ test('it removes the directory it made', async () => {
   expect(existsSync(trust.dir)).toBeFalse();
 });
 
-test('it never removes the certs root, nor another registry in it', async () => {
+test('#createRegistryTrust never removes the certs root, nor another registry in it', async () => {
   const ctx = await setupTest();
 
   const other = join(ctx.certsRoot, 'registry.example:5000');
@@ -95,7 +99,7 @@ test('it never removes the certs root, nor another registry in it', async () => 
   expect(left).toStrictEqual(['registry.example:5000']);
 });
 
-test('it removes once, so a directory made again after the removal stays', async () => {
+test('#createRegistryTrust removes once, so a directory made again after the removal stays', async () => {
   const ctx = await setupTest();
 
   const trust = await createRegistryTrust({
@@ -114,7 +118,7 @@ test('it removes once, so a directory made again after the removal stays', async
   expect(existsSync(trust.dir)).toBeTrue();
 });
 
-test('it removes the directory it made when the certificate copy fails', async () => {
+test('#createRegistryTrust removes the directory it made when the certificate copy fails', async () => {
   const ctx = await setupTest();
 
   expect(
@@ -129,4 +133,130 @@ test('it removes the directory it made when the certificate copy fails', async (
   const left = await readdir(ctx.certsRoot);
 
   expect(left).toBeEmpty();
+});
+
+test('#createRegistryTrust writes an owner file that names this process', async () => {
+  const ctx = await setupTest();
+
+  const trust = await createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: ctx.certPath,
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  const text = await readFile(join(trust.dir, OWNER_FILE), 'utf8');
+
+  const owner: unknown = JSON.parse(text);
+
+  expect(owner).toMatchObject({ pid: process.pid });
+  expect(owner).toHaveProperty('startTime', expect.stringMatching(/^\d+$/));
+});
+
+test('#removeStaleRegistryTrusts removes a directory whose owner no longer runs', async () => {
+  const ctx = await setupTest();
+
+  const gone = Bun.spawn(['true']);
+
+  await gone.exited;
+
+  const stale = join(ctx.certsRoot, 'imp-e2e-registry.test:40001');
+
+  await mkdir(stale, { recursive: true });
+  await writeFile(join(stale, OWNER_FILE), JSON.stringify({ pid: gone.pid, startTime: '1' }));
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toStrictEqual([stale]);
+  expect(existsSync(stale)).toBeFalse();
+});
+
+test('#removeStaleRegistryTrusts keeps a directory whose owner still runs', async () => {
+  const ctx = await setupTest();
+
+  const trust = await createRegistryTrust({
+    registry: 'imp-e2e-registry.test:43210',
+    certPath: ctx.certPath,
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toBeEmpty();
+  expect(existsSync(trust.dir)).toBeTrue();
+});
+
+test('#removeStaleRegistryTrusts keeps a directory with no owner file', async () => {
+  const ctx = await setupTest();
+
+  const unowned = join(ctx.certsRoot, 'imp-e2e-registry.test:40002');
+
+  await mkdir(unowned, { recursive: true });
+  await writeFile(join(unowned, 'ca.crt'), 'another owner');
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toBeEmpty();
+  expect(existsSync(unowned)).toBeTrue();
+});
+
+test('#removeStaleRegistryTrusts keeps a directory whose owner file does not parse', async () => {
+  const ctx = await setupTest();
+
+  const garbled = join(ctx.certsRoot, 'imp-e2e-registry.test:40003');
+
+  await mkdir(garbled, { recursive: true });
+  await writeFile(join(garbled, OWNER_FILE), 'not json');
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toBeEmpty();
+  expect(existsSync(garbled)).toBeTrue();
+});
+
+test('#removeStaleRegistryTrusts never looks at another registry name', async () => {
+  const ctx = await setupTest();
+
+  const other = join(ctx.certsRoot, 'registry.example:5000');
+
+  await mkdir(other, { recursive: true });
+  await writeFile(join(other, OWNER_FILE), JSON.stringify({ pid: 1, startTime: 'gone' }));
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toBeEmpty();
+  expect(existsSync(other)).toBeTrue();
+});
+
+test('#removeStaleRegistryTrusts removes nothing when the certs root does not exist', async () => {
+  const ctx = await setupTest();
+
+  const removed = await removeStaleRegistryTrusts({
+    name: 'imp-e2e-registry.test',
+    certsRoot: ctx.certsRoot,
+    asRoot: [],
+  });
+
+  expect(removed).toBeEmpty();
 });

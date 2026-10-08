@@ -1,10 +1,9 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, onTestFinished, test } from 'bun:test';
 import { lookup } from 'node:dns/promises';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
-import { createRegistryTrust } from '../lib/create-registry-trust';
-import type { RegistryTrust } from '../lib/create-registry-trust';
+import { createRegistryTrust, removeStaleRegistryTrusts } from '../lib/create-registry-trust';
 import { runImp, tryImp } from '../lib/imp-cli';
 import { REPO_ROOT, runChecked, runCommand, runDevScript } from '../lib/instance';
 import { writeRegistryIndex } from '../lib/registry-index';
@@ -57,9 +56,6 @@ const certs = join(buildDir, 'certs');
 
 // the registry's host and port, once it runs
 let registry = '';
-
-// the engine's trust of the registry's certificate, once made
-let trust: RegistryTrust | null = null;
 
 beforeAll(async () => {
   if (!REGISTRY_READY) {
@@ -131,16 +127,14 @@ beforeAll(async () => {
 
   registry = `${REGISTRY_NAME}:${port}`;
 
-  // the engine reads it on each request: no restart
-  trust = await createRegistryTrust({ registry, certPath: join(certs, 'cert.pem') });
+  // what an earlier run that bailed or was killed left in certs.d
+  await removeStaleRegistryTrusts({ name: REGISTRY_NAME });
 }, 600_000);
 
 afterAll(async () => {
   rmSync(buildDir, { recursive: true, force: true });
 
   await runCommand(['docker', 'rm', '--force', '--volumes', CONTAINER]);
-
-  await trust?.remove();
 
   for (const name of [mutable, multi, copied]) {
     await tryImp(['image', 'rm', name]);
@@ -314,6 +308,11 @@ function checkRequests(moved: Readonly<MovedTag>, seen: readonly string[]): void
 test.skipIf(!REGISTRY_READY)(
   'a tag moved in the registry after the host pulled it builds the content impd inspected',
   async () => {
+    // the engine reads certs.d on each request: no restart
+    const trust = await createRegistryTrust({ registry, certPath: join(certs, 'cert.pem') });
+
+    onTestFinished(() => trust.remove());
+
     const repository = 'e2e/mutable';
 
     const moved = await setupMovedTag(repository);
@@ -339,6 +338,11 @@ test.skipIf(!REGISTRY_READY)(
 test.skipIf(!REGISTRY_READY)(
   'COPY --from and RUN --mount from= a moved tag use the content impd inspected',
   async () => {
+    // the engine reads certs.d on each request: no restart
+    const trust = await createRegistryTrust({ registry, certPath: join(certs, 'cert.pem') });
+
+    onTestFinished(() => trust.remove());
+
     const busybox = await readBusyboxDigest();
 
     const repository = 'e2e/source';
@@ -370,6 +374,11 @@ test.skipIf(!REGISTRY_READY)(
 test.skipIf(!REGISTRY_READY)(
   'a multi-platform image binds the host’s variant, whose ONBUILD-free config impd inspected',
   async () => {
+    // the engine reads certs.d on each request: no restart
+    const trust = await createRegistryTrust({ registry, certPath: join(certs, 'cert.pem') });
+
+    onTestFinished(() => trust.remove());
+
     const busybox = await readBusyboxDigest();
     const hostArch = await readHostArch();
 

@@ -95,3 +95,61 @@ test('it keeps release-please waiting on the required e2e check', () => {
 
   expect(jobs['release-please'].needs).toContain('e2e');
 });
+
+test('it writes the build caches from group 1 alone, and only on a push', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  expect(jobs['e2e-group'].env.WRITE_CACHE).toBe(
+    `\${{ github.event_name == 'push' && matrix.group == 1 }}`,
+  );
+});
+
+test.each([['Read the Playwright version'], ['Cache Playwright Browsers']])(
+  'it gates the %s step on the matrix browser flag',
+  (name) => {
+    const jobs = parseCiWorkflow(
+      readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+    );
+
+    const step = jobs['e2e-group'].steps.find((candidate) => candidate.name === name);
+
+    expect(step?.if).toBe('matrix.browser');
+  },
+);
+
+test('it names each group its own results artifact', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  const step = jobs['e2e-group'].steps.find((candidate) => candidate.name === 'Upload results');
+  const groups = jobs['e2e-group'].strategy.matrix.include.map((row) => row.group);
+
+  const names = groups.map((group) =>
+    (step?.with?.name ?? '').replaceAll(`\${{ matrix.group }}`, String(group)),
+  );
+
+  expect(new Set(names).size).toBe(groups.length);
+});
+
+test('it binds the required e2e check to the result of every group', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  const step = jobs.e2e.steps.find((candidate) => candidate.run?.includes('$RESULT') === true);
+
+  expect(step?.env?.['RESULT']).toBe(`\${{ needs.e2e-group.result }}`);
+});
+
+test('it never lets the required e2e check swallow a failure', () => {
+  const jobs = parseCiWorkflow(
+    readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+  );
+
+  const runs = jobs.e2e.steps.map((step) => step.run ?? '').join('\n');
+
+  expect(runs).not.toInclude('|| true');
+});
