@@ -1,57 +1,160 @@
-import { expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@imp/test-utils/invariant';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
-import { startStubImpd } from '../test-utils/start-stub-impd';
 
-// The CLI runs as a user runs it, against an impd it reaches over loopback.
-
+// The CLI's home, and a real impd on a loopback port that the CLI child
+// reaches as a user's would
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dir = await mkdtemp(join(tmpdir(), 'imp-login-'));
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
   // the CLI's home: config.json lives under XDG_CONFIG_HOME
   const env = { HOME: dir, XDG_CONFIG_HOME: dir };
 
-  return { env, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  const dataDir = await mkdtemp(join(tmpdir(), 'imp-login-impd-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  // the system drive impd boots imps with
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the token impd takes
+    rootToken: 'login-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so impd never reads this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await app.stop(true);
+  });
+
+  invariant(app.server?.port);
+
+  return { env, url: `http://127.0.0.1:${String(app.server.port)}` };
 }
 
 test('it saves the host as current when impd accepts the token', async () => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({ token: 'login-token' });
+  const ctx = await setupTest();
 
   const login = await runCli({
-    args: ['login', impd.url, '--name', 'home'],
+    args: ['login', ctx.url, '--name', 'home'],
     env: ctx.env,
     stdin: 'login-token\n',
   });
 
   expect(login).toStrictEqual({
-    stdout: `logged in to ${impd.url} as home, now the current host\n`,
+    stdout: `logged in to ${ctx.url} as home, now the current host\n`,
     stderr: '',
     code: 0,
   });
 
-  expect(impd.calls).toStrictEqual([
-    { path: 'system/info', authorization: 'Bearer login-token', input: undefined },
-  ]);
-
   expect(readHostConfig(ctx.env)).toStrictEqual({
     current: 'home',
-    hosts: { home: { url: impd.url, token: 'login-token' } },
+    hosts: { home: { url: ctx.url, token: 'login-token' } },
   });
 });
 
 test('it lists the saved hosts without their tokens', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'home',
@@ -68,15 +171,12 @@ test('it lists the saved hosts without their tokens', async () => {
 });
 
 test('it saves nothing when impd refuses the token', async () => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({ token: 'login-token' });
-
-  const login = await runCli({ args: ['login', impd.url], env: ctx.env, stdin: 'wrong\n' });
+  const ctx = await setupTest();
+  const login = await runCli({ args: ['login', ctx.url], env: ctx.env, stdin: 'wrong\n' });
 
   expect(login).toStrictEqual({
     stdout: '',
-    stderr: `imp: ${impd.url} refused the token; nothing saved\n`,
+    stderr: `imp: ${ctx.url} refused the token; nothing saved\n`,
     code: 1,
   });
 
@@ -84,11 +184,10 @@ test('it saves nothing when impd refuses the token', async () => {
 });
 
 test('it saves nothing when the token is empty', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({ token: 'login-token' });
-
-  const login = await runCli({ args: ['login', impd.url], env: ctx.env, stdin: '\n' });
+  // nothing listens there: a check would fail on the connection instead
+  const login = await runCli({ args: ['login', 'http://127.0.0.1:1'], env: ctx.env, stdin: '\n' });
 
   expect(login).toStrictEqual({
     stdout: '',
@@ -96,12 +195,11 @@ test('it saves nothing when the token is empty', async () => {
     code: 2,
   });
 
-  expect(impd.calls).toStrictEqual([]);
   expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
 test('it saves nothing when impd is out of reach', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const login: unknown = await runCli({
     args: ['login', 'http://127.0.0.1:1'],
@@ -121,7 +219,7 @@ test('it saves nothing when impd is out of reach', async () => {
 });
 
 test('it saves without asking impd and warns of plain http under --no-verify', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const login = await runCli({
     args: ['login', 'http://imp.example:7070', '--no-verify'],
@@ -143,16 +241,15 @@ test('it saves without asking impd and warns of plain http under --no-verify', a
 });
 
 test('it leaves a damaged config.json as it was and asks impd nothing on login', async () => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({ token: 'login-token' });
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, { current: null, hosts: {} });
 
   await writeFile(resolveConfigPath(ctx.env), '{ damaged', { mode: 0o600 });
 
+  // nothing listens there: a check would fail on the connection instead
   const login: unknown = await runCli({
-    args: ['login', impd.url],
+    args: ['login', 'http://127.0.0.1:1'],
     env: ctx.env,
     stdin: 'login-token\n',
   });
@@ -166,11 +263,10 @@ test('it leaves a damaged config.json as it was and asks impd nothing on login',
   const config = await readFile(resolveConfigPath(ctx.env), 'utf8');
 
   expect(config).toBe('{ damaged');
-  expect(impd.calls).toStrictEqual([]);
 });
 
 test('it makes a saved host current on host use', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'home',
@@ -187,7 +283,7 @@ test('it makes a saved host current on host use', async () => {
 });
 
 test('it refuses a host use of a host it has not saved', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'home',
@@ -206,7 +302,7 @@ test('it refuses a host use of a host it has not saved', async () => {
 });
 
 test('it forgets the current host and clears current on host rm', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'work',
@@ -226,38 +322,44 @@ test('it forgets the current host and clears current on host rm', async () => {
   });
 });
 
-test('it sends the saved token of --host and names the host in a 401', async () => {
-  await using ctx = await setupTest();
+test('it sends the saved token of --host over IMP_TOKEN, with a note', async () => {
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({ token: 'login-token' });
-
-  writeHostConfig(ctx.env, { current: null, hosts: { work: { url: impd.url, token: 'stale' } } });
+  writeHostConfig(ctx.env, {
+    current: null,
+    hosts: { work: { url: ctx.url, token: 'login-token' } },
+  });
 
   const listed = await runCli({
-    args: ['--host', 'work', 'ls'],
+    args: ['--host', 'work', 'ls', '--json'],
     env: { ...ctx.env, IMP_TOKEN: 'ignored' },
   });
 
   expect(listed).toStrictEqual({
-    stdout: '',
-    stderr: [
-      'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
-      `imp: unauthorized: work (${impd.url}) refused the token; run imp login ${impd.url} --name work\n`,
-    ].join(''),
-    code: 1,
+    stdout: '[]\n',
+    stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+    code: 0,
   });
-
-  expect(impd.calls).toStrictEqual([
-    { path: 'imps/list', authorization: 'Bearer stale', input: undefined },
-  ]);
 });
 
-test('it carries the saved token of --host on exec’s socket and its follow-up check', async () => {
-  await using ctx = await setupTest();
+test('it names the --host in a 401 for a saved token impd refuses', async () => {
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({ token: 'login-token' });
+  writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
 
-  writeHostConfig(ctx.env, { current: null, hosts: { work: { url: impd.url, token: 'stale' } } });
+  const listed = await runCli({ args: ['--host', 'work', 'ls'], env: ctx.env });
+
+  expect(listed).toStrictEqual({
+    stdout: '',
+    stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
+    code: 1,
+  });
+});
+
+test('it names the --host when impd refuses the saved token on exec’s socket', async () => {
+  const ctx = await setupTest();
+
+  writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
 
   const exec = await runCli({
     args: ['--host', 'work', 'exec', 'box', '--', 'true'],
@@ -266,20 +368,13 @@ test('it carries the saved token of --host on exec’s socket and its follow-up 
 
   expect(exec).toStrictEqual({
     stdout: '',
-    stderr: `imp: unauthorized: work (${impd.url}) refused the token; run imp login ${impd.url} --name work\n`,
+    stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
     code: 255,
   });
-
-  expect(impd.calls).not.toBeEmpty();
-
-  expect(impd.calls).toSatisfyAll(
-    (call: Readonly<{ authorization: string | null }>) => call.authorization === 'Bearer stale',
-  );
 });
 
 test('it refuses --host without a saved host name', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const listed = await runCli({ args: ['ls', '--host'], env: ctx.env });
 
   expect(listed).toStrictEqual({
@@ -290,8 +385,7 @@ test('it refuses --host without a saved host name', async () => {
 });
 
 test('it prints the version with --host and no saved host', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const version: unknown = await runCli({ args: ['--host', 'work', '--version'], env: ctx.env });
 
   expect(version).toStrictEqual({
@@ -302,8 +396,7 @@ test('it prints the version with --host and no saved host', async () => {
 });
 
 test('it prints the help with --host and no saved host', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const help: unknown = await runCli({ args: ['--host', 'work', '--help'], env: ctx.env });
 
   expect(help).toStrictEqual({
@@ -314,7 +407,7 @@ test('it prints the help with --host and no saved host', async () => {
 });
 
 test('it prints one line, not a stack, when exec cannot read config.json', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await mkdir(resolveConfigPath(ctx.env), { recursive: true });
 

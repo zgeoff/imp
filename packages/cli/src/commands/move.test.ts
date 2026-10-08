@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,8 @@ import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { TEST_TOKEN } from '@imp/daemon/src/imps/test-imps';
+import { createMoveHosts, createUbuntuImage } from '@imp/daemon/src/moves/test-moves';
 import {
   buildImagePaths,
   buildSystemDrivePath,
@@ -15,19 +17,25 @@ import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
 import { createImpClient } from '@zgeoff/imp-client';
 import { HttpResponse, http } from 'msw';
+import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { runCli } from '../test-utils/start-cli';
-import { startStubImpd } from '../test-utils/start-stub-impd';
 import { UsageError } from '../usage-error';
 import { runMove } from './move';
 
 // two impds, a and b, each with the image its imps boot from
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const startImpd = async (host: string) => {
+    // a test moves a host's clock on, such as past the target's commit window
+    const clock = { offsetMs: 0 };
+
     const dataDir = await mkdtemp(join(tmpdir(), `cli-move-${host}-`));
 
     stack.defer(() => rm(dataDir, { recursive: true, force: true }));
@@ -76,6 +84,9 @@ async function setupTest() {
       // the host's free space, so a create never meets this machine's disk
       readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
       log: () => {},
+
+      // the wall clock until a test moves it on
+      now: () => Date.now() + clock.offsetMs,
       readIdentity: (files, ipv6Prefix) => ({
         firecrackerVersion: 'v1.17.0',
         snapshotVersion: 'v12.0.0',
@@ -144,27 +155,35 @@ async function setupTest() {
       fetch: (request) => impd.api.app.handle(request),
     });
 
-    return { client, moves: impd.moves };
+    return {
+      client,
+      clock,
+      moves: impd.moves,
+      handle: (request: Request) => impd.api.app.handle(request),
+    };
   };
 
   const source = await startImpd('a');
   const target = await startImpd('b');
 
-  const owned = stack.move();
-
   return {
     from: source.client,
     to: target.client,
 
+    // the target's API, as a client in front of it reaches it
+    handleOnTarget: target.handle,
+
+    // the target's clock, which a test may move on
+    targetClock: target.clock,
+
     // the target's move routes, as the source reaches them over the
     // tailnet from 100.100.0.1
     receiveFromSource: (request: Request) => target.moves.handle(request, '100.100.0.1'),
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('it prepares on the source, takes a ticket from the target, then sends', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
@@ -196,7 +215,7 @@ test('it prepares on the source, takes a ticket from the target, then sends', as
 });
 
 test('it draws the send’s progress on a terminal and ends the line', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
@@ -248,7 +267,7 @@ test('it draws the send’s progress on a terminal and ends the line', async () 
 });
 
 test('it moves an imp that holds leases for --stop, which ends them as imp stop does', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.leases.acquire({ name: 'dev', label: 'ci', ttlSeconds: 600 });
@@ -276,8 +295,8 @@ test('it moves an imp that holds leases for --stop, which ends them as imp stop 
   expect(print).toHaveBeenCalledExactlyOnceWith('dev: moved to b');
 });
 
-test('it sends the target’s facts to prepare for a sleeping imp', async () => {
-  await using ctx = await setupTest();
+test('it refuses to move a sleeping imp with its memory when the target’s data dir differs', async () => {
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.sleep({ name: 'dev' });
@@ -308,18 +327,17 @@ test('it sends the target’s facts to prepare for a sleeping imp', async () => 
 });
 
 test('it prepares a sleeping imp without facts when the target is an older impd with none to give', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.sleep({ name: 'dev' });
 
-  // an impd from before warm moves has no moves.facts
-  using older = startStubImpd({
-    answers: { 'system/info': { storage: { backend: 'xfs' } } },
-    failures: { 'moves/facts': { code: 'NOT_FOUND', status: 404, message: 'Not found' } },
+  // an impd from before warm moves (0.38.0) has no moves.facts
+  const older = buildStubOlderImpdFetch(ctx.handleOnTarget, {
+    withoutProcedures: ['moves/facts'],
   });
 
-  const to = createImpClient({ url: older.url, token: older.token });
+  const to = createImpClient({ url: 'http://b.test', token: 'root-token', fetch: older.fetch });
 
   expect(
     runMove({
@@ -340,81 +358,53 @@ test('it prepares a sleeping imp without facts when the target is an older impd 
   ).rejects.toThrow(/^dev cannot move with its memory: the target does not say what it can load/u);
 });
 
-test('it sends the warm plan with the ticket and says the imp moved asleep, from stub hosts since two impds in one process never share a data dir', async () => {
-  const facts = {
-    firecrackerVersion: 'v1.17.0',
-    snapshotVersion: 'v12.0.0',
-    hostKernel: 'test',
-    cpuModel: 'Test CPU',
-    cpuFlags: 'test-flags',
-    dataDir: '/var/lib/imp',
-    storage: 'xfs',
-    subnet: '10.66.0.0/16',
-    slotCount: 16_384,
-    brokerPort: 7443,
-    dns: ['1.1.1.1'],
-  } as const;
+test('it moves a sleeping imp with its memory and says it moved asleep', async () => {
+  // one stack: the listeners close before both impds stop
+  const stack = new AsyncDisposableStack();
 
-  const warm = {
-    slot: 0,
-    egressMode: 'none',
-    snapshot: {
-      firecrackerVersion: 'v1.17.0',
-      snapshotVersion: 'v12.0.0',
-      hostKernel: 'test',
-      cpuModel: 'Test CPU',
-      cpuFlags: 'test-flags',
-      ipv6Prefix: null,
-    },
-    host: {
-      dataDir: '/var/lib/imp',
-      storage: 'xfs',
-      subnet: '10.66.0.0/16',
-      brokerPort: 7443,
-      dns: ['1.1.1.1'],
-    },
-  } as const;
+  onTestFinished(() => stack.disposeAsync());
 
-  using source = startStubImpd({
-    answers: {
-      'moves/prepare': { bytes: 4096, checkpoints: 0, warm },
-      'moves/send': {
-        state: 'sending',
-        peer: 'http://100.100.0.2:7070',
-        sentBytes: 0,
-        totalBytes: 4096,
-        isDone: false,
-        error: null,
-      },
-      'moves/status': {
-        state: null,
-        peer: null,
-        sentBytes: 4096,
-        totalBytes: 4096,
-        isDone: true,
-        error: null,
-      },
-    },
+  // a warm move needs one data dir on both hosts, which two impds in one
+  // process cannot share: both report the target's facts
+  const hosts = await createMoveHosts(stack, { isShared: true });
+
+  await createUbuntuImage(hosts.source);
+  await createUbuntuImage(hosts.target);
+
+  const source = hosts.sourceApp.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await source.stop(true);
   });
 
-  using target = startStubImpd({
-    answers: {
-      'system/info': { storage: { backend: 'xfs' } },
-      'moves/facts': facts,
-      'moves/receive': {
-        ticket: 'ticket-1',
-        expiresAt: new Date(60_000),
-        peerUrl: 'http://100.100.0.2:7070',
-      },
-    },
+  const target = hosts.targetApp.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await target.stop(true);
   });
+
+  const sourcePort = source.server?.port;
+  const targetPort = target.server?.port;
+
+  invariant(sourcePort);
+  invariant(targetPort);
+
+  const from = createImpClient({
+    url: `http://127.0.0.1:${String(sourcePort)}`,
+    token: TEST_TOKEN,
+  });
+
+  const to = createImpClient({ url: `http://127.0.0.1:${String(targetPort)}`, token: TEST_TOKEN });
+
+  await from.imps.create({ name: 'dev', image: 'ubuntu' });
+  await from.imps.sleep({ name: 'dev' });
 
   const print = mock<(line: string) => void>();
 
   await runMove({
     name: 'dev',
-    from: createImpClient({ url: source.url, token: source.token }),
-    to: createImpClient({ url: target.url, token: target.token }),
+    from,
+    to,
     toHost: 'b',
     mode: 'move',
     stop: false,
@@ -427,23 +417,14 @@ test('it sends the warm plan with the ticket and says the imp moved asleep, from
     now: () => 0,
   });
 
+  const moved = await to.imps.get({ name: 'dev' });
+
   expect(print).toHaveBeenCalledExactlyOnceWith('dev: moved to b, asleep with its memory');
-
-  expect(source.calls.map((call) => [call.path, call.input])).toStrictEqual([
-    ['moves/prepare', { name: 'dev', stop: false, targetStorage: 'xfs', target: facts }],
-    ['moves/send', { name: 'dev', to: 'http://100.100.0.2:7070', ticket: 'ticket-1' }],
-    ['moves/status', { name: 'dev' }],
-  ]);
-
-  expect(target.calls.map((call) => [call.path, call.input])).toStrictEqual([
-    ['system/info', undefined],
-    ['moves/facts', undefined],
-    ['moves/receive', { name: 'dev', bytes: 4096, warm }],
-  ]);
+  expect(moved.state).toBe('sleeping');
 });
 
 test('it takes the source’s mark off when the target refuses the ticket', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
@@ -474,17 +455,20 @@ test('it takes the source’s mark off when the target refuses the ticket', asyn
   expect(status.state).toBeNull();
 });
 
-test('it points at --resume when the target answers the commit with a 500', async () => {
-  await using ctx = await setupTest();
+test('it points at --resume when the target’s commit window ended before the commit', async () => {
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
 
+  // the commit window is 24 hours from the receipt
+  // (docs/architecture/moves.md); the commit lands a second past it
   server.use(
-    http.post(
-      'http://100.100.0.2:7070/move/commit',
-      () => new HttpResponse('boom', { status: 500 }),
-    ),
+    http.post('http://100.100.0.2:7070/move/commit', (info) => {
+      ctx.targetClock.offsetMs = 24 * 60 * 60 * 1000 + 1000;
+
+      return ctx.receiveFromSource(info.request);
+    }),
     http.all('http://100.100.0.2:7070/*', (info) => ctx.receiveFromSource(info.request)),
   );
 
@@ -508,12 +492,12 @@ test('it points at --resume when the target answers the commit with a 500', asyn
     }),
   ).rejects.toThrowWithMessage(
     Error,
-    'dev: the move failed: commit: the target answered 500; run imp move dev b --resume, or --abort',
+    'dev: the move failed: commit: the target answered 410 the commit window ended; reissue the ticket; run imp move dev b --resume, or --abort',
   );
 });
 
 test('it points at --abort when the network to the target is down', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
@@ -544,17 +528,22 @@ test('it points at --abort when the network to the target is down', async () => 
   );
 });
 
-test('it commits a verified move with a fresh ticket from the target on --resume', async () => {
-  await using ctx = await setupTest();
+test('it commits a verified move with a fresh ticket from the target on --resume after the commit window ended', async () => {
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
 
-  // the first commit meets a 500, so the target holds a verified copy
+  // the first commit lands a second past the 24-hour commit window
+  // (docs/architecture/moves.md), so the target holds a verified copy
   server.use(
     http.post(
       'http://100.100.0.2:7070/move/commit',
-      () => new HttpResponse('boom', { status: 500 }),
+      (info) => {
+        ctx.targetClock.offsetMs = 24 * 60 * 60 * 1000 + 1000;
+
+        return ctx.receiveFromSource(info.request);
+      },
       { once: true },
     ),
     http.all('http://100.100.0.2:7070/*', (info) => ctx.receiveFromSource(info.request)),
@@ -605,7 +594,7 @@ test('it commits a verified move with a fresh ticket from the target on --resume
 });
 
 test('it says the move is complete when an abort finds the target committed it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.imps.stop({ name: 'dev' });
@@ -668,7 +657,7 @@ test('it says the move is complete when an abort finds the target committed it',
 });
 
 test('it says an abort leaves the imp here when no move is underway', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
 
@@ -694,7 +683,7 @@ test('it says an abort leaves the imp here when no move is underway', async () =
 });
 
 test('it refuses --resume of an imp with no verified move', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
 

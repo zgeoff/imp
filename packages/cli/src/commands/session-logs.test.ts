@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,13 +20,15 @@ import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
 import { createImpClient } from '@zgeoff/imp-client';
 import { runCli } from '../test-utils/start-cli';
-import { startStubImpd } from '../test-utils/start-stub-impd';
+import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 import { UsageError } from '../usage-error';
 import { writeSessionLog } from './session-logs';
 
 // impd, listening for the spawned CLI
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'cli-session-logs-'));
 
@@ -129,10 +131,12 @@ async function setupTest() {
 
   invariant(port);
 
+  const sendRequest = (request: Request) => impd.api.app.handle(request);
+
   const client = createImpClient({
     url: 'http://impd.test',
     token: 'root-token',
-    fetch: (request) => impd.api.app.handle(request),
+    fetch: sendRequest,
   });
 
   // the image a test's imps boot from
@@ -145,19 +149,17 @@ async function setupTest() {
     sizeBytes: 6,
   });
 
-  const owned = stack.move();
-
   return {
+    stack,
     dataDir,
+    sendRequest,
     client,
     env: { IMP_URL: `http://127.0.0.1:${String(port)}`, IMP_TOKEN: 'root-token' },
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('it writes the newest log to stdout and the bytes the log lost to stderr', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -193,8 +195,7 @@ test('it writes the newest log to stdout and the bytes the log lost to stderr', 
 });
 
 test('it reads a named generation from the --from offset', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -284,7 +285,7 @@ test.each([
 });
 
 test('it says the imp has no log of a session that never logged', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -298,8 +299,7 @@ test('it says the imp has no log of a session that never logged', async () => {
 });
 
 test('it lists the logs of an imp as JSON', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -348,8 +348,7 @@ test('it lists the logs of an imp as JSON', async () => {
 });
 
 test('it deletes the logs of the session it names', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -385,15 +384,14 @@ test('it deletes the logs of the session it names', async () => {
   expect(existsSync(dir)).toBe(false);
 });
 
-test('it refuses to read a log from an older impd without session logs before any read', async () => {
-  using impd = startStubImpd({
-    token: 'stub-token',
-    answers: { 'system/info': { features: {} } },
-  });
+test('it refuses to read a log from an impd from before sessionLog, before any read', async () => {
+  const ctx = await setupTest();
+
+  const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { withoutFeatures: ['sessionLog'] });
 
   const result = await runCli({
     args: ['sessions', 'log', 'dev', 'main'],
-    env: { IMP_URL: impd.url, IMP_TOKEN: 'stub-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
   });
 
   expect(result).toStrictEqual({
@@ -403,5 +401,5 @@ test('it refuses to read a log from an older impd without session logs before an
     code: 1,
   });
 
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/info']);
 });

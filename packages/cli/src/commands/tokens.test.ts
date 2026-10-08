@@ -1,23 +1,146 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@imp/test-utils/invariant';
+import { createImpClient } from '@zgeoff/imp-client';
 import { runCli } from '../test-utils/start-cli';
-import { startStubImpd } from '../test-utils/start-stub-impd';
+import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
+// impd's real app, listening on a loopback port for the spawned CLI, and an
+// in-process client of it
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
 
-  const dir = await mkdtemp(join(tmpdir(), 'imp-cli-tokens-'));
+  onTestFinished(() => stack.disposeAsync());
 
-  stack.defer(() => rm(dir, { recursive: true, force: true }));
+  const dataDir = await mkdtemp(join(tmpdir(), 'cli-tokens-'));
 
-  const owned = stack.move();
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  // the CLI's home, so no saved host of this machine reaches it
-  const home = { HOME: dir, XDG_CONFIG_HOME: dir };
+  const db = await openDatabase(':memory:');
 
-  return { home, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  // the system drive impd boots with
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the CLI sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so boot never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker and the CPU, which the test host may not have
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+
+    // no IPv6 routes, tailnet, cgroups, taps or VMs on the test host
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+
+    // no broker bundle, tunnel or OAuth timer without a guest network
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+
+    // nft, conntrack and the uplinks belong to the host, not the test
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+
+    // the VMs' memory as /proc would show it
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await app.stop(true);
+  });
+
+  invariant(app.server?.port);
+
+  const sendRequest = (request: Request) => impd.api.app.handle(request);
+
+  return {
+    stack,
+    sendRequest,
+    client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendRequest }),
+    url: `http://127.0.0.1:${String(app.server.port)}`,
+  };
 }
 
 test('it refuses a scope a token cannot have', async () => {
@@ -104,6 +227,7 @@ test('it refuses an --ssh-key file that is missing', async () => {
   });
 });
 
+// impd's address is a closed port: a call would fail to connect, not refuse
 test.each([
   [
     ['token', 'new', 'agent', '--scope', 'manage', '--grantable', 'gh'],
@@ -140,213 +264,162 @@ test.each([
     'imp: --grantable takes secret names, such as gh,npm; not Not A Name\n',
   ],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({ token: 'tokens-token' });
-
   const result = await runCli({
     args,
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
-    stdin: 'fake-secret-value\n',
+    env: { IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'root-token' },
   });
 
   expect(result).toStrictEqual({ stdout: '', stderr, code: 2 });
-  expect(impd.calls).toStrictEqual([]);
 });
 
-// an impd from before 0.27.0, with none of the newer features
 test.each([
   [
     ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
+    'grantableTokens',
     'is older than 0.27.0 and would drop --grantable and make the token without that limit',
   ],
   [
     ['token', 'set', 'agent', '--grantable', 'gh'],
+    'tokenUpdate',
     'is older than 0.34.0 and would not know tokens.update',
   ],
-])('it makes no call past the feature check for %p on an older impd', async (args, reason) => {
-  await using ctx = await setupTest();
+])(
+  'it makes no call past the feature check for %p on an impd from before %s',
+  async (args, feature, reason) => {
+    const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'tokens-token',
-    answers: {
-      'system/info': { version: '0.26.0', features: { sessionOffsets: true, leases: true } },
-    },
-  });
+    const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { withoutFeatures: [feature] });
 
-  const result = await runCli({
-    args,
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
-    stdin: 'fake-secret-value\n',
-  });
+    const result = await runCli({ args, env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' } });
 
-  expect(result).toStrictEqual({
-    stdout: '',
-    stderr: `imp: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
-    code: 1,
-  });
+    expect(result).toStrictEqual({
+      stdout: '',
+      stderr: `imp: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
+      code: 1,
+    });
 
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info']);
-});
+    expect(older.calls).toStrictEqual(['system/info']);
+  },
+);
 
-test.each([
-  [
-    'false flags',
-    {
-      version: '0.27.0',
-      features: { sessionOffsets: true, leases: true, grantableTokens: false, secretRebind: false },
-    },
-  ],
-  ['no features object', { version: '0.14.0' }],
-])('it creates no token when the feature check finds %s', async (_case, info) => {
-  await using ctx = await setupTest();
+test('it creates no token on an impd from before SystemInfo.features', async () => {
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'tokens-token',
-    answers: { 'system/info': info },
-  });
+  const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { isWithoutFeatureList: true });
 
   const result = await runCli({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
   });
 
   expect(result.code).toBe(1);
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/info']);
 });
 
-test('it creates no token when the feature check fails', async () => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({
-    token: 'tokens-token',
-    failures: {
-      'system/info': { code: 'INTERNAL_SERVER_ERROR', status: 500, message: 'boom' },
-    },
-  });
-
+test('it creates no token when the feature check cannot reach impd', async () => {
   const result = await runCli({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
+    env: { IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'root-token' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: INTERNAL_SERVER_ERROR: boom\n',
+    stderr: 'imp: Unable to connect. Is the computer able to access the url?\n',
     code: 1,
   });
-
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info']);
 });
 
 test('it creates a grantable token on an impd with the feature', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'tokens-token',
-    answers: {
-      'system/info': { version: '0.27.0', features: { grantableTokens: true } },
-      'tokens/create': {
-        token: {
-          name: 'agent',
-          scope: 'manage',
-          imps: ['agent-*'],
-          sshKeys: [],
-          grantable: ['gh'],
-          createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        },
-        secret: 'imp_made.token-secret',
-      },
-    },
-  });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-secret-value' });
 
   const result = await runCli({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
-  expect(result).toStrictEqual({
-    stdout: 'imp_made.token-secret\n',
+  const tokens: unknown = await ctx.client.tokens.list();
+
+  const received: unknown = result;
+
+  expect(received).toStrictEqual({
+    stdout: expect.stringMatching(/^imp_\S+\n$/u) as unknown,
     stderr: 'imp: token agent made; impd shows its secret only this once\n',
     code: 0,
   });
 
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info', 'tokens/create']);
-});
-
-test('it sends the grantable list on token set to an impd with tokens.update', async () => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({
-    token: 'tokens-token',
-    answers: {
-      'system/info': { version: '0.34.0', features: { tokenUpdate: true } },
-      'tokens/update': {
-        name: 'agent',
-        scope: 'manage',
-        imps: ['agent-*'],
-        sshKeys: [],
-        grantable: ['gh'],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-      },
-    },
-  });
-
-  const result = await runCli({
-    args: ['token', 'set', 'agent', '--grantable', 'gh', '--json'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
-  });
-
-  expect(result).toStrictEqual({
-    stdout: `${JSON.stringify(
-      {
-        name: 'agent',
-        scope: 'manage',
-        imps: ['agent-*'],
-        sshKeys: [],
-        grantable: ['gh'],
-        createdAt: '2026-10-03T00:00:00.000Z',
-      },
-      null,
-      2,
-    )}\n`,
-    stderr: '',
-    code: 0,
-  });
-
-  expect(impd.calls).toStrictEqual([
-    { path: 'system/info', authorization: 'Bearer tokens-token', input: undefined },
+  expect(tokens).toStrictEqual([
     {
-      path: 'tokens/update',
-      authorization: 'Bearer tokens-token',
-      input: { name: 'agent', grantable: ['gh'] },
+      name: 'agent',
+      scope: 'manage',
+      imps: ['agent-*'],
+      sshKeys: [],
+      grantable: ['gh'],
+      createdAt: expect.toBeValidDate() as unknown,
     },
   ]);
 });
 
-test('it clears the grantable list on token set with an empty --grantable', async () => {
-  await using ctx = await setupTest();
+test('it sends the grantable list on token set to an impd with tokens.update', async () => {
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'tokens-token',
-    answers: {
-      'system/info': { version: '0.34.0', features: { tokenUpdate: true } },
-      'tokens/update': {
-        name: 'agent',
-        scope: 'manage',
-        imps: ['agent-*'],
-        sshKeys: [],
-        grantable: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-      },
-    },
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-secret-value' });
+  await ctx.client.tokens.create({ name: 'agent', scope: 'manage', imps: ['agent-*'] });
+
+  const result = await runCli({
+    args: ['token', 'set', 'agent', '--grantable', 'gh', '--json'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  const printed: unknown = JSON.parse(result.stdout);
+
+  expect(printed).toStrictEqual({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+    sshKeys: [],
+    grantable: ['gh'],
+    createdAt: expect.any(String) as unknown,
+  });
+});
+
+test('it clears the grantable list on token set with an empty --grantable', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-secret-value' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+    grantable: ['gh'],
   });
 
   const result = await runCli({
     args: ['token', 'set', 'agent', '--grantable', '', '--json'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'tokens-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
-  expect(result.code).toBe(0);
-  expect(impd.calls[1]?.input).toStrictEqual({ name: 'agent', grantable: [] });
+  const printed: unknown = JSON.parse(result.stdout);
+
+  expect(printed).toStrictEqual({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+    sshKeys: [],
+    grantable: [],
+    createdAt: expect.any(String) as unknown,
+  });
+});
+
+test('it names a token it cannot find on token key ls', async () => {
+  const ctx = await setupTest();
+
+  const result = await runCli({
+    args: ['token', 'key', 'ls', 'ci'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  expect(result).toStrictEqual({ stdout: '', stderr: 'imp: no token named ci\n', code: 2 });
 });

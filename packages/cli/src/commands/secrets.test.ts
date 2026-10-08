@@ -1,23 +1,148 @@
-import { expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@imp/test-utils/invariant';
+import { server } from '@imp/test-utils/mock-server';
+import { createImpClient } from '@zgeoff/imp-client';
+import { HttpResponse, http } from 'msw';
 import { runCli } from '../test-utils/start-cli';
-import { startStubImpd } from '../test-utils/start-stub-impd';
+import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
+// impd's real app, listening on a loopback port for the spawned CLI, and an
+// in-process client of it
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
 
-  const dir = await mkdtemp(join(tmpdir(), 'imp-cli-secrets-'));
+  onTestFinished(() => stack.disposeAsync());
 
-  stack.defer(() => rm(dir, { recursive: true, force: true }));
+  const dataDir = await mkdtemp(join(tmpdir(), 'cli-secrets-'));
 
-  const owned = stack.move();
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  // the CLI's home, so no saved host of this machine reaches it
-  const home = { HOME: dir, XDG_CONFIG_HOME: dir };
+  const db = await openDatabase(':memory:');
 
-  return { home, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  // the system drive impd boots with
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the CLI sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so boot never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker and the CPU, which the test host may not have
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+
+    // no IPv6 routes, tailnet, cgroups, taps or VMs on the test host
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+
+    // no broker bundle, tunnel or OAuth timer without a guest network
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+
+    // nft, conntrack and the uplinks belong to the host, not the test
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+
+    // the VMs' memory as /proc would show it
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await app.stop(true);
+  });
+
+  invariant(app.server?.port);
+
+  const sendRequest = (request: Request) => impd.api.app.handle(request);
+
+  return {
+    stack,
+    sendRequest,
+    client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendRequest }),
+    url: `http://127.0.0.1:${String(app.server.port)}`,
+  };
 }
 
 test('it refuses a secret value given as a flag, which only stdin may carry', async () => {
@@ -118,6 +243,7 @@ test('it refuses an audit limit outside 1 to 1000', async () => {
   });
 });
 
+// impd's address is a closed port: a call would fail to connect, not refuse
 test.each([
   [['secret', 'add', 'gh', '--kind', 'github', '--rebind'], 'imp: --rebind needs --replace\n'],
   [
@@ -153,28 +279,24 @@ test.each([
     'imp: must be an origin with no path\n',
   ],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({ token: 'secrets-token' });
-
   const result = await runCli({
     args,
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'root-token' },
     stdin: 'fake-secret-value\n',
   });
 
   expect(result).toStrictEqual({ stdout: '', stderr, code: 2 });
-  expect(impd.calls).toStrictEqual([]);
 });
 
-// an impd from before 0.27.0, with none of the newer features
 test.each([
   [
     ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
+    'secretRebind',
     'is older than 0.27.0 and would let --replace change the hosts and keep every grant',
   ],
   [
     ['secret', 'add', 'gh', '--kind', 'github', '--replace', '--rebind'],
+    'secretRebind',
     'is older than 0.27.0 and would let --replace change the hosts and keep every grant',
   ],
   [
@@ -193,9 +315,14 @@ test.each([
       '--token-format',
       'json',
     ],
+    'oauthSecrets',
     'has no oauth secrets and would refuse the oauth kind',
   ],
-  [['secret', 'refresh', 'codex'], 'has no oauth secrets and would not know the command'],
+  [
+    ['secret', 'refresh', 'codex'],
+    'oauthSecrets',
+    'has no oauth secrets and would not know the command',
+  ],
   [
     [
       'secret',
@@ -208,142 +335,95 @@ test.each([
       '--upstream',
       'http://172.17.0.1:18081',
     ],
+    'secretUpstream',
     'has no secret upstreams and would send the credential to the host itself',
   ],
-])('it makes no call past the feature check for %p on an older impd', async (args, reason) => {
-  await using ctx = await setupTest();
+])(
+  'it makes no call past the feature check for %p on an impd from before %s',
+  async (args, feature, reason) => {
+    const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.26.0', features: { sessionOffsets: true, leases: true } },
-    },
-  });
+    const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { withoutFeatures: [feature] });
 
-  const result = await runCli({
-    args,
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
-    stdin: 'fake-secret-value\n',
-  });
+    const result = await runCli({
+      args,
+      env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+      stdin: 'fake-secret-value\n',
+    });
 
-  expect(result).toStrictEqual({
-    stdout: '',
-    stderr: `imp: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
-    code: 1,
-  });
+    expect(result).toStrictEqual({
+      stdout: '',
+      stderr: `imp: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
+      code: 1,
+    });
 
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info']);
-});
+    expect(older.calls).toStrictEqual(['system/info']);
+  },
+);
 
-test.each([
-  [
-    'false flags',
-    {
-      version: '0.27.0',
-      features: { sessionOffsets: true, leases: true, grantableTokens: false, secretRebind: false },
-    },
-  ],
-  ['no features object', { version: '0.14.0' }],
-])('it replaces no secret when the feature check finds %s', async (_case, info) => {
-  await using ctx = await setupTest();
+test('it replaces no secret on an impd from before SystemInfo.features', async () => {
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: { 'system/info': info },
-  });
+  const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { isWithoutFeatureList: true });
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
     stdin: 'fake-secret-value\n',
   });
 
   expect(result.code).toBe(1);
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/info']);
 });
 
 test('it replaces a secret on an impd with the feature', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.27.0', features: { secretRebind: true } },
-      'secrets/add': {
-        name: 'gh',
-        kind: 'github',
-        rules: [],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        droppedGrants: 0,
-      },
-    },
-  });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-old-value' });
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'fake-secret-value\n',
   });
 
-  expect(result.code).toBe(0);
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info', 'secrets/add']);
+  expect(result).toStrictEqual({
+    stdout: [
+      'NAME  KIND    STATE  HOSTS                                         IMPS',
+      'gh    github  -      github.com,api.github.com,uploads.github.com  -',
+      '',
+    ].join('\n'),
+    stderr: '',
+    code: 0,
+  });
 });
 
-test('it adds a plain secret without a feature check', async () => {
-  await using ctx = await setupTest();
+test('it adds a plain secret without a feature check, even on an impd from before SystemInfo.features', async () => {
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'secrets/add': {
-        name: 'gh',
-        kind: 'github',
-        rules: [],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        droppedGrants: 0,
-      },
-    },
-  });
+  const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { isWithoutFeatureList: true });
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
     stdin: 'fake-secret-value\n',
   });
 
   expect(result.code).toBe(0);
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['secrets/add']);
+  expect(older.calls).toStrictEqual(['secrets/add']);
 });
 
 test('it says until when an added oauth secret’s access token is valid', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
-      'secrets/add': {
-        name: 'codex',
-        kind: 'oauth',
-        rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        droppedGrants: 0,
-        oauth: {
-          tokenUrl: 'https://auth.example.com/oauth/token',
-          clientId: 'fake-client',
-          tokenFormat: 'json',
-          status: 'ready',
-          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-          refreshedAt: null,
-          error: null,
-          idClaims: null,
-        },
-      },
-    },
-  });
+  // an access token whose JWT expiry is 2030-01-01T00:00:00Z
+  const accessToken = `e30.${Buffer.from(JSON.stringify({ exp: 1_893_456_000 })).toString('base64url')}.sig`;
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ access_token: accessToken, refresh_token: 'fake-refresh-1' }),
+    ),
+  );
 
   const result = await runCli({
     args: [
@@ -361,7 +441,7 @@ test('it says until when an added oauth secret’s access token is valid', async
       '--token-format',
       'json',
     ],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'fake-refresh\n',
   });
 
@@ -374,37 +454,16 @@ test('it says until when an added oauth secret’s access token is valid', async
     stderr: 'imp: codex signed in, access token valid until 2030-01-01T00:00:00.000Z\n',
     code: 0,
   });
-
-  expect(impd.calls.map((call) => call.path)).toStrictEqual(['system/info', 'secrets/add']);
 });
 
 test('it says why an added oauth secret failed its sign-in', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
-      'secrets/add': {
-        name: 'codex',
-        kind: 'oauth',
-        rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        droppedGrants: 0,
-        oauth: {
-          tokenUrl: 'https://auth.example.com/oauth/token',
-          clientId: 'fake-client',
-          tokenFormat: 'json',
-          status: 'needs_login',
-          expiresAt: null,
-          refreshedAt: null,
-          error: 'invalid_grant',
-          idClaims: null,
-        },
-      },
-    },
-  });
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ error: 'invalid_grant' }, { status: 400 }),
+    ),
+  );
 
   const result = await runCli({
     args: [
@@ -422,7 +481,7 @@ test('it says why an added oauth secret failed its sign-in', async () => {
       '--token-format',
       'json',
     ],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'fake-refresh\n',
   });
 
@@ -438,35 +497,32 @@ test('it says why an added oauth secret failed its sign-in', async () => {
 });
 
 test('it prints a refreshed oauth secret that is ready', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
-      'secrets/refresh': {
-        name: 'codex',
-        kind: 'oauth',
-        rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        oauth: {
-          tokenUrl: 'https://auth.example.com/oauth/token',
-          clientId: 'fake-client',
-          tokenFormat: 'json',
-          status: 'ready',
-          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-          refreshedAt: null,
-          error: null,
-          idClaims: null,
-        },
-      },
+  // an access token whose JWT expiry is 2030-01-01T00:00:00Z
+  const accessToken = `e30.${Buffer.from(JSON.stringify({ exp: 1_893_456_000 })).toString('base64url')}.sig`;
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ access_token: accessToken, refresh_token: 'fake-refresh-1' }),
+    ),
+  );
+
+  await ctx.client.secrets.add({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh',
+    rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
+    oauth: {
+      tokenUrl: 'https://auth.example.com/oauth/token',
+      clientId: 'fake-client',
+      tokenFormat: 'json',
     },
   });
 
   const result = await runCli({
     args: ['secret', 'refresh', 'codex'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
   expect(result).toStrictEqual({
@@ -481,35 +537,29 @@ test('it prints a refreshed oauth secret that is ready', async () => {
 });
 
 test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.36.0', features: { oauthSecrets: true } },
-      'secrets/refresh': {
-        name: 'codex',
-        kind: 'oauth',
-        rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        oauth: {
-          tokenUrl: 'https://auth.example.com/oauth/token',
-          clientId: 'fake-client',
-          tokenFormat: 'json',
-          status: 'pending',
-          expiresAt: null,
-          refreshedAt: null,
-          error: 'HTTP 503',
-          idClaims: null,
-        },
-      },
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ error: 'temporarily_unavailable' }, { status: 503 }),
+    ),
+  );
+
+  await ctx.client.secrets.add({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh',
+    rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
+    oauth: {
+      tokenUrl: 'https://auth.example.com/oauth/token',
+      clientId: 'fake-client',
+      tokenFormat: 'json',
     },
   });
 
   const result = await runCli({
     args: ['secret', 'refresh', 'codex', '--json'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
   const printed: unknown = JSON.parse(result.stdout);
@@ -519,7 +569,7 @@ test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
     kind: 'oauth',
     rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
     imps: [],
-    createdAt: '2026-10-03T00:00:00.000Z',
+    createdAt: expect.any(String) as unknown,
     oauth: {
       tokenUrl: 'https://auth.example.com/oauth/token',
       clientId: 'fake-client',
@@ -537,50 +587,38 @@ test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
 });
 
 test('it shows a state column on secret ls, with a dash for other kinds', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'secrets/list': [
-        {
-          name: 'gh',
-          kind: 'github',
-          rules: [],
-          imps: [],
-          createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        },
-        {
-          name: 'codex',
-          kind: 'oauth',
-          rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
-          imps: [],
-          createdAt: new Date('2026-10-03T00:00:00.000Z'),
-          oauth: {
-            tokenUrl: 'https://auth.example.com/oauth/token',
-            clientId: 'fake-client',
-            tokenFormat: 'json',
-            status: 'needs_login',
-            expiresAt: null,
-            refreshedAt: null,
-            error: 'refresh_token_reused',
-            idClaims: null,
-          },
-        },
-      ],
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ error: 'refresh_token_reused' }, { status: 400 }),
+    ),
+  );
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-secret-value' });
+
+  await ctx.client.secrets.add({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh',
+    rules: [{ host: 'chatgpt.com', header: 'authorization', scheme: 'bearer' }],
+    oauth: {
+      tokenUrl: 'https://auth.example.com/oauth/token',
+      clientId: 'fake-client',
+      tokenFormat: 'json',
     },
   });
 
   const result = await runCli({
     args: ['secret', 'ls'],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
   expect(result).toStrictEqual({
     stdout: [
-      'NAME   KIND    STATE                               HOSTS        IMPS',
-      'gh     github  -                                                -',
-      'codex  oauth   needs_login (refresh_token_reused)  chatgpt.com  -',
+      'NAME   KIND    STATE                               HOSTS                                         IMPS',
+      'codex  oauth   needs_login (refresh_token_reused)  chatgpt.com                                   -',
+      'gh     github  -                                   github.com,api.github.com,uploads.github.com  -',
       '',
     ].join('\n'),
     stderr: '',
@@ -589,22 +627,7 @@ test('it shows a state column on secret ls, with a dash for other kinds', async 
 });
 
 test('it sends a secret upstream in the rule to an impd that knows it', async () => {
-  await using ctx = await setupTest();
-
-  using impd = startStubImpd({
-    token: 'secrets-token',
-    answers: {
-      'system/info': { version: '0.36.0', features: { secretUpstream: true } },
-      'secrets/add': {
-        name: 'op-connect',
-        kind: 'custom',
-        rules: [],
-        imps: [],
-        createdAt: new Date('2026-10-03T00:00:00.000Z'),
-        droppedGrants: 0,
-      },
-    },
-  });
+  const ctx = await setupTest();
 
   const result = await runCli({
     args: [
@@ -618,19 +641,18 @@ test('it sends a secret upstream in the rule to an impd that knows it', async ()
       '--upstream',
       'http://172.17.0.1:18081',
     ],
-    env: { ...ctx.home, IMP_URL: impd.url, IMP_TOKEN: 'secrets-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'fake-token\n',
   });
 
+  const secrets: unknown = await ctx.client.secrets.list();
+
   expect(result.code).toBe(0);
 
-  expect(impd.calls[1]).toStrictEqual({
-    path: 'secrets/add',
-    authorization: 'Bearer secrets-token',
-    input: {
+  expect(secrets).toStrictEqual([
+    {
       name: 'op-connect',
       kind: 'custom',
-      value: 'fake-token',
       rules: [
         {
           host: 'op-connect.imp.internal',
@@ -639,6 +661,37 @@ test('it sends a secret upstream in the rule to an impd that knows it', async ()
           upstream: 'http://172.17.0.1:18081',
         },
       ],
+      imps: [],
+      createdAt: expect.toBeValidDate() as unknown,
     },
+  ]);
+});
+
+test('it stores nothing when stdin gives an empty value', async () => {
+  const ctx = await setupTest();
+
+  const result = await runCli({
+    args: ['secret', 'add', 'gh', '--kind', 'github'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    stdin: '\n',
   });
+
+  const secrets = await ctx.client.secrets.list();
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: no value given; nothing stored\n',
+    code: 2,
+  });
+
+  expect(secrets).toBeEmpty();
+});
+
+test('it refuses an audit kind other than broker or api', async () => {
+  const result = await runCli({
+    args: ['audit', '--kind', 'tokens'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result).toStrictEqual({ stdout: '', stderr: 'imp: --kind is broker or api\n', code: 2 });
 });

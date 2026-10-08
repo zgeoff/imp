@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,27 +11,22 @@ import { createContextStream } from './run-image-build';
 // the CLI packs; each test skips where buildx is missing
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const work = await mkdtemp(join(tmpdir(), 'imp-context-docker-'));
 
-  stack.defer(() => rm(work, { recursive: true, force: true }));
-
-  const owned = stack.move();
+  onTestFinished(() => rm(work, { recursive: true, force: true }));
 
   return {
     context: join(work, 'context'),
     tarPath: join(work, 'context.tar'),
     fromDir: join(work, 'from-dir'),
     fromTar: join(work, 'from-tar'),
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test.skipIf(!checkDockerBuildx())(
   'it packs the files docker sees from the directory, honouring .dockerignore',
   async () => {
-    await using ctx = await setupTest();
+    const ctx = await setupTest();
 
     // past ustar's 100-byte name field, so the tar gives it a pax header
     const longName = `${'long-name-'.repeat(12)}.txt`;
@@ -125,7 +120,7 @@ test.skipIf(!checkDockerBuildx())(
 test.skipIf(!checkDockerBuildx())(
   'it packs the files docker sees with a <Dockerfile>.dockerignore',
   async () => {
-    await using ctx = await setupTest();
+    const ctx = await setupTest();
 
     await mkdir(ctx.context);
 
@@ -182,7 +177,7 @@ test.skipIf(!checkDockerBuildx())(
 test.skipIf(!checkDockerBuildx())(
   'it uses the ignore file of a lowercase dockerfile it falls back to',
   async () => {
-    await using ctx = await setupTest();
+    const ctx = await setupTest();
 
     await mkdir(ctx.context);
 

@@ -23,7 +23,9 @@ import { UsageError } from '../usage-error';
 import { buildServiceDef, createLogPrinter, formatLogEvent } from './services';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'cli-services-'));
 
@@ -145,13 +147,12 @@ async function setupTest() {
     sizeBytes: 6,
   });
 
-  const owned = stack.move();
-
   return {
+    // a test defers what must stop before impd, such as a guest's agent
+    stack,
     dataDir,
     client,
     url: `http://127.0.0.1:${String(port)}`,
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
@@ -267,12 +268,11 @@ test.each([
 });
 
 test('#serviceCommand sends the definition to the guest with --env given more than once', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
   const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket);
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -304,12 +304,11 @@ test('#serviceCommand sends the definition to the guest with --env given more th
 });
 
 test('#serviceCommand adds the service and then sets the imp’s HTTP port for --http-port', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
   const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket);
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -325,13 +324,12 @@ test('#serviceCommand adds the service and then sets the imp’s HTTP port for -
 });
 
 test('#serviceCommand says the service runs and how to set the port when an exec token may not set it', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
   const made = await ctx.client.tokens.create({ name: 'runner', scope: 'exec' });
   const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket);
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -362,7 +360,7 @@ test('#serviceCommand refuses a bad --http-port before it calls impd', async () 
 });
 
 test('#serviceCommand says when a sleeping imp’s last sleep recorded no list', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'box' });
   await ctx.client.imps.sleep({ name: 'box' });

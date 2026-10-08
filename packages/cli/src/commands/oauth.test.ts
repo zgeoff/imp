@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +17,9 @@ import { UsageError } from '../usage-error';
 import { runApprove } from './oauth';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'cli-oauth-'));
 
@@ -117,8 +119,6 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  const owned = stack.move();
-
   return {
     oauth: impd.oauth,
 
@@ -129,7 +129,6 @@ async function setupTest() {
         token,
         fetch: (request) => impd.api.app.handle(request),
       }),
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
@@ -155,7 +154,7 @@ test('it refuses without a terminal or --yes before it calls impd', () => {
 });
 
 test('it shows the sign-in and approves nothing when the answer at a terminal is no', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const root = ctx.connect('root-token');
 
@@ -210,7 +209,7 @@ test('it shows the sign-in and approves nothing when the answer at a terminal is
 });
 
 test('it approves what it showed when the answer at a terminal is yes', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const root = ctx.connect('root-token');
 
@@ -259,7 +258,7 @@ test.each([
   ['without', false],
   ['with', true],
 ])('it approves without asking for --yes %s a terminal', async (_case, isTerminal) => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const root = ctx.connect('root-token');
 
@@ -303,7 +302,7 @@ test.each([
 });
 
 test('it refuses an approval of more than a read token holds', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const root = ctx.connect('root-token');
 

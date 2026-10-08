@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,22 +11,14 @@ import { buildMockSavedTarget } from './test-utils/build-mock-saved-target';
 import { UsageError } from './usage-error';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-fan-out-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    env: { XDG_CONFIG_HOME: dir },
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  // where config.json keeps the saved hosts
+  return { env: { XDG_CONFIG_HOME: dir } };
 }
 
 test('#runOnHosts gives each host its own answer or error, and a silent one the timeout', async () => {
@@ -75,7 +67,11 @@ test('#runOnHosts gives each host its own answer or error, and a silent one the 
     expect(timers.filter((timer) => timer.isCancelled)).toHaveLength(2);
   });
 
-  timers.find((timer) => !timer.isCancelled)?.fire();
+  const silentTimer = timers.find((timer) => !timer.isCancelled);
+
+  invariant(silentTimer);
+
+  silentTimer.fire();
 
   const settled = await answers;
 
@@ -131,7 +127,10 @@ test('#runOnHosts aborts each host’s requests once its answer is in, the silen
     expect(signals.filter((signal) => signal.aborted)).toHaveLength(2);
   });
 
-  fires[1]?.();
+  const [, silentFire] = fires;
+
+  invariant(silentFire);
+  silentFire();
 
   await answers;
 
@@ -166,7 +165,7 @@ test('#runOnHosts aborts the requests still open beside a call that fails', asyn
 });
 
 test('#listSavedTargets lists the saved hosts in name order', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'zeta',
@@ -183,7 +182,7 @@ test('#listSavedTargets lists the saved hosts in name order', () => {
 });
 
 test('#listSavedTargets rejects a config with no saved hosts', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   expect(() => listSavedTargets(ctx.env)).toThrowWithMessage(
     UsageError,
