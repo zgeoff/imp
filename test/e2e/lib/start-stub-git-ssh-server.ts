@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Server, utils } from 'ssh2';
 import type { Connection, ServerChannel } from 'ssh2';
+import { createGitFreeEnv, runGitChecked } from './git-env';
 import { runChecked } from './instance';
 
 // A git server over SSH on this machine, as a forge would be: one public
@@ -28,7 +29,10 @@ export interface StubGitSshServer {
 const RECEIVE_PACK = /^git-receive-pack '\/?repo\.git'$/;
 
 function runReceivePack(channel: ServerChannel, repo: string): void {
-  const child = spawn('git', ['receive-pack', repo], { stdio: 'pipe' });
+  const child = spawn('git', ['receive-pack', repo], {
+    stdio: 'pipe',
+    env: createGitFreeEnv(process.env),
+  });
 
   channel.pipe(child.stdin);
   child.stdout.pipe(channel, { end: false });
@@ -108,7 +112,7 @@ export async function startStubGitSshServer(
   const repo = join(dir, 'repo.git');
 
   await runChecked(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', hostKeyPath]);
-  await runChecked(['git', 'init', '-q', '--bare', '-b', 'main', repo]);
+  await runGitChecked(['git', 'init', '-q', '--bare', '-b', 'main', repo]);
 
   const counts = { logins: 0 };
 

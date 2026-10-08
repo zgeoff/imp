@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runCommand } from './instance';
+import { runGitCommand } from './git-env';
 import { startStubUpstream } from './start-stub-upstream';
 
 async function setupTest() {
@@ -23,12 +23,12 @@ async function setupTest() {
     GIT_TERMINAL_PROMPT: '0',
   };
 
-  await runCommand(['git', 'init', '-q', '-b', 'main', work], { env: gitEnv });
+  await runGitCommand(['git', 'init', '-q', '-b', 'main', work], { env: gitEnv });
   await writeFile(join(work, 'README'), 'pushed\n');
-  await runCommand(['git', '-C', work, 'add', 'README'], { env: gitEnv });
-  await runCommand(['git', '-C', work, 'commit', '-q', '-m', 'first'], { env: gitEnv });
+  await runGitCommand(['git', '-C', work, 'add', 'README'], { env: gitEnv });
+  await runGitCommand(['git', '-C', work, 'commit', '-q', '-m', 'first'], { env: gitEnv });
 
-  const head = await runCommand(['git', '-C', work, 'rev-parse', 'main'], { env: gitEnv });
+  const head = await runGitCommand(['git', '-C', work, 'rev-parse', 'main'], { env: gitEnv });
 
   return { dir, work, gitEnv, head: head.stdout.trim() };
 }
@@ -118,11 +118,11 @@ test('it lands a git push over smart http with its Basic credential', async () =
   url.username = 'x-access-token';
   url.password = 'token-a';
 
-  const push = await runCommand(['git', '-C', ctx.work, 'push', '-q', url.href, 'main'], {
+  const push = await runGitCommand(['git', '-C', ctx.work, 'push', '-q', url.href, 'main'], {
     env: { ...ctx.gitEnv, GIT_SSL_CAINFO: caFile },
   });
 
-  const landed = await runCommand(['git', '-C', repo, 'rev-parse', 'main']);
+  const landed = await runGitCommand(['git', '-C', repo, 'rev-parse', 'main']);
 
   expect(push.exitCode).toBe(0);
   expect(landed.stdout.trim()).toBe(ctx.head);
@@ -145,11 +145,19 @@ test('it refuses a git push with another Basic credential', async () => {
   url.username = 'x-access-token';
   url.password = 'token-b';
 
-  const push = await runCommand(['git', '-C', ctx.work, 'push', '-q', url.href, 'main'], {
+  const push = await runGitCommand(['git', '-C', ctx.work, 'push', '-q', url.href, 'main'], {
     env: { ...ctx.gitEnv, GIT_SSL_CAINFO: caFile },
   });
 
-  const landed = await runCommand(['git', '-C', repo, 'rev-parse', '--verify', '--quiet', 'main']);
+  const landed = await runGitCommand([
+    'git',
+    '-C',
+    repo,
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    'main',
+  ]);
 
   expect(push.exitCode).toBe(128);
   expect(push.stderr).toInclude('Authentication failed');

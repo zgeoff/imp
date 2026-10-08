@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod';
+import { createGitFreeEnv, runGitChecked } from './git-env';
 import { runChecked } from './instance';
 
 const OAUTH_CLIENT_ID = 'e2e-client';
@@ -126,7 +127,7 @@ export async function startStubUpstream(address: string, token: string): Promise
       stdin: body,
       stdout: 'pipe',
       env: {
-        ...process.env,
+        ...createGitFreeEnv(process.env),
         GIT_PROJECT_ROOT: repos,
         GIT_HTTP_EXPORT_ALL: '1',
         REMOTE_USER: 'x-access-token',
@@ -202,8 +203,8 @@ export async function startStubUpstream(address: string, token: string): Promise
     createRepo: async (path) => {
       const repo = join(repos, path);
 
-      await runChecked(['git', 'init', '-q', '--bare', '-b', 'main', repo]);
-      await runChecked(['git', '-C', repo, 'config', 'http.receivepack', 'true']);
+      await runGitChecked(['git', 'init', '-q', '--bare', '-b', 'main', repo]);
+      await runGitChecked(['git', '-C', repo, 'config', 'http.receivepack', 'true']);
 
       return repo;
     },

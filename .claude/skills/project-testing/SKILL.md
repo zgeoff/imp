@@ -242,7 +242,12 @@ run includes `tailscale` or `moves-tailnet`.
 
 The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and need no KVM, Docker or dev
 instance. Some start real processes: `reset-baseline.test.ts` boots impd's app in process
-(`createImpd` on the stub VMM), and `run-suite.test.ts` spawns Bun processes and their children.
+(`createImpd` on the stub VMM), and `run-suite.test.ts` spawns Bun processes and their children. A
+test or stand-in that runs git, or a tool that runs it (`git receive-pack`, `git http-backend`),
+spawns it through `runGitCommand`, `runGitChecked` or `createGitFreeEnv` in
+`test/e2e/lib/git-env.ts`: a git hook exports `GIT_DIR` and the other variables
+`git rev-parse --local-env-vars` lists into `bun test`, and a git child that inherits them works on
+this checkout whatever its `-C` says.
 
 ## ZFS
 

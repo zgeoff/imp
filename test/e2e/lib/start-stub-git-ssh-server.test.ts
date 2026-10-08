@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runGitCommand } from './git-env';
 import { runCommand } from './instance';
 import { startStubGitSshServer } from './start-stub-git-ssh-server';
 
@@ -22,12 +23,12 @@ async function setupTest() {
     GIT_CONFIG_NOSYSTEM: '1',
   };
 
-  await runCommand(['git', 'init', '-q', '-b', 'main', work], { env: gitEnv });
+  await runGitCommand(['git', 'init', '-q', '-b', 'main', work], { env: gitEnv });
   await writeFile(join(work, 'README'), 'pushed\n');
-  await runCommand(['git', '-C', work, 'add', 'README'], { env: gitEnv });
-  await runCommand(['git', '-C', work, 'commit', '-q', '-m', 'first'], { env: gitEnv });
+  await runGitCommand(['git', '-C', work, 'add', 'README'], { env: gitEnv });
+  await runGitCommand(['git', '-C', work, 'commit', '-q', '-m', 'first'], { env: gitEnv });
 
-  const head = await runCommand(['git', '-C', work, 'rev-parse', 'main'], { env: gitEnv });
+  const head = await runGitCommand(['git', '-C', work, 'rev-parse', 'main'], { env: gitEnv });
 
   return { dir, work, gitEnv, head: head.stdout.trim() };
 }
@@ -46,7 +47,7 @@ test('it lands a push signed by the key it allows, from a client that checks its
 
   await writeFile(knownHosts, `[127.0.0.1]:${String(server.port)} ${server.hostKey}\n`);
 
-  const push = await runCommand(
+  const push = await runGitCommand(
     [
       'git',
       '-C',
@@ -65,7 +66,7 @@ test('it lands a push signed by the key it allows, from a client that checks its
     },
   );
 
-  const landed = await runCommand(['git', '-C', server.repo, 'rev-parse', 'main']);
+  const landed = await runGitCommand(['git', '-C', server.repo, 'rev-parse', 'main']);
 
   expect(push.exitCode).toBe(0);
   expect(landed.stdout.trim()).toBe(ctx.head);
@@ -87,7 +88,7 @@ test('it refuses a key other than the one it allows', async () => {
 
   await writeFile(knownHosts, `[127.0.0.1]:${String(server.port)} ${server.hostKey}\n`);
 
-  const push = await runCommand(
+  const push = await runGitCommand(
     [
       'git',
       '-C',
@@ -106,7 +107,7 @@ test('it refuses a key other than the one it allows', async () => {
     },
   );
 
-  const landed = await runCommand([
+  const landed = await runGitCommand([
     'git',
     '-C',
     server.repo,
