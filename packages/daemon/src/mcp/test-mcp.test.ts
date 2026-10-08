@@ -32,6 +32,26 @@ test('#setupMcpTest stops impd and removes its data dir when the test finishes',
   expect(run.output).toInclude(' 3 pass');
 });
 
+test('#setupMcpTest removes its data dir when a setup step throws', async () => {
+  const ctx = await setupTest();
+
+  // the child's temp dir is ctx.dir: the harness's data dir is made there
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { readdirSync } from 'node:fs';",
+      "import { tmpdir } from 'node:os';",
+      `import { setupMcpTest } from ${ctx.testMcpPath};`,
+      "test('it fails to set up', () => { expect(setupMcpTest({ env: { IMP_SUBNET: 'nope' } })).rejects.toThrow(); });",
+      "test('it finds no data dir left', () => { expect(readdirSync(tmpdir()).filter((name) => name.startsWith('impd-test-'))).toStrictEqual([]); });",
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
+});
+
 test('#setupMcpTest lets the test end release it again after an explicit release', async () => {
   const ctx = await setupTest();
 

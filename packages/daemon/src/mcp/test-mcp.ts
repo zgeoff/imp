@@ -28,6 +28,9 @@ interface ImpdTestOptions {
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
 
+  // impd's environment
+  readonly env?: Readonly<Record<string, string>>;
+
   // every line impd and the harness log, its releases included
   readonly onLog?: (message: string) => void;
 }
@@ -40,6 +43,7 @@ async function createImpdTest(
   options: Readonly<ImpdTestOptions>,
 ) {
   const harness = await createImpTest(stack, {
+    ...(options.env !== undefined && { env: options.env }),
     ...(options.onLog !== undefined && { onLog: options.onLog }),
   });
 
@@ -95,6 +99,9 @@ interface McpTestOptions {
   // the server's token is a manage token for these imps, not the root token
   readonly tokenImps?: readonly string[];
 
+  // impd's environment
+  readonly env?: Readonly<Record<string, string>>;
+
   // every line impd and the harness log, its releases included
   readonly onLog?: (message: string) => void;
 }
@@ -109,6 +116,7 @@ export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
 
   const impd = await createImpdTest(stack, {
     ...(options.oldAgent !== undefined && { oldAgent: options.oldAgent }),
+    ...(options.env !== undefined && { env: options.env }),
     ...(options.onLog !== undefined && { onLog: options.onLog }),
   });
 
