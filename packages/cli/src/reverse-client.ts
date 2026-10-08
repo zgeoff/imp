@@ -30,6 +30,9 @@ export interface ReverseIo {
   // resolves after `ms`, or at once when the signal aborts; a timer by
   // default
   readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+
+  // told each state the wait for a wake reads; nothing by default
+  readonly onWatchedState?: (state: ImpState) => void;
 }
 
 export interface ReverseForwarding {
@@ -257,6 +260,7 @@ function createStateReader(next: () => Promise<IteratorResult<ImpState>>): State
 async function waitForWake(
   next: () => Promise<IteratorResult<ImpState>>,
   grace: Promise<void> | null,
+  onState: (state: ImpState) => void,
 ): Promise<void> {
   const reader = createStateReader(next);
   let left = grace === null;
@@ -273,6 +277,8 @@ async function waitForWake(
     if (result.done === true) {
       throw new Error('the event stream ended');
     }
+
+    onState(result.value);
 
     if (result.value !== 'running') {
       left = true;
@@ -334,7 +340,7 @@ export async function startReverseForward(
     const states = watchImp(config, name, signal)[Symbol.asyncIterator]();
 
     try {
-      await waitForWake(() => states.next(), grace);
+      await waitForWake(() => states.next(), grace, io.onWatchedState ?? (() => {}));
     } finally {
       waiting.abort();
       void states.return?.();

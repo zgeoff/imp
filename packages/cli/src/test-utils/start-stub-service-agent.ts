@@ -14,9 +14,9 @@ function sendResponse(socket: Socket, value: unknown): void {
   socket.end(encodeJsonFrame(FRAME_TYPES.response, value));
 }
 
-// An imp's guest agent that keeps services: `services.add` adds or replaces
-// one and answers ok, `services.list` lists them, and any other op is
-// UNKNOWN_OP. `requests` holds each request as the agent decoded it.
+// An imp's guest agent that keeps services (`services.add`, `services.list`;
+// any other op is UNKNOWN_OP), recording each decoded request in `requests`.
+// It closes at the test's end, or at `close`.
 export async function startStubServiceAgent(vsockPath: string) {
   const services: AgentService[] = [];
   const requests: unknown[] = [];

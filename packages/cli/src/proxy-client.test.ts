@@ -2,9 +2,16 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { connect, createServer } from 'node:net';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TUNNEL_WINDOW_BYTES } from '@imp/api';
+import {
+  TUNNEL_CLOSE_LOST,
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_CLOSE_RESTARTING,
+  TUNNEL_MAX_FRAME_BYTES,
+  TUNNEL_WINDOW_BYTES,
+} from '@imp/api';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -28,13 +35,14 @@ import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from './create-imp-client';
-import { startProxy } from './proxy-client';
+import { formatTunnelClose, readTunnelServerMessage, startProxy } from './proxy-client';
 import { sendLocalRequest } from './test-utils/send-local-request';
 import { runCli } from './test-utils/start-cli';
-import { startStubTunnel } from './test-utils/start-stub-tunnel';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'proxy-client-'));
 
@@ -151,21 +159,20 @@ async function setupTest() {
   stack.defer(() => server.stop(true));
 
   const url = `http://127.0.0.1:${String(server.port)}`;
-  const owned = stack.move();
 
   return {
+    // for what the test starts that must stop before impd does
+    stack,
     dataDir,
     impd,
     server,
     url,
     client: createImpClient({ url, token: 'root-token' }),
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
-test('it relays a half-closed request and its reply on both loopbacks', async () => {
-  await using ctx = await setupTest();
-
+test('#startProxy relays a half-closed request and its reply on both loopbacks', async () => {
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   const decoder = new TextDecoder();
@@ -189,7 +196,7 @@ test('it relays a half-closed request and its reply on both loopbacks', async ()
     },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -202,7 +209,7 @@ test('it relays a half-closed request and its reply on both loopbacks', async ()
     { writeNotice },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
@@ -210,12 +217,11 @@ test('it relays a half-closed request and its reply on both loopbacks', async ()
 
   invariant(port);
 
-  const replies = [
-    await sendLocalRequest('127.0.0.1', port, new TextEncoder().encode('hello')),
-    await sendLocalRequest('::1', port, new TextEncoder().encode('hi')),
-  ];
+  const ipv4Reply = await sendLocalRequest('127.0.0.1', port, new TextEncoder().encode('hello'));
+  const ipv6Reply = await sendLocalRequest('::1', port, new TextEncoder().encode('hi'));
 
-  expect(replies).toStrictEqual(['got hello', 'got hi']);
+  expect(ipv4Reply).toBe('got hello');
+  expect(ipv6Reply).toBe('got hi');
 
   expect(
     agent.received
@@ -229,30 +235,31 @@ test('it relays a half-closed request and its reply on both loopbacks', async ()
   expect(writeNotice).not.toHaveBeenCalled();
 });
 
-test('it holds a large upload at the window while impd holds its acks', async () => {
-  await using ctx = await setupTest();
+test('#startProxy stops reading an upload at the window while the guest takes none of it', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
 
-  await ctx.client.imps.create({ name: 'box' });
-
-  // the deliberate fault: impd opens the tunnel and never acks a byte
-  await using tunnel = startStubTunnel({
-    token: 'root-token',
-    onMessage: (peer, message) => {
-      if (message.type === 'open') {
-        peer.send({ type: 'opened' });
-      }
-    },
-    fallback: (request) => ctx.impd.api.app.handle(request),
+  // the guest's server takes the dial, then reads nothing, so impd holds
+  // its acks once the agent's socket is full
+  const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+    socket.pause();
   });
 
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const onWindowFull = mock<(unackedBytes: number) => void>();
+
   const proxy = await startProxy(
-    { url: tunnel.url, token: 'root-token', host: null },
+    { url: ctx.url, token: 'root-token', host: null },
     'box',
     [{ local: 0, remote: 80 }],
-    { writeNotice: () => {} },
+    { writeNotice: () => {}, onWindowFull },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
@@ -260,62 +267,71 @@ test('it holds a large upload at the window while impd holds its acks', async ()
 
   invariant(port);
 
-  // a client whose upload the test never lets finish
+  // a client whose upload the guest never lets finish
   const upload = connect({ host: '127.0.0.1', port });
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     upload.destroy();
   });
 
   upload.on('error', () => {});
   upload.end(new Uint8Array(4 * TUNNEL_WINDOW_BYTES));
 
-  const sent = await waitFor(() => {
-    const bytes = tunnel.received.reduce(
-      (total, message) => total + (message.type === 'data' ? message.data.byteLength : 0),
-      0,
-    );
-
-    expect(bytes).toBeGreaterThan(TUNNEL_WINDOW_BYTES);
-
-    return bytes;
+  await waitFor(() => {
+    expect(onWindowFull).toHaveBeenCalled();
   });
 
-  // the client stops at the read that crossed the window
-  expect(sent).toBeLessThan(2 * TUNNEL_WINDOW_BYTES);
+  // past the window by one frame at most, as impd allows
+  expect(onWindowFull.mock.calls).toSatisfyAll(
+    ([unacked]: readonly [number]) =>
+      unacked > TUNNEL_WINDOW_BYTES && unacked <= TUNNEL_WINDOW_BYTES + TUNNEL_MAX_FRAME_BYTES,
+  );
 });
 
-test('it sends the rest of an upload once impd acks the window', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.client.imps.create({ name: 'box' });
+test('#startProxy sends the rest of an upload once the guest takes it again', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
 
   const size = 4 * TUNNEL_WINDOW_BYTES;
+  const guest = Promise.withResolvers<Socket>();
 
-  // impd holds every ack until the client stopped at the window, then acks
-  // it all and answers once the upload is whole
-  await using tunnel = startStubTunnel({
-    token: 'root-token',
-    onMessage: (peer, message) => {
-      if (message.type === 'open') {
-        peer.send({ type: 'opened' });
-      } else if (message.type === 'eof') {
-        peer.sendBinary(new TextEncoder().encode('done'));
-        peer.send({ type: 'eof' });
-        peer.close(1000, 'done');
+  // the guest's server takes the dial and reads nothing until the test lets
+  // it; once the upload is whole it answers with the bytes it got
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, _request, frames) => {
+      if (frames.length === 1) {
+        socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+        socket.pause();
+        guest.resolve(socket);
+      } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
+        const bytes = frames
+          .filter((frame) => frame.type === FRAME_TYPES.stdin)
+          .reduce((total, frame) => total + frame.payload.byteLength, 0);
+
+        const answer = new TextEncoder().encode(`got ${String(bytes)}`);
+
+        socket.write(encodeFrame(FRAME_TYPES.stdout, answer));
+        socket.end(encodeFrame(FRAME_TYPES.stdoutEof));
       }
     },
-    fallback: (request) => ctx.impd.api.app.handle(request),
-  });
-
-  const proxy = await startProxy(
-    { url: tunnel.url, token: 'root-token', host: null },
-    'box',
-    [{ local: 0, remote: 80 }],
-    { writeNotice: () => {} },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const onWindowFull = mock<(unackedBytes: number) => void>();
+  const writeNotice = mock<(text: string) => void>();
+
+  const proxy = await startProxy(
+    { url: ctx.url, token: 'root-token', host: null },
+    'box',
+    [{ local: 0, remote: 80 }],
+    { writeNotice, onWindowFull },
+  );
+
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
@@ -326,22 +342,20 @@ test('it sends the rest of an upload once impd acks the window', async () => {
   const reply = sendLocalRequest('127.0.0.1', port, new Uint8Array(size));
 
   await waitFor(() => {
-    expect(tunnel.received).toPartiallyContain({ type: 'data' });
+    expect(onWindowFull).toHaveBeenCalled();
   });
 
-  tunnel.peers[0]?.send({ type: 'ack', bytes: size });
+  const paused = await guest.promise;
+
+  paused.resume();
 
   const replied = await reply;
 
-  const sent = tunnel.received.reduce(
-    (total, message) => total + (message.type === 'data' ? message.data.byteLength : 0),
-    0,
-  );
-
-  expect([replied, sent]).toStrictEqual(['done', size]);
+  expect(replied).toBe(`got ${String(size)}`);
+  expect(writeNotice).not.toHaveBeenCalled();
 });
 
-test('it fails at once naming a local port in use, before any call to impd', async () => {
+test('#startProxy fails at once naming a local port in use, before any call to impd', async () => {
   const port = findFreePorts(1).take();
   const busy = createServer();
 
@@ -372,7 +386,7 @@ test('it fails at once naming a local port in use, before any call to impd', asy
   );
 });
 
-test('it fails naming the local port when only its IPv6 loopback is in use', async () => {
+test('#startProxy fails naming the local port when only its IPv6 loopback is in use', async () => {
   const port = findFreePorts(1).take();
   const busy = createServer();
 
@@ -402,7 +416,7 @@ test('it fails naming the local port when only its IPv6 loopback is in use', asy
 test.skipIf(
   process.getuid?.() === 0 ||
     Number(readFileSync('/proc/sys/net/ipv4/ip_unprivileged_port_start', 'utf8')) <= 1,
-)('it fails naming a privileged local port, with one above 1023 to map', () => {
+)('#startProxy fails naming a privileged local port, with one above 1023 to map', () => {
   const started = startProxy(
     { url: 'http://127.0.0.1:1', token: 'root-token', host: null },
     'box',
@@ -416,8 +430,8 @@ test.skipIf(
   );
 });
 
-test('it rejects an imp that impd does not have, and frees its local port', async () => {
-  await using ctx = await setupTest();
+test('#startProxy rejects an imp that impd does not have, and frees its local port', async () => {
+  const ctx = await setupTest();
 
   const port = findFreePorts(1).take();
 
@@ -444,9 +458,8 @@ test('it rejects an imp that impd does not have, and frees its local port', asyn
   await expect(listening).toResolve();
 });
 
-test('it reports impd’s refusal of a dial and resets the local connection', async () => {
-  await using ctx = await setupTest();
-
+test('#startProxy reports impd’s refusal of a dial and resets the local connection', async () => {
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   // the agent cannot connect to the port in the guest
@@ -458,7 +471,7 @@ test('it reports impd’s refusal of a dial and resets the local connection', as
     );
   });
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -471,7 +484,7 @@ test('it reports impd’s refusal of a dial and resets the local connection', as
     { writeNotice },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
@@ -490,62 +503,54 @@ test('it reports impd’s refusal of a dial and resets the local connection', as
   });
 });
 
-test('it ends only the tunnel whose message from impd is not JSON', async () => {
-  await using ctx = await setupTest();
+test('#startProxy says impd restarted when impd closes an open tunnel to restart', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
 
-  await ctx.client.imps.create({ name: 'box' });
+  const dialed = Promise.withResolvers<void>();
 
-  // the deliberate fault: impd answers the open of port 9 with text that is
-  // not JSON; port 80 opens, and answers `ok` once the request is whole
-  await using tunnel = startStubTunnel({
-    token: 'root-token',
-    onMessage: (peer, message) => {
-      if (message.type === 'open' && message.port === 9) {
-        peer.sendText('not json');
-      } else if (message.type === 'open') {
-        peer.send({ type: 'opened' });
-      } else if (message.type === 'eof') {
-        peer.sendBinary(new TextEncoder().encode('ok'));
-        peer.send({ type: 'eof' });
-        peer.close(1000, 'done');
-      }
-    },
-    fallback: (request) => ctx.impd.api.app.handle(request),
+  // the guest's server takes the dial and holds the connection open
+  const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+    dialed.resolve();
+  });
+
+  ctx.stack.defer(() => {
+    agent.close();
   });
 
   const writeNotice = mock<(text: string) => void>();
 
   const proxy = await startProxy(
-    { url: tunnel.url, token: 'root-token', host: null },
+    { url: ctx.url, token: 'root-token', host: null },
     'box',
-    [
-      { local: 0, remote: 9 },
-      { local: 0, remote: 80 },
-    ],
+    [{ local: 0, remote: 80 }],
     { writeNotice },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
-  const [junkPort, okPort] = proxy.ports;
+  const [port] = proxy.ports;
 
-  invariant(junkPort);
-  invariant(okPort);
+  invariant(port);
 
-  const junk = sendLocalRequest('127.0.0.1', junkPort, new Uint8Array(1));
+  const reply = sendLocalRequest('127.0.0.1', port, new Uint8Array(1));
 
-  expect(junk).rejects.toMatchObject({ code: 'ECONNRESET' });
+  await dialed.promise;
 
-  const reply = await sendLocalRequest('127.0.0.1', okPort, new TextEncoder().encode('hi'));
+  ctx.impd.api.closeExecSessions();
 
-  expect(reply).toBe('ok');
-  expect(writeNotice).toHaveBeenCalledExactlyOnceWith('box:9: impd broke the tunnel protocol');
+  expect(reply).rejects.toMatchObject({ code: 'ECONNRESET' });
+
+  await waitFor(() => {
+    expect(writeNotice).toHaveBeenCalledExactlyOnceWith('box:80: impd restarted');
+  });
 });
 
-test('it prints one notice for a burst of connections that cannot reach impd', async () => {
-  await using ctx = await setupTest();
+test('#startProxy prints one notice for a burst of connections that cannot reach impd', async () => {
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -559,7 +564,7 @@ test('it prints one notice for a burst of connections that cannot reach impd', a
     { writeNotice, now: () => Date.UTC(2026, 0, 1) },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
@@ -570,18 +575,18 @@ test('it prints one notice for a burst of connections that cannot reach impd', a
   // impd goes away once the proxy checked the imp
   await ctx.server.stop(true);
 
-  const replies = [
-    await sendLocalRequest('127.0.0.1', port, new Uint8Array(1)).catch(() => 'reset'),
-    await sendLocalRequest('127.0.0.1', port, new Uint8Array(1)).catch(() => 'reset'),
-    await sendLocalRequest('127.0.0.1', port, new Uint8Array(1)).catch(() => 'reset'),
-  ];
+  const replies = await Promise.allSettled([
+    sendLocalRequest('127.0.0.1', port, new Uint8Array(1)),
+    sendLocalRequest('127.0.0.1', port, new Uint8Array(1)),
+    sendLocalRequest('127.0.0.1', port, new Uint8Array(1)),
+  ]);
 
-  expect(replies).toStrictEqual(['reset', 'reset', 'reset']);
+  expect(replies.map((reply) => reply.status)).toStrictEqual(['rejected', 'rejected', 'rejected']);
   expect(writeNotice).toHaveBeenCalledExactlyOnceWith(`could not reach impd at ${ctx.url}`);
 });
 
-test('it prints the notice again once the quiet time passed without a failure', async () => {
-  await using ctx = await setupTest();
+test('#startProxy prints the notice again once the quiet time passed without a failure', async () => {
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -595,7 +600,7 @@ test('it prints the notice again once the quiet time passed without a failure', 
     { writeNotice, now: () => clock.nowMs },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     proxy.stop();
   });
 
@@ -604,13 +609,12 @@ test('it prints the notice again once the quiet time passed without a failure', 
   invariant(port);
 
   await ctx.server.stop(true);
-
-  await sendLocalRequest('127.0.0.1', port, new Uint8Array(1)).catch(() => 'reset');
+  await Promise.allSettled([sendLocalRequest('127.0.0.1', port, new Uint8Array(1))]);
 
   // the quiet time is 5 s
   clock.nowMs += 5001;
 
-  await sendLocalRequest('127.0.0.1', port, new Uint8Array(1)).catch(() => 'reset');
+  await Promise.allSettled([sendLocalRequest('127.0.0.1', port, new Uint8Array(1))]);
 
   expect(writeNotice.mock.calls).toStrictEqual([
     [`could not reach impd at ${ctx.url}`],
@@ -618,7 +622,7 @@ test('it prints the notice again once the quiet time passed without a failure', 
   ]);
 });
 
-test('it prints the usage error for a proxy with no port and no reverse forward', async () => {
+test('#runProxy prints the usage error for a proxy with no port and no reverse forward', async () => {
   const result = await runCli({ args: ['proxy', 'box'], env: { IMP_URL: 'http://127.0.0.1:1' } });
 
   expect(result).toStrictEqual({
@@ -626,4 +630,28 @@ test('it prints the usage error for a proxy with no port and no reverse forward'
     stderr: 'imp: name a port to forward, or a --reverse forward\n',
     code: 2,
   });
+});
+
+test('#readTunnelServerMessage reads a control message impd sends', () => {
+  expect(readTunnelServerMessage('{"type":"ack","bytes":4096}')).toStrictEqual({
+    type: 'ack',
+    bytes: 4096,
+  });
+});
+
+test('#readTunnelServerMessage refuses text that is not JSON as a broken protocol', () => {
+  expect(readTunnelServerMessage('not json')).toBeNull();
+});
+
+test('#readTunnelServerMessage refuses JSON that is no message of the protocol', () => {
+  expect(readTunnelServerMessage('{"type":"hello"}')).toBeNull();
+});
+
+test.each([
+  [TUNNEL_CLOSE_LOST, 'the connection in the imp was lost'],
+  [TUNNEL_CLOSE_RESTARTING, 'impd restarted'],
+  [TUNNEL_CLOSE_PROTOCOL, 'impd broke the tunnel protocol'],
+  [4999, 'impd closed the tunnel (code 4999)'],
+])('#formatTunnelClose names close code %d as %s', (code, text) => {
+  expect(formatTunnelClose(code)).toBe(text);
 });

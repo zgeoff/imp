@@ -1,9 +1,10 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TUNNEL_CLOSE_LOST, TUNNEL_CLOSE_RESTARTING } from '@imp/api';
+import type { ImpState } from '@imp/api';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -31,10 +32,11 @@ import { parseReverse } from './parse-reverse';
 import { startReverseForward } from './reverse-client';
 import { buildStubImpStates } from './test-utils/build-stub-imp-states';
 import { buildStubWait } from './test-utils/build-stub-wait';
-import { startStubTunnel } from './test-utils/start-stub-tunnel';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'reverse-client-'));
 
@@ -151,21 +153,19 @@ async function setupTest() {
   stack.defer(() => server.stop(true));
 
   const url = `http://127.0.0.1:${String(server.port)}`;
-  const owned = stack.move();
 
   return {
+    // for what the test starts that must stop before impd does
+    stack,
     dataDir,
     impd,
-    server,
     url,
     client: createImpClient({ url, token: 'root-token' }),
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('it relays a client in the imp to the local unix socket, both ways', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   // the agent listens on a socket it makes, has one client waiting at once,
@@ -197,7 +197,7 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
     },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -212,7 +212,7 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
     });
   });
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     app.close();
   });
 
@@ -225,7 +225,7 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
     { writeNotice: () => {} },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
@@ -253,8 +253,7 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
 });
 
 test('it rejects a listen the agent refuses, with the agent’s code', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -265,7 +264,7 @@ test('it rejects a listen the agent refuses, with the agent’s code', async () 
     );
   });
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     agent.close();
   });
 
@@ -283,58 +282,67 @@ test('it rejects a listen the agent refuses, with the agent’s code', async () 
 });
 
 test('it fails the forward when the imp is destroyed while it waits for a wake', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
 
-  await ctx.client.imps.create({ name: 'box' });
+  const listens: Socket[] = [];
 
-  const streaming = Promise.withResolvers<void>();
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
 
-  // the tunnel is scripted, so the test can lose the listener; everything else
-  // is impd's own app, whose event stream says once it sent the imp's state
-  await using tunnel = startStubTunnel({
-    token: 'root-token',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen') {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
-    },
-    fallback: async (request) => {
-      const response = await ctx.impd.api.app.handle(request);
 
-      if (!request.url.endsWith('/rpc/events/stream') || response.body === null) {
-        return response;
-      }
-
-      const body = response.body.pipeThrough(
-        new TransformStream<Uint8Array, Uint8Array>({
-          transform: (chunk, controller) => {
-            controller.enqueue(chunk);
-
-            if (new TextDecoder().decode(chunk).includes('"box"')) {
-              streaming.resolve();
-            }
-          },
-        }),
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
       );
 
-      return new Response(body, response);
+      listens.push(socket);
     },
-  });
-
-  const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'root-token', host: null },
-    'box',
-    parseReverse('9000'),
-    { writeNotice: () => {}, wait: buildStubWait().wait },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stub = buildStubWait();
+  const watched = mock<(state: ImpState) => void>();
+
+  const forwarding = await startReverseForward(
+    { url: ctx.url, token: 'root-token', host: null },
+    'box',
+    parseReverse('9000'),
+    {
+      writeNotice: () => {},
+      wait: stub.wait,
+      onWatchedState: watched,
+    },
+  );
+
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+  const [listen] = listens;
 
-  await streaming.promise;
+  invariant(listen);
+
+  // the agent ends the listener, as a forced sleep does
+  listen.end();
+
+  await waitFor(() => {
+    expect(watched).toHaveBeenCalled();
+  });
 
   await ctx.client.imps.destroy({ name: 'box' });
 
@@ -344,48 +352,80 @@ test('it fails the forward when the imp is destroyed while it waits for a wake',
 });
 
 test('it waits for an imp that slept to wake before it listens again after a loss', async () => {
-  // the deliberate fault: impd loses the listener, as a sleep ends it
-  await using tunnel = startStubTunnel({
-    token: 'secret',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen') {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const listens: Socket[] = [];
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
+
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
+      );
+
+      listens.push(socket);
     },
+  );
+
+  ctx.stack.defer(() => {
+    agent.close();
   });
 
-  const states = buildStubImpStates();
+  const stub = buildStubWait();
+  const watched = mock<(state: ImpState) => void>();
   const writeNotice = mock<(text: string) => void>();
 
   const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'secret', host: null },
+    { url: ctx.url, token: 'root-token', host: null },
     'box',
     parseReverse('9000:8080'),
-    { writeNotice, watchImp: states.watchImp, wait: buildStubWait().wait },
+    {
+      writeNotice,
+      wait: stub.wait,
+      onWatchedState: watched,
+    },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
-  states.add('running');
-  states.add('sleeping');
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+  const [listen] = listens;
 
-  // asleep within the grace, it waits on a third state rather than listening
+  invariant(listen);
+
+  await ctx.client.imps.sleep({ name: 'box' });
+
+  // the sleep ended the listener in the imp
+  listen.end();
+
   await waitFor(() => {
-    expect(states.reads).toBe(3);
+    expect(watched).toHaveBeenCalledExactlyOnceWith('sleeping');
   });
 
-  const listensWhileAsleep = tunnel.received.filter((message) => message.type === 'listen');
+  const listensWhileAsleep = listens.length;
 
-  states.add('running');
+  await ctx.client.imps.start({ name: 'box' });
 
   await waitFor(() => {
     expect(writeNotice).toHaveBeenCalledTimes(2);
   });
 
-  expect(listensWhileAsleep).toHaveLength(1);
+  expect(listensWhileAsleep).toBe(1);
 
   expect(writeNotice.mock.calls).toStrictEqual([
     [
@@ -396,35 +436,66 @@ test('it waits for an imp that slept to wake before it listens again after a los
 });
 
 test('it listens again once the grace passes on an imp that stayed running', async () => {
-  // the deliberate fault: impd loses the listener while the imp runs on
-  await using tunnel = startStubTunnel({
-    token: 'secret',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen') {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const listens: Socket[] = [];
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
+
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
+      );
+
+      listens.push(socket);
     },
-  });
-
-  const states = buildStubImpStates();
-  const stub = buildStubWait();
-
-  const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'secret', host: null },
-    'box',
-    parseReverse('9000'),
-    { writeNotice: () => {}, watchImp: states.watchImp, wait: stub.wait },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stub = buildStubWait();
+  const watched = mock<(state: ImpState) => void>();
+
+  const forwarding = await startReverseForward(
+    { url: ctx.url, token: 'root-token', host: null },
+    'box',
+    parseReverse('9000'),
+    {
+      writeNotice: () => {},
+      wait: stub.wait,
+      onWatchedState: watched,
+    },
+  );
+
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
-  states.add('running');
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+  const [listen] = listens;
+
+  invariant(listen);
+
+  // the agent ends the listener while the imp runs on
+  listen.end();
 
   await waitFor(() => {
-    expect(states.reads).toBe(2);
+    expect(watched).toHaveBeenCalled();
   });
 
   const [grace] = stub.calls;
@@ -434,112 +505,220 @@ test('it listens again once the grace passes on an imp that stayed running', asy
   grace.release();
 
   await waitFor(() => {
-    expect(tunnel.received.filter((message) => message.type === 'listen')).toHaveLength(2);
+    expect(listens).toHaveLength(2);
   });
 
   expect(grace.ms).toBe(30_000);
 });
 
-test('it fails the forward for good when impd refuses the listen after a wake', async () => {
-  // the deliberate fault: impd loses the listener, then refuses the next one
-  await using tunnel = startStubTunnel({
-    token: 'secret',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen' && peer.index === 0) {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
-      } else if (message.type === 'listen') {
-        peer.send({ type: 'error', code: 'ACCESS_DENIED', message: 'no exec on box' });
-        peer.close(1000, 'refused');
+test('it fails the forward for good when the agent refuses the listen after a loss', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const listens: Socket[] = [];
+
+  // the agent listens on port 9000 once, then refuses
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
+
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
+
+      if (listens.length === 0) {
+        socket.write(
+          encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
+        );
+      } else {
+        socket.end(
+          encodeJsonFrame(FRAME_TYPES.response, {
+            error: { code: 'LISTEN_FAILED', message: 'port 9000 is in use in the imp' },
+          }),
+        );
+      }
+
+      listens.push(socket);
     },
-  });
-
-  const states = buildStubImpStates();
-
-  const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'secret', host: null },
-    'box',
-    parseReverse('9000'),
-    { writeNotice: () => {}, watchImp: states.watchImp, wait: buildStubWait().wait },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stub = buildStubWait();
+  const watched = mock<(state: ImpState) => void>();
+
+  const forwarding = await startReverseForward(
+    { url: ctx.url, token: 'root-token', host: null },
+    'box',
+    parseReverse('9000'),
+    {
+      writeNotice: () => {},
+      wait: stub.wait,
+      onWatchedState: watched,
+    },
+  );
+
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
-  states.add('sleeping');
-  states.add('running');
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+  const [listen] = listens;
+
+  invariant(listen);
+
+  listen.end();
+
+  await waitFor(() => {
+    expect(watched).toHaveBeenCalled();
+  });
+
+  const [grace] = stub.calls;
+
+  invariant(grace);
+
+  grace.release();
 
   const failure = await forwarding.failed;
 
   expect(failure).toStrictEqual(
-    new Error('reverse forward to localhost:9000: ACCESS_DENIED: no exec on box'),
+    new Error('reverse forward to localhost:9000: LISTEN_FAILED: port 9000 is in use in the imp'),
   );
 });
 
 test('it ends the wait for a wake when the forward stops', async () => {
-  // the deliberate fault: impd loses the listener, as a sleep ends it
-  await using tunnel = startStubTunnel({
-    token: 'secret',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen') {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const listens: Socket[] = [];
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
+
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
+      );
+
+      listens.push(socket);
     },
-  });
-
-  const states = buildStubImpStates();
-
-  const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'secret', host: null },
-    'box',
-    parseReverse('9000'),
-    { writeNotice: () => {}, watchImp: states.watchImp, wait: buildStubWait().wait },
   );
 
-  states.add('sleeping');
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stub = buildStubWait();
+  const watched = mock<(state: ImpState) => void>();
+
+  const forwarding = await startReverseForward(
+    { url: ctx.url, token: 'root-token', host: null },
+    'box',
+    parseReverse('9000'),
+    {
+      writeNotice: () => {},
+      wait: stub.wait,
+      onWatchedState: watched,
+    },
+  );
+
+  const [listen] = listens;
+
+  invariant(listen);
+
+  await ctx.client.imps.sleep({ name: 'box' });
+
+  listen.end();
 
   await waitFor(() => {
-    expect(states.reads).toBe(2);
+    expect(watched).toHaveBeenCalled();
   });
 
   forwarding.stop();
 
-  await waitFor(() => {
-    expect(states.aborts).toBe(1);
-  });
+  const [grace] = stub.calls;
 
-  expect(tunnel.received.filter((message) => message.type === 'listen')).toHaveLength(1);
+  invariant(grace);
+
+  expect(grace.signal.aborted).toBe(true);
+  expect(listens).toHaveLength(1);
 });
 
-test('it fails the forward when the imp’s event stream ends while it waits', async () => {
-  // the deliberate fault: impd loses the listener, then the stream ends
-  await using tunnel = startStubTunnel({
-    token: 'secret',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen') {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
+test('it fails the forward when the imp’s state watch ends while it waits', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const listens: Socket[] = [];
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
+
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
+      );
+
+      listens.push(socket);
     },
+  );
+
+  ctx.stack.defer(() => {
+    agent.close();
   });
 
+  // a watch that ends: impd's own stream opens again instead, so only an
+  // injected one reaches this
   const states = buildStubImpStates();
 
   const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'secret', host: null },
+    { url: ctx.url, token: 'root-token', host: null },
     'box',
     parseReverse('9000'),
     { writeNotice: () => {}, watchImp: states.watchImp, wait: buildStubWait().wait },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
+  const [listen] = listens;
+
+  invariant(listen);
+
   states.end();
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+  listen.end();
 
   const failure = await forwarding.failed;
 
@@ -547,33 +726,55 @@ test('it fails the forward when the imp’s event stream ends while it waits', a
 });
 
 test('it listens again after the retry time when impd closes the tunnel to restart', async () => {
-  // impd closes the control socket as it restarts
-  await using tunnel = startStubTunnel({
-    token: 'secret',
-    onMessage: (peer, message) => {
-      if (message.type === 'listen') {
-        peer.send({ type: 'listening', listener: 'fwd1', path: null, port: 9000 });
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const listens: Socket[] = [];
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const asked: unknown = decodeJsonPayload(request);
+
+      const op: unknown =
+        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+
+      // the imp's other agent calls, such as a sleep's, go unanswered
+      if (op !== 'listen') {
+        socket.end();
+
+        return;
       }
+
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
+      );
+
+      listens.push(socket);
     },
+  );
+
+  ctx.stack.defer(() => {
+    agent.close();
   });
 
-  const states = buildStubImpStates();
   const stub = buildStubWait();
   const writeNotice = mock<(text: string) => void>();
 
   const forwarding = await startReverseForward(
-    { url: tunnel.url, token: 'secret', host: null },
+    { url: ctx.url, token: 'root-token', host: null },
     'box',
     parseReverse('9000'),
-    { writeNotice, watchImp: states.watchImp, wait: stub.wait },
+    { writeNotice, wait: stub.wait },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(() => {
     forwarding.stop();
   });
 
-  states.add('running');
-  tunnel.peers[0]?.close(TUNNEL_CLOSE_RESTARTING, 'restarting');
+  // impd closes every tunnel as it restarts
+  ctx.impd.api.closeExecSessions();
 
   await waitFor(() => {
     expect(stub.calls).toHaveLength(1);
@@ -589,13 +790,12 @@ test('it listens again after the retry time when impd closes the tunnel to resta
     expect(writeNotice).toHaveBeenCalledTimes(2);
   });
 
-  expect([retry.ms, writeNotice.mock.calls]).toStrictEqual([
-    2000,
+  expect(retry.ms).toBe(2000);
+
+  expect(writeNotice.mock.calls).toStrictEqual([
     [
-      [
-        'reverse forward to localhost:9000: impd closed it (code 1012); listening again once box runs',
-      ],
-      ['forwarding box:9000 -> localhost:9000 again'],
+      'reverse forward to localhost:9000: impd closed it (code 1012); listening again once box runs',
     ],
+    ['forwarding box:9000 -> localhost:9000 again'],
   ]);
 });
