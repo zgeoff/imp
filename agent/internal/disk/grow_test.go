@@ -103,16 +103,22 @@ func TestGrowReportsTheBlockSizeError(t *testing.T) {
 func TestWaitAndGrowWaitsForTheNewSize(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := installFakeDisk(t, 4<<21)
+		start := time.Now()
 		grown := make(chan error, 1)
+		// the disk grows 60ms in; until then every read sees the stale 4 GiB
 		go func() {
 			time.Sleep(60 * time.Millisecond)
 			grown <- f.setSectors(6 << 21)
 		}()
 
 		err := WaitAndGrow("/", 6<<30, 2*time.Second)
+		took := time.Since(start)
 
 		assert.NilError(t, <-grown)
 		assert.Check(t, err)
+		// returning only at the growth shows the earlier reads saw the stale
+		// size and kept polling
+		assert.Check(t, took >= 60*time.Millisecond, "returned after %s, before the disk grew", took)
 		assert.Check(t, cmp.DeepEqual(f.resized, []uint64{6 << 30 / 4096}))
 	})
 }

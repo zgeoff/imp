@@ -63,15 +63,35 @@ type logStream struct {
 	result chan error
 }
 
+// startLogs runs Logs in the background. Its cleanup ends the stream and
+// joins both goroutines, draining frames nobody read.
 func startLogs(t *testing.T, s *Supervisor, name string, lines int, follow bool, cursor *proto.LogCursor) *logStream {
 	t.Helper()
 	pr, pw := io.Pipe()
 	ls := &logStream{frames: make(chan proto.Frame, 1024), done: make(chan struct{}), result: make(chan error, 1)}
+	logsEnded := make(chan struct{})
 	t.Cleanup(func() {
 		select {
 		case <-ls.done:
 		default:
 			close(ls.done)
+		}
+		deadline := time.After(5 * time.Second)
+		for frames := ls.frames; frames != nil; {
+			select {
+			case _, ok := <-frames:
+				if !ok {
+					frames = nil
+				}
+			case <-deadline:
+				t.Error("the stream's reader did not end")
+				return
+			}
+		}
+		select {
+		case <-logsEnded:
+		case <-deadline:
+			t.Error("Logs did not return")
 		}
 	})
 	go func() {
@@ -86,6 +106,7 @@ func startLogs(t *testing.T, s *Supervisor, name string, lines int, follow bool,
 		}
 	}()
 	go func() {
+		defer close(logsEnded)
 		err := s.Logs(name, LogRequest{Lines: lines, Follow: follow, Cursor: cursor}, proto.NewWriter(pw), ls.done)
 		ls.result <- err
 		pw.Close()
@@ -212,6 +233,24 @@ func TestLogsFollowsTheLogThroughATruncateAndARename(t *testing.T) {
 		assert.Check(t, cmp.Equal(text, "a\nb\nc\nd\n"))
 		assert.Check(t, err, "Logs")
 	})
+}
+
+// A running service's own output reaches a follow, through the log the
+// supervisor writes, after the tail it already had.
+func TestLogsFollowsARunningServicesOutput(t *testing.T) {
+	s := newManagedSupervisor(t)
+	release := filepath.Join(t.TempDir(), "release")
+	s.Start(Def{Name: "web", Argv: []string{"sh", "-c", "echo started; while [ ! -e " + release + " ]; do sleep 0.01; done; echo later; exec sleep 30"}, Restart: "always"})
+	waitRunning(t, s, "web", 0)
+	ls := startLogs(t, s, "web", 10, true, nil)
+	ls.waitResponse(t)
+	text := ""
+	ls.readUntil(t, &text, "started\n")
+
+	assert.NilError(t, os.WriteFile(release, nil, 0o600))
+	ls.readUntil(t, &text, "later\n")
+
+	assert.Check(t, cmp.Equal(text, "started\nlater\n"))
 }
 
 func TestLogsFollowsTheRotatorsCopytruncate(t *testing.T) {

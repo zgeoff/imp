@@ -33,9 +33,10 @@ func (f *fakeInit) die() {
 }
 
 // testManager returns a manager whose starts make fake inits, which it
-// sends on inits, after gate (when set) lets each start go on. Its cleanup
-// stops the manager, then ends every fake init it made.
-func testManager(t *testing.T, gate <-chan struct{}) (*Manager, <-chan *fakeInit) {
+// sends on inits. With gate set, each start first signals entered (when
+// set), then waits for gate. Its cleanup stops the manager, then ends every
+// fake init it made.
+func testManager(t *testing.T, gate <-chan struct{}, entered chan<- struct{}) (*Manager, <-chan *fakeInit) {
 	t.Helper()
 	inits := make(chan *fakeInit, 16)
 	var mu sync.Mutex
@@ -56,6 +57,9 @@ func testManager(t *testing.T, gate <-chan struct{}) (*Manager, <-chan *fakeInit
 		rootOf:    func(int) string { return root },
 	}
 	m.startInit = func(*os.File) (*initProc, error) {
+		if entered != nil {
+			entered <- struct{}{}
+		}
 		if gate != nil {
 			<-gate
 		}
@@ -92,8 +96,38 @@ func receive[T any](t *testing.T, ch <-chan T, within time.Duration, what string
 	}
 }
 
+// die ends the fake init's spawner and reports the init killed, which the
+// manager sees as the container going down.
+func TestFakeInitDieTakesTheContainerDown(t *testing.T) {
+	m, inits := testManager(t, nil, nil)
+	down := make(chan struct{}, 1)
+	m.OnDown(func() { down <- struct{}{} })
+	m.Launch()
+	f := receive(t, inits, 5*time.Second, "init")
+
+	f.die()
+
+	receive(t, down, 5*time.Second, "down hook")
+}
+
+func TestTestManagerHoldsEachStartAtTheGate(t *testing.T) {
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	m, inits := testManager(t, gate, entered)
+	launched := make(chan struct{})
+	go func() { m.Launch(); close(launched) }()
+	receive(t, entered, 5*time.Second, "start")
+
+	early := len(inits)
+	close(gate)
+
+	receive(t, inits, 5*time.Second, "init")
+	receive(t, launched, 5*time.Second, "end of Launch")
+	assert.Check(t, early == 0, "a start made an init before the gate opened")
+}
+
 func TestLaunchBringsTheContainerUp(t *testing.T) {
-	m, inits := testManager(t, nil)
+	m, inits := testManager(t, nil, nil)
 
 	m.Launch()
 
@@ -102,7 +136,7 @@ func TestLaunchBringsTheContainerUp(t *testing.T) {
 }
 
 func TestARestartRunsOnDownThenOnUp(t *testing.T) {
-	m, inits := testManager(t, nil)
+	m, inits := testManager(t, nil, nil)
 	events := make(chan string, 4)
 	m.OnDown(func() { events <- "down" })
 	m.OnUp(func() { events <- "up" })
@@ -123,9 +157,12 @@ func TestARestartRunsOnDownThenOnUp(t *testing.T) {
 
 func TestAStopDuringAStartKillsTheNewInit(t *testing.T) {
 	gate := make(chan struct{})
-	m, inits := testManager(t, gate)
+	entered := make(chan struct{}, 1)
+	m, inits := testManager(t, gate, entered)
 	launched := make(chan struct{})
 	go func() { m.Launch(); close(launched) }()
+	// the start is under way, held at the gate
+	receive(t, entered, 5*time.Second, "start")
 
 	m.Stop()
 	close(gate)
@@ -140,7 +177,7 @@ func TestAStopDuringAStartKillsTheNewInit(t *testing.T) {
 }
 
 func TestManagerStartIsErrDownWhileNoContainerRuns(t *testing.T) {
-	m, _ := testManager(t, nil)
+	m, _ := testManager(t, nil, nil)
 
 	_, err := m.Start(proc.Spec{Argv: []string{"true"}})
 
@@ -148,7 +185,7 @@ func TestManagerStartIsErrDownWhileNoContainerRuns(t *testing.T) {
 }
 
 func TestManagerRootIsErrDownWhileNoContainerRuns(t *testing.T) {
-	m, _ := testManager(t, nil)
+	m, _ := testManager(t, nil, nil)
 
 	_, err := m.Root().ReadFile("etc/passwd")
 

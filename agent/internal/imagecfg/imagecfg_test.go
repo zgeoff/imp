@@ -17,17 +17,9 @@ import (
 func TestLoadMergesTheImageConfigOverTheDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		file string // "" for no file
+		file string
 		want Config
 	}{
-		{
-			name: "no file gives the defaults",
-			want: Config{Env: []string{
-				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-				"HOME=/root",
-				"TERM=xterm-256color",
-			}},
-		},
 		{
 			name: "image env overrides defaults key by key",
 			file: `{"env":["PATH=/opt/bin","LANG=C.UTF-8"],"workdir":"/app","user":"1000:1000"}`,
@@ -54,9 +46,7 @@ func TestLoadMergesTheImageConfigOverTheDefaults(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "image.json")
-			if tc.file != "" {
-				assert.NilError(t, os.WriteFile(path, []byte(tc.file), 0o644))
-			}
+			assert.NilError(t, os.WriteFile(path, []byte(tc.file), 0o644))
 
 			got, err := load(fsroot.Host, path)
 
@@ -64,6 +54,19 @@ func TestLoadMergesTheImageConfigOverTheDefaults(t *testing.T) {
 			assert.DeepEqual(t, got, tc.want)
 		})
 	}
+}
+
+func TestLoadGivesTheDefaultsWithNoImageConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image.json")
+
+	got, err := load(fsroot.Host, path)
+
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, Config{Env: []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=/root",
+		"TERM=xterm-256color",
+	}})
 }
 
 func TestLoadFallsBackToTheDefaultsForBrokenJSON(t *testing.T) {

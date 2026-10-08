@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -36,6 +37,25 @@ func fakeInitProc(t *testing.T) (p *initProc, died chan reaper.Status, kills cha
 		return nil
 	}, func() {})
 	return p, died, kills
+}
+
+func TestFakeInitProcRecordsAKillAndReportsTheInitKilled(t *testing.T) {
+	p, _, kills := fakeInitProc(t)
+
+	p.kill()
+
+	assert.Check(t, cmp.Len(kills, 1))
+	assert.Check(t, cmp.Equal(p.status, reaper.Status{Code: -1, Signal: syscall.SIGKILL}))
+}
+
+func TestFakeInitProcSendsNothingOnItsSocket(t *testing.T) {
+	p, _, _ := fakeInitProc(t)
+
+	fds := []unix.PollFd{{Fd: int32(p.sock), Events: unix.POLLIN}}
+	n, err := unix.Poll(fds, 0)
+
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(n, 0), "the socket has something to read")
 }
 
 func TestConnectFailsWhenTheInitDiesBeforeItIsReady(t *testing.T) {

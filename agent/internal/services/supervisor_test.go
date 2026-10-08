@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,8 +46,11 @@ func newSupervisor(t *testing.T) *Supervisor {
 // offsets 50µs apart across its start: each offset is a fault-injection
 // point, not a settling delay. A SIGTERM lost to the window between fork
 // and recording the process would make StopAll wait out stopGrace and
-// SIGKILL.
+// SIGKILL. Where each stop lands depends on scheduling; the test after this
+// one puts a stop in the window itself.
 func TestStopAllDeliversSIGTERMWhenItLandsDuringAStart(t *testing.T) {
+	// each stop's last exit: nil when it landed before the service ran
+	var exits []*proto.Exit
 	for i := range 100 {
 		offset := time.Duration(i) * 50 * time.Microsecond
 		t.Run(fmt.Sprintf("stop %s into the start", offset), func(t *testing.T) {
@@ -61,8 +66,98 @@ func TestStopAllDeliversSIGTERMWhenItLandsDuringAStart(t *testing.T) {
 			list := s.List()
 			assert.Assert(t, cmp.Len(list, 1))
 			assert.Check(t, cmp.Equal(list[0].State, "stopped"))
+			exits = append(exits, list[0].LastExit)
 		})
 	}
+
+	var killed []proto.Exit
+	for _, e := range exits {
+		if e != nil {
+			killed = append(killed, *e)
+		}
+	}
+	sigterm := slices.Repeat([]proto.Exit{{Code: -1, Signal: 15}}, len(killed))
+	assert.Check(t, cmp.DeepEqual(killed, sigterm), "every process that ran ends by SIGTERM")
+}
+
+// heldRunner starts processes through a Direct runner, then reports each
+// fork on forked and holds the return until proceed closes: the supervisor
+// has a process it has not recorded yet.
+type heldRunner struct {
+	direct  *proc.Direct
+	forked  chan *proc.Process
+	proceed chan struct{}
+}
+
+func (r *heldRunner) Start(spec proc.Spec) (*proc.Process, error) {
+	p, err := r.direct.Start(spec)
+	if err == nil {
+		r.forked <- p
+		<-r.proceed
+	}
+	return p, err
+}
+
+func TestHeldRunnerHoldsTheReturnOfAStartedProcess(t *testing.T) {
+	r := &heldRunner{direct: &proc.Direct{Reaper: testReaper}, forked: make(chan *proc.Process, 1), proceed: make(chan struct{})}
+	returned := make(chan *proc.Process, 1)
+	failed := make(chan error, 1)
+	go func() {
+		p, err := r.Start(proc.Spec{Argv: []string{"/bin/true"}, Dir: "/"})
+		if err != nil {
+			failed <- err
+			return
+		}
+		returned <- p
+	}()
+	var forked *proc.Process
+	select {
+	case forked = <-r.forked:
+	case err := <-failed:
+		t.Fatalf("Start: %v", err)
+	}
+	early := len(returned)
+
+	close(r.proceed)
+	got := <-returned
+
+	assert.Check(t, early == 0, "Start returned before proceed")
+	assert.Check(t, got == forked, "Start returned another process")
+	<-got.Done
+}
+
+// A stop that lands after the fork, while the supervisor has not recorded
+// the process, still reaches it with SIGTERM.
+func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
+	r := &heldRunner{direct: &proc.Direct{Reaper: testReaper}, forked: make(chan *proc.Process, 1), proceed: make(chan struct{})}
+	s := New(r, fsroot.Host, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}))
+	s.logDir = t.TempDir()
+	s.Start(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"})
+	p := <-r.forked
+	t.Cleanup(func() { p.Signal(syscall.SIGKILL) })
+	stopped := make(chan time.Duration, 1)
+	go func() {
+		began := time.Now()
+		s.StopAll()
+		stopped <- time.Since(began)
+	}()
+	// StopAll has closed the service's stop, with no process to signal yet
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if isClosed(s.services["sleeper"].stop) {
+			return poll.Success()
+		}
+		return poll.Continue("StopAll has not reached the service")
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(time.Millisecond))
+
+	close(r.proceed)
+	took := <-stopped
+
+	assert.Check(t, took < stopGrace, "StopAll took %s; SIGTERM was lost", took)
+	list := s.List()
+	assert.Assert(t, cmp.Len(list, 1))
+	assert.Check(t, cmp.DeepEqual(list[0].LastExit, &proto.Exit{Code: -1, Signal: 15}))
 }
 
 // TestAFailedRestartKeepsTheLastExit runs a service that exits 3 and

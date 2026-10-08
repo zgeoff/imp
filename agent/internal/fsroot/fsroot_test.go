@@ -62,26 +62,21 @@ func TestWriteFileAtomicNeverWritesThroughAPlantedSymlinkToOutside(t *testing.T)
 	assert.Equal(t, string(b), "agent's", "the agent's file changed")
 }
 
-func TestReadFileStopsDotDotAtTheRoot(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		path string
-		link string // a relative link planted at /etc/up, or ""
-	}{
-		{name: "through a relative link", path: "/etc/up/secret", link: "../../outside"},
-		{name: "in the path itself", path: "/../outside/secret"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r, inside, _ := setup(t)
-			if tc.link != "" {
-				assert.NilError(t, os.Symlink(tc.link, filepath.Join(inside, "etc/up")))
-			}
+func TestReadFileStopsDotDotThroughARelativeLinkAtTheRoot(t *testing.T) {
+	r, inside, _ := setup(t)
+	assert.NilError(t, os.Symlink("../../outside", filepath.Join(inside, "etc/up")))
 
-			_, err := r.ReadFile(tc.path)
+	_, err := r.ReadFile("/etc/up/secret")
 
-			assert.ErrorIs(t, err, fs.ErrNotExist)
-		})
-	}
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+func TestReadFileStopsDotDotInThePathAtTheRoot(t *testing.T) {
+	r, _, _ := setup(t)
+
+	_, err := r.ReadFile("/../outside/secret")
+
+	assert.ErrorIs(t, err, fs.ErrNotExist)
 }
 
 func TestMkdirAllAndOpenFileCreateAFileInsideTheRoot(t *testing.T) {

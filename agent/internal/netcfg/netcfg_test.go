@@ -157,8 +157,17 @@ func TestUp6WithoutAnAddressDoesNothing(t *testing.T) {
 	assert.NilError(t, err)
 }
 
+// This runs against the host's real netlink: a fresh network namespace
+// needs CAP_SYS_ADMIN, or a user namespace that a multi-threaded test binary
+// cannot enter. Up6 looks the link up by name before it writes anything, so
+// with no such link it fails at a read-only lookup. The test refuses to run
+// if a link of that name exists, since Up6 would then configure it.
 func TestUp6FailsForAMissingLink(t *testing.T) {
-	err := Up6("no-such-link", "fd00::2/128", "fe80::1")
+	_, err := netlink.LinkByName("no-such-link")
+	var absent netlink.LinkNotFoundError
+	assert.Assert(t, errors.As(err, &absent), "a link named no-such-link exists here (%v); refusing to configure it", err)
+
+	err = Up6("no-such-link", "fd00::2/128", "fe80::1")
 
 	var notFound netlink.LinkNotFoundError
 	assert.Assert(t, errors.As(err, &notFound), "err = %v, want a netlink.LinkNotFoundError", err)
