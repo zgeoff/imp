@@ -45,6 +45,10 @@ test('it issues one certificate for the domain and its wildcard', async () => {
     store: createCertStore(ctx.dir),
     dns: createChalltestsrvProvider(ctx.pebble.challtestsrvUrl),
     log: () => {},
+
+    // a challenge still pending at the first poll waits backoffMin before the
+    // next one: acme-client's 5 s default would spend the test's whole budget
+    poll: { backoffAttempts: 10, backoffMin: 50, backoffMax: 500 },
   });
 
   const certificate = await issue('imp.test');
@@ -68,6 +72,10 @@ test('it renews with the account the stored key already has', async () => {
     store: createCertStore(ctx.dir),
     dns: createChalltestsrvProvider(ctx.pebble.challtestsrvUrl),
     log: () => {},
+
+    // a challenge still pending at the first poll waits backoffMin before the
+    // next one: acme-client's 5 s default would spend the test's whole budget
+    poll: { backoffAttempts: 10, backoffMin: 50, backoffMax: 500 },
   });
 
   const store = createCertStore(ctx.dir);
@@ -94,6 +102,10 @@ test('it opens a new account and still issues when the account file is lost', as
     store: createCertStore(ctx.dir),
     dns: createChalltestsrvProvider(ctx.pebble.challtestsrvUrl),
     log: () => {},
+
+    // a challenge still pending at the first poll waits backoffMin before the
+    // next one: acme-client's 5 s default would spend the test's whole budget
+    poll: { backoffAttempts: 10, backoffMin: 50, backoffMax: 500 },
   });
 
   const store = createCertStore(ctx.dir);
