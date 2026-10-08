@@ -22,6 +22,21 @@ test('it takes the grant report out of a fork’s answer and keeps the rest', as
   });
 });
 
+test('it takes the grant error out of a fork’s answer and keeps the rest', async () => {
+  const fetch = buildStubOlderImpdFetch(() =>
+    Promise.resolve(
+      Response.json({
+        json: { name: 'dev-b', grantsNotCopied: [], grantsError: 'the copy failed' },
+      }),
+    ),
+  );
+
+  const response = await fetch(new Request('http://impd.test/rpc/imps/fork', { method: 'POST' }));
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({ json: { name: 'dev-b' } });
+});
+
 test('it passes the answer of another procedure as it came', async () => {
   const answer = Response.json({ json: { grantsNotCopied: [] } });
   const fetch = buildStubOlderImpdFetch(() => Promise.resolve(answer));

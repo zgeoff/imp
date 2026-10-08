@@ -77,6 +77,9 @@ async function setupTest() {
     readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
     log: () => {},
 
+    // a frozen clock, so a later read of the fork matches the answer to it
+    now: () => Date.UTC(2026, 0, 1),
+
     // Firecracker, the kernel and the CPU as this host reports them
     readIdentity: (files, ipv6Prefix) => ({
       firecrackerVersion: 'v1.17.0',
@@ -186,6 +189,20 @@ test('it reports beside the fork each grant it did not get', async () => {
     },
   );
 
+  const forked = await ctx.rootClient.imps.get({ name: 'dev-b' });
+
+  // the fork as it crosses impd's API, its dates as ISO strings, which a
+  // structuredClone would keep as dates
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(forked));
+  const read = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  // its awake time runs on the wall clock between the answer and the read
+  const wire = {
+    ...read,
+    resources: { ...read.resources, awakeMs: expect.any(Number) as unknown },
+  };
+
   expect(sent).toStrictEqual([
     {
       jsonrpc: '2.0',
@@ -193,7 +210,7 @@ test('it reports beside the fork each grant it did not get', async () => {
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
         structuredContent: {
-          imp: expect.objectContaining({ name: 'dev-b' }) as unknown,
+          imp: wire,
           grantsNotCopied: [{ secret: 'gh', reason: 'not-grantable' }],
         },
         isError: false,
@@ -231,6 +248,20 @@ test('it reports an empty grant report beside a fork that got every grant', asyn
     },
   );
 
+  const forked = await ctx.rootClient.imps.get({ name: 'dev-b' });
+
+  // the fork as it crosses impd's API, its dates as ISO strings, which a
+  // structuredClone would keep as dates
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(forked));
+  const read = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  // its awake time runs on the wall clock between the answer and the read
+  const wire = {
+    ...read,
+    resources: { ...read.resources, awakeMs: expect.any(Number) as unknown },
+  };
+
   expect(sent).toStrictEqual([
     {
       jsonrpc: '2.0',
@@ -238,7 +269,7 @@ test('it reports an empty grant report beside a fork that got every grant', asyn
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
         structuredContent: {
-          imp: expect.objectContaining({ name: 'dev-b' }) as unknown,
+          imp: wire,
           grantsNotCopied: [],
         },
         isError: false,
@@ -279,6 +310,20 @@ test('it reports beside the fork why it got none of the grants', async () => {
     },
   );
 
+  const forked = await ctx.rootClient.imps.get({ name: 'dev-b' });
+
+  // the fork as it crosses impd's API, its dates as ISO strings, which a
+  // structuredClone would keep as dates
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(forked));
+  const read = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  // its awake time runs on the wall clock between the answer and the read
+  const wire = {
+    ...read,
+    resources: { ...read.resources, awakeMs: expect.any(Number) as unknown },
+  };
+
   expect(sent).toStrictEqual([
     {
       jsonrpc: '2.0',
@@ -286,7 +331,7 @@ test('it reports beside the fork why it got none of the grants', async () => {
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
         structuredContent: {
-          imp: expect.objectContaining({ name: 'dev-b' }) as unknown,
+          imp: wire,
           grantsNotCopied: [],
           grantsError:
             "the source's grants could not be copied, so the fork has none; impd's log has the cause",
@@ -328,13 +373,27 @@ test('it leaves the grant report out of a fork from an impd that sends none', as
     },
   );
 
+  const forked = await ctx.rootClient.imps.get({ name: 'dev-b' });
+
+  // the fork as it crosses impd's API, its dates as ISO strings, which a
+  // structuredClone would keep as dates
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(forked));
+  const read = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  // its awake time runs on the wall clock between the answer and the read
+  const wire = {
+    ...read,
+    resources: { ...read.resources, awakeMs: expect.any(Number) as unknown },
+  };
+
   expect(sent).toStrictEqual([
     {
       jsonrpc: '2.0',
       id: 1,
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
-        structuredContent: { imp: expect.objectContaining({ name: 'dev-b' }) as unknown },
+        structuredContent: { imp: wire },
         isError: false,
       },
     },
