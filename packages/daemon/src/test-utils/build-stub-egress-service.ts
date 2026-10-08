@@ -4,8 +4,8 @@ import type { QueryVerdict, ResolverDeps } from '../egress/egress-resolver';
 import type { AddressAnswer } from '../egress/egress-sets';
 import { resolveNetworkName } from '../egress/network-names';
 import { parseSubnet } from '../net/addressing';
-import { buildMockDnsReply } from './build-mock-dns-message';
-import type { MockDnsRecord } from './build-mock-dns-message';
+import { buildMockDnsReply } from './build-mock-dns-reply';
+import type { MockDnsRecord } from './build-mock-dns-reply';
 
 interface StubEgressServiceOptions {
   // IMP_SUBNET; 10.66.0.0/16 by default

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
-import { buildMockDnsQuery, buildMockDnsReply } from './build-mock-dns-message';
+import { buildMockDnsQuery } from './build-mock-dns-query';
+import { buildMockDnsReply } from './build-mock-dns-reply';
 import { findFreePorts } from './find-free-ports';
 import { startStubDnsUpstream } from './start-stub-dns-upstream';
 
@@ -104,19 +105,12 @@ test('it reads a dropped UDP query and sends nothing back', async () => {
   const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'drop' });
 
   const received: string[] = [];
-  const fence = Promise.withResolvers<void>();
 
   const client = await Bun.udpSocket({
     hostname: '127.0.0.1',
     socket: {
       data: (_socket, data) => {
-        const text = Buffer.from(data).toString();
-
-        received.push(text);
-
-        if (text === 'fence') {
-          fence.resolve();
-        }
+        received.push(Buffer.from(data).toString());
       },
     },
   });
@@ -138,7 +132,9 @@ test('it reads a dropped UDP query and sends nothing back', async () => {
   // a datagram to itself: the socket reads it after any reply already sent
   client.send('fence', client.port, '127.0.0.1');
 
-  await fence.promise;
+  await waitFor(() => {
+    expect(received).toContain('fence');
+  });
 
   expect(received).toStrictEqual(['fence']);
   expect(upstream.queries).toStrictEqual([{ transport: 'udp', id: 7 }]);
@@ -319,10 +315,12 @@ test('it frees its port when the test that started it finishes', async () => {
       "test('it finds the port free', async () => {",
       `  const udp = await Bun.udpSocket({ hostname: '127.0.0.1', port: ${String(port)} });`,
       `  const tcp = Bun.listen({ hostname: '127.0.0.1', port: ${String(port)}, socket: { data: () => {} } });`,
-      '  const ports = [udp.port, tcp.port];',
+      '  const udpPort = udp.port;',
+      '  const tcpPort = tcp.port;',
       '  udp.close();',
       '  tcp.stop(true);',
-      `  expect(ports).toStrictEqual([${String(port)}, ${String(port)}]);`,
+      `  expect(udpPort).toBe(${String(port)});`,
+      `  expect(tcpPort).toBe(${String(port)});`,
       '});',
     ].join('\n'),
   );

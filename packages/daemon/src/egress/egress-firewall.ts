@@ -68,6 +68,10 @@ export function createNftRunner(nftBin = 'nft'): NftRunner {
       stdin: new TextEncoder().encode(script),
       stdout: 'ignore',
       stderr: 'pipe',
+
+      // process.env as it is now, PATH included: Bun's own default is the
+      // env impd started with
+      env: process.env,
     });
 
     const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);

@@ -1,5 +1,10 @@
 import type { NftRunner } from '../egress/egress-firewall';
 
+interface NftRun {
+  readonly script: string;
+  readonly accepted: boolean;
+}
+
 interface Refusal {
   readonly reason: string;
   readonly match: (script: string) => boolean;
@@ -28,6 +33,7 @@ interface RefuseOptions {
 // A test picks each fault itself.
 export function buildStubNft() {
   const scripts: string[] = [];
+  const runs: NftRun[] = [];
   const refusals: Refusal[] = [];
   const holds: Hold[] = [];
 
@@ -45,9 +51,12 @@ export function buildStubNft() {
 
     if (refusal !== undefined) {
       refusal.left -= 1;
+
+      runs.push({ script, accepted: false });
       throw new Error(`nft exited 1: ${refusal.reason}`);
     }
 
+    runs.push({ script, accepted: true });
     scripts.push(script);
   };
 
@@ -56,6 +65,9 @@ export function buildStubNft() {
 
     // every script nft took, in order
     scripts: scripts as readonly string[],
+
+    // every script it was given, in order, and whether it took it
+    runs: runs as readonly NftRun[],
 
     // the last whole table nft took, or null before the first
     readTable: (): string | null =>

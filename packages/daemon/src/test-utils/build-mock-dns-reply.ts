@@ -1,50 +1,12 @@
-import { faker } from '@faker-js/faker';
+import { DNS_CLASS_IN, DNS_TYPE_CODES, writeDnsName, writeDnsUint16 } from './write-dns-wire';
 
-// DNS messages as a guest's resolver or an upstream server sends them, built
-// byte by byte from RFC 1035 (and RFC 3596 for AAAA, RFC 6891 for the EDNS
-// OPT record), with no name compression.
+// An upstream's reply, byte by byte from RFC 1035 (RFC 3596 for AAAA), with
+// no name compression.
 
-const TYPE_CODES = { A: 1, CNAME: 5, SOA: 6, PTR: 12, MX: 15, TXT: 16, AAAA: 28 } as const;
-
-type MockDnsType = keyof typeof TYPE_CODES;
-
-const CLASS_IN = 1;
-const TYPE_OPT = 41;
 const QR = 0x80_00;
 const TC = 0x02_00;
 const RD = 0x01_00;
 const RA = 0x00_80;
-
-interface MockDnsQuery {
-  readonly name: string;
-  readonly type: MockDnsType;
-  readonly id: number;
-
-  // an OPT record with a 1232-byte payload size, as dig and systemd send
-  readonly edns: boolean;
-}
-
-// A one-question query with recursion desired. The id is arbitrary.
-export function buildMockDnsQuery(
-  query: Readonly<Pick<MockDnsQuery, 'name' | 'type'> & Partial<MockDnsQuery>>,
-): Uint8Array {
-  const id = query.id ?? faker.number.int({ min: 0, max: 0xff_ff });
-  const edns = query.edns ?? true;
-  const additionals = edns ? 1 : 0;
-
-  return Uint8Array.from([
-    ...writeUint16(id),
-    ...writeUint16(RD),
-    ...writeUint16(1),
-    ...writeUint16(0),
-    ...writeUint16(0),
-    ...writeUint16(additionals),
-    ...writeName(query.name),
-    ...writeUint16(TYPE_CODES[query.type]),
-    ...writeUint16(CLASS_IN),
-    ...(edns ? [0, ...writeUint16(TYPE_OPT), ...writeUint16(1232), 0, 0, 0, 0, 0, 0] : []),
-  ]);
-}
 
 export interface MockDnsRecord {
   readonly type: 'A' | 'AAAA' | 'CNAME';
@@ -80,12 +42,12 @@ export function buildMockDnsReply(
   const flags = QR | RD | RA | (reply.truncated === true ? TC : 0);
 
   return Uint8Array.from([
-    ...writeUint16(id),
-    ...writeUint16(flags),
-    ...writeUint16(1),
-    ...writeUint16(answers.length),
-    ...writeUint16(authorities.length),
-    ...writeUint16(additionals.length),
+    ...writeDnsUint16(id),
+    ...writeDnsUint16(flags),
+    ...writeDnsUint16(1),
+    ...writeDnsUint16(answers.length),
+    ...writeDnsUint16(authorities.length),
+    ...writeDnsUint16(additionals.length),
     ...readQuestion(query),
     ...[...answers, ...authorities, ...additionals].flatMap((record) => writeRecord(record)),
   ]);
@@ -106,12 +68,12 @@ function writeRecord(record: MockDnsRecord): number[] {
   const data = writeRecordData(record);
 
   return [
-    ...writeName(record.name),
-    ...writeUint16(TYPE_CODES[record.type]),
-    ...writeUint16(CLASS_IN),
-    ...writeUint16(Math.floor(record.ttl / 0x1_00_00)),
-    ...writeUint16(record.ttl % 0x1_00_00),
-    ...writeUint16(data.length),
+    ...writeDnsName(record.name),
+    ...writeDnsUint16(DNS_TYPE_CODES[record.type]),
+    ...writeDnsUint16(DNS_CLASS_IN),
+    ...writeDnsUint16(Math.floor(record.ttl / 0x1_00_00)),
+    ...writeDnsUint16(record.ttl % 0x1_00_00),
+    ...writeDnsUint16(data.length),
     ...data,
   ];
 }
@@ -125,7 +87,7 @@ function writeRecordData(record: MockDnsRecord): number[] {
     return writeIpv6(record.data);
   }
 
-  return writeName(record.data);
+  return writeDnsName(record.data);
 }
 
 function writeIpv6(address: string): number[] {
@@ -135,22 +97,5 @@ function writeIpv6(address: string): number[] {
   const fill = Array.from({ length: 8 - headGroups.length - tailGroups.length }, () => '0');
   const groups = address.includes('::') ? [...headGroups, ...fill, ...tailGroups] : headGroups;
 
-  return groups.flatMap((group) => writeUint16(Number.parseInt(group, 16)));
-}
-
-function writeName(name: string): number[] {
-  const labels = name.split('.').filter((label) => label !== '');
-  const bytes: number[] = [];
-
-  for (const label of labels) {
-    bytes.push(label.length, ...new TextEncoder().encode(label));
-  }
-
-  bytes.push(0);
-
-  return bytes;
-}
-
-function writeUint16(value: number): number[] {
-  return [(value >> 8) & 0xff, value & 0xff];
+  return groups.flatMap((group) => writeDnsUint16(Number.parseInt(group, 16)));
 }

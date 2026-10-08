@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import * as dnsPacket from 'dns-packet';
-import { buildMockDnsQuery } from '../test-utils/build-mock-dns-message';
+import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubDnsUpstream } from '../test-utils/start-stub-dns-upstream';
 import { createDnsForward } from './dns-upstream';
@@ -31,8 +31,12 @@ test('it asks each upstream under a fresh random id, not the guest one', async (
     await forward(buildMockDnsQuery({ name: 'example.com', type: 'A', id: 4242 }));
   }
 
-  // eight draws of a 16-bit id are all one value with odds of 2^-112
-  expect(new Set(upstream.queries.map((query) => query.id)).size).toBeGreaterThan(1);
+  const ids = upstream.queries.map((query) => query.id);
+
+  // A random id may be 4242 by chance, so no one id is checked. Eight draws
+  // are all 4242 with odds of 2^-128, and all one value with odds of 2^-112.
+  expect(ids).not.toSatisfyAll((id: number) => id === 4242);
+  expect(new Set(ids).size).toBeGreaterThan(1);
 });
 
 test('it asks again over TCP when the UDP reply is truncated', async () => {
@@ -105,6 +109,25 @@ test('it rejects with every upstream failure when none answers', async () => {
       'no upstream resolver answered (127.0.0.2: ECONNREFUSED: connection refused, recv; 127.0.0.1: timed out)',
     ),
   );
+});
+
+test('it gives an upstream 2 s to answer by default', async () => {
+  const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'drop' });
+
+  const forward = createDnsForward(['127.0.0.1'], upstream.port);
+  const started = performance.now();
+
+  const failure = await forward(buildMockDnsQuery({ name: 'example.com', type: 'A' })).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  const elapsedMs = performance.now() - started;
+
+  expect(failure).toStrictEqual(new Error('no upstream resolver answered (127.0.0.1: timed out)'));
+
+  // a timer never fires early; the upper bound is left to the test timeout
+  expect(elapsedMs).toBeGreaterThanOrEqual(1990);
 });
 
 test('it ignores a UDP reply for another id, and times out', async () => {

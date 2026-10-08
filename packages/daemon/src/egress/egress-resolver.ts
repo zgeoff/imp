@@ -223,7 +223,7 @@ function toCappedTtl(record: Answer, maxTtlS: number): Answer {
 
 // a TCP client's idle time before the resolver closes it, and the
 // connections one slot may hold open, as the broker caps them
-const DEFAULT_TCP_LIMITS: ResolverServerLimits = { idleS: 10, maxPerSlot: 16 };
+export const DEFAULT_TCP_LIMITS: ResolverServerLimits = { idleS: 10, maxPerSlot: 16 };
 
 // smaller limits for tests
 interface ResolverServerLimits {

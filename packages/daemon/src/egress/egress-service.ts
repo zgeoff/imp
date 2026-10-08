@@ -20,6 +20,7 @@ import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createRangeChecker } from '../net/range-checker';
 import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6, RESERVED_RANGES6 } from '../net/ranges6';
 import { readErrorMessage } from '../read-error-message';
+import { startInterval } from '../start-interval';
 import { createDnsForward } from './dns-upstream';
 import type { DnsForward } from './dns-upstream';
 import { runConntrackFlush, runForwardRulesList, runPairFlush } from './egress-commands';
@@ -763,14 +764,6 @@ function isPeerAccept(rule: string): boolean {
     rule.includes('--mark 0x1000000/0x1000000') &&
     rule.endsWith('-j ACCEPT')
   );
-}
-
-function startInterval(run: () => void, ms: number): () => void {
-  const timer = setInterval(run, ms);
-
-  return () => {
-    clearInterval(timer);
-  };
 }
 
 // A records, and with IPv6 AAAA too; a name with no AAAA still resolves

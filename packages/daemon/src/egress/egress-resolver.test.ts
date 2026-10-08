@@ -3,13 +3,15 @@ import { connect } from 'node:net';
 import { waitFor } from '@imp/test-utils/wait-for';
 import * as dnsPacket from 'dns-packet';
 import { parseSubnet } from '../net/addressing';
-import { buildMockDnsQuery, buildMockDnsReply } from '../test-utils/build-mock-dns-message';
+import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';
+import { buildMockDnsReply } from '../test-utils/build-mock-dns-reply';
 import { buildMockNetworkMember } from '../test-utils/build-mock-network-member';
 import { buildStubEgressService } from '../test-utils/build-stub-egress-service';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubDnsUpstream } from '../test-utils/start-stub-dns-upstream';
 import { createDnsForward } from './dns-upstream';
 import {
+  DEFAULT_TCP_LIMITS,
   createQueryHandler,
   createSocketErrorReport,
   startResolverServer,
@@ -693,6 +695,67 @@ test("#startResolverServer closes at once a TCP client past its slot's cap, and 
 
   expect(outcomes.slice(0, 3).toSorted()).toStrictEqual(['answered', 'answered', 'closed']);
   expect(outcomes[3]).toBe('answered');
+});
+
+test('#startResolverServer gives TCP clients 10 s idle and 16 to a slot by default', () => {
+  expect(DEFAULT_TCP_LIMITS).toStrictEqual({ idleS: 10, maxPerSlot: 16 });
+});
+
+test('#startResolverServer closes at once the 17th TCP client of a slot without limits given', async () => {
+  const egress = buildStubEgressService({
+    subnet: '127.0.0.0/16',
+    verdicts: { 0: { 'github.com': 'answer' } },
+  });
+
+  const server = await startResolverServer(
+    findFreePorts(1).take(),
+    parseSubnet('127.0.0.0/16'),
+    createQueryHandler(egress.deps),
+    { log: () => {} },
+  );
+
+  onTestFinished(() => {
+    server.stop();
+  });
+
+  const query = buildMockDnsQuery({ name: 'github.com', type: 'A', id: 7 });
+  const framed = Buffer.alloc(2 + query.byteLength);
+
+  framed.writeUInt16BE(query.byteLength, 0);
+  framed.set(query, 2);
+
+  // slot 0's guest is 127.0.0.2: each client asks once, and settles on its
+  // reply or on its close, whichever comes first
+  const outcomes = await Promise.all(
+    Array.from({ length: 17 }, () => {
+      const outcome = Promise.withResolvers<'answered' | 'closed'>();
+
+      const socket = connect(
+        { host: '127.0.0.1', port: server.port, localAddress: '127.0.0.2' },
+        () => {
+          socket.write(framed);
+        },
+      );
+
+      onTestFinished(() => {
+        socket.destroy();
+      });
+
+      socket.on('error', () => {});
+
+      socket.once('data', () => {
+        outcome.resolve('answered');
+      });
+
+      socket.once('close', () => {
+        outcome.resolve('closed');
+      });
+
+      return outcome.promise;
+    }),
+  );
+
+  expect(outcomes.filter((outcome) => outcome === 'closed')).toHaveLength(1);
 });
 
 // Bun checks socket deadlines on a sweep of about four seconds, so a 1 s

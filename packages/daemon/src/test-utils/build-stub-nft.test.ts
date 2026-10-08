@@ -41,6 +41,19 @@ test('it refuses as runNft reports nft exiting 1, and takes nothing of the scrip
   expect(nft.scripts).toStrictEqual([]);
 });
 
+test('it records every script it is given, in order, and whether it took it', async () => {
+  const nft = buildStubNft();
+
+  nft.refuse({ reason: 'syntax error', match: (script) => script.includes('bad') });
+
+  await Promise.allSettled([nft.runNft('good\n'), nft.runNft('bad\n')]);
+
+  expect(nft.runs).toStrictEqual([
+    { script: 'good\n', accepted: true },
+    { script: 'bad\n', accepted: false },
+  ]);
+});
+
 test('it refuses only the scripts the match picks', async () => {
   const nft = buildStubNft();
 

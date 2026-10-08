@@ -238,6 +238,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | nft binary          | `test-utils/create-stub-nft-bin.ts` (`createStubNftBin`)                            | The `nft` that `createNftRunner` spawns                     |
 | Upstream DNS        | `test-utils/start-stub-dns-upstream.ts`                                             | An IMP_DNS server over UDP and TCP, with chosen faults      |
 | Egress for resolver | `test-utils/build-stub-egress-service.ts`                                           | The egress service as `createQueryHandler`'s deps           |
+| Host routes         | `test-utils/build-stub-host-routes.ts` (`buildStubHostRoutes`)                      | The container's links and default routes egress reads       |
 | Tunnel far end      | `test-utils/start-stub-echo-server.ts` (`startStubEchoServer`)                      | A host a broker tunnel dials: it echoes and holds open      |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                                          | `ip` and `sysctl -n`, as `createTapDevices`'s `run`         |
 | mount               | A `run` with a mount table in `vmm/jail.test.ts`                                    | `mount` and `umount` for the jailer                         |
@@ -305,8 +306,8 @@ wires them without the start steps into a caller's stack; `setupImpTest` wraps i
 stack, and the client smoke's `run-stub-impd.ts` runs it outside a test.
 `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
 `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
-`test-utils/find-free-ports.ts`. Egress's `repeat` dep runs its sweep (`setInterval` by default), so
-a test fires a sweep by calling the function it was handed.
+`test-utils/find-free-ports.ts`. Egress's `repeat` dep runs its sweep (`startInterval` by default),
+so a test fires a sweep by calling the function it was handed.
 
 ## Connectors
 

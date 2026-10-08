@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { buildMockDnsQuery, buildMockDnsReply } from './build-mock-dns-message';
+import { buildMockDnsQuery } from './build-mock-dns-query';
+import { buildMockDnsReply } from './build-mock-dns-reply';
 import { buildMockNetworkMember } from './build-mock-network-member';
 import { buildStubEgressService } from './build-stub-egress-service';
 

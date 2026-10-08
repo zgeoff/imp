@@ -1,6 +1,6 @@
 import { onTestFinished } from 'bun:test';
-import { buildMockDnsReply } from './build-mock-dns-message';
-import type { MockDnsRecord } from './build-mock-dns-message';
+import { buildMockDnsReply } from './build-mock-dns-reply';
+import type { MockDnsRecord } from './build-mock-dns-reply';
 
 // What the UDP side does with a query: answer it, answer with TC set and no
 // records (the client must ask again over TCP), say nothing, or answer with

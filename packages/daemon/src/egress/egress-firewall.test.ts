@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { buildStubNft } from '../test-utils/build-stub-nft';
 import { createStubNftBin } from '../test-utils/create-stub-nft-bin';
 import { createNftRunner, createNftWriter, formatNftError } from './egress-firewall';
@@ -50,7 +51,12 @@ test('#createNftWriter runs a refused batch again one script at a time, so only 
     { status: 'rejected', reason: new Error('nft exited 1: syntax error') },
   ]);
 
-  expect(nft.scripts).toStrictEqual(['a\n', 'b\n']);
+  expect(nft.runs).toStrictEqual([
+    { script: 'a\n', accepted: true },
+    { script: 'b\nbad\n', accepted: false },
+    { script: 'b\n', accepted: true },
+    { script: 'bad\n', accepted: false },
+  ]);
 });
 
 test('#createNftRunner runs nft with -f -', async () => {
@@ -69,6 +75,19 @@ test('#createNftRunner hands nft the script on its stdin', async () => {
   const nft = await createStubNftBin(ctx.dir);
 
   await createNftRunner(nft.path)('table inet imp_egress {}\n');
+
+  const stdin = await nft.readStdin();
+
+  expect(stdin).toBe('table inet imp_egress {}\n');
+});
+
+test('#createNftRunner runs the nft it finds on PATH by default', async () => {
+  const ctx = await setupTest();
+  const nft = await createStubNftBin(ctx.dir);
+
+  updateEnv('PATH', `${ctx.dir}:${process.env['PATH'] ?? ''}`);
+
+  await createNftRunner()('table inet imp_egress {}\n');
 
   const stdin = await nft.readStdin();
 
