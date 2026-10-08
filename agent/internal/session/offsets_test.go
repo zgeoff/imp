@@ -88,16 +88,21 @@ func TestFreshAttachSendsTheReplayAndPlacesIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "output")
 	assert.NilError(t, os.WriteFile(path, fixture, 0o600))
 	first := startQuiet(t, m, "main", "cat "+path, uint64(len(fixture)))
+	m.mu.Lock()
+	s := m.sessions["main"]
+	m.mu.Unlock()
+	s.mu.Lock()
+	// Screen.Replay is a separate unit that TestHistoryReplayMatchesTheGolden
+	// pins, so here it is a tested collaborator, not the unit under test.
+	want := replay(s.screen)
+	s.mu.Unlock()
 
 	h := attach(t, m, "main")
 
 	_, out := h.output(t)
 	f := h.next(t)
 	assert.Assert(t, cmp.Equal(f.Type, proto.TypeStdout))
-	// The prelude's bytes depend on how the pty split the output into
-	// reads, so no fixed value pins them here; the placement is checked
-	// against the output itself, and TestHistoryReplayMatchesTheGolden pins
-	// the history's replay.
+	assert.Assert(t, bytes.Equal(f.Payload, want), "replay frame of %d bytes, want the history's %d", len(f.Payload), len(want))
 	assert.Assert(t, out.Prelude <= len(f.Payload), "a prelude of %d in a frame of %d", out.Prelude, len(f.Payload))
 	kept := uint64(len(f.Payload) - out.Prelude)
 	assert.Check(t, cmp.Nil(out.Resume))
