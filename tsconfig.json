@@ -10,6 +10,7 @@
     "scripts/**/*.ts",
     "deploy/**/*.ts",
     "images/**/*.ts",
+    "host/**/*.ts",
     "*.test.ts"
   ],
   // a browser app with its own tsconfig (DOM, JSX)

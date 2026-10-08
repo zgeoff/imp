@@ -15,17 +15,17 @@ the rules for writing tests live in the testing skill.
 
 ## Runs
 
-| Run                     | Command                                                             | Needs                                              |
-| ----------------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
-| Unit and package tests  | `bun test` at the root                                              | Bun, bash, git, jq; the gated files below skip     |
-| Dashboard components    | `bun run test:dashboard`                                            | Nothing beyond Bun                                 |
-| End to end              | `scripts/test-e2e.sh`                                               | KVM, Docker; some suites need more (below)         |
-| Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun test test/host/` | Root or unprivileged namespaces, `nft`, `iptables` |
-| ZFS on a real pool      | `sudo env "PATH=$PATH" scripts/test-zfs.sh`                         | Root, the zfs module, `zpool`                      |
-| ZFS on a host, with VMs | `scripts/zfs-host-test.sh`                                          | sudo, Docker, KVM, the zfs module                  |
-| Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`     | A small filesystem mounted at `<dir>`              |
-| ACME issuer             | `bun run test:pebble`                                               | Docker                                             |
-| Docker idle             | `bun run test:slow`                                                 | Nothing beyond Bun; about 6.5 minutes              |
+| Run                     | Command                                                           | Needs                                                                                   |
+| ----------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Unit and package tests  | `bun test` at the root                                            | Bun, bash, git, jq; the gated files below skip                                          |
+| Dashboard components    | `bun run test:dashboard`                                          | Nothing beyond Bun                                                                      |
+| End to end              | `scripts/test-e2e.sh`                                             | KVM, Docker; some suites need more (below)                                              |
+| Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host` | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
+| ZFS on a real pool      | `sudo env "PATH=$PATH" scripts/test-zfs.sh`                       | Root, the zfs module, `zpool`                                                           |
+| ZFS on a host, with VMs | `scripts/zfs-host-test.sh`                                        | sudo, Docker, KVM, the zfs module                                                       |
+| Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`   | A small filesystem mounted at `<dir>`                                                   |
+| ACME issuer             | `bun run test:pebble`                                             | Docker                                                                                  |
+| Docker idle             | `bun run test:slow`                                               | Nothing beyond Bun; about 6.5 minutes                                                   |
 
 Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
 tests need `jq`, and `release-please-config.test.ts` and `scripts/check-doc-refs.ts` run `git`.
@@ -58,8 +58,8 @@ with no MSW server. `updateEnv`, `invariant` and `waitFor` live in `packages/tes
 
 Plain `bun test` does not match `*.e2e.ts`, `*.pebble.ts`, or `*.slow.ts`; each of those runs only
 when its `./` path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain
-`bun test` and skip unless their variables are set. `test/host/` loads too, and skips where its
-namespace probe fails.
+`bun test` and skip unless their variables are set. The `*.host.test.ts` files load too, and each
+test skips where its namespace probe fails; `bun run test:host` runs exactly those files.
 
 ## End-to-end harness
 
@@ -167,41 +167,49 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
 
 ## Stand-ins by boundary
 
-Paths are under `packages/daemon/src/` unless they start with `test/` or `scripts/`.
+Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/` or `packages/`.
 
-| Boundary            | Stand-in                                                     | What it replaces                                          |
-| ------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
-| VMM                 | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)              | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step |
-| impd                | `create-impd.ts` (`createImpd`) with stubs as its deps       | The host: see Booting impd below                          |
-| Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `buildTestApp`)         | A shim over createImpd's parts, without its start steps   |
-| Firecracker API     | `Bun.serve({ unix })` (1); a Bun script (2)                  | Firecracker's HTTP API on its socket                      |
-| Firecracker process | `bash` run under the name `firecracker` (3)                  | A process whose cmdline matches Firecracker's             |
-| Guest agent         | `test-utils/start-stub-agent.ts` (`startStubAgent`)          | The agent on the vsock socket: CONNECT and frames         |
-| Builder guest       | `test-utils/build-stub-guest.ts` (`buildStubGuest`)          | A builder's agent: output and exit per exec               |
-| zfs                 | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)              | `zfs`, send and receive, and the mount table              |
-| Docker engine       | A unix-socket server (4)                                     | The engine API                                            |
-| Docker CLI          | A `docker` script on `PATH` in the images tests              | The `docker` binary                                       |
-| CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                  | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`   |
-| Docker for upgrade  | `scripts/test-utils/build-stub-host-docker.ts`               | The docker that `deploy/upgrade.sh` drives on a host      |
-| nft                 | `setupImpTest`'s default `runNft`, which records scripts     | `nft` from the egress service                             |
-| ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                   | `ip` and `sysctl -n`, as `createTapDevices`'s `run`       |
-| mount               | A `run` with a mount table in `vmm/jail.test.ts`             | `mount` and `umount` for the jailer                       |
-| cgroups and `/proc` | Temp dirs as `root` and `procRoot` (5)                       | The cgroup tree and `/proc`                               |
-| cgroups for impd    | `test-utils/build-stub-cpu-cgroups.ts`                       | `CpuCgroups`: an in-memory tree that records each change  |
-| Imp guest agent     | `test-utils/build-stub-exec-guest.ts`                        | An imp's agent for the MCP tools: files and shell verbs   |
-| tailscale whois     | A `whois` function passed to `createTailnetIdentities`       | `tailscale whois --json` (`runWhois`)                     |
-| Connector upstreams | `Bun.serve` TLS servers (6); `test/e2e/lib/fake-upstream.ts` | github.com, api.github.com, an OAuth token endpoint       |
+| Boundary            | Stand-in                                                                            | What it replaces                                            |
+| ------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| VMM                 | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)                                     | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step   |
+| impd                | `create-impd.ts` (`createImpd`) with stubs as its deps                              | The host: see Booting impd below                            |
+| Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `buildTestApp`)                                | A shim over createImpd's parts, without its start steps     |
+| Firecracker API     | `Bun.serve({ unix })` (1); a Bun script (2)                                         | Firecracker's HTTP API on its socket                        |
+| Firecracker process | `bash` run under the name `firecracker` (3)                                         | A process whose cmdline matches Firecracker's               |
+| Guest agent         | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                 | The agent on the vsock socket: CONNECT and frames           |
+| Builder guest       | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                 | A builder's agent: output and exit per exec                 |
+| zfs                 | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                     | `zfs`, send and receive, and the mount table                |
+| Docker engine       | A unix-socket server (4)                                                            | The engine API                                              |
+| Docker CLI          | A `docker` script on `PATH` in the images tests                                     | The `docker` binary                                         |
+| CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                                         | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`     |
+| Docker for upgrade  | `scripts/test-utils/build-stub-host-docker.ts`                                      | The docker that `deploy/upgrade.sh` drives on a host        |
+| nft                 | `setupImpTest`'s default `runNft`, which records scripts                            | `nft` from the egress service                               |
+| ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                                          | `ip` and `sysctl -n`, as `createTapDevices`'s `run`         |
+| mount               | A `run` with a mount table in `vmm/jail.test.ts`                                    | `mount` and `umount` for the jailer                         |
+| cgroups and `/proc` | Temp dirs as `root` and `procRoot` (5)                                              | The cgroup tree and `/proc`                                 |
+| cgroups for impd    | `test-utils/build-stub-cpu-cgroups.ts`                                              | `CpuCgroups`: an in-memory tree that records each change    |
+| Imp guest agent     | `test-utils/build-stub-exec-guest.ts`                                               | An imp's agent for the MCP tools: files and shell verbs     |
+| tailscale whois     | A `whois` function passed to `createTailnetIdentities`                              | `tailscale whois --json` (`runWhois`)                       |
+| Connector upstreams | `Bun.serve` TLS servers (6); `test/e2e/lib/fake-upstream.ts`                        | github.com, api.github.com, an OAuth token endpoint         |
+| Cloudflare API      | A `server.use` MSW handler in `https/acme/acme-issuer.pebble.ts`                    | `api.cloudflare.com/client/v4`                              |
+| Host networks       | `test-utils/build-stub-public-network.ts` (8)                                       | Guests on taps, an uplink to the internet, a tailnet peer   |
+| GitHub releases     | `packages/test-utils/src/start-stub-github-releases.ts` (9)                         | The releases pages `install.sh` fetches with curl           |
+| gh and uname        | `packages/test-utils/src/create-stub-gh-attestation.ts`, `create-stub-uname.ts` (9) | `gh auth status`, `gh attestation verify`, `uname -s -m`    |
+| shasum and PATH     | `packages/test-utils/src/create-stub-shasum.ts`, `create-command-links.ts` (9)      | macOS's `shasum -a 256`; a PATH of only the linked commands |
 
 1. `vmm/firecracker-client.test.ts`, `vmm/vm-runner.test.ts`.
 2. `vmm/template-vm.test.ts` spawns it as the VMM process.
 3. `vmm/firecracker-process.test.ts`, `vmm/vm-runner.test.ts`.
 4. `Bun.serve({ unix })` in `docker-proxy/proxy.test.ts` and `images/docker-build.test.ts`; a
-   `node:net` server in `test/integration/docker-idle.slow.ts`.
+   `node:net` server, `test-utils/start-stub-silent-build-engine.ts`, in
+   `images/docker-build.slow.ts`.
 5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`.
 6. `broker/broker.test.ts`, `broker/broker-oauth.test.ts`.
 7. The shell tests in `scripts/` and `deploy/`: a stub on a temp `PATH` logs each call to one file
    and answers from a bash script the test gives it. `run-sourced-function.ts` beside it calls a
    function of a sourced script with only `PATH` and the variables a test passes.
+8. Bash that `egress/egress-ruleset.host.test.ts` runs in a mount and network namespace.
+9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
 
 The mcp package's tests reach impd through the real `@zgeoff/imp-client` and
 `packages/mcp/src/test-utils/build-stub-impd.ts` (`buildStubImpd`): an MSW handler that answers the
@@ -210,9 +218,15 @@ progress and keepalive timers of `createMcpServer` and `createHttpTransport` tak
 the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks
 only when the test says so.
 
-Host networking runs the real tools: `test/host/setup-net.test.ts` runs `host/scripts/setup-net.sh`
-with `iptables`, and `test/host/egress-ruleset.test.ts` applies impd's ruleset with `nft`, each in a
-fresh network namespace.
+Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
+`host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
+ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.
+
+The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
+each test through `test/e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
+`imp-acme-it-<pid>-<random>`, with a cert store in a temp dir. `bun run test:pebble` first pulls the
+pinned images (`PEBBLE_IMAGES` in that helper) with `scripts/pull-pebble-images.ts`, so no test pays
+for a pull.
 
 ### Booting impd
 
@@ -282,11 +296,11 @@ file leaves every host on its real origin.
 5. Optional: `packages/cli/src/image/pack-build-context.docker.test.ts` runs the real
    `docker buildx` and skips when it is missing.
 
-- `IMP_HOST_TESTS=required` makes the `canUnshare` probe in each `test/host/` file true, so a
-  missing tool or namespace fails the tests instead of skipping them. `deploy/bootstrap.test.ts`'s
-  `nft -c` check of the rendered firewall reads it too; plain `bun test` skips that check where
-  `unshare -rn nft` fails. `test/host/unshare.ts` adds a user namespace (`-r`) only when the uid is
-  not 0.
+- `IMP_HOST_TESTS=required` makes the `canUnshare` probe (`packages/daemon/src/test-utils/`) of each
+  `*.host.test.ts` test true, so a missing tool or namespace fails the test instead of skipping it.
+  `build-unshare.ts` there adds a user namespace (`-r`) only when the uid is not 0.
+  `deploy/bootstrap.test.ts`'s `nft -c` check of the rendered firewall reads it too; plain
+  `bun test` skips that check where `unshare -rn nft` fails.
 - `scripts/check-kvm.sh` checks for `vmx` or `svm` and that `/dev/kvm` opens for read and write. The
   dev container gets `/dev/kvm` and `/dev/net/tun` from `deploy/imp-host.args.json`, plus
   `/dev/loop-control` and loop devices for its XFS file.

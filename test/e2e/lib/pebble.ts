@@ -10,6 +10,9 @@ const PEBBLE_IMAGE =
 const CHALLTESTSRV_IMAGE =
   'ghcr.io/letsencrypt/pebble-challtestsrv:2.10.1@sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b';
 
+// what scripts/pull-pebble-images.ts pulls before `bun run test:pebble`
+export const PEBBLE_IMAGES = [PEBBLE_IMAGE, CHALLTESTSRV_IMAGE] as const;
+
 // the domain impd gets in the https suite; challtestsrv answers for it
 export const PEBBLE_DOMAIN = 'imp.test';
 

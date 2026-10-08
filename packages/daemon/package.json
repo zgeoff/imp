@@ -35,6 +35,7 @@
     "@orpc/contract": "catalog:",
     "@types/dns-packet": "catalog:",
     "@types/ssh2": "catalog:",
-    "fast-check": "catalog:"
+    "fast-check": "catalog:",
+    "msw": "catalog:"
   }
 }

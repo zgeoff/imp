@@ -109,6 +109,7 @@
         "@types/dns-packet": "catalog:",
         "@types/ssh2": "catalog:",
         "fast-check": "catalog:",
+        "msw": "catalog:",
       },
     },
     "packages/dashboard": {

@@ -16,6 +16,16 @@ export interface AcmeIssuerOptions {
   readonly store: CertStore;
   readonly dns: DnsProvider;
   readonly log: (message: string) => void;
+
+  // how acme-client polls a challenge or an order that is still pending;
+  // left out, its own defaults apply (5 s at first, up to 30 s, 10 tries)
+  readonly poll?: AcmePollOptions;
+}
+
+interface AcmePollOptions {
+  readonly backoffAttempts: number;
+  readonly backoffMin: number;
+  readonly backoffMax: number;
 }
 
 // a pending DNS-01 challenge: one per certificate name
@@ -47,6 +57,7 @@ export function createAcmeIssuer(options: AcmeIssuerOptions): IssueCertificate {
         directoryUrl: options.directoryUrl,
         accountKey: stored.keyPem,
         accountUrl: stored.url,
+        ...options.poll,
       });
     }
 
@@ -54,7 +65,11 @@ export function createAcmeIssuer(options: AcmeIssuerOptions): IssueCertificate {
 
     const keyPem = key.toString();
 
-    const client = new acme.Client({ directoryUrl: options.directoryUrl, accountKey: keyPem });
+    const client = new acme.Client({
+      directoryUrl: options.directoryUrl,
+      accountKey: keyPem,
+      ...options.poll,
+    });
 
     await client.createAccount({
       termsOfServiceAgreed: true,
