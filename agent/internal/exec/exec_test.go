@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -23,7 +24,22 @@ import (
 // The reaper runs a process-wide wait4 loop, so the package shares one.
 var testReaper *reaper.Reaper
 
+// zombieParentEnv makes the test binary a parent that forks /bin/true,
+// writes its pid to the named file and never waits for it, so the child
+// stays a zombie until this parent dies.
+const zombieParentEnv = "EXEC_TEST_ZOMBIE_PARENT"
+
 func TestMain(m *testing.M) {
+	if pidFile := os.Getenv(zombieParentEnv); pidFile != "" {
+		pid, err := syscall.ForkExec("/bin/true", []string{"true"}, &syscall.ProcAttr{})
+		if err != nil {
+			os.Exit(1)
+		}
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+			os.Exit(1)
+		}
+		select {}
+	}
 	testReaper = reaper.New()
 	os.Exit(m.Run())
 }
@@ -43,13 +59,29 @@ type host struct {
 func startExec(t *testing.T, m *Manager, req proto.Request) *host {
 	t.Helper()
 	guest, conn := net.Pipe()
-	t.Cleanup(func() { conn.Close() })
 	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 64), served: make(chan error, 1)}
+	stop, serveDone, readDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// The hangup ends Serve: within hangupGrace for a process that ignores
+	// it, and at once otherwise. Cleanups registered later, such as a kill
+	// of the process, run first.
+	t.Cleanup(func() {
+		close(stop)
+		conn.Close()
+		for _, done := range []chan struct{}{serveDone, readDone} {
+			select {
+			case <-done:
+			case <-time.After(hangupGrace + 5*time.Second):
+				t.Error("a goroutine of the exec connection did not end")
+			}
+		}
+	})
 	go func() {
+		defer close(serveDone)
 		h.served <- m.Serve(req, proto.NewReader(guest), proto.NewWriter(guest))
 		guest.Close()
 	}()
 	go func() {
+		defer close(readDone)
 		defer close(h.frames)
 		r := proto.NewReader(conn)
 		for {
@@ -57,7 +89,11 @@ func startExec(t *testing.T, m *Manager, req proto.Request) *host {
 			if err != nil {
 				return
 			}
-			h.frames <- f
+			select {
+			case h.frames <- f:
+			case <-stop:
+				return
+			}
 		}
 	}()
 	return h

@@ -7,8 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -53,6 +51,8 @@ func TestServeHangsUpTheProcessWhenItsOwnBodyPanics(t *testing.T) {
 		newManager().Serve(proto.Request{Op: proto.OpExec, Argv: []string{"sh", "-c", "echo $$ > " + pidFile + "; exec sleep 30"}},
 			proto.NewReader(guest), proto.NewWriter(startedPanics{guest, pidFile}))
 	}()
+	pid := readPid(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
 
 	var v any
 	select {
@@ -62,11 +62,6 @@ func TestServeHangsUpTheProcessWhenItsOwnBodyPanics(t *testing.T) {
 	}
 
 	assert.Check(t, v != nil, "Serve did not re-panic")
-	b, err := os.ReadFile(pidFile)
-	assert.NilError(t, err)
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	assert.NilError(t, err)
-	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
 	// The reaper reaps it, so a dead child stops existing.
 	poll.WaitOn(t, func(poll.LogT) poll.Result {
 		if syscall.Kill(pid, 0) == nil {

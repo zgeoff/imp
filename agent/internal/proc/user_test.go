@@ -81,24 +81,34 @@ func TestLookupUserLeavesRootToInheritTheAgentsCredentials(t *testing.T) {
 	}
 }
 
+// The error text is the EXEC_FAILED message the host shows. A failed lookup
+// gives no credential and no home, so it never falls back to root.
 func TestLookupUserFailsForASpecItCannotResolve(t *testing.T) {
 	for _, tc := range []struct {
 		name, passwd, group, spec string
+		// want is the error text, given the paths the test installed
+		want func(passwd, group string) string
 	}{
-		{name: "unknown user", passwd: testPasswd, group: testGroup, spec: "nobody"},
-		{name: "unknown group", passwd: testPasswd, group: testGroup, spec: "imp:nogroup"},
+		{name: "unknown user", passwd: testPasswd, group: testGroup, spec: "nobody",
+			want: func(string, string) string { return `unknown user "nobody"` }},
+		{name: "unknown group", passwd: testPasswd, group: testGroup, spec: "imp:nogroup",
+			want: func(string, string) string { return `unknown group "nogroup"` }},
 		// A malformed id must fail, never fall back to 0 (root).
-		{name: "bad uid", passwd: "bad:x:abc:1000::/:/bin/sh\n", group: testGroup, spec: "bad"},
-		{name: "bad gid", passwd: "bad:x:1000:-1::/:/bin/sh\n", group: testGroup, spec: "bad"},
-		{name: "bad group id", passwd: testPasswd, group: "odd:x:zz:\n", spec: "imp:odd"},
+		{name: "bad uid", passwd: "bad:x:abc:1000::/:/bin/sh\n", group: testGroup, spec: "bad",
+			want: func(passwd, _ string) string { return passwd + `: bad: bad id "abc"` }},
+		{name: "bad gid", passwd: "bad:x:1000:-1::/:/bin/sh\n", group: testGroup, spec: "bad",
+			want: func(passwd, _ string) string { return passwd + `: bad: bad id "-1"` }},
+		{name: "bad group id", passwd: testPasswd, group: "odd:x:zz:\n", spec: "imp:odd",
+			want: func(_, group string) string { return group + `: odd: bad id "zz"` }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useAccounts(t, tc.passwd, tc.group)
 
-			cred, _, err := LookupUser(tc.spec)
+			cred, home, err := LookupUser(tc.spec)
 
-			assert.Check(t, err != nil, "LookupUser(%q) gave no error", tc.spec)
+			assert.Check(t, cmp.Error(err, tc.want(passwdPath, groupPath)))
 			assert.Check(t, cmp.Nil(cred))
+			assert.Check(t, cmp.Equal(home, ""))
 		})
 	}
 }

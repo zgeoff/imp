@@ -2,9 +2,12 @@ package exec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -114,9 +117,9 @@ func TestAliveReportsARunningProcess(t *testing.T) {
 // A zombie still holds its pid, but has finished.
 func TestAliveReportsAZombieAsFinished(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	// The shell becomes sleep, which never waits for the background child,
-	// so that child stays a zombie until the sleep ends.
-	pid, err := syscall.ForkExec("/bin/sh", []string{"sh", "-c", "true & echo $! > " + pidFile + "; exec sleep 300"}, &syscall.ProcAttr{})
+	// This test binary, as the parent, never waits for its child (see
+	// TestMain), so the child stays a zombie until the parent is killed.
+	pid, err := syscall.ForkExec(os.Args[0], []string{os.Args[0]}, &syscall.ProcAttr{Env: []string{zombieParentEnv + "=" + pidFile}})
 	assert.NilError(t, err)
 	killAfter(t, pid)
 	zombie := readPid(t, pidFile)
@@ -129,6 +132,42 @@ func TestAliveReportsAZombieAsFinished(t *testing.T) {
 	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 
 	assert.Check(t, syscall.Kill(zombie, 0), "pid %d is gone, not a zombie", zombie)
+}
+
+// removeCgroup kills whatever still runs in the cgroup dir this test made
+// and removes it with every cgroup under it, deepest first. It is safe after
+// a failure part way: what is already gone is skipped.
+func removeCgroup(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.kill"), []byte("1"), 0o600); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("cgroup.kill %s: %v", dir, err)
+	}
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		b, err := os.ReadFile(filepath.Join(dir, "cgroup.events"))
+		if errors.Is(err, fs.ErrNotExist) || err == nil && strings.Contains(string(b), "populated 0") {
+			return poll.Success()
+		}
+		return poll.Continue("%s still holds processes", dir)
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
+	var dirs []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("walk %s: %v", dir, err)
+	}
+	// a cgroup goes with rmdir, children before their parent
+	for _, d := range slices.Backward(dirs) {
+		if err := syscall.Rmdir(d); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("remove cgroup %s: %v", d, err)
+		}
+	}
 }
 
 func killAfter(t *testing.T, pid int) {
@@ -353,7 +392,7 @@ func TestKillGraceReachesAChildThatLeftTheProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Skipf("needs a writable cgroup2: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(parent) })
+	t.Cleanup(func() { removeCgroup(t, parent) })
 	tree, err := cgroup.NewTree(parent)
 	assert.NilError(t, err)
 	pidFile := filepath.Join(t.TempDir(), "pid")

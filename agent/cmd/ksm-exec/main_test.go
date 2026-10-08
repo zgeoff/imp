@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -32,16 +33,21 @@ func TestMain(m *testing.M) {
 // kernelAtLeast reports whether the running kernel is major.minor or later.
 func kernelAtLeast(t *testing.T, major, minor int) bool {
 	t.Helper()
-
 	var uts unix.Utsname
 	assert.NilError(t, unix.Uname(&uts))
+	return releaseAtLeast(unix.ByteSliceToString(uts.Release[:]), major, minor)
+}
 
-	release := unix.ByteSliceToString(uts.Release[:])
+// releaseAtLeast reports whether a kernel release string such as
+// "6.6.87.2-microsoft-standard-WSL2" is major.minor or later.
+func releaseAtLeast(release string, major, minor int) bool {
 	parts := strings.SplitN(release, ".", 3)
 	gotMajor, _ := strconv.Atoi(parts[0])
 	gotMinor := 0
 	if len(parts) > 1 {
-		gotMinor, _ = strconv.Atoi(strings.TrimFunc(parts[1], func(r rune) bool { return r < '0' || r > '9' }))
+		// the leading digits: "7-rc1" is 7
+		rest := strings.TrimLeft(parts[1], "0123456789")
+		gotMinor, _ = strconv.Atoi(parts[1][:len(parts[1])-len(rest)])
 	}
 
 	return gotMajor > major || (gotMajor == major && gotMinor >= minor)
@@ -93,12 +99,52 @@ func TestKsmExecKeepsTheMergeFlagAcrossASecondExecAsTheJailers(t *testing.T) {
 	assert.Equal(t, string(out), "1", "the child's PR_GET_MEMORY_MERGE after two execs")
 }
 
-func TestRunMergedFailsForAMissingProgram(t *testing.T) {
-	if _, err := os.Stat("/sys/kernel/mm/ksm"); err != nil {
-		t.Skip("this kernel has no KSM")
+func TestReleaseAtLeastComparesMajorThenMinor(t *testing.T) {
+	for _, tc := range []struct {
+		release string
+		want    bool
+	}{
+		{release: "6.7.0", want: true},
+		{release: "6.10.2-arch1-1", want: true},
+		{release: "7.0", want: true},
+		{release: "6.6.87.2-microsoft-standard-WSL2", want: false},
+		{release: "5.15.0-91-generic", want: false},
+		{release: "6.7-rc1", want: true},
+		{release: "6", want: false},
+	} {
+		t.Run(tc.release, func(t *testing.T) {
+			assert.Equal(t, releaseAtLeast(tc.release, 6, 7), tc.want)
+		})
 	}
+}
 
-	err := runMerged([]string{"/nonexistent/program"})
+// runMerged sets the merge flag on this test process before its exec fails,
+// so the test puts the flag back as it found it.
+func TestRunMergedFailsForAMissingProgram(t *testing.T) {
+	// PR_GET_MEMORY_MERGE is EINVAL on a kernel without the prctl (before
+	// Linux 6.4, or without CONFIG_KSM), where runMerged fails before it
+	// looks at the program.
+	prev, err := unix.PrctlRetInt(unix.PR_GET_MEMORY_MERGE, 0, 0, 0, 0)
+	if errors.Is(err, unix.EINVAL) {
+		t.Skip("this kernel has no PR_SET_MEMORY_MERGE")
+	}
+	assert.NilError(t, err)
+	t.Cleanup(func() { unix.Prctl(unix.PR_SET_MEMORY_MERGE, uintptr(prev), 0, 0, 0) })
+
+	err = runMerged([]string{"/nonexistent/program"})
 
 	assert.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+// Without the prctl, runMerged names what the kernel lacks.
+func TestRunMergedNamesTheMissingKernelFeature(t *testing.T) {
+	_, err := unix.PrctlRetInt(unix.PR_GET_MEMORY_MERGE, 0, 0, 0, 0)
+	if !errors.Is(err, unix.EINVAL) {
+		t.Skip("this kernel has PR_SET_MEMORY_MERGE")
+	}
+
+	err = runMerged([]string{"/nonexistent/program"})
+
+	assert.ErrorIs(t, err, unix.EINVAL)
+	assert.ErrorContains(t, err, "needs CONFIG_KSM")
 }

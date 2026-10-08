@@ -2,7 +2,9 @@ package proc
 
 import (
 	"bufio"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,10 +74,12 @@ func startGroup(t *testing.T, d *Direct) *Process {
 // removes its path, as an agent whose system drive went away.
 func agentCopy(t *testing.T) (path string, f *os.File) {
 	t.Helper()
+	// /bin/echo is a small binary that needs nothing at a fixed path
 	b, err := os.ReadFile("/bin/echo")
-	if err != nil {
-		t.Skip("no /bin/echo")
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skip("needs /bin/echo to stand in for the agent binary")
 	}
+	assert.NilError(t, err)
 	path = filepath.Join(t.TempDir(), "agent")
 	assert.NilError(t, os.WriteFile(path, b, 0o755))
 	f, err = os.Open(path)
@@ -192,6 +196,9 @@ func TestStartRefusesARequiredCgroupThatIsNotOne(t *testing.T) {
 
 	p, err := d.Start(Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, Cgroup: openPlainDir(t), RequireCgroup: true})
 
-	assert.Check(t, err != nil, "a required cgroup that is not one did not fail the spawn")
+	// clone3 refuses a cgroup fd that is no cgroup with EBADF, and a required
+	// cgroup gets no retry without one
+	assert.Check(t, cmp.ErrorIs(err, syscall.EBADF))
+	assert.Check(t, cmp.ErrorContains(err, "start true: "))
 	assert.Check(t, cmp.Nil(p))
 }

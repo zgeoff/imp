@@ -149,11 +149,30 @@ func TestWaitEmptyReturnsOnceTheLeafEmpties(t *testing.T) {
 	g := newLeaf(t, newTree(t))
 	events := filepath.Join(g.path, "cgroup.events")
 	assert.NilError(t, os.WriteFile(events, []byte("populated 1\nfrozen 0\n"), 0o600))
+	// the first read must see the leaf populated before it empties
+	reads := make(chan bool, 1)
+	waitEmptyRead = func(populated bool, err error) {
+		if err != nil {
+			return
+		}
+		select {
+		case reads <- populated:
+		default:
+		}
+	}
+	t.Cleanup(func() { waitEmptyRead = nil })
 	emptied := make(chan bool, 1)
 	go func() { emptied <- g.WaitEmpty(time.Now().Add(5 * time.Second)) }()
+	var first bool
+	select {
+	case first = <-reads:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitEmpty never read cgroup.events")
+	}
 
 	assert.NilError(t, os.WriteFile(events, []byte("populated 0\nfrozen 0\n"), 0o600))
 
+	assert.Check(t, first, "the first read saw the leaf empty")
 	assert.Check(t, <-emptied, "the leaf never emptied")
 }
 

@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,27 +107,45 @@ func TestLookPathFindsTheFirstExecutableMatch(t *testing.T) {
 	}
 }
 
+// The error text is the EXEC_FAILED message the host shows.
 func TestLookPathFailsWithoutAnExecutableMatch(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		file func(a string) string
+		file string
 	}{
-		{name: "directory", file: func(a string) string { return "dir" }},
-		{name: "missing", file: func(a string) string { return "missing" }},
-		{name: "non-executable path with a slash", file: func(a string) string { return filepath.Join(a, "noexec") }},
+		{name: "directory", file: "dir"},
+		{name: "missing", file: "missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, b := pathDirs(t)
 
-			got, err := LookPath(tc.file(a), []string{"PATH=" + a + ":" + b})
+			got, err := LookPath(tc.file, []string{"PATH=" + a + ":" + b})
 
-			assert.Assert(t, err != nil, "LookPath = %q, want an error", got)
+			assert.Check(t, cmp.Error(err, tc.file+": executable file not found in $PATH"))
+			assert.Check(t, cmp.Equal(got, ""))
 		})
 	}
+}
+
+func TestLookPathRefusesANonExecutablePathWithASlash(t *testing.T) {
+	a, b := pathDirs(t)
+	file := filepath.Join(a, "noexec")
+
+	_, err := LookPath(file, []string{"PATH=" + a + ":" + b})
+
+	assert.Check(t, cmp.Error(err, file+": permission denied"))
+}
+
+func TestLookPathRefusesAMissingPathWithASlash(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "missing")
+
+	_, err := LookPath(file, []string{"PATH=/usr/bin:/bin"})
+
+	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist))
 }
 
 func TestLookPathSearchesOnlyThePathOfTheGivenEnv(t *testing.T) {
 	got, err := LookPath("sh", []string{"PATH=" + t.TempDir()})
 
-	assert.Assert(t, err != nil, "found sh at %q outside the given PATH", got)
+	assert.Check(t, cmp.Error(err, "sh: executable file not found in $PATH"), "found sh at %q outside the given PATH", got)
 }
