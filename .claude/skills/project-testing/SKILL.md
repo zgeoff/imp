@@ -81,8 +81,8 @@ with no MSW server. `updateEnv`, `invariant` and `waitFor` live in `packages/tes
 On Bun 1.4.2, `onTestFinished` callbacks run in the order they were registered, and when one throws,
 the ones after it are skipped. A util that registers its own cleanup is therefore released before
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
-`close` may also run earlier), `createTestDatabase`, `buildQueryGate` (it releases a held select),
-`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`.
+`close` may also run earlier), `startStubDnsUpstream`, `createTestDatabase`, `buildQueryGate` (it
+releases a held select), `setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`.
 
 `setupImpTest`, `setupImpdTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
 `[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
@@ -94,6 +94,8 @@ Utils that take a caller's stack and register nothing themselves:
 - `createMoveHosts(stack, options)` in `moves/test-moves.ts`: the two `setupMoveHosts` impds.
 - `runWithStack(body)` in `test-utils/run-with-stack.ts`: runs `body` with a fresh stack and
   releases it once `body` settles or throws.
+- `startStubEchoServer(stack)` in `test-utils/start-stub-echo-server.ts`: a tunnel's far end on
+  loopback.
 
 `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
 `packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source)`) runs one test file in a
@@ -232,7 +234,12 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Docker for dev.sh   | `scripts/test-utils/build-stub-dev-docker.ts`                                       | The images, labels and containers `dev.sh prune` reads      |
 | Registry for base   | `scripts/test-utils/build-stub-registry-docker.ts`                                  | `docker buildx imagetools inspect` in the release Plan step |
 | impd for the client | `packages/client/smoke/run-stub-impd.ts`                                            | impd's app on loopback, run by `check-client-runtimes.sh`   |
-| nft                 | `setupImpTest`'s default `runNft`, which records scripts                            | `nft` from the egress service                               |
+| nft                 | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                | `nft` from the egress service                               |
+| nft binary          | `test-utils/create-stub-nft-bin.ts` (`createStubNftBin`)                            | The `nft` that `createNftRunner` spawns                     |
+| Upstream DNS        | `test-utils/start-stub-dns-upstream.ts`                                             | An IMP_DNS server over UDP and TCP, with chosen faults      |
+| Egress for resolver | `test-utils/build-stub-egress-service.ts`                                           | The egress service as `createQueryHandler`'s deps           |
+| Host routes         | `test-utils/build-stub-host-routes.ts` (`buildStubHostRoutes`)                      | The container's links and default routes egress reads       |
+| Tunnel far end      | `test-utils/start-stub-echo-server.ts` (`startStubEchoServer`)                      | A host a broker tunnel dials: it echoes and holds open      |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                                          | `ip` and `sysctl -n`, as `createTapDevices`'s `run`         |
 | mount               | A `run` with a mount table in `vmm/jail.test.ts`                                    | `mount` and `umount` for the jailer                         |
 | cgroups and `/proc` | Temp dirs as `root` and `procRoot` (5)                                              | The cgroup tree and `/proc`                                 |
@@ -259,6 +266,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
    function of a sourced script with only `PATH` and the variables a test passes.
 8. Bash that `egress/egress-ruleset.host.test.ts` runs in a mount and network namespace.
 9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
+10. `setupImpTest`'s default `runNft` still records scripts for the suites that use it.
 
 The mcp package's tests reach impd through the real `@zgeoff/imp-client` and
 `packages/mcp/src/test-utils/build-stub-impd.ts` (`buildStubImpd`): an MSW handler that answers the
@@ -298,7 +306,8 @@ wires them without the start steps into a caller's stack; `setupImpTest` wraps i
 stack, and the client smoke's `run-stub-impd.ts` runs it outside a test.
 `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
 `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
-`test-utils/find-free-ports.ts`.
+`test-utils/find-free-ports.ts`. Egress's `repeat` dep runs its sweep (`startInterval` by default),
+so a test fires a sweep by calling the function it was handed.
 
 ## Connectors
 

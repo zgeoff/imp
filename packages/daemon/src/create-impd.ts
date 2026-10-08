@@ -106,6 +106,7 @@ type EgressBoundaries = Pick<
   | 'forward'
   | 'resolveExact'
   | 'now'
+  | 'repeat'
 >;
 
 // The imp service's reach past impd: /proc, KSM, the host's filesystem

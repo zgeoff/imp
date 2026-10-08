@@ -223,7 +223,7 @@ function toCappedTtl(record: Answer, maxTtlS: number): Answer {
 
 // a TCP client's idle time before the resolver closes it, and the
 // connections one slot may hold open, as the broker caps them
-const DEFAULT_TCP_LIMITS: ResolverServerLimits = { idleS: 10, maxPerSlot: 16 };
+export const DEFAULT_TCP_LIMITS: ResolverServerLimits = { idleS: 10, maxPerSlot: 16 };
 
 // smaller limits for tests
 interface ResolverServerLimits {
@@ -235,6 +235,9 @@ export interface ResolverServerOptions {
   readonly log: (message: string) => void;
   readonly now?: () => number;
   readonly limits?: ResolverServerLimits;
+
+  // where the UDP socket's errors go; createSocketErrorReport by default
+  readonly reportError?: (...args: readonly unknown[]) => void;
 }
 
 // what a reply to a guest that went, or to a gateway with no route, gets
@@ -313,7 +316,7 @@ export async function startResolverServer(
 
       // an unhandled error would end impd; the ICMP error of a reply to a
       // guest that went is routine, anything else is logged
-      error: createSocketErrorReport(options.log, options.now ?? Date.now),
+      error: options.reportError ?? createSocketErrorReport(options.log, options.now ?? Date.now),
     },
   });
 
