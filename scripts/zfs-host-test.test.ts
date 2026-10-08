@@ -111,10 +111,14 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
     'zfs list -r -o name,used,refer,compressratio,recordsize impbenchPID',
     'docker logs imp-zfs',
     'dev.sh down',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P impbenchPID',
     'zpool status -P impbenchPID',
     'sudo zpool destroy -f impbenchPID',
     'zpool destroy -f impbenchPID',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P',
     'zpool status -P',
     `sudo rm -f ${work}/bench.img`,
@@ -247,8 +251,10 @@ test('it never destroys a pool or stops an instance when its own pool create fai
     'docker container inspect imp-zfs',
     `sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
-    'sudo zpool status -P impbenchPID',
-    'zpool status -P impbenchPID',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P',
     'zpool status -P',
     `sudo rm -f ${work}/bench.img`,
@@ -403,14 +409,18 @@ test('it stops the suites, the instance and the pool when it gets SIGTERM during
 
   expect(exitCode).toBe(143);
 
-  expect(calls.split('\n').slice(-11)).toStrictEqual([
+  expect(calls.split('\n').slice(-15)).toStrictEqual([
     'test-e2e.sh --only checkpoints,sleep',
     'docker logs imp-zfs',
     'dev.sh down',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P impbenchPID',
     'zpool status -P impbenchPID',
     'sudo zpool destroy -f impbenchPID',
     'zpool destroy -f impbenchPID',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P',
     'zpool status -P',
     `sudo rm -f ${work}/bench.img`,
@@ -454,11 +464,15 @@ test('it destroys the pool and removes its file when SIGTERM comes during the po
 
   expect(exitCode).toBe(143);
 
-  expect(calls.split('\n').slice(-8)).toStrictEqual([
+  expect(calls.split('\n').slice(-12)).toStrictEqual([
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P impbenchPID',
     'zpool status -P impbenchPID',
     'sudo zpool destroy -f impbenchPID',
     'zpool destroy -f impbenchPID',
+    'sudo zpool list -H -o name',
+    'zpool list -H -o name',
     'sudo zpool status -P',
     'zpool status -P',
     `sudo rm -f ${work}/bench.img`,
@@ -490,6 +504,54 @@ test('it keeps the pool file and fails while a pool still uses it', () => {
 
   expect(result.stderr.toString()).toBe(
     `zfs-host-test: a pool still uses ${work}/bench.img; it stays\n`,
+  );
+
+  expect(existsSync(join(work, 'bench.img'))).toBeTrue();
+});
+
+test('it destroys its pool and removes the file when the work dir path holds spaces', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work dir');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe('');
+  expect(existsSync(join(work, 'bench.img'))).toBeFalse();
+});
+
+test('it keeps the pool file and fails when zpool cannot say what uses it', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs, { queries: 'fail' });
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    `zfs-host-test: zpool cannot say which pools use ${work}/bench.img; it stays\n`,
   );
 
   expect(existsSync(join(work, 'bench.img'))).toBeTrue();

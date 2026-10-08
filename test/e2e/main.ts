@@ -1,12 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  statfsSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as z from 'zod';
 import { findBootFallbacks } from './lib/boot-fallbacks';
@@ -39,8 +31,10 @@ import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
 import { FAST_GROUPS, SUITES, buildSuiteArgv } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
-import { ZFS_OWNER_FILE, readZfsOwner, resetZfsRoot } from './lib/zfs-owner';
-import type { ZfsCommandResult, ZfsOwner } from './lib/zfs-owner';
+import { resolveWipeTarget } from './lib/wipe-target';
+import type { WipeTarget } from './lib/wipe-target';
+import { ZFS_OWNER_FILE, resetZfsRoot } from './lib/zfs-owner';
+import type { ZfsCommandResult } from './lib/zfs-owner';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
@@ -96,12 +90,6 @@ function resolveDataPath(): string {
   return resolve(process.cwd(), configured);
 }
 
-// A data dir the reset may wipe, and the ZFS root it may empty with it
-interface WipeTarget {
-  readonly dir: string;
-  readonly zfs: ZfsOwner | null;
-}
-
 // zpool and zfs as root, from the host image, as the data wipe runs
 async function runHostZfs(argv: readonly string[]): Promise<ZfsCommandResult> {
   // scripts/lib.sh knows how the host image builds
@@ -110,53 +98,26 @@ async function runHostZfs(argv: readonly string[]): Promise<ZfsCommandResult> {
   return runCommand(['docker', 'run', '--rm', '--privileged', getHostImage(), ...argv]);
 }
 
-// The data dir to wipe, or null when it does not exist. The reset deletes it
-// as root, so it must sit under <repo>/.data/, hold an imp.xfs, or, on the
-// ZFS backend, provably belong with this run's pool (zfs-owner.ts).
-async function resolveWipeTarget(path: string): Promise<WipeTarget | null> {
-  if (!existsSync(path)) {
-    return null;
-  }
-
-  const data = realpathSync(path);
-
-  const dataRoot = existsSync(join(REPO_ROOT, '.data'))
-    ? realpathSync(join(REPO_ROOT, '.data'))
-    : null;
-
-  const underDataRoot = dataRoot !== null && data.startsWith(`${dataRoot}/`);
-
-  if (underDataRoot || existsSync(join(data, 'imp.xfs'))) {
-    return { dir: data, zfs: null };
-  }
-
-  if (process.env['IMP_STORAGE_BACKEND'] === 'zfs') {
-    const zfs = await readZfsOwner({
-      dataDir: data,
-      zfsRoot: process.env['IMP_ZFS_ROOT'],
-      run: runHostZfs,
-    });
-
-    if (zfs !== null) {
-      return { dir: data, zfs };
-    }
-  }
-
-  throw new Error(
-    `refusing to wipe ${data}: it is not under ${join(REPO_ROOT, '.data')}, holds no imp.xfs, ` +
-      "and is no data dir of this run's ZFS pool",
-  );
+// the wipe's target for a data dir, as this run's instance stores it
+function resolveDataWipe(path: string): Promise<WipeTarget | null> {
+  return resolveWipeTarget({
+    path,
+    repoRoot: REPO_ROOT,
+    storageBackend: process.env['IMP_STORAGE_BACKEND'],
+    zfsRoot: process.env['IMP_ZFS_ROOT'],
+    run: runHostZfs,
+  });
 }
 
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
-  const data = await resolveWipeTarget(resolveDataPath());
+  const data = await resolveDataWipe(resolveDataPath());
 
   // the moves suites' second host keeps its data between runs, which spares
   // its image seed; a reset takes it too, so no old migration outlives a
   // rebase that renumbered it
-  const hostB = await resolveWipeTarget(`${resolveDataPath()}-mv-b`);
+  const hostB = await resolveDataWipe(`${resolveDataPath()}-mv-b`);
 
   const targets = [data, hostB].filter((target) => target !== null);
 

@@ -145,15 +145,17 @@ test skips where its namespace probe fails; `bun run test:host` runs exactly tho
    interrupted run exits 130.
 
 The wipe of `--clean` and of a re-creation deletes the data dir as root, so `main.ts` wipes only a
-dir under `<repo>/.data/` or one that holds an `imp.xfs`. On the ZFS backend
-(`IMP_STORAGE_BACKEND=zfs`, as `scripts/zfs-host-test.sh` runs it) the data dir is neither, so
-`readZfsOwner` in `test/e2e/lib/zfs-owner.ts` must prove it instead: the owner file
-`imp-e2e-zfs-owner` that `zfs-host-test.sh` writes into it parses, its root is `IMP_ZFS_ROOT` and
-sits in its pool, its vdev sits beside the data dir, and `zpool status -P` lists that vdev in that
-pool. Then the wipe keeps the owner file, and `resetZfsRoot` destroys the root dataset with all its
-descendants (`zfs destroy -R`) and makes it again. `zpool` and `zfs` run in a privileged container
-of the host image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in command
-runner; no test runs them on a real pool.
+dir under `<repo>/.data/` or one that holds an `imp.xfs` (`resolveWipeTarget` in
+`test/e2e/lib/wipe-target.ts`). On the ZFS backend (`IMP_STORAGE_BACKEND=zfs`, as
+`scripts/zfs-host-test.sh` runs it) it first asks `readZfsOwner` in `test/e2e/lib/zfs-owner.ts`,
+wherever the dir sits, so a proven pool's root is emptied along with the data; a dir it cannot prove
+falls back to the two rules above. The proof: the owner file `imp-e2e-zfs-owner` that
+`zfs-host-test.sh` writes into it parses, its root is `IMP_ZFS_ROOT` and sits in its pool, its vdev
+sits beside the data dir, and `zpool status -P` lists that vdev in that pool. Then the wipe keeps
+the owner file, and `resetZfsRoot` destroys the root dataset with all its descendants
+(`zfs destroy -R`) and makes it again. `zpool` and `zfs` run in a privileged container of the host
+image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in command runner; no
+test runs them on a real pool.
 
 The baseline reset, `resetBaseline` in `test/e2e/lib/reset-baseline.ts`, takes impd's client
 (`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It removes
@@ -262,16 +264,17 @@ instance. Some start real processes: `reset-baseline.test.ts` boots impd's app i
   `mnt`, `pool.img`), and its EXIT cleanup releases only those, in reverse order. The pool is proven
   rather than flagged, since a signal during `zpool create` runs the trap only once the create has
   finished: cleanup destroys the pool only when `zpool status -P` lists this run's `pool.img` as its
-  vdev, and removes `pool.img` only when no pool lists it. So a failed `zpool create` destroys no
-  pool, and a pool that will not go keeps its file and fails the run. A `pool.img` that is a symlink
-  is refused too. The tests run in the background, so TERM (exit 143) or INT (130) stops them before
-  cleanup. It reads the module's version from `IMP_ZFS_MODULE_VERSION_FILE` (default
-  `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs the script against stub `id`, `zfs`,
-  `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), and a `zpool`
-  that keeps its pools in a state file (`create-stub-zpool.ts`), in a temp root: a normal release, a
-  work dir made with its parents, the collisions (a symlinked `pool.img` included), a failed
-  `zfs create`, a failed `zpool create`, a failed destroy, a pool that still uses the file, and
-  SIGTERM during the create and mid-run.
+  vdev, matching the whole path even when it holds spaces, and removes `pool.img` only when no pool
+  lists it; when `zpool` cannot answer, the file stays and the run fails. So a failed `zpool create`
+  destroys no pool, and a pool that will not go keeps its file and fails the run. A `pool.img` that
+  is a symlink is refused too. The tests run in the background, so TERM (exit 143) or INT (130)
+  stops them before cleanup. It reads the module's version from `IMP_ZFS_MODULE_VERSION_FILE`
+  (default `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs the script against stub `id`,
+  `zfs`, `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), and a
+  `zpool` that keeps its pools in a state file (`create-stub-zpool.ts`), in a temp root: a normal
+  release, a work dir made with its parents, the collisions (a symlinked `pool.img` included), a
+  failed `zfs create`, a failed `zpool create`, a failed destroy, a pool that still uses the file, a
+  failed `zpool` query, a work dir path with spaces, and SIGTERM during the create and mid-run.
 - **`scripts/zfs-host-test.sh`** runs `test-zfs.sh` (unless `IMP_ZFS_TEST_UNIT=0`), then starts a
   dev instance `imp-zfs` (port offset `IMP_DEV_PORT_OFFSET`, default 300) with
   `IMP_STORAGE_BACKEND=zfs` on a second sparse pool `impbench<pid>` of `IMP_ZFS_BENCH_GIB`
@@ -285,14 +288,15 @@ instance. Some start real processes: `reset-baseline.test.ts` boots impd's app i
   harness). The e2e run goes in the background, its output through `tee` into `<dir>/e2e.log`, so
   TERM (143) or INT (130) reaches the trap at once and cleanup stops it first. Its EXIT cleanup
   releases only what the run made: it collects the impd log and stops the instance only once the run
-  started it, destroys the pool only when `zpool status -P` lists this run's `bench.img`, and
-  removes that file only when no pool lists it. A pool that will not go keeps its file and fails the
-  run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in `test-zfs.sh`. `scripts/zfs-host-test.test.ts`
-  runs a copy of the script beside the real `lib.sh` and stand-in `dev.sh`, `test-e2e.sh` and
-  `test-zfs.sh`, with stub `sudo`, `zfs` and `docker` and the stateful `zpool` on `PATH`: a normal
-  release with its owner file, a work dir made with its parents, the pool, file, symlink, data dir
-  and container collisions, a failed `zpool create`, a failed destroy, a pool that still uses the
-  file, and SIGTERM during the create and during the e2e run.
+  started it, destroys the pool only when `zpool status -P` lists this run's `bench.img` (the whole
+  path), and removes that file only when no pool lists it and `zpool` could say so. A pool that will
+  not go keeps its file and fails the run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in
+  `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh`
+  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh`, with stub `sudo`, `zfs` and `docker` and
+  the stateful `zpool` on `PATH`: a normal release with its owner file, a work dir made with its
+  parents, the pool, file, symlink, data dir and container collisions, a failed `zpool create`, a
+  failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
+  spaces, and SIGTERM during the create and during the e2e run.
 
 ## CI
 

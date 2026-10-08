@@ -65,9 +65,20 @@ made_img=
 # the test run, when it runs, so a signal can stop it first
 child=
 
-# uses_img [POOL]: POOL, or any pool, lists this run's pool.img as a vdev
-uses_img() {
-  zpool status -P "$@" 2>/dev/null | awk -v img="$img" '$1 == img { found = 1 } END { exit !found }'
+# img_use [POOL]: 0 when POOL, or any pool, lists this run's file as a vdev,
+# 1 when none does, 2 when zpool cannot say; a vdev path may hold spaces
+img_use() {
+  local pools out
+  pools=$(zpool list -H -o name 2>/dev/null) || return 2
+  if [ -n "${1:-}" ] && ! grep -qxF -- "$1" <<<"$pools"; then
+    return 1
+  fi
+  out=$(zpool status -P "$@" 2>/dev/null) || return 2
+  awk -v img="$img" '{
+    sub(/^[ \t]+/, "")
+    rest = substr($0, length(img) + 1)
+    if (index($0, img) == 1 && (rest == "" || rest ~ /^[ \t]/)) found = 1
+  } END { exit !found }' <<<"$out"
 }
 
 # In reverse order. Everything under $mnt is unmounted before the pool goes:
@@ -83,14 +94,23 @@ cleanup() {
   if [ -n "$made_mnt" ]; then
     umount -R "$mnt" 2>/dev/null || true
   fi
-  if [ -n "$made_img" ] && uses_img "$pool" && ! zpool destroy -f "$pool"; then
-    echo "test-zfs: could not destroy $pool; its file stays at $img" >&2
-    [ "$status" != 0 ] || status=1
-    exit "$status"
-  fi
   if [ -n "$made_img" ]; then
-    if uses_img; then
-      echo "test-zfs: a pool still uses $img; it stays" >&2
+    local use=0
+    img_use "$pool" || use=$?
+    if [ "$use" = 0 ] && ! zpool destroy -f "$pool"; then
+      echo "test-zfs: could not destroy $pool; its file stays at $img" >&2
+      [ "$status" != 0 ] || status=1
+      exit "$status"
+    fi
+    # never the file of a pool that is still there, or may be
+    use=0
+    img_use || use=$?
+    if [ "$use" != 1 ]; then
+      if [ "$use" = 0 ]; then
+        echo "test-zfs: a pool still uses $img; it stays" >&2
+      else
+        echo "test-zfs: zpool cannot say which pools use $img; it stays" >&2
+      fi
       [ "$status" != 0 ] || status=1
       exit "$status"
     fi

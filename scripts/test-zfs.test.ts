@@ -81,8 +81,10 @@ test('it creates the pool, runs the tests on it, then releases all it made', () 
     'bun test packages/daemon/src/storage/zfs',
     `env imptestPID/imp ${work}/mnt`,
     `umount -R ${work}/mnt`,
+    'zpool list -H -o name',
     'zpool status -P imptestPID',
     'zpool destroy -f imptestPID',
+    'zpool list -H -o name',
     'zpool status -P',
     '',
   ]);
@@ -256,8 +258,10 @@ test('it destroys the pool it created and removes its file when the dataset cann
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa imptestPID ${work}/pool.img`,
     'zfs create -o mountpoint=legacy imptestPID/imp',
     `umount -R ${work}/mnt`,
+    'zpool list -H -o name',
     'zpool status -P imptestPID',
     'zpool destroy -f imptestPID',
+    'zpool list -H -o name',
     'zpool status -P',
     '',
   ]);
@@ -297,7 +301,8 @@ test('it never destroys a pool when its own create fails', () => {
     'zfs version',
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa imptestPID ${work}/pool.img`,
     `umount -R ${work}/mnt`,
-    'zpool status -P imptestPID',
+    'zpool list -H -o name',
+    'zpool list -H -o name',
     'zpool status -P',
     '',
   ]);
@@ -411,10 +416,12 @@ test('it stops the test run and releases all it made when it gets SIGTERM', asyn
 
   expect(exitCode).toBe(143);
 
-  expect(calls.split('\n').slice(-5)).toStrictEqual([
+  expect(calls.split('\n').slice(-7)).toStrictEqual([
     `umount -R ${work}/mnt`,
+    'zpool list -H -o name',
     'zpool status -P imptestPID',
     'zpool destroy -f imptestPID',
+    'zpool list -H -o name',
     'zpool status -P',
     '',
   ]);
@@ -461,10 +468,12 @@ test('it destroys the pool and removes its file when SIGTERM comes during the po
 
   expect(exitCode).toBe(143);
 
-  expect(calls.split('\n').slice(-5)).toStrictEqual([
+  expect(calls.split('\n').slice(-7)).toStrictEqual([
     `umount -R ${work}/mnt`,
+    'zpool list -H -o name',
     'zpool status -P imptestPID',
     'zpool destroy -f imptestPID',
+    'zpool list -H -o name',
     'zpool status -P',
     '',
   ]);
@@ -520,4 +529,60 @@ test('it makes a work dir that does not exist yet, parents included', () => {
   expect(result.exitCode).toBe(0);
   expect(existsSync(work)).toBeFalse();
   expect(existsSync(join(ctx.dir, 'not', 'yet'))).toBeTrue();
+});
+
+test('it destroys its pool and removes the file when the work dir path holds spaces', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work dir');
+
+  mkdirSync(work);
+
+  const zpool = createStubZpool(ctx.stubs);
+
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe('');
+  expect(existsSync(join(work, 'pool.img'))).toBeFalse();
+});
+
+test('it keeps the pool file and fails when zpool cannot say what uses it', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+
+  const zpool = createStubZpool(ctx.stubs, { queries: 'fail' });
+
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    `test-zfs: zpool cannot say which pools use ${work}/pool.img; it stays\n`,
+  );
+
+  expect(existsSync(join(work, 'pool.img'))).toBeTrue();
 });

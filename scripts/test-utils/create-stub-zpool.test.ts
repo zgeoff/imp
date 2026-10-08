@@ -105,3 +105,45 @@ test('it logs each call to the shared stub log', () => {
 
   expect(readFileSync(stub.calls, 'utf8')).toBe('zpool list tank\n');
 });
+
+test('it names every pool in list -H -o name', () => {
+  const ctx = setupTest();
+  const stub = createStubZpool(ctx.dir);
+
+  runZpool(stub.bin, 'create', 'tank', '/work dir/a.img');
+  runZpool(stub.bin, 'create', 'bench', '/work dir/b.img');
+
+  expect(runZpool(stub.bin, 'list', '-H', '-o', 'name')).toStrictEqual({
+    exitCode: 0,
+    stdout: 'tank\nbench\n',
+  });
+});
+
+test('it keeps a vdev path with spaces whole in status -P', () => {
+  const ctx = setupTest();
+  const stub = createStubZpool(ctx.dir);
+
+  runZpool(stub.bin, 'create', 'tank', '/work dir/pool.img');
+
+  expect(runZpool(stub.bin, 'status', '-P', 'tank').stdout).toBe(
+    '  pool: tank\n\t  /work dir/pool.img  ONLINE  0 0 0\n',
+  );
+});
+
+test('it fails status for a pool that is not there', () => {
+  const ctx = setupTest();
+  const stub = createStubZpool(ctx.dir);
+
+  expect(runZpool(stub.bin, 'status', '-P', 'tank').exitCode).toBe(1);
+});
+
+test('it fails list -H and status once a pool exists, when told to', () => {
+  const ctx = setupTest();
+  const stub = createStubZpool(ctx.dir, { queries: 'fail' });
+
+  runZpool(stub.bin, 'create', 'tank', '/work/pool.img');
+
+  expect(runZpool(stub.bin, 'list', '-H', '-o', 'name').exitCode).toBe(1);
+  expect(runZpool(stub.bin, 'status', '-P').exitCode).toBe(1);
+  expect(runZpool(stub.bin, 'list', 'tank').exitCode).toBe(0);
+});

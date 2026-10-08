@@ -9,6 +9,10 @@ export interface ZpoolStubOptions {
 
   // fails: the destroy fails; ignored: it exits 0 and the pool stays
   readonly destroy?: 'fails' | 'ignored';
+
+  // fail: once a pool exists, list -H and status fail, as when zpool or
+  // sudo cannot reach the kernel
+  readonly queries?: 'fail';
 }
 
 // A zpool that keeps its pools as `<name> <vdev>` lines in <dir>/pools, so
@@ -24,6 +28,7 @@ export function createStubZpool(stubs: string, options: Readonly<ZpoolStubOption
   }
 
   const onDestroy = { fails: 'exit 1', ignored: 'exit 0', none: ':' }[options.destroy ?? 'none'];
+  const onQuery = options.queries === 'fail' ? '[ ! -s "$pools" ] || exit 1' : ':';
 
   return createStubBin(
     stubs,
@@ -33,12 +38,23 @@ touch "$pools"
 # the last two arguments: a create's pool and vdev, a destroy's pool
 for arg; do prev=$last; last=$arg; done
 case "$1" in
-  list) grep -q "^$2 " "$pools" ;;
+  list)
+    if [ "$2" = -H ]; then
+      ${onQuery}
+      while read -r pool _; do printf '%s\n' "$pool"; done <"$pools"
+    else
+      grep -q "^$2 " "$pools"
+    fi ;;
   create)
     ${onCreate}
     printf '%s %s\n' "$prev" "$last" >>"$pools" ;;
   status)
+    ${onQuery}
     want=$3
+    if [ -n "$want" ] && ! grep -q "^$want " "$pools"; then
+      echo "cannot open '$want': no such pool" >&2
+      exit 1
+    fi
     while read -r pool file; do
       if [ -z "$want" ] || [ "$pool" = "$want" ]; then
         printf '  pool: %s\n\t  %s  ONLINE  0 0 0\n' "$pool" "$file"
