@@ -84,9 +84,9 @@ the ones after it are skipped. A util that registers its own cleanup is therefor
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier), `startStubExecAgent` (through `startStubAgent`),
 `startStubDnsUpstream`, `createTestDatabase`, `buildQueryGate` (it releases a held select),
-`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`.
+`setupImpTest`, `setupMcpTest` and `setupMoveHosts`.
 
-`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
+`setupImpTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
 `[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
 removes it once those branches land.
 
