@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.40.3](https://github.com/zgeoff/imp/compare/v0.40.2...v0.40.3) (2026-10-08)
+
+### Bug Fixes
+
+- **geo-135:** assert the exact path the zfs host test passes to sudo
+  ([#269](https://github.com/zgeoff/imp/issues/269))
+  ([9f192ca](https://github.com/zgeoff/imp/commit/9f192ca9bc19e01cf2f45b8bde31b8d13eb66337))
+
 ## [0.40.2](https://github.com/zgeoff/imp/compare/v0.40.1...v0.40.2) (2026-10-08)
 
 ### Bug Fixes
