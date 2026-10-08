@@ -176,7 +176,7 @@ test('it sets no ARC cap on an xfs host, and leaves none out of the budget', () 
   const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
-  writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
+  writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=xfs\n');
   writeFileSync(join(ctx.dir, 'meminfo'), `MemTotal: ${String(64_000 * 1024)} kB\n`);
   writeFileSync(join(ctx.dir, 'zfs_arc_max'), '0\n');
 

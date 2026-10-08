@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import type { Socket } from 'node:net';
 import type { ImpContract, ServiceLog } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
@@ -14,7 +14,7 @@ import {
 import type { AgentService } from '../agent-client/service-requests';
 import { subscribeImpWrites } from '../db/imp-write-feed';
 import { updateImpActivity } from '../db/imps';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildTestApp, createImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
 import { startStubAgent } from '../test-utils/start-stub-agent';
@@ -183,7 +183,12 @@ function buildServiceAgent(knowsServices: boolean) {
 }
 
 async function setupServiceTest(knowsServices = true) {
-  const harness = await setupImpTest();
+  // one stack: the stub agent closes before the harness it serves
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack);
 
   // each boot and wake reports it
   harness.fake.agent.version = knowsServices ? '0.10.0' : '0.9.0';
@@ -197,10 +202,14 @@ async function setupServiceTest(knowsServices = true) {
   const agent = buildServiceAgent(knowsServices);
   const paths = buildImpPaths(harness.config.dataDir, imp.id);
 
-  await startStubAgent(paths.vsockSocket, (socket, request, frames) => {
+  const listening = await startStubAgent(paths.vsockSocket, (socket, request, frames) => {
     if (frames.length === 1) {
       agent.handleRequest(socket, AgentRequestSchema.parse(decodeJsonPayload(request)));
     }
+  });
+
+  stack.defer(() => {
+    listening.close();
   });
 
   // a client with an exec-scope token

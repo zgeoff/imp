@@ -10,19 +10,11 @@ interface TestDatabase {
   [Symbol.asyncDispose]: () => Promise<void>;
 }
 
-// a migrated in-memory database, empty, closed once when the test finishes
+// a migrated in-memory database, empty, closed when the test finishes
 export async function createTestDatabase(): Promise<TestDatabase> {
   const db = await openDatabase(':memory:');
 
-  const destroyed = { promise: null as Promise<void> | null };
+  onTestFinished(() => db.destroy());
 
-  const destroy = (): Promise<void> => {
-    destroyed.promise ??= db.destroy();
-
-    return destroyed.promise;
-  };
-
-  onTestFinished(destroy);
-
-  return { db, [Symbol.asyncDispose]: destroy };
+  return { db, [Symbol.asyncDispose]: () => db.destroy() };
 }

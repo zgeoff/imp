@@ -34,7 +34,7 @@ function setupTest() {
   };
 }
 
-test('it installs the unprivileged host unit before the restart, on an upgrade from the privileged host', () => {
+test('it installs the unprivileged host unit and restarts imp-host, on an upgrade from the privileged host', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -81,7 +81,7 @@ test('it installs the unprivileged host unit before the restart, on an upgrade f
   expect(existsSync(join(ctx.dir, 'imp-docker-proxy.service'))).toBeFalse();
 });
 
-test('it installs both units, then restarts the proxy before imp-host, on an upgrade from the socket host', () => {
+test('it installs both units and restarts the proxy before imp-host, on an upgrade from the socket host', () => {
   const ctx = setupTest();
 
   // a #75 unit: unprivileged, with the host's docker.sock
@@ -676,10 +676,8 @@ test('it comments out the old template line, which is no pin, with a .bak of the
     'TAILSCALE_AUTHKEY=fake-key-for-tests\nIMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest\nIMP_PORT=7070\n',
   ]);
 
-  expect(
-    ['imp-host.env', ...backups].map((file) => statSync(join(ctx.dir, file)).mode & 0o777),
-  ).toStrictEqual([0o600, 0o600]);
-
+  expect(statSync(join(ctx.dir, 'imp-host.env')).mode & 0o777).toBe(0o600);
+  expect(backups.map((file) => statSync(join(ctx.dir, file)).mode & 0o777)).toStrictEqual([0o600]);
   expect(output).toInclude('was the old template');
   expect(readdirSync(ctx.dir).filter((file) => file.endsWith('.new'))).toBeEmpty();
 });

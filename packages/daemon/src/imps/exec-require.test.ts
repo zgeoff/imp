@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import type { Socket } from 'node:net';
 import * as z from 'zod';
@@ -12,7 +12,7 @@ import type { InstallBundle } from '../broker/guest-trust';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { setupImpTest } from './test-imps';
+import { createImpTest } from './test-imps';
 
 // An exec with `require: ['broker']` starts only once impd set the broker's
 // variables and the CA bundle for the boot it starts in.
@@ -79,7 +79,12 @@ async function readRefusal(opening: Promise<{ readonly close: () => void }>): Pr
 async function setupRequireTest(installBundle?: InstallBundle) {
   const options = installBundle === undefined ? {} : { installBundle };
 
-  const ctx = await setupImpTest(options);
+  // one stack: the stub agent closes before the harness it serves
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, options);
 
   await ctx.createTestImage('base');
 
@@ -149,6 +154,10 @@ async function setupRequireTest(installBundle?: InstallBundle) {
         },
       }),
     );
+  });
+
+  stack.defer(() => {
+    agent.close();
   });
 
   const createGrant = async () => {

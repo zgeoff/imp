@@ -14,12 +14,17 @@ import {
   writeBuildContext,
 } from './write-build-context';
 
+// `stack` releases in reverse: a test defers what must end before the dir goes
 async function setupTest() {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const dir = await mkdtemp(join(tmpdir(), 'imp-build-context-'));
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  return { dir };
+  return { dir, stack };
 }
 
 test('#readBuildContext returns the Dockerfile at the asked path and its text', async () => {
@@ -516,9 +521,19 @@ test('#writeBuildContext rejects with the reason of a signal aborted during its 
     controller.signal,
   );
 
+  // the writer settles before the dir goes, once the feed closes and the
+  // signal aborts
+  ctx.stack.defer(async () => {
+    await Promise.allSettled([writing]);
+  });
+
   const feed = await open(input, 'w');
 
-  onTestFinished(() => feed.close());
+  ctx.stack.defer(() => feed.close());
+
+  ctx.stack.defer(() => {
+    controller.abort();
+  });
 
   // every entry, without the two zero blocks that end the tar
   await feed.write(bytes.subarray(0, -1024));
@@ -556,9 +571,19 @@ test('#writeBuildContext rejects with an error of the text of a reason that is n
     controller.signal,
   );
 
+  // the writer settles before the dir goes, once the feed closes and the
+  // signal aborts
+  ctx.stack.defer(async () => {
+    await Promise.allSettled([writing]);
+  });
+
   const feed = await open(input, 'w');
 
-  onTestFinished(() => feed.close());
+  ctx.stack.defer(() => feed.close());
+
+  ctx.stack.defer(() => {
+    controller.abort();
+  });
 
   // every entry, without the two zero blocks that end the tar
   await feed.write(bytes.subarray(0, -1024));
@@ -603,8 +628,10 @@ test('#writeBuildContext rejects with the write failure as it is', async () => {
     { stdout: 'pipe', stderr: 'inherit' },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(async () => {
     child.kill();
+
+    await child.exited;
   });
 
   const printed = await new Response(child.stdout).text();

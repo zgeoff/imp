@@ -1,7 +1,7 @@
 #!/bin/bash
 # Smoke a packed @zgeoff/imp-client (scripts/pack-client.sh) as its users run
 # it: under Node, under Bun, and as a compiled Bun binary copied to an empty
-# directory. Each runs packages/client/smoke/smoke.ts against fake-impd.ts,
+# directory. Each runs packages/client/smoke/smoke.ts against run-stub-impd.ts,
 # impd's own app with a fake agent, which runs from the workspace.
 #
 #   scripts/check-client-runtimes.sh build/npm/zgeoff-imp-client-X.Y.Z.tgz
@@ -23,16 +23,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-bun "$root/packages/client/smoke/fake-impd.ts" > "$work/impd.json" &
+bun "$root/packages/client/smoke/run-stub-impd.ts" > "$work/impd.json" &
 impd_pid=$!
 
 for _ in $(seq 100); do
   [ -s "$work/impd.json" ] && break
-  kill -0 "$impd_pid" 2>/dev/null || { echo "fake-impd exited before it was ready" >&2; exit 1; }
+  kill -0 "$impd_pid" 2>/dev/null || { echo "run-stub-impd exited before it was ready" >&2; exit 1; }
   sleep 0.1
 done
 impd=$(head -1 "$work/impd.json")
-[ -n "$impd" ] || { echo "fake-impd was not ready within 10 s" >&2; exit 1; }
+[ -n "$impd" ] || { echo "run-stub-impd was not ready within 10 s" >&2; exit 1; }
 
 # Node, installed with npm; 22.6 to 22.17 strip types only with the flag
 mkdir "$work/node"

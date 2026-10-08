@@ -1,4 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { createImage } from '../db/images';
 import { buildQueryGate } from './build-query-gate';
 import { createTestDatabase } from './create-test-database';
@@ -144,30 +148,30 @@ test('it stays armed past a select that does not name it', async () => {
   expect(Bun.peek.status(held)).toBe('pending');
 });
 
-test('it lets a second release pass as a no-op', async () => {
-  const testDatabase = await createTestDatabase();
+test('it releases a held select when the test finishes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'query-gate-'));
 
-  await createImage(testDatabase.db, {
-    name: 'ubuntu',
-    ref: 'imp/ubuntu:24.04',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-  const gate = buildQueryGate('images');
+  // the gate comes first, so its release runs before the database closes
+  const run = runChildTests(
+    dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      `import { buildQueryGate } from ${JSON.stringify(join(import.meta.dir, 'build-query-gate.ts'))};`,
+      `import { createTestDatabase } from ${JSON.stringify(join(import.meta.dir, 'create-test-database.ts'))};`,
+      'const left: { held: Promise<unknown> | null } = { held: null };',
+      "test('it holds', async () => {",
+      "  const gate = buildQueryGate('images');",
+      '  const testDatabase = await createTestDatabase();',
+      '  gate.arm();',
+      "  left.held = testDatabase.db.withPlugin(gate.plugin).selectFrom('images').select('name').execute();",
+      '  await gate.reached;',
+      '});',
+      "test('it finds it released', () => { expect(left.held).resolves.toStrictEqual([]); });",
+    ].join('\n'),
+  );
 
-  gate.arm();
-
-  const held = testDatabase.db
-    .withPlugin(gate.plugin)
-    .selectFrom('images')
-    .select('name')
-    .execute();
-
-  await gate.reached;
-
-  gate.release();
-  gate.release();
-
-  expect(held).resolves.toStrictEqual([{ name: 'ubuntu' }]);
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });

@@ -277,7 +277,10 @@ test('it answers inspect, pull, plain imp ls and compose up with success and no 
     { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
   );
 
-  expect(result.stdout.toString()).toBe('inspect 0\npull 0\nls 0\nup 0\n');
+  expect({ stdout: result.stdout.toString(), stderr: result.stderr.toString() }).toStrictEqual({
+    stdout: 'inspect 0\npull 0\nls 0\nup 0\n',
+    stderr: '',
+  });
 });
 
 test('it fails a pull of another image than the one it was given', () => {

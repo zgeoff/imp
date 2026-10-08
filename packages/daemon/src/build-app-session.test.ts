@@ -6,7 +6,7 @@ import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import { TEST_TOKEN, buildTestApp, createImpTest } from './imps/test-imps';
 
 const ORIGIN = 'http://impd.test';
 
@@ -20,16 +20,21 @@ interface SendInit {
 }
 
 async function setupTest() {
+  // one stack: the app's harness goes before the dashboard dir it serves
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const dashboardDir = mkdtempSync(join(tmpdir(), 'imp-dashboard-'));
 
-  onTestFinished(() => {
+  stack.defer(() => {
     rmSync(dashboardDir, { recursive: true, force: true });
   });
 
   mkdirSync(join(dashboardDir, 'assets'));
   writeFileSync(join(dashboardDir, 'index.html'), '<!doctype html><title>imp</title>');
 
-  const harness = await setupImpTest({ env: { IMP_DASHBOARD_DIR: dashboardDir } });
+  const harness = await createImpTest(stack, { env: { IMP_DASHBOARD_DIR: dashboardDir } });
 
   const built = buildTestApp(harness, harness);
 

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
@@ -58,12 +59,72 @@ test('#setupImpTest removes its data dir and closes its database on release', as
   expect(listImps(ctx.db)).rejects.toThrow();
 });
 
-test('#setupImpTest resolves a second release as a no-op', async () => {
-  const ctx = await setupImpTest();
+test('#setupImpTest removes its data dir when the test finishes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
 
-  await ctx[Symbol.asyncDispose]();
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-  await expect(ctx[Symbol.asyncDispose]()).toResolve();
+  const run = runChildTests(
+    dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { existsSync } from 'node:fs';",
+      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
+      "const left = { dataDir: '' };",
+      "test('it sets up', async () => { left.dataDir = (await setupImpTest()).dataDir; });",
+      "test('it finds the data dir gone', () => { expect(existsSync(left.dataDir)).toBeFalse(); });",
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
+});
+
+test('#setupImpTest lets the test end release it again after an explicit release', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  // a second release that threw would fail the child's test
+  const run = runChildTests(
+    dir,
+    [
+      "import { test } from 'bun:test';",
+      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
+      "test('it releases early', async () => { await (await setupImpTest())[Symbol.asyncDispose](); });",
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 1 pass');
+});
+
+test('#setupImpTest removes its data dir when a setup step throws', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const run = runChildTests(
+    dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { existsSync } from 'node:fs';",
+      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
+      'const seen: string[] = [];',
+      "test('it fails to set up', () => {",
+      '  const setup = setupImpTest({',
+      "    createStorage: (dataDir) => { seen.push(dataDir); throw new Error('no storage'); },",
+      '  });',
+      "  expect(setup).rejects.toThrow('no storage');",
+      '});',
+      "test('it finds the data dir gone', () => {",
+      '  expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);',
+      '});',
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });
 
 test('#setupImpTest keeps a data dir the caller passed', async () => {
@@ -78,7 +139,7 @@ test('#setupImpTest keeps a data dir the caller passed', async () => {
   expect(existsSync(dataDir)).toBeTrue();
 });
 
-test('#createImpTest leaves its data dir to the stack when a setup step throws', async () => {
+test('#createImpTest has its data dir removed by the stack after a setup step throws', async () => {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());

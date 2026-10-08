@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   cpSync,
   existsSync,
@@ -16,7 +16,7 @@ import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
 import { findSecret } from '../db/secrets';
 import { createTemplateService } from '../images/template-service';
-import { setupImpTest } from '../imps/test-imps';
+import { createImpTest } from '../imps/test-imps';
 import { createNetworkService } from '../networks/network-service';
 import { buildImpPaths } from '../storage/data-layout';
 import type { BackupConfig } from './backup-config';
@@ -133,9 +133,22 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
 }
 
 // Imps on the harness's XFS backend over a fake repository, which a second
-// host can share to restore from (`repoDir`).
-async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`)) {
-  const harness = await setupImpTest();
+// host can share to restore from (`repoDir`). Its own repository goes after
+// its harness, even when it shares another host's.
+async function setupTest(sharedRepoDir?: string) {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ownRepoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`);
+
+  stack.defer(() => {
+    rmSync(ownRepoDir, { recursive: true, force: true });
+  });
+
+  const repoDir = sharedRepoDir ?? ownRepoDir;
+
+  const harness = await createImpTest(stack);
 
   const clock = { now: new Date('2026-10-02T00:00:00Z') };
   const fake = createFakeRestic(repoDir, () => clock.now);

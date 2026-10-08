@@ -395,6 +395,10 @@ export async function createImpTest(
 
   const stored = buildImpdStorage(config, deps);
 
+  stack.defer(() => {
+    stored.diskUsage.stop();
+  });
+
   const broker = await createImpdBroker(config, deps, {
     ipv6: options.ipv6 ?? null,
     secretFiles: createSecretFiles(dataDir),

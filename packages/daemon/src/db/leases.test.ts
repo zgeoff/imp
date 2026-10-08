@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { BunSqliteDriver } from './bun-sqlite-driver';
@@ -213,17 +213,16 @@ test('the migration moves a live hold to legacy, and drops one that ended', asyn
 
   sqlite.run('PRAGMA foreign_keys = ON;');
 
-  await using db = Object.assign(
-    new Kysely<DatabaseSchema>({
-      dialect: {
-        createAdapter: () => new SqliteAdapter(),
-        createDriver: () => new BunSqliteDriver(sqlite),
-        createIntrospector: (kysely) => new SqliteIntrospector(kysely),
-        createQueryCompiler: () => new SqliteQueryCompiler(),
-      },
-    }),
-    { [Symbol.asyncDispose]: () => db.destroy() },
-  );
+  const db = new Kysely<DatabaseSchema>({
+    dialect: {
+      createAdapter: () => new SqliteAdapter(),
+      createDriver: () => new BunSqliteDriver(sqlite),
+      createIntrospector: (kysely) => new SqliteIntrospector(kysely),
+      createQueryCompiler: () => new SqliteQueryCompiler(),
+    },
+  });
+
+  onTestFinished(() => db.destroy());
 
   await runMigrationsTo(db, '012_add_networks');
 

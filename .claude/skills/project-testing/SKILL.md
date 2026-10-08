@@ -56,6 +56,24 @@ the global `fetch` sends a request to a loopback host or over a unix socket to t
 `test/e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env overrides and seeds faker,
 with no MSW server. `updateEnv`, `invariant` and `waitFor` live in `packages/test-utils/src`.
 
+### Cleanup order
+
+On Bun 1.4.2, `onTestFinished` callbacks run in the order they were registered, and when one throws,
+the ones after it are skipped. A util that registers its own cleanup is therefore released before
+anything the test registers after calling it. These utils register their own: `startStubAgent` (its
+`close` may also run earlier), `createTestDatabase`, `buildQueryGate` (it releases a held select),
+`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`. `setupImpTest`,
+`setupImpdTest`, `setupMcpTest` and `createTestDatabase` also keep a transitional
+`[Symbol.asyncDispose]` for branches that still hold them with `await using`. Where a test's own
+resources must end before such a harness or outlive it, the test builds one `AsyncDisposableStack`,
+registers its disposal once, and passes it to `createImpTest(stack, options)` (or
+`createMoveHosts(stack, options)` in `moves/test-moves.ts`), deferring its other resources into the
+same stack in order. `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack` so a
+restarted impd's stops run before the shared database closes. A property case releases its resources
+through `test-utils/run-with-stack.ts` (`runWithStack`), on success and on failure, before the next
+case starts. `packages/test-utils/src/run-child-tests.ts` (`runChildTests`) runs a test file in a
+child `bun test`, so a later test there can check what an earlier test's `onTestFinished` released.
+
 Plain `bun test` does not match `*.e2e.ts`, `*.pebble.ts`, or `*.slow.ts`; each of those runs only
 when its `./` path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain
 `bun test` and skip unless their variables are set. The `*.host.test.ts` files load too, and each
@@ -173,7 +191,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | ------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | VMM                 | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)                                     | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step   |
 | impd                | `create-impd.ts` (`createImpd`) with stubs as its deps                              | The host: see Booting impd below                            |
-| Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `buildTestApp`)                                | A shim over createImpd's parts, without its start steps     |
+| Governed imps       | `imps/test-imps.ts` (`setupImpTest`, `createImpTest`, `buildTestApp`)               | A shim over createImpd's parts, without its start steps     |
 | Firecracker API     | `Bun.serve({ unix })` (1); a Bun script (2)                                         | Firecracker's HTTP API on its socket                        |
 | Firecracker process | `bash` run under the name `firecracker` (3)                                         | A process whose cmdline matches Firecracker's               |
 | Guest agent         | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                 | The agent on the vsock socket: CONNECT and frames           |
@@ -183,6 +201,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Docker CLI          | A `docker` script on `PATH` in the images tests                                     | The `docker` binary                                         |
 | CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                                         | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`     |
 | Docker for upgrade  | `scripts/test-utils/build-stub-host-docker.ts`                                      | The docker that `deploy/upgrade.sh` drives on a host        |
+| Docker for dev.sh   | `scripts/test-utils/build-stub-dev-docker.ts`                                       | The images, labels and containers `dev.sh prune` reads      |
+| Registry for base   | `scripts/test-utils/build-stub-registry-docker.ts`                                  | `docker buildx imagetools inspect` in the release Plan step |
+| impd for the client | `packages/client/smoke/run-stub-impd.ts`                                            | impd's app on loopback, run by `check-client-runtimes.sh`   |
 | nft                 | `setupImpTest`'s default `runNft`, which records scripts                            | `nft` from the egress service                               |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                                          | `ip` and `sysctl -n`, as `createTapDevices`'s `run`         |
 | mount               | A `run` with a mount table in `vmm/jail.test.ts`                                    | `mount` and `umount` for the jailer                         |
@@ -244,9 +265,11 @@ usage cache, backups, the builders' engine wait, or the broker's direct `Date.no
 `broker-service.ts` (the connected-prefix and public-route caches, and the leaf renewal check),
 which stay on the wall clock: a known gap. A field left out takes the host's real one. Its parts
 (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`,
-`buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for `setupImpTest`, which wires
-them without the start steps. `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs.
-The egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
+`buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for `createImpTest`, which
+wires them without the start steps into a caller's stack; `setupImpTest` wraps it with its own
+stack, and the client smoke's `run-stub-impd.ts` runs it outside a test.
+`packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
+`IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
 `test-utils/find-free-ports.ts`.
 
 ## Connectors

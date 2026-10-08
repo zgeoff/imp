@@ -55,10 +55,10 @@ test('it gives the function only PATH and the variables it is passed', () => {
   const ctx = setupTest();
   const script = join(ctx.dir, 'lib.sh');
 
-  writeFileSync(script, `show() { echo "\${IMP_SET-unset} \${HOME-unset}"; }\n`);
+  writeFileSync(script, `show() { echo "\${IMP_SET-unset} \${HOME-unset} \${PATH:+path-set}"; }\n`);
 
   expect(runSourcedFunction({ script, fn: 'show', env: { IMP_SET: 'yes' } }).stdout).toBe(
-    'yes unset\n',
+    'yes unset path-set\n',
   );
 });
 

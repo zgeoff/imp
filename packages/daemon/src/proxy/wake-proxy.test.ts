@@ -94,6 +94,14 @@ async function setupUpstreamTest(
   respond: (request: Request) => Response | Promise<Response> = () => new Response('ok'),
 ) {
   const cookies: (string | null)[] = [];
+  const ports = pickPorts();
+
+  // one stack: the proxy stops, then the upstream, then the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, { env: ports });
 
   const upstream = Bun.serve({
     port: 0,
@@ -116,16 +124,7 @@ async function setupUpstreamTest(
     },
   });
 
-  onTestFinished(() => upstream.stop(true));
-
-  const ports = pickPorts();
-
-  // the proxy stops before the harness closes its database
-  const stack = new AsyncDisposableStack();
-
-  onTestFinished(() => stack.disposeAsync());
-
-  const ctx = await createImpTest(stack, { env: ports });
+  stack.defer(() => upstream.stop(true));
 
   const proxy = startWakeProxy({
     config: ctx.config,

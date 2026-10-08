@@ -1,18 +1,23 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findImpByName } from '../db/imps';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildTestApp, createImpTest } from '../imps/test-imps';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMemoryMax, createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 
 // Elastic imps through the router, on the fake VMs: what create accepts, and
-// what a sleep and a wake do with the plugged memory.
-async function setupElasticTest(env: Readonly<Record<string, string>> = {}, cgroups?: CpuCgroups) {
-  const harness = await setupImpTest({ env, ...(cgroups !== undefined && { cgroups }) });
+// what a sleep and a wake do with the plugged memory. A test whose cgroup
+// root must outlive the harness passes the stack that already holds it.
+async function setupElasticTest(
+  env: Readonly<Record<string, string>> = {},
+  cgroups?: CpuCgroups,
+  stack: Readonly<AsyncDisposableStack> = registerStack(),
+) {
+  const harness = await createImpTest(stack, { env, ...(cgroups !== undefined && { cgroups }) });
 
   await harness.createTestImage('ubuntu');
 
@@ -134,10 +139,23 @@ test('an imp that does not grow sleeps without asking its guest', async () => {
   expect(readSnapshotMeta(paths)?.pluggedMib).toBeUndefined();
 });
 
+// a stack the test's end releases
+function registerStack(): AsyncDisposableStack {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  return stack;
+}
+
 // a cgroup root in a temp dir with the cpu and memory controllers handed to
-// imps/, as setup-cgroups.sh leaves it
-function setupCgroupRoot() {
+// imps/, as setup-cgroups.sh leaves it; removed by `stack`
+function setupCgroupRoot(stack: Readonly<AsyncDisposableStack>) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  stack.defer(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   mkdirSync(join(dir, 'imps'), { recursive: true });
   writeFileSync(join(dir, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
@@ -156,16 +174,15 @@ function setupCgroupRoot() {
       current.cgroups = createCpuCgroups({ root: dir, log: () => {} });
     },
     readMemoryMax: (impId: string) => readFileSync(join(dir, 'imps', impId, 'memory.max'), 'utf8'),
-    [Symbol.dispose]: () => {
-      rmSync(dir, { recursive: true, force: true });
-    },
   };
 }
 
 test("memory.max follows the guest: its memory at boot, raised by a grow, the plug's size at wake", async () => {
-  using root = setupCgroupRoot();
+  // one stack: the harness goes before the cgroup root it writes
+  const stack = registerStack();
+  const root = setupCgroupRoot(stack);
 
-  const ctx = await setupElasticTest({}, root.cgroups);
+  const ctx = await setupElasticTest({}, root.cgroups, stack);
 
   // an agent that moves its container's limit with the guest
   ctx.fake.agent.version = '0.17.0';
@@ -204,9 +221,11 @@ test("memory.max follows the guest: its memory at boot, raised by a grow, the pl
 });
 
 test('after a restart, adopt allows what the guest holds before a sleep can set up its cgroup', async () => {
-  using root = setupCgroupRoot();
+  // one stack: the harness goes before the cgroup root it writes
+  const stack = registerStack();
+  const root = setupCgroupRoot(stack);
 
-  const ctx = await setupElasticTest({}, root.cgroups);
+  const ctx = await setupElasticTest({}, root.cgroups, stack);
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 

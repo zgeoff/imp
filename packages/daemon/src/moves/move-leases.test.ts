@@ -313,8 +313,12 @@ test('a forced prepare that fails after the halt keeps the leases, and the imp r
   expect(status).toMatchObject({ isDone: true, error: null });
 });
 
-test('an older target is refused an imp with only a hold or a legacy hold, before any byte goes', async () => {
-  for (const owner of [HOLD, { ...HOLD, principal: 'legacy', display: 'legacy' }]) {
+test.each([
+  ['a hold', HOLD],
+  ['a legacy hold', { ...HOLD, principal: 'legacy', display: 'legacy' }],
+])(
+  'an older target is refused an imp with only %s, before any byte goes',
+  async (_label, owner) => {
     const ctx = await setupLeaseTest({ hook: removeKeepsLeases });
 
     await ctx.writeSourceLease(JOB, 600_000);
@@ -336,8 +340,8 @@ test('an older target is refused an imp with only a hold or a legacy hold, befor
     ]);
 
     expect(landed).toBeUndefined();
-  }
-});
+  },
+);
 
 test('an older target takes an imp with no lease', async () => {
   const ctx = await setupLeaseTest({ hook: removeKeepsLeases });

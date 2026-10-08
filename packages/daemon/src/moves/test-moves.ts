@@ -1,6 +1,7 @@
+import { onTestFinished } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import type { MoveStatus } from '@imp/api';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildTestApp, createImpTest } from '../imps/test-imps';
 import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
 import { deriveSlotAddress } from '../net/addressing';
 import { buildImagePaths } from '../storage/data-layout';
@@ -33,12 +34,26 @@ interface MoveHostsOptions {
   readonly moveTimeoutMs?: number;
 }
 
-// Two impds in one process: `source` sends to `target` through `fetch`,
-// which hands each request to the target's move routes as from the tailnet.
-export async function setupMoveHosts(options: MoveHostsOptions = {}) {
-  const source = await setupImpTest(options.source);
+// Two impds in one process: `source` sends to `target` through `fetch`, as
+// from the tailnet. One stack releases both at the test's end, the target
+// first; a throw in one release does not skip the other.
+export function setupMoveHosts(options: MoveHostsOptions = {}) {
+  const stack = new AsyncDisposableStack();
 
-  const target = await setupImpTest({
+  onTestFinished(() => stack.disposeAsync());
+
+  return createMoveHosts(stack, options);
+}
+
+// setupMoveHosts' hosts, their releases in `stack`, for a test whose own
+// resources must outlive both impds
+export async function createMoveHosts(
+  stack: Readonly<AsyncDisposableStack>,
+  options: MoveHostsOptions = {},
+) {
+  const source = await createImpTest(stack, options.source);
+
+  const target = await createImpTest(stack, {
     ...options.target,
     env: { IMP_PEER_URL: TARGET_URL, ...options.target?.env },
   });

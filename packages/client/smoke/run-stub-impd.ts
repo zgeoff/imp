@@ -8,46 +8,60 @@ import type { Server } from 'bun';
 
 // impd's own app with a fake agent and one imp, `smoke`, for smoke.ts.
 // Prints { url, prefixedUrl, closedUrl, token } as one JSON line and serves
-// until killed; prefixedUrl serves impd only under /impd/.
+// until SIGTERM; prefixedUrl serves impd only under /impd/.
 const PREFIX = '/impd';
 
-// the harness's releases, run on SIGTERM
+// what it started, released on SIGTERM and on a setup step that throws
 const stack = new AsyncDisposableStack();
 
-const harness = await createImpTest(stack);
-
-const built = buildTestApp(harness, harness, TEST_TOKEN, {
-  openExec: (_name, request) => Promise.resolve(buildFakeStream(request)),
-});
-
-const app = built.app.listen({ hostname: '127.0.0.1', port: 0 });
-const url = `http://127.0.0.1:${String(app.server?.port)}`;
-const proxy = startPrefixProxy(url);
-
-const closedUrl = await findClosedUrl();
-
-await harness.createTestImage('ubuntu');
-await built.client.imps.create({ name: 'smoke' });
+const served = await startOrRelease();
 
 process.on('SIGTERM', () => {
-  void stopServers();
+  void stopAndExit();
 });
 
-console.log(
-  JSON.stringify({
-    url,
-    prefixedUrl: `${proxy.url.origin}${PREFIX}/`,
-    closedUrl,
-    token: TEST_TOKEN,
-  }),
-);
+console.log(JSON.stringify(served));
 
-async function stopServers(): Promise<void> {
-  await proxy.stop(true);
-  await app.stop();
+async function startOrRelease() {
+  try {
+    return await startStubImpd();
+  } catch (error) {
+    await stack.disposeAsync();
+
+    throw error;
+  }
+}
+
+async function stopAndExit(): Promise<void> {
   await stack.disposeAsync();
 
   process.exit(0);
+}
+
+async function startStubImpd() {
+  const harness = await createImpTest(stack);
+
+  const built = buildTestApp(harness, harness, TEST_TOKEN, {
+    openExec: (_name, request) => Promise.resolve(buildFakeStream(request)),
+  });
+
+  const app = built.app.listen({ hostname: '127.0.0.1', port: 0 });
+
+  stack.defer(async () => {
+    await app.stop();
+  });
+
+  const url = `http://127.0.0.1:${String(app.server?.port)}`;
+  const proxy = startPrefixProxy(url);
+
+  stack.defer(() => proxy.stop(true));
+
+  const closedUrl = await findClosedUrl();
+
+  await harness.createTestImage('ubuntu');
+  await built.client.imps.create({ name: 'smoke' });
+
+  return { url, prefixedUrl: `${proxy.url.origin}${PREFIX}/`, closedUrl, token: TEST_TOKEN };
 }
 
 // `cat` without a tty echoes stdin until EOF. With a tty, as a console has,

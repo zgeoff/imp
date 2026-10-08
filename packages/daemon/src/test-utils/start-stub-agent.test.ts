@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { FRAME_TYPES, encodeFrame, encodeJsonFrame } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
@@ -255,13 +256,25 @@ test('it stops accepting connections once closed', async () => {
   expect(failed).resolves.toMatchObject({ code: expect.toBeOneOf(['ENOENT', 'ECONNREFUSED']) });
 });
 
-test('it lets a second close pass as a no-op', async () => {
+test('it closes when the test finishes', async () => {
   const ctx = await setupTest();
-  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
 
-  agent.close();
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { createConnection } from 'node:net';",
+      `import { startStubAgent } from ${JSON.stringify(join(import.meta.dir, 'start-stub-agent.ts'))};`,
+      `const path = ${JSON.stringify(join(ctx.dir, 'v.sock'))};`,
+      "test('it starts', async () => { await startStubAgent(path, () => {}); });",
+      "test('it finds it closed', () => {",
+      '  const client = createConnection(path);',
+      "  const failed = new Promise((resolve) => { client.once('error', resolve); });",
+      '  expect(failed).resolves.toMatchObject({ code: expect.stringMatching(/ENOENT|ECONNREFUSED/) });',
+      '});',
+    ].join('\n'),
+  );
 
-  expect(() => {
-    agent.close();
-  }).not.toThrow();
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });

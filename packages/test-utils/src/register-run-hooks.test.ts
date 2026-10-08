@@ -17,7 +17,7 @@ test('it puts an env override back before the next test of a run', async () => {
   await writeFile(
     join(ctx.dir, 'env.test.ts'),
     [
-      "import { expect, onTestFinished, test } from 'bun:test';",
+      "import { expect, test } from 'bun:test';",
       `import { updateEnv } from '${join(import.meta.dir, 'update-env.ts')}';`,
       "test('it sets', () => { updateEnv('IMP_TEST_RUN_HOOKS', 'set'); });",
       "test('it sees the override gone', () => { expect(process.env['IMP_TEST_RUN_HOOKS']).toBeUndefined(); });",
@@ -35,5 +35,6 @@ test('it puts an env override back before the next test of a run', async () => {
     { cwd: ctx.dir },
   );
 
+  expect(result.exitCode).toBe(0);
   expect(result.stderr.toString()).toInclude(' 2 pass');
 });

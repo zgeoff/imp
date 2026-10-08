@@ -1,9 +1,9 @@
-import { afterEach, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { createImage } from '../../db/images';
 import { findImpByName } from '../../db/imps';
-import { setupMoveHosts } from '../../moves/test-moves';
+import { createMoveHosts } from '../../moves/test-moves';
 import { runChecked, runCommand } from '../../process/run-command';
 import { readSnapshotMeta } from '../../sleep/snapshot-meta';
 import { createZfsBackend } from './zfs-backend';
@@ -15,7 +15,6 @@ import type { ZfsBackend } from './zfs-backend';
 const POOL_ROOT = process.env['IMP_TEST_ZFS_ROOT'];
 const POOL_DIR = process.env['IMP_TEST_ZFS_DIR'];
 const isReal = POOL_ROOT !== undefined && POOL_DIR !== undefined;
-const cleanups: (() => Promise<void>)[] = [];
 
 // zfs commands on a shared CI runner take seconds each
 const REAL_TEST_TIMEOUT_MS = 180_000;
@@ -32,19 +31,17 @@ function writeSyncedFile(path: string, text: string): void {
   }
 }
 
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) {
-    await cleanup();
-  }
-});
-
 // one impd's root dataset, mounted as setup-storage.sh mounts one, and its
-// backend; the cleanup waits for the backend's reclaim, then destroys it all
-async function setupPoolHost(name: string) {
+// backend; the release waits for the backend's reclaim, then destroys it all
+async function createPoolHost(stack: Readonly<AsyncDisposableStack>, name: string) {
   const root = `${POOL_ROOT ?? ''}/${name}`;
   const dataDir = join(POOL_DIR ?? '', name);
 
   await runChecked(['zfs', 'create', '-o', 'mountpoint=legacy', root]);
+
+  stack.defer(async () => {
+    await runChecked(['zfs', 'destroy', '-R', root]);
+  });
 
   mkdirSync(dataDir, { recursive: true });
 
@@ -52,11 +49,10 @@ async function setupPoolHost(name: string) {
 
   const made: { backend: ZfsBackend | null } = { backend: null };
 
-  cleanups.push(async () => {
+  stack.defer(async () => {
     await made.backend?.waitForReclaim();
 
     await runCommand(['umount', '-R', dataDir]);
-    await runChecked(['zfs', 'destroy', '-R', root]);
   });
 
   const createStorage = (dir: string): ZfsBackend => {
@@ -78,10 +74,15 @@ async function listDatasets(root: string): Promise<string[]> {
 async function setupPoolMove(options: Readonly<{ isShared?: boolean }> = {}) {
   const stamp = String(Date.now());
 
-  const source = await setupPoolHost(`s${stamp}`);
-  const target = await setupPoolHost(`t${stamp}`);
+  // one stack: both impds stop before their datasets go
+  const stack = new AsyncDisposableStack();
 
-  const hosts = await setupMoveHosts({
+  onTestFinished(() => stack.disposeAsync());
+
+  const source = await createPoolHost(stack, `s${stamp}`);
+  const target = await createPoolHost(stack, `t${stamp}`);
+
+  const hosts = await createMoveHosts(stack, {
     isShared: options.isShared === true,
     source: source.options,
     target: target.options,

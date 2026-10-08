@@ -130,6 +130,9 @@ async function setupTest() {
 
   stack.defer(() => {
     impd.egress.stop();
+  });
+
+  stack.defer(() => {
     impd.diskUsage.stop();
   });
 
@@ -203,6 +206,9 @@ test('it adopts a running VM through the new runner when it boots again', async 
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -230,6 +236,9 @@ test('it says CPU limits are kept on a host without a cpu controller', async () 
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -254,6 +263,9 @@ test('it says no jailed VM can start on a jailed host without a cpu controller',
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -278,6 +290,9 @@ test('it removes a system drive that no imp uses when it boots', async () => {
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -313,6 +328,9 @@ test('it removes a builder that a stopped impd left when it boots', async () => 
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -350,6 +368,9 @@ test('it drops a move ticket whose stream never came when it boots', async () =>
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -408,6 +429,9 @@ test('it sets a lease end from the wall clock when no clock is given', async () 
 
   ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 

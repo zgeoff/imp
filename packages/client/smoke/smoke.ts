@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { CLIENT_VERSION, ExecError, createImpClient, openExecSession } from '@zgeoff/imp-client';
 import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
 
-// The client's smoke against fake-impd.ts, from the packed package under
+// The client's smoke against run-stub-impd.ts, from the packed package under
 // Node, Bun and a compiled Bun binary (scripts/check-client-runtimes.sh).
-// Arguments: the expected version and fake-impd's JSON line.
+// Arguments: the expected version and run-stub-impd's JSON line.
 const [expectedVersion = '', impdJson = '{}'] = process.argv.slice(2);
 const impd = parseImpd(impdJson);
 const imp = createImpClient({ url: impd.url, token: impd.token });
@@ -52,7 +52,7 @@ function parseImpd(json: string): Record<'url' | 'prefixedUrl' | 'closedUrl' | '
   const read = (key: string): string => {
     const value: unknown = Reflect.get(parsed, key);
 
-    assert.equal(typeof value, 'string', `fake-impd's ${key}`);
+    assert.equal(typeof value, 'string', `run-stub-impd's ${key}`);
 
     return String(value);
   };
@@ -115,7 +115,7 @@ async function checkConsole(): Promise<void> {
   assert.deepEqual(exit, { code: null, signal: 'SIGINT' });
 }
 
-// fake-impd's proxy answers only under /impd/, so this fails if the client
+// run-stub-impd's proxy answers only under /impd/, so this fails if the client
 // drops the prefix from the RPC or the exec socket URL
 async function checkPrefix(): Promise<void> {
   const prefixed = createImpClient({ url: impd.prefixedUrl, token: impd.token });

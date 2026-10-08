@@ -1,11 +1,17 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
 import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
-import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import {
+  TEST_SYSTEM_FILES,
+  TEST_TOKEN,
+  buildTestApp,
+  createImpTest,
+  setupImpTest,
+} from './imps/test-imps';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
@@ -154,36 +160,46 @@ test('it reports the https URL when impd has a domain', async () => {
 });
 
 test('without its DNS token file, the API still answers and system.info names the file as an error', async () => {
+  // one stack: the harness goes before the dir its token file is in
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const dir = mkdtempSync(join(tmpdir(), 'imp-dns-token-'));
+
+  stack.defer(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   const tokenPath = join(dir, 'dns-api-token');
 
-  try {
-    const ctx = await setupTest(TEST_TOKEN, {
+  const harness = await createImpTest(stack, {
+    env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
       IMP_DNS_API_TOKEN_FILE: tokenPath,
-    });
+    },
+  });
 
-    const missing = await ctx.client.system.info();
+  const ctx = buildTestApp(harness, harness, TEST_TOKEN);
 
-    expect(missing.https?.domain).toBe('imp.example.com');
+  const missing = await ctx.client.system.info();
 
-    expect(missing.https?.dnsToken).toMatchObject({
-      isOk: false,
-      error: `cannot read the DNS API token from ${tokenPath}: ENOENT`,
-    });
+  expect(missing.https?.domain).toBe('imp.example.com');
 
-    // the operator puts the token in place; the next ask sees it, with no
-    // restart, and never shows it
-    writeFileSync(tokenPath, 'cf-secret-token\n');
+  expect(missing.https?.dnsToken).toMatchObject({
+    isOk: false,
+    error: `cannot read the DNS API token from ${tokenPath}: ENOENT`,
+  });
 
-    const fixed = await ctx.client.system.info();
+  // the operator puts the token in place; the next ask sees it, with no
+  // restart, and never shows it
+  writeFileSync(tokenPath, 'cf-secret-token\n');
 
-    expect(fixed.https?.dnsToken?.isOk).toBe(true);
-    expect(JSON.stringify([missing, fixed])).not.toContain('cf-secret-token');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const fixed = await ctx.client.system.info();
+
+  expect(fixed.https?.dnsToken?.isOk).toBe(true);
+  expect(JSON.stringify([missing, fixed])).not.toContain('cf-secret-token');
 });
 
 const PUBLIC_ENV = {

@@ -50,10 +50,11 @@ test('it exits 0 with no output when it has no script', () => {
     env: { PATH: `${stub.bin}:${process.env['PATH'] ?? ''}` },
   });
 
-  expect({ exitCode: result.exitCode, stdout: result.stdout.toString() }).toStrictEqual({
-    exitCode: 0,
-    stdout: '',
-  });
+  expect({
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
 });
 
 test('it logs the calls of stubs that share a directory in the order they ran', () => {

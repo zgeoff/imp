@@ -1,10 +1,10 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import type { Socket } from 'node:net';
 import * as z from 'zod';
 import type { AgentSession } from '../agent-client/agent-requests';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName } from '../db/imps';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildTestApp, createImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
@@ -72,7 +72,12 @@ function buildSessionAgent(initial: readonly AgentSession[], knowsKill: boolean)
 }
 
 async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = true) {
-  const harness = await setupImpTest();
+  // one stack: the stub agent closes before the harness it serves
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack);
 
   const app = buildTestApp(harness, harness);
 
@@ -82,7 +87,7 @@ async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = t
 
   const agent = buildSessionAgent(sessions, knowsKill);
 
-  await startStubAgent(
+  const listening = await startStubAgent(
     buildImpPaths(harness.config.dataDir, imp.id).vsockSocket,
     (socket, request, frames) => {
       if (frames.length === 1) {
@@ -90,6 +95,10 @@ async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = t
       }
     },
   );
+
+  stack.defer(() => {
+    listening.close();
+  });
 
   return {
     ...harness,

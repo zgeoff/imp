@@ -67,15 +67,9 @@ export async function startStubAgent(path: string, agent: StubAgentHandler) {
     server.listen(path, resolve);
   });
 
-  const listening = { isOpen: true };
-
-  // a second close does nothing
+  // a close after the test closed it already does nothing
   const stopServer = (): void => {
-    if (listening.isOpen) {
-      listening.isOpen = false;
-
-      server.close();
-    }
+    server.close();
   };
 
   onTestFinished(stopServer);
