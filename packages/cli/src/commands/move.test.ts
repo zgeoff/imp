@@ -6,8 +6,6 @@ import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { TEST_TOKEN } from '@imp/daemon/src/imps/test-imps';
-import { createMoveHosts, createUbuntuImage } from '@imp/daemon/src/moves/test-moves';
 import {
   buildImagePaths,
   buildSystemDrivePath,
@@ -17,12 +15,12 @@ import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
 import { createImpClient } from '@zgeoff/imp-client';
 import { HttpResponse, http } from 'msw';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { runCli } from '../test-utils/start-cli';
+import { startWarmMoveHosts } from '../test-utils/start-warm-move-hosts';
 import { UsageError } from '../usage-error';
 import { runMove } from './move';
 
@@ -31,6 +29,9 @@ async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
+
+  // each call the CLI makes, as `<host> <procedure>`, in the order impd took them
+  const calls: string[] = [];
 
   const startImpd = async (host: string) => {
     // a test moves a host's clock on, such as past the target's commit window
@@ -152,7 +153,11 @@ async function setupTest() {
     const client = createImpClient({
       url: `http://${host}.test`,
       token: 'root-token',
-      fetch: (request) => impd.api.app.handle(request),
+      fetch: (request) => {
+        calls.push(`${host} ${new URL(request.url).pathname.slice('/rpc/'.length)}`);
+
+        return impd.api.app.handle(request);
+      },
     });
 
     return {
@@ -167,6 +172,7 @@ async function setupTest() {
   const target = await startImpd('b');
 
   return {
+    calls,
     from: source.client,
     to: target.client,
 
@@ -212,6 +218,12 @@ test('it prepares on the source, takes a ticket from the target, then sends', as
 
   expect(print).toHaveBeenCalledExactlyOnceWith('dev: moved to b');
   expect(moved.state).toBe('stopped');
+
+  expect(
+    ctx.calls.filter((call) =>
+      ['a moves/prepare', 'b moves/receive', 'a moves/send'].includes(call),
+    ),
+  ).toStrictEqual(['a moves/prepare', 'b moves/receive', 'a moves/send']);
 });
 
 test('it draws the send’s progress on a terminal and ends the line', async () => {
@@ -272,6 +284,8 @@ test('it moves an imp that holds leases for --stop, which ends them as imp stop 
   await ctx.from.imps.create({ name: 'dev' });
   await ctx.from.leases.acquire({ name: 'dev', label: 'ci', ttlSeconds: 600 });
 
+  const held = await ctx.from.leases.list({ name: 'dev' });
+
   server.use(http.all('http://100.100.0.2:7070/*', (info) => ctx.receiveFromSource(info.request)));
 
   const print = mock<(line: string) => void>();
@@ -292,7 +306,13 @@ test('it moves an imp that holds leases for --stop, which ends them as imp stop 
     now: () => 0,
   });
 
+  const moved = await ctx.to.imps.get({ name: 'dev' });
+  const leases = await ctx.to.leases.list({ name: 'dev' });
+
   expect(print).toHaveBeenCalledExactlyOnceWith('dev: moved to b');
+  expect(held).toHaveLength(1);
+  expect(moved.state).toBe('stopped');
+  expect(leases).toBeEmpty();
 });
 
 test('it refuses to move a sleeping imp with its memory when the target’s data dir differs', async () => {
@@ -359,52 +379,21 @@ test('it prepares a sleeping imp without facts when the target is an older impd 
 });
 
 test('it moves a sleeping imp with its memory and says it moved asleep', async () => {
-  // one stack: the listeners close before both impds stop
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  // a warm move needs one data dir on both hosts, which two impds in one
-  // process cannot share: both report the target's facts
-  const hosts = await createMoveHosts(stack, { isShared: true });
+  const hosts = await startWarmMoveHosts(stack);
 
-  await createUbuntuImage(hosts.source);
-  await createUbuntuImage(hosts.target);
-
-  const source = hosts.sourceApp.app.listen({ port: 0, hostname: '127.0.0.1' });
-
-  stack.defer(async () => {
-    await source.stop(true);
-  });
-
-  const target = hosts.targetApp.app.listen({ port: 0, hostname: '127.0.0.1' });
-
-  stack.defer(async () => {
-    await target.stop(true);
-  });
-
-  const sourcePort = source.server?.port;
-  const targetPort = target.server?.port;
-
-  invariant(sourcePort);
-  invariant(targetPort);
-
-  const from = createImpClient({
-    url: `http://127.0.0.1:${String(sourcePort)}`,
-    token: TEST_TOKEN,
-  });
-
-  const to = createImpClient({ url: `http://127.0.0.1:${String(targetPort)}`, token: TEST_TOKEN });
-
-  await from.imps.create({ name: 'dev', image: 'ubuntu' });
-  await from.imps.sleep({ name: 'dev' });
+  await hosts.from.imps.create({ name: 'dev', image: 'ubuntu' });
+  await hosts.from.imps.sleep({ name: 'dev' });
 
   const print = mock<(line: string) => void>();
 
   await runMove({
     name: 'dev',
-    from,
-    to,
+    from: hosts.from,
+    to: hosts.to,
     toHost: 'b',
     mode: 'move',
     stop: false,
@@ -417,7 +406,7 @@ test('it moves a sleeping imp with its memory and says it moved asleep', async (
     now: () => 0,
   });
 
-  const moved = await to.imps.get({ name: 'dev' });
+  const moved = await hosts.to.imps.get({ name: 'dev' });
 
   expect(print).toHaveBeenCalledExactlyOnceWith('dev: moved to b, asleep with its memory');
   expect(moved.state).toBe('sleeping');

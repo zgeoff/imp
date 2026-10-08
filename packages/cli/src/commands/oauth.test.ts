@@ -12,6 +12,7 @@ import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-c
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { createImpClient } from '@zgeoff/imp-client';
+import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
 import { UsageError } from '../usage-error';
 import { runApprove } from './oauth';
@@ -119,15 +120,31 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
+  // a call's body as oRPC sends it: the input under `json`
+  const RpcBodySchema = z.looseObject({ json: z.unknown() });
+
+  // each call a client makes: its procedure and its input as oRPC sends it
+  const calls: { readonly path: string; readonly input: unknown }[] = [];
+
   return {
     oauth: impd.oauth,
+    calls,
 
     // a client of impd's API for the token with this secret
     connect: (token: string) =>
       createImpClient({
         url: 'http://impd.test',
         token,
-        fetch: (request) => impd.api.app.handle(request),
+        fetch: async (request) => {
+          const body: unknown = await request.clone().json();
+
+          calls.push({
+            path: new URL(request.url).pathname.slice('/rpc/'.length),
+            input: RpcBodySchema.parse(body).json,
+          });
+
+          return impd.api.app.handle(request);
+        },
       }),
   };
 }
@@ -193,6 +210,7 @@ test('it shows the sign-in and approves nothing when the answer at a terminal is
 
   expect(approving).rejects.toThrowWithMessage(Error, 'not approved; nothing changed');
   expect(confirm).toHaveBeenCalledExactlyOnceWith('Approve this sign-in? [y/N] ');
+  expect(ctx.calls.filter((call) => call.path === 'oauth/approvals/approve')).toBeEmpty();
 
   expect(show.mock.calls).toStrictEqual([
     [
@@ -248,6 +266,10 @@ test('it approves what it showed when the answer at a terminal is yes', async ()
   expect(show).toHaveBeenLastCalledWith(
     'imp: approved: conn gets exec on dev-*; press Continue on the sign-in page',
   );
+
+  expect(ctx.calls.filter((call) => call.path === 'oauth/approvals/approve')).toStrictEqual([
+    { path: 'oauth/approvals/approve', input: { code, scope: 'exec', imps: ['dev-*'] } },
+  ]);
 
   expect(approver.oauth.approvals.approve({ code, scope: 'exec' })).rejects.toMatchObject({
     code: 'CONFLICT',

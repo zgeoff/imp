@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { defineCommand } from 'citty';
 import { mainCommand } from './command-tree';
 import { buildCompletionTree, renderCompletion } from './completion';
+import type { CompletionNode } from './completion';
+import { runCli } from './test-utils/start-cli';
 
 test('#renderCompletion renders the bash script of a tree', () => {
   const tree = {
@@ -236,13 +238,36 @@ test('#buildCompletionTree lists the subcommands, flags, aliases and negations o
   });
 });
 
-test('#buildCompletionTree holds every command of the CLI', async () => {
+test('#completionCommand prints the bash script for the whole CLI', async () => {
+  const tree = await buildCompletionTree(mainCommand);
+  const result = await runCli({ args: ['completion', 'bash'] });
+
+  expect(result).toStrictEqual({ stdout: renderCompletion('bash', tree), stderr: '', code: 0 });
+});
+
+test('#completionCommand refuses a shell it has no script for', async () => {
+  const result = await runCli({ args: ['completion', 'tcsh'] });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: no completion for tcsh (try bash, zsh, fish)\n',
+    code: 2,
+  });
+});
+
+test('#buildCompletionTree gives imp login its own flags', async () => {
   const tree = await buildCompletionTree(mainCommand);
 
   expect(tree.children).toPartiallyContain({
     path: 'imp login',
     flags: expect.arrayContaining(['--no-verify']) as unknown,
   });
+});
+
+test('#buildCompletionTree holds imp completion itself, with no subcommands', async () => {
+  const tree = await buildCompletionTree(mainCommand);
+
+  expect(tree.children).toPartiallyContain({ path: 'imp completion', subcommands: [] });
 });
 
 test('#buildCompletionTree reaches the nested commands of the CLI', async () => {
@@ -264,10 +289,14 @@ test.each(['bash', 'zsh', 'fish'] as const)(
   async (shell) => {
     const tree = await buildCompletionTree(mainCommand);
 
-    const paths = [tree, ...tree.children, ...tree.children.flatMap((node) => node.children)].map(
-      (node) => node.path,
-    );
+    // every level of the tree, however deep: the walk visits what it appends
+    const nodes: CompletionNode[] = [tree];
 
+    for (const node of nodes) {
+      nodes.push(...node.children);
+    }
+
+    const paths = nodes.map((node) => node.path);
     const script = renderCompletion(shell, tree);
 
     expect(paths).toSatisfyAll((path: string) => script.includes(`'${path}'`));
