@@ -1,9 +1,7 @@
 package server
 
 import (
-	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -12,7 +10,6 @@ import (
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
-	"gotest.tools/v3/poll"
 )
 
 // fakeIoctl records the ioctls freeze and thaw issue.
@@ -103,19 +100,6 @@ func TestStaleAutoThawLeavesALaterFreezeFrozen(t *testing.T) {
 	assert.Check(t, s.frozen, "the later freeze still holds")
 }
 
-// lockWaiters reports whether a goroutine running fn is blocked taking a
-// sync.Mutex, from the runtime's own stacks.
-func lockWaiters(fn string) bool {
-	buf := make([]byte, 1<<20)
-	stacks := string(buf[:runtime.Stack(buf, true)])
-	for _, g := range strings.Split(stacks, "\n\n") {
-		if strings.Contains(g, fn) && strings.Contains(g, "sync.(*Mutex).Lock") {
-			return true
-		}
-	}
-	return false
-}
-
 // A timer that fires while freezeMu is held waits for the lock, then finds
 // its freeze thawed and a new one in place, and leaves the new one frozen.
 func TestAutoThawThatFiresWhileTheLockIsHeldWaitsAndThenLeavesALaterFreeze(t *testing.T) {
@@ -132,21 +116,39 @@ func TestAutoThawThatFiresWhileTheLockIsHeldWaitsAndThenLeavesALaterFreeze(t *te
 	assert.NilError(t, s.freeze(time.Millisecond))
 	t.Cleanup(func() { s.thaw() })
 	autoThaw := callbacks[0]
+	started := make(chan struct{})
+	autoThawFired = func() { close(started) }
+	t.Cleanup(func() { autoThawFired = nil })
 	s.freezeMu.Lock()
+	held := true
 	fired := make(chan struct{})
 	// the timer fires: its callback runs on a goroutine of its own
 	go func() {
 		defer close(fired)
 		autoThaw()
 	}()
-	poll.WaitOn(t, func(poll.LogT) poll.Result {
-		if lockWaiters("server.(*Server).freeze.func1") {
-			return poll.Success()
+	// after a failure below, let the callback have the lock and join it
+	t.Cleanup(func() {
+		if held {
+			s.freezeMu.Unlock()
 		}
-		return poll.Continue("the callback is not waiting on freezeMu yet")
-	}, poll.WithTimeout(5*time.Second), poll.WithDelay(time.Millisecond))
+		select {
+		case <-fired:
+		case <-time.After(5 * time.Second):
+			t.Error("the auto-thaw callback did not return")
+		}
+	})
+	// The callback has started while the lock is held. Whether it takes the
+	// lock before or after the later freeze below, it must leave that
+	// freeze alone.
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the callback never started")
+	}
 
 	thawErr := s.thawLocked()
+	held = false
 	s.freezeMu.Unlock()
 	freezeErr := s.freeze(time.Hour)
 	select {

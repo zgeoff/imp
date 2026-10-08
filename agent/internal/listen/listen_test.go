@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -531,11 +532,17 @@ func TestServeClosesTheLoopbackTCPPortWhenTheHostCloses(t *testing.T) {
 	err := endListener(t, control)
 
 	assert.Check(t, err, "listen")
+	// Binding the port, without listening, proves the listener let it go
+	// and keeps any other listener from taking it before the dial.
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	assert.NilError(t, err)
+	t.Cleanup(func() { syscall.Close(fd) })
+	assert.NilError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Port: resp.Port, Addr: [4]byte{127, 0, 0, 1}}), "the port is still held")
 	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", resp.Port))
 	if err == nil {
 		c.Close()
 	}
-	assert.Check(t, err != nil, "the port still listens")
+	assert.Check(t, cmp.ErrorIs(err, syscall.ECONNREFUSED))
 }
 
 // A socket's directory is judged by where it is, not by its path: a link

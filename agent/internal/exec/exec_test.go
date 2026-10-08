@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -38,7 +39,11 @@ func TestMain(m *testing.M) {
 		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0o600); err != nil {
 			os.Exit(1)
 		}
-		select {}
+		// Block in a syscall, which the runtime does not count as a
+		// deadlock (a bare select{} is one without cgo).
+		for {
+			unix.Pause()
+		}
 	}
 	testReaper = reaper.New()
 	os.Exit(m.Run())

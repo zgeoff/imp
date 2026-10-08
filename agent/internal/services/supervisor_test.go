@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -87,6 +88,31 @@ type heldRunner struct {
 	direct  *proc.Direct
 	forked  chan *proc.Process
 	proceed chan struct{}
+	once    sync.Once
+}
+
+// newHeldRunner makes a heldRunner whose holds cleanup releases, so a
+// failed test leaves no Start blocked.
+func newHeldRunner(t *testing.T) *heldRunner {
+	t.Helper()
+	r := &heldRunner{direct: &proc.Direct{Reaper: testReaper}, forked: make(chan *proc.Process, 1), proceed: make(chan struct{})}
+	t.Cleanup(r.release)
+	return r
+}
+
+// release lets every held Start return; it is safe to call twice.
+func (r *heldRunner) release() { r.once.Do(func() { close(r.proceed) }) }
+
+// nextFork waits, bounded, for the runner's next fork.
+func (r *heldRunner) nextFork(t *testing.T) *proc.Process {
+	t.Helper()
+	select {
+	case p := <-r.forked:
+		return p
+	case <-time.After(5 * time.Second):
+		t.Fatal("no fork")
+		return nil
+	}
 }
 
 func (r *heldRunner) Start(spec proc.Spec) (*proc.Process, error) {
@@ -99,10 +125,12 @@ func (r *heldRunner) Start(spec proc.Spec) (*proc.Process, error) {
 }
 
 func TestHeldRunnerHoldsTheReturnOfAStartedProcess(t *testing.T) {
-	r := &heldRunner{direct: &proc.Direct{Reaper: testReaper}, forked: make(chan *proc.Process, 1), proceed: make(chan struct{})}
+	r := newHeldRunner(t)
 	returned := make(chan *proc.Process, 1)
 	failed := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		p, err := r.Start(proc.Spec{Argv: []string{"/bin/true"}, Dir: "/"})
 		if err != nil {
 			failed <- err
@@ -110,37 +138,70 @@ func TestHeldRunnerHoldsTheReturnOfAStartedProcess(t *testing.T) {
 		}
 		returned <- p
 	}()
+	// registered after newHeldRunner's release, so it runs first; it
+	// releases the hold itself, then joins the Start
+	t.Cleanup(func() {
+		r.release()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("Start did not return")
+		}
+	})
 	var forked *proc.Process
 	select {
 	case forked = <-r.forked:
 	case err := <-failed:
 		t.Fatalf("Start: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no fork")
 	}
 	early := len(returned)
 
-	close(r.proceed)
-	got := <-returned
+	r.release()
+	var got *proc.Process
+	select {
+	case got = <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after the release")
+	}
 
 	assert.Check(t, early == 0, "Start returned before proceed")
 	assert.Check(t, got == forked, "Start returned another process")
-	<-got.Done
+	select {
+	case <-got.Done:
+	case <-time.After(5 * time.Second):
+		t.Error("true did not exit")
+	}
 }
 
 // A stop that lands after the fork, while the supervisor has not recorded
 // the process, still reaches it with SIGTERM.
 func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
-	r := &heldRunner{direct: &proc.Direct{Reaper: testReaper}, forked: make(chan *proc.Process, 1), proceed: make(chan struct{})}
+	r := newHeldRunner(t)
 	s := New(r, fsroot.Host, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}))
 	s.logDir = t.TempDir()
 	s.Start(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"})
-	p := <-r.forked
+	p := r.nextFork(t)
 	t.Cleanup(func() { p.Signal(syscall.SIGKILL) })
 	stopped := make(chan time.Duration, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		began := time.Now()
 		s.StopAll()
 		stopped <- time.Since(began)
 	}()
+	// runs before the kill above and newHeldRunner's release: it releases
+	// the held start, so StopAll can finish, and joins StopAll
+	t.Cleanup(func() {
+		r.release()
+		select {
+		case <-finished:
+		case <-time.After(stopGrace + 5*time.Second):
+			t.Error("StopAll did not return")
+		}
+	})
 	// StopAll has closed the service's stop, with no process to signal yet
 	poll.WaitOn(t, func(poll.LogT) poll.Result {
 		s.mu.Lock()
@@ -151,8 +212,13 @@ func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
 		return poll.Continue("StopAll has not reached the service")
 	}, poll.WithTimeout(5*time.Second), poll.WithDelay(time.Millisecond))
 
-	close(r.proceed)
-	took := <-stopped
+	r.release()
+	var took time.Duration
+	select {
+	case took = <-stopped:
+	case <-time.After(stopGrace + 5*time.Second):
+		t.Fatal("StopAll did not return")
+	}
 
 	assert.Check(t, took < stopGrace, "StopAll took %s; SIGTERM was lost", took)
 	list := s.List()

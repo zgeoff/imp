@@ -196,9 +196,12 @@ func TestStartRefusesARequiredCgroupThatIsNotOne(t *testing.T) {
 
 	p, err := d.Start(Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, Cgroup: openPlainDir(t), RequireCgroup: true})
 
-	// clone3 refuses a cgroup fd that is no cgroup with EBADF, and a required
-	// cgroup gets no retry without one
-	assert.Check(t, cmp.ErrorIs(err, syscall.EBADF))
+	// clone3 refuses a cgroup fd that is no cgroup with EBADF; where clone3
+	// is missing or a seccomp filter blocks it, the spawn fails with ENOSYS
+	// or EPERM. Any of them shows no retry ran without the cgroup: the
+	// retry would have started true.
+	assert.Check(t, errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EPERM),
+		"err %v, want EBADF, or ENOSYS or EPERM without clone3", err)
 	assert.Check(t, cmp.ErrorContains(err, "start true: "))
 	assert.Check(t, cmp.Nil(p))
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"path/filepath"
 	"slices"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -87,21 +88,59 @@ func (h *host) waitServed(t *testing.T) error {
 	}
 }
 
-// listen accepts one connection and hands it to handle.
+// listen hands each connection to handle on a goroutine of its own.
 func listen(t *testing.T, network, address string, handle func(net.Conn)) net.Addr {
 	t.Helper()
 	l, err := net.Listen(network, address)
 	assert.NilError(t, err)
-	t.Cleanup(func() { l.Close() })
-	go func() {
-		c, err := l.Accept()
-		if err != nil {
-			return
-		}
-		defer c.Close()
-		handle(c)
-	}()
+	serveConns(t, l, handle)
 	return l.Addr()
+}
+
+// serveConns accepts on l until cleanup and hands each connection to handle.
+// Cleanup closes l and every connection, then waits for the accept loop and
+// every handler to return.
+func serveConns(t *testing.T, l net.Listener, handle func(net.Conn)) {
+	t.Helper()
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+		wg    sync.WaitGroup
+	)
+	t.Cleanup(func() {
+		l.Close()
+		mu.Lock()
+		for _, c := range conns {
+			c.Close()
+		}
+		mu.Unlock()
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("a connection handler did not return")
+		}
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer c.Close()
+				handle(c)
+			}()
+		}
+	}()
 }
 
 // The target reads to EOF and only then answers: it works only when the

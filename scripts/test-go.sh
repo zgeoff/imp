@@ -16,7 +16,7 @@ if [ -n "${GO_TEST_JSONFILE:-}" ]; then
   jsonfile=$GO_TEST_JSONFILE
   mkdir -p "$(dirname "$jsonfile")"
 else
-  jsonfile=$(mktemp "${TMPDIR:-/tmp}/imp-go-test.XXXXXX.json")
+  jsonfile=$(mktemp "${TMPDIR:-/tmp}/imp-go-test.XXXXXX")
 fi
 
 status=0

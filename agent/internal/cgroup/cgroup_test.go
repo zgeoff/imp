@@ -162,7 +162,21 @@ func TestWaitEmptyReturnsOnceTheLeafEmpties(t *testing.T) {
 	}
 	t.Cleanup(func() { waitEmptyRead = nil })
 	emptied := make(chan bool, 1)
-	go func() { emptied <- g.WaitEmpty(time.Now().Add(5 * time.Second)) }()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		emptied <- g.WaitEmpty(time.Now().Add(5 * time.Second))
+	}()
+	// runs before the hook is cleared: it empties the leaf, so WaitEmpty
+	// ends after a failure too, and joins it
+	t.Cleanup(func() {
+		os.WriteFile(events, []byte("populated 0\nfrozen 0\n"), 0o600)
+		select {
+		case <-finished:
+		case <-time.After(10 * time.Second):
+			t.Error("WaitEmpty did not return")
+		}
+	})
 	var first bool
 	select {
 	case first = <-reads:
@@ -172,8 +186,15 @@ func TestWaitEmptyReturnsOnceTheLeafEmpties(t *testing.T) {
 
 	assert.NilError(t, os.WriteFile(events, []byte("populated 0\nfrozen 0\n"), 0o600))
 
+	var empty bool
+	select {
+	case empty = <-emptied:
+	case <-time.After(10 * time.Second):
+		t.Fatal("WaitEmpty did not return")
+	}
+
 	assert.Check(t, first, "the first read saw the leaf empty")
-	assert.Check(t, <-emptied, "the leaf never emptied")
+	assert.Check(t, empty, "the leaf never emptied")
 }
 
 // A parent removed under the tree is made again with its limits.

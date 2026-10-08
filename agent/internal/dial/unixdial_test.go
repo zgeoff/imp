@@ -91,19 +91,7 @@ func listenUnix(t *testing.T, dir, name string) string {
 	path := filepath.Join(dir, name)
 	l, err := net.Listen("unix", path)
 	assert.NilError(t, err)
-	t.Cleanup(func() { l.Close() })
-	go func() {
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer c.Close()
-				io.Copy(c, c)
-			}()
-		}
-	}()
+	serveConns(t, l, func(c net.Conn) { io.Copy(c, c) })
 	return path
 }
 
@@ -331,26 +319,35 @@ func listenPeer(t *testing.T, dir, name string, uid, gid int, mode os.FileMode) 
 	path := filepath.Join(dir, name)
 	l, err := net.Listen("unix", path)
 	assert.NilError(t, err)
-	t.Cleanup(func() { l.Close() })
+	stop := make(chan struct{})
 	assert.NilError(t, os.Chown(path, uid, gid))
 	assert.NilError(t, os.Chmod(path, mode))
 	p := &peerListener{path: path, peerUID: make(chan uint32, 1)}
-	go func() {
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				return
-			}
-			raw, _ := c.(*net.UnixConn).SyscallConn()
-			raw.Control(func(fd uintptr) {
-				cred, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-				if err == nil {
-					p.peerUID <- cred.Uid
-				}
-			})
-			c.Close()
+	serveConns(t, l, func(c net.Conn) {
+		raw, err := c.(*net.UnixConn).SyscallConn()
+		if err != nil {
+			return
 		}
-	}()
+		var uid uint32
+		var credErr error
+		raw.Control(func(fd uintptr) {
+			var cred *unix.Ucred
+			cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+			if credErr == nil {
+				uid = cred.Uid
+			}
+		})
+		if credErr != nil {
+			return
+		}
+		select {
+		case p.peerUID <- uid:
+		case <-stop:
+		}
+	})
+	// registered after serveConns, so it runs first and frees a handler
+	// blocked on the report before serveConns waits for it
+	t.Cleanup(func() { close(stop) })
 	return p
 }
 

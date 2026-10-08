@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -167,7 +168,8 @@ func TestParkForClaimClosesTheListenerAfterAClaim(t *testing.T) {
 
 	_, err := net.Dial("unix", "agent.sock")
 
-	assert.Assert(t, err != nil, "the parked listener is still open")
+	// the closed listener unlinks its socket, which is the test's own
+	assert.Check(t, cmp.ErrorIs(err, syscall.ENOENT), "the parked listener is still open")
 }
 
 // A snapshot restore resets the vsock transport: the park listens again,
