@@ -1,98 +1,98 @@
 import { expect, test } from 'bun:test';
 import { impContract } from '@imp/api';
+import { traverseContractProcedures } from '@orpc/server';
 import * as z from 'zod';
-import { PROCEDURE_ACCESS, findAccess } from './access-policy';
+import { findAccess } from './access-policy';
 import { readChangedImps } from './builder-calls';
 
-// the calls whose `name` is no imp that exists: a new one, a backup's, or
-// another resource's; and leases.list, which changes nothing
-const NOT_AN_IMP_CALLS = new Set([
-  'imps.create',
-  'moves.receive',
-  'backups.restore',
-  'leases.list',
-  'images.build',
-  'images.buildStream',
-  'images.delete',
-  'secrets.add',
-  'secrets.delete',
-  'secrets.refresh',
-  'networks.create',
-  'networks.delete',
-  'tokens.create',
-  'tokens.update',
-  'tokens.delete',
-  'tokens.addKey',
-  'tokens.removeKey',
-  'oauth.clients.add',
-  'oauth.clients.update',
-  'oauth.clients.delete',
-  'system.copyDatabase',
-]);
+// A completeness check over the access map. The calls left out name no imp
+// that exists (a new one, a backup's, another resource's) or change nothing.
+test('it reports the imp of every call that changes an imp it names', () => {
+  const notAnImp = new Set([
+    'imps.create',
+    'moves.receive',
+    'backups.restore',
+    'leases.list',
+    'images.build',
+    'images.buildStream',
+    'images.delete',
+    'secrets.add',
+    'secrets.delete',
+    'secrets.refresh',
+    'networks.create',
+    'networks.delete',
+    'tokens.create',
+    'tokens.update',
+    'tokens.delete',
+    'tokens.addKey',
+    'tokens.removeKey',
+    'oauth.clients.add',
+    'oauth.clients.update',
+    'oauth.clients.delete',
+    'system.copyDatabase',
+  ]);
 
-const IMP_FIELDS = new Set(['name', 'imp', 'source']);
+  const procedures: { readonly procedure: string; readonly schema: unknown }[] = [];
 
-// a zod schema without its optional wrapper
-function readUnwrapped(schema: unknown): unknown {
-  return schema instanceof z.ZodOptional ? schema.unwrap() : schema;
-}
-
-// the input fields of a procedure that hold a string, from its contract
-function readStringFields(procedure: string): string[] {
-  const contract = procedure
-    .split('.')
-    .reduce<unknown>(
-      (node, key) => (typeof node === 'object' && node !== null ? Reflect.get(node, key) : null),
-      impContract,
-    );
-
-  const orpc: unknown =
-    typeof contract === 'object' && contract !== null ? Reflect.get(contract, '~orpc') : null;
-
-  const schema: unknown =
-    typeof orpc === 'object' && orpc !== null ? Reflect.get(orpc, 'inputSchema') : null;
-
-  const object = readUnwrapped(schema);
-
-  if (!(object instanceof z.ZodObject)) {
-    return [];
-  }
-
-  return Object.entries<unknown>(object.shape).flatMap(([key, field]) =>
-    readUnwrapped(field) instanceof z.ZodString ? [key] : [],
-  );
-}
-
-test('every call that changes an imp it names is one a builder refuses', () => {
-  const missed = Object.keys(PROCEDURE_ACCESS).flatMap((procedure) => {
-    const access = findAccess(procedure);
-
-    if (access === null || access.scope === 'read' || procedure === 'imps.destroy') {
-      return [];
-    }
-
-    if (NOT_AN_IMP_CALLS.has(procedure)) {
-      return [];
-    }
-
-    const named = readStringFields(procedure).filter((field) => IMP_FIELDS.has(field));
-    const input = Object.fromEntries(named.map((field) => [field, `imp-${field}`]));
-    const changed = readChangedImps(procedure, access, input);
-
-    return named
-      .filter((field) => !changed.includes(`imp-${field}`))
-      .map((field) => `${procedure} ${field}`);
+  traverseContractProcedures({ router: impContract, path: [] }, (found) => {
+    procedures.push({
+      procedure: found.path.join('.'),
+      schema: found.contract['~orpc'].inputSchema,
+    });
   });
 
-  expect(missed).toEqual([]);
+  const missed = procedures
+    .filter((entry) => ['exec', 'manage'].includes(findAccess(entry.procedure)?.scope ?? 'none'))
+    .filter((entry) => entry.procedure !== 'imps.destroy' && !notAnImp.has(entry.procedure))
+    .filter(
+      (entry): entry is { readonly procedure: string; readonly schema: z.ZodObject } =>
+        entry.schema instanceof z.ZodObject,
+    )
+    .flatMap((entry) => {
+      const named = Object.keys(entry.schema.shape).filter((key) =>
+        ['name', 'imp', 'source'].includes(key),
+      );
+
+      const input = Object.fromEntries(named.map((key) => [key, `imp-${key}`]));
+      const changed = readChangedImps(entry.procedure, findAccess(entry.procedure), input);
+
+      return named
+        .filter((key) => !changed.includes(`imp-${key}`))
+        .map((key) => `${entry.procedure} ${key}`);
+    });
+
+  expect(missed).toStrictEqual([]);
 });
 
-test('a read and rm reach a builder', () => {
-  for (const procedure of ['imps.get', 'imps.policy', 'imps.destroy', 'sessions.list']) {
-    expect(readChangedImps(procedure, findAccess(procedure), { name: 'b' })).toEqual([]);
-  }
+test.each([['imps.get'], ['imps.policy'], ['imps.destroy'], ['sessions.list']])(
+  'it reports no imp changed by %s, which a builder may call',
+  (procedure) => {
+    expect(readChangedImps(procedure, findAccess(procedure), { name: 'b' })).toStrictEqual([]);
+  },
+);
 
-  expect(readChangedImps('imps.setPolicy', findAccess('imps.setPolicy'), { name: 'b' })).toEqual([
+test('it reports the imp a call on one imp changes', () => {
+  expect(
+    readChangedImps('imps.setPolicy', findAccess('imps.setPolicy'), { name: 'b' }),
+  ).toStrictEqual(['b']);
+});
+
+test('it reports the imp a host-wide call changes by its field', () => {
+  expect(readChangedImps('images.add', findAccess('images.add'), { imp: 'b' })).toStrictEqual([
     'b',
   ]);
+});
+
+test('it reports both imps of a fork', () => {
+  expect(
+    readChangedImps('imps.fork', findAccess('imps.fork'), { source: 'a', name: 'b' }),
+  ).toStrictEqual(['a', 'b']);
+});
+
+test('it reports no imp for a call with no access rule', () => {
+  expect(readChangedImps('imps.someday', null, { name: 'b' })).toStrictEqual([]);
+});
+
+test('it reports no imp for an input that names none', () => {
+  expect(readChangedImps('imps.setPolicy', findAccess('imps.setPolicy'), 'b')).toStrictEqual([]);
 });

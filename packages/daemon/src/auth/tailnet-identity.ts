@@ -2,6 +2,7 @@ import { ImpPatternSchema, ScopeSchema } from '@imp/api';
 import * as z from 'zod';
 import type { TailscaleStatus } from '../net/tailscale-status';
 import { runCommand } from '../process/run-command';
+import type { CommandResult } from '../process/run-command';
 import type { Caller } from './caller';
 
 // Tailnet identity (docs/guides/tokens.md#tailnet-identity): a connection
@@ -174,8 +175,12 @@ export function parseWhois(json: string): TailnetPeer | null {
   }
 }
 
-export async function runWhois(address: string): Promise<TailnetPeer | null> {
-  const result = await runCommand(['tailscale', 'whois', '--json', address]);
+// `run` is the command runner, the host's by default
+export async function runWhois(
+  address: string,
+  run: (argv: readonly string[]) => Promise<CommandResult> = runCommand,
+): Promise<TailnetPeer | null> {
+  const result = await run(['tailscale', 'whois', '--json', address]);
 
   return result.exitCode === 0 ? parseWhois(result.stdout) : null;
 }

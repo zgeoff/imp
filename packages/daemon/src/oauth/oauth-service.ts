@@ -76,7 +76,7 @@ const SCOPES: readonly Scope[] = ['read', 'exec', 'manage'];
 // the failure bucket token requests from no known client share
 const UNKNOWN_CLIENT_KEY = '';
 
-export interface AuthorizeParams {
+interface AuthorizeParams {
   readonly responseType: string | null;
   readonly clientId: string | null;
   readonly redirectUri: string | null;
