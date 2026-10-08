@@ -69,6 +69,9 @@ export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
 
   // `POST /move/*`: another host's side of a move (docs/architecture/moves.md)
   readonly moves: MoveService;
+
+  // where an unexpected RPC failure is logged; stderr by default
+  readonly logRpcFailure?: (failure: unknown) => void;
 }
 
 interface SocketEntry<Session> {
@@ -105,6 +108,12 @@ export function buildApp(deps: AppDeps) {
     return resolveCaller(request, sources, { peer, cookie });
   };
 
+  const logRpcFailure =
+    deps.logRpcFailure ??
+    ((failure: unknown) => {
+      console.error('impd: rpc failed:', failure);
+    });
+
   // expected errors (NOT_FOUND, INVALID_STATE, …) go to the client; anything
   // else is a bug or a host failure worth a log line
   const handler = new RPCHandler(buildRouter({ ...deps, execTickets }), {
@@ -113,7 +122,7 @@ export function buildApp(deps: AppDeps) {
     interceptors: [
       onError((failure) => {
         if (!(failure instanceof ORPCError)) {
-          console.error('impd: rpc failed:', failure);
+          logRpcFailure(failure);
         }
       }),
     ],

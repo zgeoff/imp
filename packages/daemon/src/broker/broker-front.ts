@@ -38,13 +38,19 @@ export interface BrokerFrontDeps {
   // opens a plain tunnel's upstream socket; tests point it at a local server
   readonly dialTunnel?: (address: string, port: number) => Socket;
 
-  // smaller limits for tests
+  // a smaller cap for tests
   readonly maxConnectionsPerImp?: number;
-  readonly headTimeoutMs?: number;
+
+  // starts the deadline for a connection's head, given its length;
+  // AbortSignal.timeout by default, and tests abort it themselves
+  readonly startHeadDeadline?: (ms: number) => AbortSignal;
 }
 
 export interface BrokerFront {
   readonly server: Server;
+
+  // the port it listens on: the one asked for, or the kernel's pick for 0
+  readonly port: number;
 
   // ends the imp's plain tunnels to hosts `keep` rejects, as a tighter
   // egress policy needs: they are relays in impd, which conntrack never sees
@@ -176,8 +182,11 @@ export function startBrokerFront(port: number, deps: BrokerFrontDeps): Promise<B
   server.once('error', ready.reject);
 
   server.listen(port, '0.0.0.0', () => {
+    const address = server.address();
+
     ready.resolve({
       server,
+      port: typeof address === 'object' && address !== null ? address.port : port,
       closeTunnels: tunnels.closeDenied,
       stop: async () => {
         const closed = Promise.withResolvers<void>();
@@ -249,7 +258,10 @@ async function runConnection(
   socket.setKeepAlive(true, KEEPALIVE_MS);
   tunnels.add(peer.id, socket);
 
-  const read = await readHead(socket, deps.headTimeoutMs ?? HEAD_TIMEOUT_MS);
+  const startHeadDeadline = deps.startHeadDeadline ?? ((ms: number) => AbortSignal.timeout(ms));
+  const deadline = startHeadDeadline(HEAD_TIMEOUT_MS);
+
+  const read = await readHead(socket, deadline);
 
   if (read === null) {
     socket.destroy();
@@ -326,13 +338,12 @@ interface HeadRead {
   readonly rest: Uint8Array;
 }
 
-function readHead(socket: Socket, timeoutMs: number): Promise<HeadRead | null> {
+function readHead(socket: Socket, deadline: AbortSignal): Promise<HeadRead | null> {
   const done = Promise.withResolvers<HeadRead | null>();
   const chunks: Uint8Array[] = [];
 
   const resolveRead = (result: HeadRead | null): void => {
-    clearTimeout(timer);
-
+    deadline.removeEventListener('abort', onDeadline);
     socket.off('data', onData);
     socket.off('close', onClose);
     socket.pause();
@@ -359,10 +370,17 @@ function readHead(socket: Socket, timeoutMs: number): Promise<HeadRead | null> {
     resolveRead(null);
   };
 
-  const timer = setTimeout(() => {
+  const onDeadline = (): void => {
     resolveRead(null);
-  }, timeoutMs);
+  };
 
+  if (deadline.aborted) {
+    resolveRead(null);
+
+    return done.promise;
+  }
+
+  deadline.addEventListener('abort', onDeadline, { once: true });
   socket.on('data', onData);
   socket.once('close', onClose);
 

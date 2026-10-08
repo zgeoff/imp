@@ -13,10 +13,14 @@ export type StubAgentHandler = (
   frames: readonly AgentFrame[],
 ) => void;
 
-// A unix socket at `path`, where Firecracker would put the guest's vsock,
-// that answers the CONNECT handshake and hands each decoded frame to
-// `agent`. `received` holds every frame; it closes at the test's end.
-export async function startStubAgent(path: string, agent: StubAgentHandler) {
+// A unix socket at `path` for the guest's vsock: it answers CONNECT, hands
+// each frame to `agent` and keeps it in `received`. It closes with `stack`
+// when given one, else at the test's end.
+export async function startStubAgent(
+  path: string,
+  agent: StubAgentHandler,
+  options: Readonly<{ stack?: Readonly<AsyncDisposableStack> }> = {},
+) {
   const received: AgentFrame[] = [];
 
   // the chunks read so far, for a test that splits its writes
@@ -72,7 +76,11 @@ export async function startStubAgent(path: string, agent: StubAgentHandler) {
     server.close();
   };
 
-  onTestFinished(stopServer);
+  if (options.stack === undefined) {
+    onTestFinished(stopServer);
+  } else {
+    options.stack.defer(stopServer);
+  }
 
   return {
     received,

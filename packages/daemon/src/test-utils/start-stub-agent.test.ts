@@ -278,3 +278,53 @@ test('it closes when the test finishes', async () => {
   expect(run.exitCode).toBe(0);
   expect(run.output).toInclude(' 2 pass');
 });
+
+test('it closes when the stack it was given is released', async () => {
+  const ctx = await setupTest();
+
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  await startStubAgent(join(ctx.dir, 'v.sock'), () => {}, { stack });
+
+  await stack.disposeAsync();
+
+  const client = createConnection(join(ctx.dir, 'v.sock'));
+
+  onTestFinished(() => {
+    client.destroy();
+  });
+
+  const failed = new Promise((resolve) => {
+    client.once('error', resolve);
+  });
+
+  expect(failed).resolves.toMatchObject({ code: expect.toBeOneOf(['ENOENT', 'ECONNREFUSED']) });
+});
+
+test('it leaves its close to the stack it was given, not the test’s end', async () => {
+  const ctx = await setupTest();
+
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { createConnection } from 'node:net';",
+      `import { startStubAgent } from ${JSON.stringify(join(import.meta.dir, 'start-stub-agent.ts'))};`,
+      `const path = ${JSON.stringify(join(ctx.dir, 'v.sock'))};`,
+      'const stack = new AsyncDisposableStack();',
+      "test('it starts', async () => { await startStubAgent(path, () => {}, { stack }); });",
+      "test('it finds it open', async () => {",
+      '  const client = createConnection(path);',
+      "  const connected = new Promise((resolve) => { client.once('connect', resolve); });",
+      '  await expect(connected).resolves.toBeUndefined();',
+      '  client.destroy();',
+      '  await stack.disposeAsync();',
+      '});',
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
+});

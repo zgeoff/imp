@@ -235,18 +235,47 @@ export function createGuestTrust(
   };
 }
 
+interface BundleInstallOptions {
+  // how long the install may take
+  readonly timeoutMs?: number;
+
+  // runs `cut` once `ms` is up and returns the cancel; setTimeout by default
+  readonly startTimer?: (cut: () => void, ms: number) => () => void;
+}
+
 // The install as an exec through the agent, as root (uid 0, which needs no
-// passwd entry), with buildInstallInput's text on stdin.
-export async function runBundleInstall(vsockPath: string, input: string): Promise<void> {
+// passwd entry), with buildInstallInput's text on stdin; cut off once its
+// time is up.
+export async function runBundleInstall(
+  vsockPath: string,
+  input: string,
+  options: Readonly<BundleInstallOptions> = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? INSTALL_TIMEOUT_MS;
+
+  const startTimer =
+    options.startTimer ??
+    ((cut: () => void, ms: number) => {
+      const timer = setTimeout(cut, ms);
+
+      return () => {
+        clearTimeout(timer);
+      };
+    });
+
   const stream = await openExecStream(vsockPath, {
     argv: ['/bin/sh', '-c', buildInstallScript()],
     tty: false,
     user: '0',
   });
 
-  const timer = setTimeout(() => {
+  const state = { cut: false };
+
+  const cancelTimer = startTimer(() => {
+    state.cut = true;
+
     stream.close();
-  }, INSTALL_TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     stream.writeStdin(new TextEncoder().encode(input));
@@ -266,9 +295,13 @@ export async function runBundleInstall(vsockPath: string, input: string): Promis
       }
     }
 
-    throw new Error('the install ended without an exit');
+    const ended = state.cut
+      ? `the install did not finish within ${String(timeoutMs)} ms`
+      : 'the install ended without an exit';
+
+    throw new Error(ended);
   } finally {
-    clearTimeout(timer);
+    cancelTimer();
 
     stream.close();
   }
