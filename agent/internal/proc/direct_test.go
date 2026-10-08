@@ -1,6 +1,8 @@
 package proc
 
 import (
+	"bufio"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,138 +10,188 @@ import (
 	"testing"
 	"time"
 
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
+
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
+// The reap loop is process-wide, so the package shares one Reaper.
 var testReaper = reaper.New()
 
-// run starts spec and returns what it wrote to stdout.
+// devNull opens /dev/null for the rest of the test.
+func devNull(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	assert.NilError(t, err)
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// run starts spec, waits for it to exit, and returns what it wrote to
+// stdout and stderr.
 func run(t *testing.T, d *Direct, spec Spec) string {
 	t.Helper()
 	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec.Files = []*os.File{nil, w, w}
-	devnull, _ := os.Open(os.DevNull)
-	defer devnull.Close()
-	spec.Files[0] = devnull
+	assert.NilError(t, err)
+	t.Cleanup(func() { r.Close() })
+	spec.Files = []*os.File{devNull(t), w, w}
 	p, err := d.Start(spec)
 	w.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	out := make([]byte, 4096)
-	n, _ := r.Read(out)
+	assert.NilError(t, err)
+	out, err := io.ReadAll(r)
+	assert.NilError(t, err)
 	<-p.Done
-	return strings.TrimSpace(string(out[:n]))
+	return strings.TrimSpace(string(out))
 }
 
-func TestAnEmptyDirFallsBackToTheWorkdirThenHome(t *testing.T) {
-	d := &Direct{Reaper: testReaper}
-	work := t.TempDir()
-	env := []string{"PATH=/usr/bin:/bin", "HOME=" + t.TempDir()}
-
-	got := run(t, d, Spec{Argv: []string{"pwd"}, Env: env, Workdir: work})
-	if got != work {
-		t.Fatalf("pwd = %q, want the workdir %q", got, work)
-	}
-	got = run(t, d, Spec{Argv: []string{"pwd"}, Env: env, Workdir: filepath.Join(work, "missing")})
-	if got != strings.TrimPrefix(env[1], "HOME=") {
-		t.Fatalf("pwd = %q, want HOME", got)
-	}
+// startGroup starts sh leaving a sleep in its process group, and returns
+// once the sleep has started. Cleanup kills whatever is left of the group.
+func startGroup(t *testing.T, d *Direct) *Process {
+	t.Helper()
+	r, w, err := os.Pipe()
+	assert.NilError(t, err)
+	t.Cleanup(func() { r.Close() })
+	null := devNull(t)
+	p, err := d.Start(Spec{
+		Argv:  []string{"sh", "-c", "sleep 30 & echo ready; wait"},
+		Env:   []string{"PATH=/usr/bin:/bin"},
+		Files: []*os.File{null, w, null},
+	})
+	w.Close()
+	assert.NilError(t, err)
+	t.Cleanup(func() { p.Signal(syscall.SIGKILL) })
+	line, err := bufio.NewReader(r).ReadString('\n')
+	assert.NilError(t, err)
+	assert.Equal(t, line, "ready\n")
+	return p
 }
 
-func TestAHelperRunsTheAgentFromItsOwnFd(t *testing.T) {
-	// "the agent" is /bin/echo here; its path goes away after the fd opens
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "agent")
+// agentCopy copies /bin/echo to stand in for the agent binary, opens it, and
+// removes its path, as an agent whose system drive went away.
+func agentCopy(t *testing.T) (path string, f *os.File) {
+	t.Helper()
 	b, err := os.ReadFile("/bin/echo")
 	if err != nil {
 		t.Skip("no /bin/echo")
 	}
-	if err := os.WriteFile(bin, b, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Open(bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	os.Remove(bin)
+	path = filepath.Join(t.TempDir(), "agent")
+	assert.NilError(t, os.WriteFile(path, b, 0o755))
+	f, err = os.Open(path)
+	assert.NilError(t, err)
+	t.Cleanup(func() { f.Close() })
+	assert.NilError(t, os.Remove(path))
+	return path, f
+}
 
+func TestStartRunsAnEmptyDirInTheWorkdir(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+	work := t.TempDir()
+
+	got := run(t, d, Spec{Argv: []string{"pwd"}, Env: []string{"PATH=/usr/bin:/bin", "HOME=" + t.TempDir()}, Workdir: work})
+
+	assert.Equal(t, got, work)
+}
+
+func TestStartRunsAnEmptyDirInHomeWhenTheWorkdirIsMissing(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+	home := t.TempDir()
+
+	got := run(t, d, Spec{Argv: []string{"pwd"}, Env: []string{"PATH=/usr/bin:/bin", "HOME=" + home}, Workdir: filepath.Join(t.TempDir(), "missing")})
+
+	assert.Equal(t, got, home)
+}
+
+func TestStartRunsAHelperFromTheAgentsOwnFd(t *testing.T) {
+	bin, f := agentCopy(t)
 	d := &Direct{Reaper: testReaper, Agent: bin, AgentFile: f}
-	if got := run(t, d, Spec{Argv: []string{"imp-agent", "hello"}, Helper: true}); got != "hello" {
-		t.Fatalf("helper said %q", got)
-	}
-	// an exec of the agent by its path, as impd's sftp
-	if got := run(t, d, Spec{Argv: []string{bin, "by path"}}); got != "by path" {
-		t.Fatalf("the agent by its path said %q", got)
-	}
+
+	got := run(t, d, Spec{Argv: []string{"imp-agent", "hello"}, Helper: true})
+
+	assert.Equal(t, got, "hello")
 }
 
-func TestKillReachesOnlyTheChildAndGroupAliveSeesTheGroup(t *testing.T) {
+// impd's sftp runs the agent by its path.
+func TestStartRunsTheAgentByItsPathFromItsOwnFd(t *testing.T) {
+	bin, f := agentCopy(t)
+	d := &Direct{Reaper: testReaper, Agent: bin, AgentFile: f}
+
+	got := run(t, d, Spec{Argv: []string{bin, "by path"}})
+
+	assert.Equal(t, got, "by path")
+}
+
+func TestStartRefusesAnEmptyArgv(t *testing.T) {
 	d := &Direct{Reaper: testReaper}
-	devnull, _ := os.Open(os.DevNull)
-	defer devnull.Close()
-	// the child leaves a grandchild in its group, then waits
-	p, err := d.Start(Spec{
-		Argv:  []string{"sh", "-c", "sleep 30 & wait"},
-		Env:   []string{"PATH=/usr/bin:/bin"},
-		Files: []*os.File{devnull, devnull, devnull},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// let the sh start its sleep
-	time.Sleep(200 * time.Millisecond)
-	if err := p.Kill(); err != nil {
-		t.Fatal(err)
-	}
+
+	p, err := d.Start(Spec{Env: []string{"PATH=/usr/bin:/bin"}})
+
+	assert.Check(t, cmp.ErrorContains(err, "empty argv"))
+	assert.Check(t, cmp.Nil(p))
+}
+
+func TestKillReachesOnlyTheChildWhileGroupAliveSeesTheRest(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+	p := startGroup(t, d)
+
+	assert.NilError(t, p.Kill())
+
 	st := <-p.Done
-	if st.Signal != syscall.SIGKILL {
-		t.Fatalf("status = %+v, want SIGKILL", st)
-	}
-	// the sleep is still in the group
-	if !p.GroupAlive() {
-		t.Fatal("the group should still have its sleep")
-	}
-	if err := p.Kill(); err != syscall.ESRCH {
-		t.Fatalf("a kill after the reap = %v, want ESRCH", err)
-	}
-	p.Signal(syscall.SIGKILL)
-	deadline := time.Now().Add(5 * time.Second)
-	for p.GroupAlive() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if p.GroupAlive() {
-		t.Fatal("the group outlived its SIGKILL")
-	}
+	assert.Check(t, cmp.Equal(st.Signal, syscall.SIGKILL))
+	assert.Check(t, p.GroupAlive(), "the group should still have its sleep")
 }
 
-// TestRequireCgroupRefusesTheFallback: a leaf that is not a cgroup (here a
-// plain directory) fails a spawn that requires it, where the default runs
-// the child without one.
-func TestRequireCgroupRefusesTheFallback(t *testing.T) {
+func TestKillAfterTheReapFailsWithESRCH(t *testing.T) {
 	d := &Direct{Reaper: testReaper}
-	dir, err := os.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dir.Close()
-	spec := Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, Cgroup: dir}
-
-	p, err := d.Start(spec)
-	if err != nil {
-		t.Fatalf("fallback: %v", err)
-	}
+	p, err := d.Start(Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}})
+	assert.NilError(t, err)
 	<-p.Done
-	if p.InCgroup {
-		t.Fatal("InCgroup for a plain directory")
-	}
-	spec.RequireCgroup = true
-	if _, err := d.Start(spec); err == nil {
-		t.Fatal("a required cgroup that is not one did not fail the spawn")
-	}
+
+	err = p.Kill()
+
+	assert.ErrorIs(t, err, syscall.ESRCH)
+}
+
+func TestGroupAliveTurnsFalseOnceTheGroupIsGone(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+	p := startGroup(t, d)
+
+	assert.NilError(t, p.Signal(syscall.SIGKILL))
+
+	<-p.Done
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if p.GroupAlive() {
+			return poll.Continue("the group is still alive")
+		}
+		return poll.Success()
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
+}
+
+// openPlainDir opens a directory that is not a cgroup, as a Spec.Cgroup.
+func openPlainDir(t *testing.T) *os.File {
+	t.Helper()
+	dir, err := os.Open(t.TempDir())
+	assert.NilError(t, err)
+	t.Cleanup(func() { dir.Close() })
+	return dir
+}
+
+func TestStartFallsBackToNoCgroupWhenTheLeafIsNotOne(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+
+	p, err := d.Start(Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, Cgroup: openPlainDir(t)})
+
+	assert.NilError(t, err)
+	<-p.Done
+	assert.Check(t, !p.InCgroup, "InCgroup for a plain directory")
+}
+
+func TestStartRefusesARequiredCgroupThatIsNotOne(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+
+	p, err := d.Start(Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, Cgroup: openPlainDir(t), RequireCgroup: true})
+
+	assert.Check(t, err != nil, "a required cgroup that is not one did not fail the spawn")
+	assert.Check(t, cmp.Nil(p))
 }

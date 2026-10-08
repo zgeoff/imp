@@ -3,26 +3,30 @@ package proc
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+	"syscall"
 	"testing"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
+// useAccounts points the account lookups at passwd and group files holding
+// the given contents, for the rest of the test.
 func useAccounts(t *testing.T, passwd, group string) {
 	t.Helper()
 	dir := t.TempDir()
 	p, g := filepath.Join(dir, "passwd"), filepath.Join(dir, "group")
-	if err := os.WriteFile(p, []byte(passwd), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(g, []byte(group), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.WriteFile(p, []byte(passwd), 0o644))
+	assert.NilError(t, os.WriteFile(g, []byte(group), 0o644))
 	oldP, oldG := passwdPath, groupPath
 	passwdPath, groupPath = p, g
 	t.Cleanup(func() { passwdPath, groupPath = oldP, oldG })
 }
 
+// The account files most cases resolve against: imp is in docker and
+// wheel, svc only in docker. They are immutable inputs; each test installs
+// them itself through useAccounts.
 const (
 	testPasswd = "root:x:0:0:root:/root:/bin/sh\n" +
 		"imp:x:1000:1000::/home/imp:/bin/bash\n" +
@@ -35,92 +39,96 @@ const (
 		"staff:x:50:\n"
 )
 
-func TestLookupUser(t *testing.T) {
-	useAccounts(t, testPasswd, testGroup)
-	tests := []struct {
-		spec     string
-		uid, gid uint32
-		groups   []uint32
-		home     string
+func TestLookupUserResolvesTheCredentialsAndHomeOfASpec(t *testing.T) {
+	for _, tc := range []struct {
+		spec string
+		cred *syscall.Credential
+		home string
 	}{
-		{"imp", 1000, 1000, []uint32{10, 999, 1000}, "/home/imp"},
-		{"1000", 1000, 1000, []uint32{10, 999, 1000}, "/home/imp"},
+		{"imp", &syscall.Credential{Uid: 1000, Gid: 1000, Groups: []uint32{10, 999, 1000}}, "/home/imp"},
+		{"1000", &syscall.Credential{Uid: 1000, Gid: 1000, Groups: []uint32{10, 999, 1000}}, "/home/imp"},
 		// An explicit group is the only group, as in runc.
-		{"imp:staff", 1000, 50, []uint32{}, "/home/imp"},
-		{"imp:7", 1000, 7, []uint32{}, "/home/imp"},
-		{"svc", 1001, 1001, []uint32{999, 1001}, "/srv"},
+		{"imp:staff", &syscall.Credential{Uid: 1000, Gid: 50, Groups: []uint32{}}, "/home/imp"},
+		{"imp:7", &syscall.Credential{Uid: 1000, Gid: 7, Groups: []uint32{}}, "/home/imp"},
+		{"svc", &syscall.Credential{Uid: 1001, Gid: 1001, Groups: []uint32{999, 1001}}, "/srv"},
 		// A uid with no passwd entry gets no supplementary groups.
-		{"4242", 4242, 4242, []uint32{}, "/"},
-		{"4242:999", 4242, 999, []uint32{}, "/"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.spec, func(t *testing.T) {
-			cred, home, err := LookupUser(tt.spec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cred.Uid != tt.uid || cred.Gid != tt.gid || !slices.Equal(cred.Groups, tt.groups) || home != tt.home {
-				t.Fatalf("LookupUser(%q) = %d:%d %v %q; want %d:%d %v %q",
-					tt.spec, cred.Uid, cred.Gid, cred.Groups, home, tt.uid, tt.gid, tt.groups, tt.home)
-			}
+		{"4242", &syscall.Credential{Uid: 4242, Gid: 4242, Groups: []uint32{}}, "/"},
+		{"4242:999", &syscall.Credential{Uid: 4242, Gid: 999, Groups: []uint32{}}, "/"},
+	} {
+		t.Run(tc.spec, func(t *testing.T) {
+			useAccounts(t, testPasswd, testGroup)
+
+			cred, home, err := LookupUser(tc.spec)
+
+			assert.NilError(t, err)
+			assert.Check(t, cmp.DeepEqual(cred, tc.cred))
+			assert.Check(t, cmp.Equal(home, tc.home))
 		})
 	}
 }
 
-func TestLookupUserRoot(t *testing.T) {
-	useAccounts(t, testPasswd, testGroup)
+func TestLookupUserLeavesRootToInheritTheAgentsCredentials(t *testing.T) {
 	for _, spec := range []string{"", "root", "0"} {
-		if cred, home, err := LookupUser(spec); cred != nil || home != "/root" || err != nil {
-			t.Errorf("LookupUser(%q) = %v, %q, %v; want inherited root", spec, cred, home, err)
-		}
+		t.Run("spec "+spec, func(t *testing.T) {
+			useAccounts(t, testPasswd, testGroup)
+
+			cred, home, err := LookupUser(spec)
+
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Nil(cred))
+			assert.Check(t, cmp.Equal(home, "/root"))
+		})
 	}
 }
 
-func TestLookupUserErrors(t *testing.T) {
-	tests := []struct {
+func TestLookupUserFailsForASpecItCannotResolve(t *testing.T) {
+	for _, tc := range []struct {
 		name, passwd, group, spec string
 	}{
-		{"unknown user", testPasswd, testGroup, "nobody"},
-		{"unknown group", testPasswd, testGroup, "imp:nogroup"},
+		{name: "unknown user", passwd: testPasswd, group: testGroup, spec: "nobody"},
+		{name: "unknown group", passwd: testPasswd, group: testGroup, spec: "imp:nogroup"},
 		// A malformed id must fail, never fall back to 0 (root).
-		{"bad uid", "bad:x:abc:1000::/:/bin/sh\n", testGroup, "bad"},
-		{"bad gid", "bad:x:1000:-1::/:/bin/sh\n", testGroup, "bad"},
-		{"bad group id", testPasswd, "odd:x:zz:\n", "imp:odd"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			useAccounts(t, tt.passwd, tt.group)
-			if cred, _, err := LookupUser(tt.spec); err == nil {
-				t.Fatalf("LookupUser(%q) = %+v, want an error", tt.spec, cred)
-			}
+		{name: "bad uid", passwd: "bad:x:abc:1000::/:/bin/sh\n", group: testGroup, spec: "bad"},
+		{name: "bad gid", passwd: "bad:x:1000:-1::/:/bin/sh\n", group: testGroup, spec: "bad"},
+		{name: "bad group id", passwd: testPasswd, group: "odd:x:zz:\n", spec: "imp:odd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useAccounts(t, tc.passwd, tc.group)
+
+			cred, _, err := LookupUser(tc.spec)
+
+			assert.Check(t, err != nil, "LookupUser(%q) gave no error", tc.spec)
+			assert.Check(t, cmp.Nil(cred))
 		})
 	}
 }
 
-func TestLookupUserWithoutGroupFile(t *testing.T) {
+func TestLookupUserGivesOnlyThePrimaryGroupWithoutAGroupFile(t *testing.T) {
 	useAccounts(t, testPasswd, "")
 	groupPath = filepath.Join(t.TempDir(), "missing")
+
 	cred, _, err := LookupUser("imp")
-	if err != nil || !slices.Equal(cred.Groups, []uint32{1000}) {
-		t.Fatalf("LookupUser = %+v, %v; want only the primary group", cred, err)
-	}
+
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cred.Groups, []uint32{1000})
 }
 
-// TestLookupUserSkipsBadGroupLines checks that a malformed /etc/group line
-// costs only that group, not every lookup.
-func TestLookupUserSkipsBadGroupLines(t *testing.T) {
+// A malformed /etc/group line costs only that group, not every lookup.
+func TestLookupUserSkipsMalformedGroupLines(t *testing.T) {
 	useAccounts(t, testPasswd, "odd:x:zz:imp\nbroken\ndocker:x:999:imp\n")
+
 	cred, _, err := LookupUser("imp")
-	if err != nil || !slices.Equal(cred.Groups, []uint32{999, 1000}) {
-		t.Fatalf("LookupUser = %+v, %v; want groups [999 1000]", cred, err)
-	}
+
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cred.Groups, []uint32{999, 1000})
 }
 
-func TestLookupUserLongGroupLine(t *testing.T) {
+func TestLookupUserReadsAGroupLineLongerThanTheScannerDefault(t *testing.T) {
 	members := strings.Repeat("someone,", 20000) + "imp"
 	useAccounts(t, testPasswd, "big:x:4000:"+members+"\n")
+
 	cred, _, err := LookupUser("imp")
-	if err != nil || !slices.Equal(cred.Groups, []uint32{1000, 4000}) {
-		t.Fatalf("LookupUser = %+v, %v; want groups [1000 4000]", cred, err)
-	}
+
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cred.Groups, []uint32{1000, 4000})
 }

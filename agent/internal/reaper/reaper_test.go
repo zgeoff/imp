@@ -5,6 +5,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 )
 
 // The reap loop is process-wide, so the package shares one Reaper.
@@ -16,6 +20,7 @@ func forkSh(script string) func() (int, error) {
 	}
 }
 
+// wait returns the status ch delivers, failing the test if none arrives.
 func wait(t *testing.T, ch <-chan Status) Status {
 	t.Helper()
 	select {
@@ -27,8 +32,8 @@ func wait(t *testing.T, ch <-chan Status) Status {
 	}
 }
 
-func TestStatus(t *testing.T) {
-	tests := []struct {
+func TestStartDeliversTheChildsExitStatus(t *testing.T) {
+	for _, tc := range []struct {
 		script string
 		code   int
 		sig    syscall.Signal
@@ -37,59 +42,59 @@ func TestStatus(t *testing.T) {
 		{"exit 7", 7, 0},
 		{"kill -KILL $$", -1, syscall.SIGKILL},
 		{"kill -TERM $$", -1, syscall.SIGTERM},
-	}
-	for _, tt := range tests {
-		t.Run(tt.script, func(t *testing.T) {
-			pid, ch, err := r.Start(forkSh(tt.script))
-			if err != nil {
-				t.Fatal(err)
-			}
+	} {
+		t.Run(tc.script, func(t *testing.T) {
+			pid, ch, err := r.Start(forkSh(tc.script))
+			assert.NilError(t, err)
+
 			st := wait(t, ch)
-			if st != (Status{Pid: pid, Code: tt.code, Signal: tt.sig}) {
-				t.Fatalf("status %+v, want code %d signal %d", st, tt.code, tt.sig)
-			}
+
+			assert.Equal(t, st, Status{Pid: pid, Code: tc.code, Signal: tc.sig})
 		})
 	}
 }
 
-// TestCoalescedExits checks that exits sharing one SIGCHLD each reach their
-// own waiter.
-func TestCoalescedExits(t *testing.T) {
+// Exits that share one SIGCHLD each reach their own waiter.
+func TestStartDeliversEachOfManyCoalescedExitsToItsOwnWaiter(t *testing.T) {
 	chans := make([]<-chan Status, 20)
+	want := make([]int, len(chans))
 	for i := range chans {
 		_, ch, err := r.Start(forkSh("exit " + strconv.Itoa(i)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NilError(t, err)
 		chans[i] = ch
+		want[i] = i
 	}
+
+	got := make([]int, len(chans))
 	for i, ch := range chans {
-		if st := wait(t, ch); st.Code != i {
-			t.Errorf("child %d: code %d", i, st.Code)
-		}
+		got[i] = wait(t, ch).Code
 	}
+
+	assert.DeepEqual(t, got, want)
 }
 
-// TestReapsUnregistered checks that a child with no waiter (as an orphan
-// reparented to PID 1 would be) does not stay a zombie.
-func TestReapsUnregistered(t *testing.T) {
+// A child with no waiter, as an orphan reparented to PID 1 would be, does
+// not stay a zombie.
+func TestTheReaperReapsAChildWithNoWaiter(t *testing.T) {
 	pid, err := forkSh("exit 0")()
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
+	assert.NilError(t, err)
+
 	// kill(pid, 0) succeeds on a zombie and fails with ESRCH once reaped.
-	for syscall.Kill(pid, 0) == nil {
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d not reaped", pid)
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		switch err := syscall.Kill(pid, 0); err {
+		case nil:
+			return poll.Continue("pid %d not reaped", pid)
+		case syscall.ESRCH:
+			return poll.Success()
+		default:
+			return poll.Error(err)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 }
 
-func TestStartError(t *testing.T) {
-	_, _, err := r.Start(func() (int, error) { return 0, syscall.ENOENT })
-	if err != syscall.ENOENT {
-		t.Fatalf("err %v, want ENOENT", err)
-	}
+func TestStartReturnsTheForkError(t *testing.T) {
+	_, ch, err := r.Start(func() (int, error) { return 0, syscall.ENOENT })
+
+	assert.Check(t, cmp.ErrorIs(err, syscall.ENOENT))
+	assert.Check(t, ch == nil, "a failed start returned a status channel")
 }

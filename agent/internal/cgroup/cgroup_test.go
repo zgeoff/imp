@@ -1,147 +1,203 @@
 package cgroup
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 // These run on plain directories: what cgroupfs adds (cgroup.kill, a leaf
 // that rmdir takes with its files) is left to the e2e suite.
+
+// newTree makes a tree under a fresh temporary parent.
+func newTree(t *testing.T) *Tree {
+	t.Helper()
+	tree, err := NewTree(filepath.Join(t.TempDir(), "imp-exec"))
+	assert.NilError(t, err)
+	return tree
+}
+
+// newLeaf makes a leaf of tree that the test's cleanup releases.
+func newLeaf(t *testing.T, tree *Tree) *Group {
+	t.Helper()
+	g, err := tree.New()
+	assert.NilError(t, err)
+	t.Cleanup(func() { tree.Release(g) })
+	return g
+}
+
+// endedBusyLeaf makes a leaf, puts a member in it (on a plain directory, a
+// file standing for a nohup child), and releases it. It returns the leaf's
+// path and the member's.
+func endedBusyLeaf(t *testing.T, tree *Tree) (leaf, member string) {
+	t.Helper()
+	g, err := tree.New()
+	assert.NilError(t, err)
+	member = filepath.Join(g.path, "member")
+	assert.NilError(t, os.WriteFile(member, nil, 0o600))
+	tree.Release(g)
+	return g.path, member
+}
 
 func TestNewTreeRefusesAnUnwritableParent(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes anywhere")
 	}
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.Chmod(dir, 0o500))
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
-	if _, err := NewTree(filepath.Join(dir, "imp-exec")); err == nil {
-		t.Fatal("NewTree made a tree it cannot write")
-	}
+
+	_, err := NewTree(filepath.Join(dir, "imp-exec"))
+
+	assert.ErrorIs(t, err, fs.ErrPermission)
+}
+
+func TestNewOpensTheLeafDirectory(t *testing.T) {
+	tree := newTree(t)
+
+	g := newLeaf(t, tree)
+
+	fi, err := g.Dir().Stat()
+	assert.NilError(t, err)
+	assert.Check(t, fi.IsDir())
+	assert.Check(t, cmp.Equal(fi.Name(), "1"))
 }
 
 func TestReleaseRemovesAnEmptyLeaf(t *testing.T) {
-	tree, err := NewTree(filepath.Join(t.TempDir(), "imp-exec"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	tree := newTree(t)
 	g, err := tree.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g.Dir() == nil {
-		t.Fatal("no directory fd")
-	}
+	assert.NilError(t, err)
+
 	tree.Release(g)
-	if _, err := os.Stat(g.path); !os.IsNotExist(err) {
-		t.Fatalf("leaf %s left after release: %v", g.path, err)
-	}
-	if tree.Ended() != 0 {
-		t.Fatal("an empty leaf waits for a sweep")
-	}
+
+	_, err = os.Stat(g.path)
+	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist), "leaf %s left after release", g.path)
+	assert.Check(t, cmp.Equal(tree.Ended(), 0), "an empty leaf waits for a sweep")
 }
 
-// TestSweepSparesLiveLeaves: an ended leaf with a member waits until it
-// empties; a live session's leaf is never swept, even while it is empty.
-func TestSweepSparesLiveLeaves(t *testing.T) {
-	tree, err := NewTree(filepath.Join(t.TempDir(), "imp-exec"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ended, err := tree.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// a nohup child still in the leaf; on a plain directory, a file
-	member := filepath.Join(ended.path, "member")
-	if err := os.WriteFile(member, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	tree.Release(ended)
-	if tree.Ended() != 1 {
-		t.Fatalf("ended = %d, want the busy leaf kept", tree.Ended())
-	}
+func TestReleaseKeepsALeafThatStillHasAMember(t *testing.T) {
+	tree := newTree(t)
 
-	live, err := tree.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(ended.path); err != nil {
-		t.Fatal("a sweep took a leaf that still has a member")
-	}
+	leaf, _ := endedBusyLeaf(t, tree)
 
-	os.Remove(member)
-	next, err := tree.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(ended.path); !os.IsNotExist(err) {
-		t.Fatal("the emptied leaf outlived the sweep")
-	}
-	if _, err := os.Stat(live.path); err != nil {
-		t.Fatal("the sweep took a live session's empty leaf")
-	}
-	tree.Release(live)
-	tree.Release(next)
+	_, err := os.Stat(leaf)
+	assert.Check(t, err)
+	assert.Check(t, cmp.Equal(tree.Ended(), 1))
 }
 
-func TestWaitEmptyReadsPopulated(t *testing.T) {
-	tree, err := NewTree(filepath.Join(t.TempDir(), "imp-exec"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	g, err := tree.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestNewSparesAnEndedLeafThatStillHasAMember(t *testing.T) {
+	tree := newTree(t)
+	leaf, _ := endedBusyLeaf(t, tree)
+
+	newLeaf(t, tree)
+
+	_, err := os.Stat(leaf)
+	assert.Check(t, err, "a sweep took a leaf that still has a member")
+	assert.Check(t, cmp.Equal(tree.Ended(), 1))
+}
+
+func TestNewSweepsAnEndedLeafOnceItEmpties(t *testing.T) {
+	tree := newTree(t)
+	leaf, member := endedBusyLeaf(t, tree)
+	assert.NilError(t, os.Remove(member))
+
+	newLeaf(t, tree)
+
+	_, err := os.Stat(leaf)
+	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist), "the emptied leaf outlived the sweep")
+	assert.Check(t, cmp.Equal(tree.Ended(), 0))
+}
+
+// A live session's leaf may be empty because its child is not yet cloned
+// into it, so a sweep never takes it.
+func TestNewNeverSweepsALiveSessionsEmptyLeaf(t *testing.T) {
+	tree := newTree(t)
+	_, member := endedBusyLeaf(t, tree)
+	live := newLeaf(t, tree)
+	assert.NilError(t, os.Remove(member))
+
+	newLeaf(t, tree)
+
+	_, err := os.Stat(live.path)
+	assert.Check(t, err, "the sweep took a live session's empty leaf")
+}
+
+func TestKillFailsOnALeafWithoutCgroupKill(t *testing.T) {
+	g := newLeaf(t, newTree(t))
+
+	err := g.Kill()
+
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+func TestWaitEmptyReportsAPopulatedLeafAtTheDeadline(t *testing.T) {
+	g := newLeaf(t, newTree(t))
 	events := filepath.Join(g.path, "cgroup.events")
-	if err := os.WriteFile(events, []byte("populated 1\nfrozen 0\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if g.WaitEmpty(time.Now().Add(50 * time.Millisecond)) {
-		t.Fatal("a populated leaf counted as empty")
-	}
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		os.WriteFile(events, []byte("populated 0\nfrozen 0\n"), 0o600)
-	}()
-	if !g.WaitEmpty(time.Now().Add(5 * time.Second)) {
-		t.Fatal("the leaf never emptied")
-	}
+	assert.NilError(t, os.WriteFile(events, []byte("populated 1\nfrozen 0\n"), 0o600))
+
+	empty := g.WaitEmpty(time.Now().Add(50 * time.Millisecond))
+
+	assert.Check(t, !empty, "a populated leaf counted as empty")
 }
 
-// TestLimitedTreeSetsItsLimitsAgain: a parent removed under the tree is made
-// again with its limits, and a leaf whose limits cannot be set is not made.
-func TestLimitedTreeSetsItsLimitsAgain(t *testing.T) {
+func TestWaitEmptyReturnsOnceTheLeafEmpties(t *testing.T) {
+	g := newLeaf(t, newTree(t))
+	events := filepath.Join(g.path, "cgroup.events")
+	assert.NilError(t, os.WriteFile(events, []byte("populated 1\nfrozen 0\n"), 0o600))
+	emptied := make(chan bool, 1)
+	go func() { emptied <- g.WaitEmpty(time.Now().Add(5 * time.Second)) }()
+
+	assert.NilError(t, os.WriteFile(events, []byte("populated 0\nfrozen 0\n"), 0o600))
+
+	assert.Check(t, <-emptied, "the leaf never emptied")
+}
+
+// A parent removed under the tree is made again with its limits.
+func TestLimitedTreeSetsItsLimitsAgainOnARemovedParent(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "outer")
-	var failing bool
-	prepare := func(dir string) error {
+	tree, err := NewLimitedTree(parent, func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "memory.max"), []byte("33554432"), 0o644)
+	})
+	assert.NilError(t, err)
+	assert.NilError(t, os.RemoveAll(parent))
+
+	newLeaf(t, tree)
+
+	b, err := os.ReadFile(filepath.Join(parent, "memory.max"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(b), "33554432")
+}
+
+func TestLimitedTreeMakesNoLeafWhoseLimitsCannotBeSet(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "outer")
+	failing := false
+	tree, err := NewLimitedTree(parent, func(string) error {
 		if failing {
 			return os.ErrPermission
 		}
-		return os.WriteFile(filepath.Join(dir, "memory.max"), []byte("33554432"), 0o644)
-	}
-	tree, err := NewLimitedTree(parent, prepare)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.RemoveAll(parent); err != nil {
-		t.Fatal(err)
-	}
-	g, err := tree.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tree.Release(g)
-	if b, err := os.ReadFile(filepath.Join(parent, "memory.max")); err != nil || string(b) != "33554432" {
-		t.Fatalf("memory.max = %q (%v), want the limit again", b, err)
-	}
+		return nil
+	})
+	assert.NilError(t, err)
 	failing = true
-	if _, err := tree.New(); err == nil {
-		t.Fatal("made a leaf whose limits could not be set")
-	}
+
+	g, err := tree.New()
+
+	assert.Check(t, cmp.ErrorIs(err, os.ErrPermission))
+	assert.Check(t, cmp.Nil(g))
+	_, err = os.Stat(filepath.Join(parent, "1"))
+	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist), "made the leaf anyway")
+}
+
+func TestNewLimitedTreeFailsWhenItsLimitsCannotBeSet(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "outer")
+
+	tree, err := NewLimitedTree(parent, func(string) error { return os.ErrPermission })
+
+	assert.Check(t, cmp.ErrorIs(err, os.ErrPermission))
+	assert.Check(t, cmp.Nil(tree))
 }
