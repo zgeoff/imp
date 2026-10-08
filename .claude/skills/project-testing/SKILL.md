@@ -62,17 +62,22 @@ On Bun 1.4.2, `onTestFinished` callbacks run in the order they were registered, 
 the ones after it are skipped. A util that registers its own cleanup is therefore released before
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier), `createTestDatabase`, `buildQueryGate` (it releases a held select),
-`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`. `setupImpTest`,
-`setupImpdTest`, `setupMcpTest` and `createTestDatabase` also keep a transitional
-`[Symbol.asyncDispose]` for branches that still hold them with `await using`. Where a test's own
-resources must end before such a harness or outlive it, the test builds one `AsyncDisposableStack`,
-registers its disposal once, and passes it to `createImpTest(stack, options)` (or
-`createMoveHosts(stack, options)` in `moves/test-moves.ts`), deferring its other resources into the
-same stack in order. `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack` so a
-restarted impd's stops run before the shared database closes. A property case releases its resources
-through `test-utils/run-with-stack.ts` (`runWithStack`), on success and on failure, before the next
-case starts. `packages/test-utils/src/run-child-tests.ts` (`runChildTests`) runs a test file in a
-child `bun test`, so a later test there can check what an earlier test's `onTestFinished` released.
+`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`.
+
+`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
+`[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
+removes it once those branches land.
+
+Utils that take a caller's stack and register nothing themselves:
+
+- `createImpTest(stack, options)` in `imps/test-imps.ts`: the `setupImpTest` harness.
+- `createMoveHosts(stack, options)` in `moves/test-moves.ts`: the two `setupMoveHosts` impds.
+- `runWithStack(body)` in `test-utils/run-with-stack.ts`: runs `body` with a fresh stack and
+  releases it once `body` settles or throws.
+
+`packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
+`packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source)`) runs one test file in a
+child `bun test` with `dir` as its working and temp dir.
 
 Plain `bun test` does not match `*.e2e.ts`, `*.pebble.ts`, or `*.slow.ts`; each of those runs only
 when its `./` path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain

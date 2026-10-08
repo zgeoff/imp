@@ -33,6 +33,9 @@ interface ImpdTestOptions {
 
   // impd's environment, such as the public route's
   readonly env?: Readonly<Record<string, string>>;
+
+  // every line impd and the harness log, its releases included
+  readonly onLog?: (message: string) => void;
 }
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
@@ -61,6 +64,7 @@ async function createImpdTest(
 ) {
   const harness = await createImpTest(stack, {
     ...(options.env !== undefined && { env: options.env }),
+    ...(options.onLog !== undefined && { onLog: options.onLog }),
   });
 
   const guest = buildStubExecGuest({ oldAgent: options.oldAgent ?? false });
@@ -84,6 +88,8 @@ async function createImpdTest(
 
   stack.defer(async () => {
     await server.stop(true);
+
+    harness.log('test harness: server stopped');
   });
 
   const url = `http://127.0.0.1:${String(server.server?.port)}`;
@@ -112,6 +118,9 @@ interface McpTestOptions {
 
   // the server's token is a manage token for these imps, not the root token
   readonly tokenImps?: readonly string[];
+
+  // every line impd and the harness log, its releases included
+  readonly onLog?: (message: string) => void;
 }
 
 // an impd as setupImpdTest makes it, and an MCP server in process over its
@@ -124,13 +133,18 @@ export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
 
   const impd = await createImpdTest(stack, {
     ...(options.oldAgent !== undefined && { oldAgent: options.oldAgent }),
+    ...(options.onLog !== undefined && { onLog: options.onLog }),
   });
 
   const sent: unknown[] = [];
   const server = createMcpServer({ version: '1.2.3', progressIntervalMs: 50, killGraceMs: 50 });
 
   // its calls in flight end before impd's app and harness close
-  stack.defer(() => server.close());
+  stack.defer(async () => {
+    await server.close();
+
+    impd.log('test harness: MCP server closed');
+  });
 
   const scoped =
     options.tokenImps === undefined

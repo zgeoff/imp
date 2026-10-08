@@ -133,11 +133,14 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
 }
 
 // Imps on the harness's XFS backend over a fake repository, which a second
-// host can share to restore from (`repoDir`). Its own repository goes after
-// its harness, even when it shares another host's.
-async function setupTest(sharedRepoDir?: string) {
-  const stack = new AsyncDisposableStack();
+// host can share to restore from: given the first host, it uses its
+// repository and its stack, so both harnesses go before the repository.
+async function setupTest(
+  source?: Readonly<{ repoDir: string; stack: Readonly<AsyncDisposableStack> }>,
+) {
+  const stack = source?.stack ?? new AsyncDisposableStack();
 
+  // a second registration of a shared stack's release does nothing
   onTestFinished(() => stack.disposeAsync());
 
   const ownRepoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`);
@@ -146,7 +149,7 @@ async function setupTest(sharedRepoDir?: string) {
     rmSync(ownRepoDir, { recursive: true, force: true });
   });
 
-  const repoDir = sharedRepoDir ?? ownRepoDir;
+  const repoDir = source?.repoDir ?? ownRepoDir;
 
   const harness = await createImpTest(stack);
 
@@ -216,6 +219,7 @@ async function setupTest(sharedRepoDir?: string) {
     ...harness,
     image,
     repoDir,
+    stack,
     clock,
     fake,
     events,
@@ -414,7 +418,7 @@ test('restore --all on a fresh host brings back every imp and its image', async 
   await source.imps.createImp({ name: 'web' });
   await source.backups.runBackup();
 
-  const fresh = await setupTest(source.repoDir);
+  const fresh = await setupTest(source);
 
   fresh.fake.snapshots.push(...source.fake.snapshots);
 
@@ -474,7 +478,7 @@ test('templates round-trip with their source, and --all brings back unused ones'
     ['dev', false],
   ]);
 
-  const fresh = await setupTest(source.repoDir);
+  const fresh = await setupTest(source);
 
   fresh.fake.snapshots.push(...source.fake.snapshots);
 
@@ -947,7 +951,7 @@ test('a restore holds the storage gate for its image and room for each file', as
   expect(usedBytes).toBeGreaterThan(0);
   expect(usedBytes).toBeLessThan(1024 ** 2);
 
-  const fresh = await setupTest(source.repoDir);
+  const fresh = await setupTest(source);
 
   fresh.fake.snapshots.push(...source.fake.snapshots);
 

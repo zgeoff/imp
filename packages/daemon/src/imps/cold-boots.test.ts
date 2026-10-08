@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { rmSync } from 'node:fs';
 import type { Socket } from 'node:net';
 import { NoSessionDataSchema } from '@imp/api';
@@ -11,7 +11,7 @@ import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubBootId } from '../test-utils/build-stub-vmm';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { buildTestApp, setupImpTest } from './test-imps';
+import { buildTestApp, createImpTest } from './test-imps';
 
 // Each cold boot records its cause, and an attach to a session names them
 // (docs/architecture/daemon.md#output-offsets).
@@ -20,7 +20,12 @@ const GENERATION = 'c'.repeat(32);
 const AgentRequestSchema = z.object({ op: z.string() }).loose();
 
 async function setupColdBootTest() {
-  const harness = await setupImpTest();
+  // one stack: an agent a test starts closes before the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack);
 
   await harness.createTestImage('ubuntu');
 
@@ -43,12 +48,18 @@ async function setupColdBootTest() {
     harness.fake.alive.delete(imp?.pid ?? 0);
   };
 
-  return { ...harness, ...app, created, paths, readCauses, stopVmUnseen };
+  return { ...harness, ...app, created, paths, readCauses, stopVmUnseen, stack };
 }
 
-// an agent whose session.attach answers `reply`, and whose ping reports `bootId`
-function startSessionAgent(path: string, reply: (socket: Socket) => void, bootId = 'boot-old') {
-  return startStubAgent(path, (socket, request, frames) => {
+// an agent whose session.attach answers `reply`, and whose ping reports
+// `bootId`; it closes through `stack`
+async function startSessionAgent(
+  stack: Readonly<AsyncDisposableStack>,
+  path: string,
+  reply: (socket: Socket) => void,
+  bootId = 'boot-old',
+) {
+  const agent = await startStubAgent(path, (socket, request, frames) => {
     if (frames.length !== 1) {
       return;
     }
@@ -65,6 +76,12 @@ function startSessionAgent(path: string, reply: (socket: Socket) => void, bootId
 
     reply(socket);
   });
+
+  stack.defer(() => {
+    agent.close();
+  });
+
+  return agent;
 }
 
 function sendNoSession(socket: Socket): void {
@@ -176,7 +193,7 @@ test('the boot after impd found the VM gone is a recovery, whatever path boots i
 // that ended the client's generation stays in the list
 test('an attach that boots a crashed imp answers NO_SESSION with its cold boots', async () => {
   const ctx = await setupColdBootTest();
-  const agent = await startSessionAgent(ctx.paths.vsockSocket, sendNoSession);
+  const agent = await startSessionAgent(ctx.stack, ctx.paths.vsockSocket, sendNoSession);
 
   await ctx.stopVmUnseen();
   await ctx.client.imps.get({ name: 'dev' });
@@ -259,7 +276,7 @@ test('a session’s started output names the cold boots; a resume error keeps it
     },
   ];
 
-  const agent = await startSessionAgent(ctx.paths.vsockSocket, (socket) => {
+  const agent = await startSessionAgent(ctx.stack, ctx.paths.vsockSocket, (socket) => {
     replies.shift()?.(socket);
   });
 
@@ -292,7 +309,7 @@ test('a session’s started output names the cold boots; a resume error keeps it
 
 test('a VM impd adopts with a boot it has no record of counts as unknown', async () => {
   const ctx = await setupColdBootTest();
-  const agent = await startSessionAgent(ctx.paths.vsockSocket, () => {}, 'boot-before');
+  const agent = await startSessionAgent(ctx.stack, ctx.paths.vsockSocket, () => {}, 'boot-before');
 
   const impd = ctx.restartImpd();
 

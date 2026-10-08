@@ -60,10 +60,27 @@ test('it reports a failed release over a failed body as a SuppressedError', () =
     return Promise.reject(new Error('the case failed'));
   });
 
+  expect(run).rejects.toBeInstanceOf(SuppressedError);
+
   expect(run).rejects.toMatchObject({
     error: { message: 'the release failed' },
     suppressed: { message: 'the case failed' },
   });
+});
+
+test('it releases the stack when the body throws before it returns a promise', () => {
+  const events: string[] = [];
+
+  const run = runWithStack((stack) => {
+    stack.defer(() => {
+      events.push('released');
+    });
+
+    throw new Error('the case failed at once');
+  });
+
+  expect(run).rejects.toThrowWithMessage(Error, 'the case failed at once');
+  expect(events).toStrictEqual(['released']);
 });
 
 test('it rejects with the release error when only the release fails', () => {

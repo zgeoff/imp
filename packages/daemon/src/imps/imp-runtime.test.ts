@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName, updateImpActivity } from '../db/imps';
@@ -7,7 +7,7 @@ import type { ImpDatabase } from '../db/open-database';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { setupImpTest, waitForOutcome } from './test-imps';
+import { createImpTest, setupImpTest, waitForOutcome } from './test-imps';
 
 // these tests wait up to 10 s for held calls to settle; a loaded host is slow
 const SLOW_TEST_TIMEOUT_MS = 30_000;
@@ -31,13 +31,18 @@ async function holdFor(db: ImpDatabase, impId: string, ms: number): Promise<void
 }
 
 async function setupRunningImp(env: Readonly<Record<string, string>> = {}) {
-  const ctx = await setupImpTest({ env });
+  // one stack: an agent a test starts closes before the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, { env });
 
   await ctx.createTestImage('ubuntu');
 
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  return { ...ctx, impId: imp.id };
+  return { ...ctx, impId: imp.id, stack };
 }
 
 test('a background sleep skips an imp that was held after the caller looked', async () => {
@@ -420,6 +425,10 @@ test('an outer exec to an older agent is refused before it is sent', async () =>
     socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
   });
 
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
   const openOuter = () =>
     ctx.imps.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec');
 
@@ -473,7 +482,12 @@ test('neither the idle loop nor the governor sleeps an image builder', async () 
 });
 
 test('an imp destroyed and made again under its id, as on a move home, logs again', async () => {
-  const ctx = await setupImpTest();
+  // one stack: each agent closes before the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack);
 
   await ctx.createTestImage('ubuntu');
 
@@ -492,7 +506,7 @@ test('an imp destroyed and made again under its id, as on a move home, logs agai
   };
 
   // a start creates the logged session; a tap gets STARTED and stays open
-  const startAgent = () => {
+  const startAgent = async () => {
     const paths = buildImpPaths(ctx.dataDir, id);
     const identity = readVmIdentity(paths);
 
@@ -502,20 +516,29 @@ test('an imp destroyed and made again under its id, as on a move home, logs agai
 
     writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
-    return startStubAgent(buildImpPaths(ctx.dataDir, id).vsockSocket, (socket, request, frames) => {
-      if (frames.length === 1) {
-        const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
+    const agent = await startStubAgent(
+      buildImpPaths(ctx.dataDir, id).vsockSocket,
+      (socket, request, frames) => {
+        if (frames.length === 1) {
+          const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
 
-        socket.write(
-          encodeJsonFrame(FRAME_TYPES.started, {
-            pid: 9,
-            session: 'main',
-            created: !isTap,
-            output,
-          }),
-        );
-      }
+          socket.write(
+            encodeJsonFrame(FRAME_TYPES.started, {
+              pid: 9,
+              session: 'main',
+              created: !isTap,
+              output,
+            }),
+          );
+        }
+      },
+    );
+
+    stack.defer(() => {
+      agent.close();
     });
+
+    return agent;
   };
 
   const sessionLogsDir = buildImpPaths(ctx.dataDir, id).sessionLogsDir;

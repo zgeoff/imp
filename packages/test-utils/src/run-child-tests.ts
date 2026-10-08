@@ -1,8 +1,13 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+// under bun test's default 5 s test timeout, so the parent reports a hung child
+const CHILD_TIMEOUT_MS = 4000;
+
 interface ChildTestRun {
-  readonly exitCode: number;
+  // null when the run was killed at its deadline
+  readonly exitCode: number | null;
+  readonly isTimedOut: boolean;
   readonly output: string;
 }
 
@@ -15,10 +20,12 @@ export function runChildTests(dir: string, source: string): ChildTestRun {
   const result = Bun.spawnSync([process.execPath, 'test', './child.test.ts'], {
     cwd: dir,
     env: { ...process.env, TMPDIR: dir },
+    timeout: CHILD_TIMEOUT_MS,
   });
 
   return {
     exitCode: result.exitCode,
+    isTimedOut: result.exitedDueToTimeout === true,
     output: `${result.stdout.toString()}${result.stderr.toString()}`,
   };
 }

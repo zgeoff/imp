@@ -67,3 +67,19 @@ test('it lets a later test read what an earlier test released', async () => {
   expect(run.exitCode).toBe(0);
   expect(run.output).toInclude(' 2 pass');
 });
+
+test('it kills a child that hangs past its deadline', async () => {
+  const ctx = await setupTest();
+
+  // a test that never settles, with a test timeout longer than the deadline
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { test } from 'bun:test';",
+      "test('it hangs', () => new Promise(() => {}), 60_000);",
+    ].join('\n'),
+  );
+
+  expect(run.isTimedOut).toBeTrue();
+  expect(run.exitCode).toBeNull();
+});

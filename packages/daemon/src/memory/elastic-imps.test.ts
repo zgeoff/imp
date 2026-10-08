@@ -9,14 +9,16 @@ import { buildImpPaths } from '../storage/data-layout';
 import { buildMemoryMax, createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 
-// Elastic imps through the router, on the fake VMs: what create accepts, and
-// what a sleep and a wake do with the plugged memory. A test whose cgroup
-// root must outlive the harness passes the stack that already holds it.
+// Elastic imps through the router, on the fake VMs. A test whose cgroup root
+// must outlive the harness passes the stack that holds it; registering the
+// same stack's release twice does nothing.
 async function setupElasticTest(
   env: Readonly<Record<string, string>> = {},
   cgroups?: CpuCgroups,
-  stack: Readonly<AsyncDisposableStack> = registerStack(),
+  stack: Readonly<AsyncDisposableStack> = new AsyncDisposableStack(),
 ) {
+  onTestFinished(() => stack.disposeAsync());
+
   const harness = await createImpTest(stack, { env, ...(cgroups !== undefined && { cgroups }) });
 
   await harness.createTestImage('ubuntu');
@@ -139,15 +141,6 @@ test('an imp that does not grow sleeps without asking its guest', async () => {
   expect(readSnapshotMeta(paths)?.pluggedMib).toBeUndefined();
 });
 
-// a stack the test's end releases
-function registerStack(): AsyncDisposableStack {
-  const stack = new AsyncDisposableStack();
-
-  onTestFinished(() => stack.disposeAsync());
-
-  return stack;
-}
-
 // a cgroup root in a temp dir with the cpu and memory controllers handed to
 // imps/, as setup-cgroups.sh leaves it; removed by `stack`
 function setupCgroupRoot(stack: Readonly<AsyncDisposableStack>) {
@@ -179,7 +172,10 @@ function setupCgroupRoot(stack: Readonly<AsyncDisposableStack>) {
 
 test("memory.max follows the guest: its memory at boot, raised by a grow, the plug's size at wake", async () => {
   // one stack: the harness goes before the cgroup root it writes
-  const stack = registerStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const root = setupCgroupRoot(stack);
 
   const ctx = await setupElasticTest({}, root.cgroups, stack);
@@ -222,7 +218,10 @@ test("memory.max follows the guest: its memory at boot, raised by a grow, the pl
 
 test('after a restart, adopt allows what the guest holds before a sleep can set up its cgroup', async () => {
   // one stack: the harness goes before the cgroup root it writes
-  const stack = registerStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const root = setupCgroupRoot(stack);
 
   const ctx = await setupElasticTest({}, root.cgroups, stack);

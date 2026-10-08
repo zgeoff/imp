@@ -1,53 +1,56 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import * as z from 'zod';
 import { createImpClient } from '../src/create-imp-client';
-
-const ServedSchema = z.object({
-  url: z.string(),
-  prefixedUrl: z.string(),
-  closedUrl: z.string(),
-  token: z.string(),
-});
 
 // the stand-in in its own process, with a temp dir of its own for the
 // harness's data dir; `served` is the JSON line it prints once ready
 async function setupTest() {
+  // one stack: the child exits before its temp dir goes
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const tempDir = await mkdtemp(join(tmpdir(), 'run-stub-impd-'));
 
-  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
+  stack.defer(() => rm(tempDir, { recursive: true, force: true }));
+
+  const stdoutPath = join(tempDir, 'stdout');
 
   const child = Bun.spawn([process.execPath, join(import.meta.dir, 'run-stub-impd.ts')], {
     env: { ...process.env, TMPDIR: tempDir },
-    stdout: 'pipe',
+    stdout: Bun.file(stdoutPath),
     stderr: 'inherit',
   });
 
-  onTestFinished(() => {
+  stack.defer(async () => {
     child.kill('SIGKILL');
+
+    await child.exited;
   });
 
-  const reader = child.stdout.getReader();
+  // the first line, once the stand-in is ready
+  const line = await waitFor(
+    async () => {
+      const text = await readFile(stdoutPath, 'utf8');
 
-  const decoder = new TextDecoder();
+      const [first, afterFirst] = text.split('\n');
 
-  const read = { text: '' };
+      // no text after a first newline: the line is not complete yet
+      invariant(afterFirst, 'run-stub-impd is not ready yet');
 
-  while (!read.text.includes('\n')) {
-    const chunk = await reader.read();
+      return first ?? '';
+    },
+    { timeoutMs: 15_000 },
+  );
 
-    if (chunk.done) {
-      throw new Error(`run-stub-impd exited before it was ready: ${read.text}`);
-    }
-
-    read.text += decoder.decode(chunk.value);
-  }
-
-  reader.releaseLock();
-
-  const served = ServedSchema.parse(JSON.parse(read.text.split('\n')[0] ?? ''));
+  const served = z
+    .object({ url: z.string(), prefixedUrl: z.string(), closedUrl: z.string(), token: z.string() })
+    .parse(JSON.parse(line));
 
   return { child, tempDir, served };
 }
@@ -62,7 +65,14 @@ test('it serves impd with the smoke imp to a client holding its token', async ()
   expect(imps.map((imp) => imp.name)).toStrictEqual(['smoke']);
 });
 
-test('it serves impd under the prefix and nothing outside it', async () => {
+test('it serves impd under the prefix', async () => {
+  const ctx = await setupTest();
+  const health = await fetch(new URL('health', ctx.served.prefixedUrl));
+
+  expect(health.status).toBe(200);
+});
+
+test('it serves nothing outside the prefix', async () => {
   const ctx = await setupTest();
   const outside = await fetch(new URL('/rpc', ctx.served.prefixedUrl));
 
@@ -75,7 +85,7 @@ test('it names a url where nothing listens', async () => {
   expect(fetch(ctx.served.closedUrl)).rejects.toThrow();
 });
 
-test('it exits 0 on SIGTERM and leaves no temp files behind', async () => {
+test('it exits 0 on SIGTERM and leaves only its output in its temp dir', async () => {
   const ctx = await setupTest();
 
   ctx.child.kill('SIGTERM');
@@ -84,5 +94,5 @@ test('it exits 0 on SIGTERM and leaves no temp files behind', async () => {
   const left = await readdir(ctx.tempDir);
 
   expect(exitCode).toBe(0);
-  expect(left).toStrictEqual([]);
+  expect(left).toStrictEqual(['stdout']);
 });

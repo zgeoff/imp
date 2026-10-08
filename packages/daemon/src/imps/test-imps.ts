@@ -224,7 +224,11 @@ export async function createImpTest(
 
   const db = await openDatabase(':memory:');
 
-  stack.defer(() => db.destroy());
+  stack.defer(async () => {
+    await db.destroy();
+
+    options.onLog?.('test harness: database closed');
+  });
 
   // a new disk stays the size of its image: the fake clone copies every byte
   const config: Config = {

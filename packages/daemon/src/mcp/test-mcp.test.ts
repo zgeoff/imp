@@ -1,9 +1,8 @@
-import { expect, onTestFinished, spyOn, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runChildTests } from '@imp/test-utils/run-child-tests';
-import { setupImpdTest, setupMcpTest } from './test-mcp';
 
 async function setupTest() {
   const dir = await mkdtemp(join(tmpdir(), 'test-mcp-'));
@@ -90,46 +89,49 @@ test('#setupMcpTest lets the test end release it again after an explicit release
   expect(run.output).toInclude(' 1 pass');
 });
 
-test('#setupImpdTest stops its server before it closes the database', async () => {
-  const impd = await setupImpdTest();
+test('#setupImpdTest stops its server before it closes the database when the test finishes', async () => {
+  const ctx = await setupTest();
 
-  const destroy = impd.db.destroy.bind(impd.db);
-  const reachable: boolean[] = [];
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      `import { setupImpdTest } from ${ctx.testMcpPath};`,
+      'const logs: string[] = [];',
+      "test('it sets up', async () => { await setupImpdTest({ onLog: (line) => { logs.push(line); } }); });",
+      "test('it saw the releases in order', () => {",
+      "  expect(logs.filter((line) => line.startsWith('test harness: '))).toStrictEqual([",
+      "    'test harness: server stopped',",
+      "    'test harness: database closed',",
+      '  ]);',
+      '});',
+    ].join('\n'),
+  );
 
-  spyOn(impd.db, 'destroy').mockImplementation(async () => {
-    const isReachable = await fetch(impd.url).then(
-      () => true,
-      () => false,
-    );
-
-    reachable.push(isReachable);
-
-    await destroy();
-  });
-
-  await impd[Symbol.asyncDispose]();
-
-  expect(reachable).toStrictEqual([false]);
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });
 
-test('#setupMcpTest stops impd’s server before it closes the database', async () => {
-  const mcp = await setupMcpTest();
+test('#setupMcpTest closes the MCP server, then impd’s, then the database when the test finishes', async () => {
+  const ctx = await setupTest();
 
-  const destroy = mcp.db.destroy.bind(mcp.db);
-  const reachable: boolean[] = [];
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      `import { setupMcpTest } from ${ctx.testMcpPath};`,
+      'const logs: string[] = [];',
+      "test('it sets up', async () => { await setupMcpTest({ onLog: (line) => { logs.push(line); } }); });",
+      "test('it saw the releases in order', () => {",
+      "  expect(logs.filter((line) => line.startsWith('test harness: '))).toStrictEqual([",
+      "    'test harness: MCP server closed',",
+      "    'test harness: server stopped',",
+      "    'test harness: database closed',",
+      '  ]);',
+      '});',
+    ].join('\n'),
+  );
 
-  spyOn(mcp.db, 'destroy').mockImplementation(async () => {
-    const isReachable = await fetch(mcp.url).then(
-      () => true,
-      () => false,
-    );
-
-    reachable.push(isReachable);
-
-    await destroy();
-  });
-
-  await mcp[Symbol.asyncDispose]();
-
-  expect(reachable).toStrictEqual([false]);
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });

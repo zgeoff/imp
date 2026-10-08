@@ -6,7 +6,8 @@ export async function runWithStack<T>(
 ): Promise<T> {
   const stack = new AsyncDisposableStack();
 
-  const outcome = await body(stack).then(
+  // a body that throws before it returns a promise still has its stack released
+  const outcome = await Promise.try(body, stack).then(
     (value) => ({ isOk: true as const, value }),
     (error: unknown) => ({ isOk: false as const, error }),
   );

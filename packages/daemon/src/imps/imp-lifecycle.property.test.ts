@@ -262,6 +262,21 @@ test(
                 return errors;
               });
 
+              // released first, pass or fail: every call and the lifecycle work
+              // they started end before the impd goes, so no late error lands
+              // in the next case's console.error spy
+              stack.defer(async () => {
+                ctx.fake.setPace(() => Promise.resolve());
+                ctx.fake.clearQueues();
+                ctx.fake.releaseHangs();
+
+                await scheduler.waitIdle();
+
+                await all;
+
+                await ctx.imps.waitForLifecycle();
+              });
+
               for (let round = 0; !settled.done; round += 1) {
                 if (round === MAX_SETTLE_ROUNDS) {
                   throw new Error('a call never settled');
