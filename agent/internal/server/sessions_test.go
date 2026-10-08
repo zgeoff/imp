@@ -7,12 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
+
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/session"
 )
 
@@ -23,55 +26,86 @@ func request(t *testing.T, s *Server, req proto.Request) (proto.Frame, net.Conn)
 	guest, conn := net.Pipe()
 	go s.handle(guest)
 	t.Cleanup(func() { conn.Close() })
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if err := proto.NewWriter(conn).WriteJSON(proto.TypeRequest, req); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+	assert.NilError(t, proto.NewWriter(conn).WriteJSON(proto.TypeRequest, req))
 	f, err := proto.NewReader(conn).Next()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	return f, conn
 }
 
-// TestSessionRequests checks the dispatch: exec with a session name goes to
-// the session manager, and activity lists the sessions.
-func TestSessionRequests(t *testing.T) {
-	l := launch.New(&proc.Direct{Reaper: reaper.New()}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil)
-	s := &Server{Exec: exec.NewManager(l, nil), Outer: exec.NewStrictManager(l, nil), Sessions: session.NewManager(l, "")}
+func newSessionServer(t *testing.T) *Server {
+	t.Helper()
+	l := launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil)
+	return &Server{Exec: exec.NewManager(l, nil), Outer: exec.NewStrictManager(l, nil), Sessions: session.NewManager(l, "")}
+}
+
+// startSession runs an exec with a session name and returns its STARTED and
+// connection; the session's process group dies with the test.
+func startSession(t *testing.T, s *Server, name string) (proto.Started, net.Conn) {
+	t.Helper()
+	f, conn := request(t, s, proto.Request{Op: proto.OpExec, Session: name, TTY: true, Argv: []string{"sleep", "30"}})
+	assert.Assert(t, cmp.Equal(f.Type, proto.TypeStarted), "%q", f.Payload)
+	var st proto.Started
+	assert.NilError(t, json.Unmarshal(f.Payload, &st))
+	t.Cleanup(func() { syscall.Kill(-st.Pid, syscall.SIGKILL) })
+	return st, conn
+}
+
+func TestSessionKillOfNoSessionIsNoSession(t *testing.T) {
+	s := newSessionServer(t)
 
 	f, _ := request(t, s, proto.Request{Op: proto.OpSessionKill, Session: "main"})
-	var resp proto.ErrorResponse
-	if f.Type != proto.TypeResponse || json.Unmarshal(f.Payload, &resp) != nil || resp.Error == nil || resp.Error.Code != proto.ErrNoSession {
-		t.Fatalf("kill of no session: %q, want NO_SESSION", f.Payload)
-	}
 
-	f, conn := request(t, s, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sleep", "30"}})
-	var st proto.Started
-	if f.Type != proto.TypeStarted || json.Unmarshal(f.Payload, &st) != nil || st.Session != "main" {
-		t.Fatalf("exec: got %s %q, want STARTED for session main", f.Type, f.Payload)
-	}
-	defer syscall.Kill(-st.Pid, syscall.SIGKILL)
+	assert.Equal(t, replyCode(t, f), proto.ErrNoSession)
+}
+
+// exec with a session name goes to the session manager.
+func TestExecWithASessionNameStartsThatSession(t *testing.T) {
+	s := newSessionServer(t)
+
+	st, _ := startSession(t, s, "main")
+
+	assert.Equal(t, st.Session, "main")
+}
+
+func TestActivityCountsAnAttachedSessionAsAnExec(t *testing.T) {
+	s := newSessionServer(t)
+	startSession(t, s, "main")
 
 	act, err := s.activity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if act.ExecSessions != 1 || len(act.Sessions) != 1 || act.Sessions[0].Name != "main" || !act.Sessions[0].Attached {
-		t.Fatalf("activity while attached: %+v", act)
-	}
 
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(act.ExecSessions, 1))
+	assert.Assert(t, cmp.Len(act.Sessions, 1))
+	assert.Check(t, cmp.Equal(act.Sessions[0].Name, "main"))
+	assert.Check(t, act.Sessions[0].Attached)
+}
+
+func TestActivityListsADetachedSessionButCountsNoExec(t *testing.T) {
+	s := newSessionServer(t)
+	_, conn := startSession(t, s, "main")
 	conn.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for s.Sessions.Attached() > 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if act, _ := s.activity(); act.ExecSessions != 0 || len(act.Sessions) != 1 || act.Sessions[0].Attached {
-		t.Fatalf("activity after detach: %+v", act)
-	}
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if n := s.Sessions.Attached(); n > 0 {
+			return poll.Continue("%d attached", n)
+		}
+		return poll.Success()
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 
-	f, _ = request(t, s, proto.Request{Op: proto.OpSessionKill, Session: "main"})
-	if f.Type != proto.TypeResponse || string(f.Payload) != `{"ok":true}` {
-		t.Fatalf("kill: got %s %q", f.Type, f.Payload)
-	}
+	act, err := s.activity()
+
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(act.ExecSessions, 0))
+	assert.Assert(t, cmp.Len(act.Sessions, 1))
+	assert.Check(t, !act.Sessions[0].Attached)
+}
+
+func TestSessionKillOfARunningSessionRepliesOK(t *testing.T) {
+	s := newSessionServer(t)
+	startSession(t, s, "main")
+
+	f, _ := request(t, s, proto.Request{Op: proto.OpSessionKill, Session: "main"})
+
+	assert.Check(t, cmp.Equal(f.Type, proto.TypeResponse))
+	assert.Check(t, cmp.Equal(string(f.Payload), `{"ok":true}`))
 }

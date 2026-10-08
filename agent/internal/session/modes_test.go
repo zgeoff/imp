@@ -1,8 +1,12 @@
 package session
 
-import "testing"
+import (
+	"testing"
 
-func TestModesSequence(t *testing.T) {
+	"gotest.tools/v3/assert"
+)
+
+func TestModesSequenceRestoresTheTrackedModesTheOutputLeftSet(t *testing.T) {
 	tests := []struct {
 		name   string
 		writes []string
@@ -40,26 +44,27 @@ func TestModesSequence(t *testing.T) {
 					m.advance(b)
 				}
 			}
-			if got := string(m.sequence()); got != tt.want {
-				t.Errorf("sequence %q, want %q", got, tt.want)
-			}
+
+			assert.Equal(t, string(m.sequence()), tt.want)
 		})
 	}
 }
 
-func TestModesKittyStackIsBounded(t *testing.T) {
+func TestModesBoundsTheKittyStackPastItsLimit(t *testing.T) {
 	m := newModes()
+
 	for range maxKittyFlags + 10 {
 		for _, b := range []byte("\x1b[>1u") {
 			m.advance(b)
 		}
 	}
-	if len(m.kitty[0]) != maxKittyFlags {
-		t.Fatalf("stack depth %d, want %d", len(m.kitty[0]), maxKittyFlags)
-	}
+
+	assert.Equal(t, len(m.kitty[0]), maxKittyFlags)
 }
 
-func TestModesGround(t *testing.T) {
+// Each step checks the transition its byte makes, so a failure names the
+// byte that left or reached the ground state wrongly.
+func TestModesReportsGroundOnlyBetweenSequencesAndCharacters(t *testing.T) {
 	m := newModes()
 	steps := []struct {
 		b      byte
@@ -74,8 +79,6 @@ func TestModesGround(t *testing.T) {
 	}
 	for i, s := range steps {
 		m.advance(s.b)
-		if m.atGround() != s.ground {
-			t.Fatalf("after byte %d (%#x): atGround %v, want %v", i, s.b, m.atGround(), s.ground)
-		}
+		assert.Equal(t, m.atGround(), s.ground, "after byte %d (%#x)", i, s.b)
 	}
 }

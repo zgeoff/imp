@@ -1,10 +1,12 @@
 package server
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/cgroup"
 	"github.com/zgeoff/imp/agent/internal/exec"
@@ -12,7 +14,6 @@ import (
 	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/session"
 )
 
@@ -37,13 +38,11 @@ func (r outsideRunner) Start(s proc.Spec) (*proc.Process, error) {
 func newOuterServer(t *testing.T) (*Server, chan bool) {
 	t.Helper()
 	tree, err := cgroup.NewTree(filepath.Join(t.TempDir(), "outer"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	image := imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
 	inner := launch.New(downRunner{}, image, nil)
 	inCgroup := make(chan bool, 1)
-	outside := launch.New(outsideRunner{direct: &proc.Direct{Reaper: reaper.New()}, inCgroup: inCgroup}, image, nil)
+	outside := launch.New(outsideRunner{direct: &proc.Direct{Reaper: testReaper}, inCgroup: inCgroup}, image, nil)
 	return &Server{
 		Exec:     exec.NewManager(inner, nil),
 		Outer:    exec.NewStrictManager(outside, tree),
@@ -51,74 +50,92 @@ func newOuterServer(t *testing.T) (*Server, chan bool) {
 	}, inCgroup
 }
 
-// TestOuterExecRunsWithTheContainerDown: exec.outer goes to the outer
-// manager, in a leaf of its cgroup, while a plain exec finds the container
-// down.
-func TestOuterExecRunsWithTheContainerDown(t *testing.T) {
-	s, inCgroup := newOuterServer(t)
+// replyCode reads the code of an error RESPONSE frame.
+func replyCode(t *testing.T, f proto.Frame) string {
+	t.Helper()
+	assert.Assert(t, cmp.Equal(f.Type, proto.TypeResponse), "%q", f.Payload)
+	return errorCode(t, f.Payload)
+}
+
+func TestPlainExecFindsTheInnerContainerDown(t *testing.T) {
+	s, _ := newOuterServer(t)
 
 	f, _ := request(t, s, proto.Request{Op: proto.OpExec, Argv: []string{"echo", "hi"}})
-	var resp proto.ErrorResponse
-	if json.Unmarshal(f.Payload, &resp) != nil || resp.Error == nil || resp.Error.Code != proto.ErrInnerDown {
-		t.Fatalf("plain exec: %s %q, want INNER_DOWN", f.Type, f.Payload)
-	}
 
-	for _, tty := range []bool{false, true} {
-		f, conn := request(t, s, proto.Request{Op: proto.OpExecOuter, Argv: []string{"echo", "outside"}, TTY: tty})
-		if f.Type != proto.TypeStarted {
-			t.Fatalf("tty %v: got %s %q, want STARTED", tty, f.Type, f.Payload)
-		}
-		if !<-inCgroup {
-			t.Fatalf("tty %v: the outer exec started without a cgroup leaf", tty)
-		}
-		r := proto.NewReader(conn)
-		var out strings.Builder
-		for {
-			f, err := r.Next()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if f.Type == proto.TypeStdout {
-				out.Write(f.Payload)
-			}
-			if f.Type == proto.TypeExit {
-				break
-			}
-		}
-		if !strings.Contains(out.String(), "outside") {
-			t.Fatalf("tty %v: output %q", tty, out.String())
-		}
-	}
+	assert.Equal(t, replyCode(t, f), proto.ErrInnerDown)
 }
 
-func TestOuterExecRefuses(t *testing.T) {
-	s, _ := newOuterServer(t)
-	for _, req := range []proto.Request{
-		{Op: proto.OpExecOuter, Argv: []string{"sh"}, TTY: true, Session: "main"},
-		{Op: proto.OpExecOuter, Argv: []string{"id"}, User: "app"},
+// exec.outer goes to the outer manager, in a leaf of its cgroup, while the
+// inner container is down.
+func TestOuterExecRunsInACgroupLeafWithTheContainerDown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tty  bool
+	}{
+		{name: "pipes", tty: false},
+		{name: "tty", tty: true},
 	} {
-		f, _ := request(t, s, req)
-		var resp proto.ErrorResponse
-		if json.Unmarshal(f.Payload, &resp) != nil || resp.Error == nil || resp.Error.Code != proto.ErrBadRequest {
-			t.Fatalf("%+v: %s %q, want BAD_REQUEST", req, f.Type, f.Payload)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			s, inCgroup := newOuterServer(t)
+
+			f, conn := request(t, s, proto.Request{Op: proto.OpExecOuter, Argv: []string{"echo", "outside"}, TTY: tc.tty})
+
+			assert.Assert(t, cmp.Equal(f.Type, proto.TypeStarted), "%q", f.Payload)
+			assert.Check(t, <-inCgroup, "the outer exec started without a cgroup leaf")
+			r := proto.NewReader(conn)
+			var out strings.Builder
+			for {
+				f, err := r.Next()
+				assert.NilError(t, err)
+				if f.Type == proto.TypeStdout {
+					out.Write(f.Payload)
+				}
+				if f.Type == proto.TypeExit {
+					break
+				}
+			}
+			assert.Check(t, cmp.Contains(out.String(), "outside"))
+		})
 	}
 }
 
-// TestOuterExecNeedsItsCgroup: with no outer cgroup (its setup failed),
-// every outer exec is refused rather than run without its limits.
-func TestOuterExecNeedsItsCgroup(t *testing.T) {
-	s, inCgroup := newOuterServer(t)
-	image := imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
-	s.Outer = exec.NewStrictManager(launch.New(outsideRunner{direct: &proc.Direct{Reaper: reaper.New()}, inCgroup: inCgroup}, image, nil), nil)
-	for _, tty := range []bool{false, true} {
-		f, _ := request(t, s, proto.Request{Op: proto.OpExecOuter, Argv: []string{"true"}, TTY: tty})
-		var resp proto.ErrorResponse
-		if json.Unmarshal(f.Payload, &resp) != nil || resp.Error == nil || resp.Error.Code != proto.ErrExecFailed {
-			t.Fatalf("tty %v: %s %q, want EXEC_FAILED", tty, f.Type, f.Payload)
-		}
+func TestOuterExecRefusesWhatOnlyAnInnerExecTakes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  proto.Request
+	}{
+		{name: "a session", req: proto.Request{Op: proto.OpExecOuter, Argv: []string{"sh"}, TTY: true, Session: "main"}},
+		{name: "a user", req: proto.Request{Op: proto.OpExecOuter, Argv: []string{"id"}, User: "app"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newOuterServer(t)
+
+			f, _ := request(t, s, tc.req)
+
+			assert.Equal(t, replyCode(t, f), proto.ErrBadRequest)
+		})
 	}
-	if len(inCgroup) != 0 {
-		t.Fatal("a refused exec reached the runner")
+}
+
+// With no outer cgroup (its setup failed), every outer exec is refused
+// rather than run without its limits.
+func TestOuterExecWithoutItsCgroupIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tty  bool
+	}{
+		{name: "pipes", tty: false},
+		{name: "tty", tty: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, inCgroup := newOuterServer(t)
+			image := imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
+			s.Outer = exec.NewStrictManager(launch.New(outsideRunner{direct: &proc.Direct{Reaper: testReaper}, inCgroup: inCgroup}, image, nil), nil)
+
+			f, _ := request(t, s, proto.Request{Op: proto.OpExecOuter, Argv: []string{"true"}, TTY: tc.tty})
+
+			assert.Check(t, cmp.Equal(replyCode(t, f), proto.ErrExecFailed))
+			assert.Check(t, cmp.Len(inCgroup, 0), "a refused exec reached the runner")
+		})
 	}
 }
