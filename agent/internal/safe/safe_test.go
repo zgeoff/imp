@@ -1,11 +1,16 @@
 package safe
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"os"
+	"sync/atomic"
 	"testing"
-	"time"
+	"testing/synctest"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 func TestMain(m *testing.M) {
@@ -14,33 +19,51 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestGoRecoversAndCleansUp(t *testing.T) {
-	cleaned := make(chan struct{})
-	Go("test", func() { panic("boom") }, func() { close(cleaned) })
-	wait(t, cleaned)
+func TestGoRunsTheCleanupAfterAPanic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var cleaned atomic.Bool
+
+		Go("test", func() { panic("boom") }, func() { cleaned.Store(true) })
+		synctest.Wait()
+
+		assert.Assert(t, cleaned.Load(), "onPanic did not run")
+	})
 }
 
-func TestGoWithoutPanicSkipsCleanup(t *testing.T) {
-	done := make(chan struct{})
-	Go("test", func() { close(done) }, func() { t.Error("onPanic ran without a panic") })
-	<-done
+func TestGoSkipsTheCleanupWithoutAPanic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var ran, cleaned atomic.Bool
+
+		Go("test", func() { ran.Store(true) }, func() { cleaned.Store(true) })
+		synctest.Wait()
+
+		assert.Check(t, ran.Load(), "f did not run")
+		assert.Check(t, !cleaned.Load(), "onPanic ran without a panic")
+	})
 }
 
-func TestCleanupPanicIsRecovered(t *testing.T) {
-	ran := make(chan struct{})
-	Go("test", func() { panic("boom") }, func() { close(ran); panic("again") })
-	wait(t, ran)
+func TestGoRecoversAPanicInTheCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var cleaned atomic.Bool
+
+		Go("test", func() { panic("boom") }, func() { cleaned.Store(true); panic("again") })
+		synctest.Wait()
+
+		assert.Assert(t, cleaned.Load(), "onPanic did not run")
+	})
 }
 
-func TestCallRecovers(t *testing.T) {
+func TestCallRecoversAPanicAndReturns(t *testing.T) {
+	// A panic that escaped Call would fail this test before it returned.
 	Call("test", func() { panic("boom") })
 }
 
-func wait(t *testing.T, c <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-c:
-	case <-time.After(time.Second):
-		t.Fatal("onPanic did not run")
-	}
+func TestRecoverLogsThePanicUnderTheGivenName(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(io.Discard) })
+
+	Call("worker", func() { panic("boom") })
+
+	assert.Check(t, cmp.Contains(buf.String(), "worker: panic: boom"))
 }
