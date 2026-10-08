@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.40.2](https://github.com/zgeoff/imp/compare/v0.40.1...v0.40.2) (2026-10-08)
+
+### Bug Fixes
+
+- **geo-135:** wait for the session-log tap instead of sleeping
+  ([#256](https://github.com/zgeoff/imp/issues/256))
+  ([45095e5](https://github.com/zgeoff/imp/commit/45095e5874ed6df368d805a6988f5821ad5c49bf))
+
 ## [0.40.1](https://github.com/zgeoff/imp/compare/v0.40.0...v0.40.1) (2026-10-07)
 
 ### Bug Fixes
