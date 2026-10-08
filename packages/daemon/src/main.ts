@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
+import { buildApiListenOptions } from './api-listen-options';
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
 import { openDatabase } from './db/open-database';
@@ -9,7 +10,6 @@ import { ENFORCE_INTERVAL_MS } from './governor/ram-governor';
 import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { readSetfcapWarning } from './images/unpack-export';
-import { MOVE_PART_BYTES } from './moves/move-parts';
 import { startPublicListener } from './oauth/public-listener';
 import { printLog } from './process/print-log';
 import { startTicker } from './process/ticker';
@@ -32,7 +32,6 @@ const STOP_STEP_MAX_MS = 10_000;
 // the broker's stop waits for a token exchange under way (30 s at most) and
 // its write, so a rotated refresh token is stored before the database closes
 const STOP_BROKER_MAX_MS = 40_000;
-const BODY_SLACK_BYTES = 1024 ** 2;
 
 // Bounded, and a failure is logged: impd always reaches its exit. True when
 // the step finished in time. A ticker stop waits for a pass under way.
@@ -97,12 +96,7 @@ async function main(): Promise<void> {
 
   const impd = await createImpd(config, { db, rootToken: token, storage, systemFiles });
 
-  // Bun refuses a larger body before any route sees it; the slack leaves the
-  // build route room to answer 413 itself
-  const app = impd.api.app.listen({
-    port: config.apiPort,
-    maxRequestBodySize: Math.max(config.buildContextMaxBytes, MOVE_PART_BYTES) + BODY_SLACK_BYTES,
-  });
+  const app = impd.api.app.listen(buildApiListenOptions(config));
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
 
