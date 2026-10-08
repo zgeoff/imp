@@ -395,6 +395,16 @@ progress and keepalive timers of `createMcpServer` and `createHttpTransport` tak
 the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks
 only when the test says so.
 
+The cli package's tests boot impd with `createImpd` in each file's `setupTest()` and spawn the real
+binary (`packages/cli/src/test-utils/start-cli.ts`) against its app on a loopback port. In
+`packages/cli/src/test-utils/`, `start-stub-older-impd.ts` (over `build-stub-older-impd-fetch.ts`)
+puts an older release in front of the real app: it drops named feature flags or the whole features
+object from `system.info`, sends a procedure the release lacked to impd's own not-found, drops named
+events of a stream, and records each procedure it forwards. `start-stub-silent-host.ts` takes
+requests and never answers. The CLI's warm-move test uses
+`createMoveHosts(stack, { isShared: true })`, because two impds in one process cannot share the data
+dir a warm move needs.
+
 Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
 `host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
 ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.

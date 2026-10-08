@@ -65,6 +65,10 @@ test('#runCli keeps the test run’s variables from the CLI', async () => {
 test('#startCli hands the running process to the caller', async () => {
   const child = startCli({ args: ['--version'] });
 
+  onTestFinished(() => {
+    child.kill();
+  });
+
   const code = await child.exited;
 
   expect(code).toBe(0);

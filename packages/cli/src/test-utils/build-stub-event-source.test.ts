@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import type { ImpEvent } from '@imp/api';
 import { buildMockGovernorDecision } from '@imp/api/test-utils/build-mock-governor-decision';
 import { buildStubEventSource } from './build-stub-event-source';
 
@@ -12,17 +11,13 @@ test('it plays each stream’s events in turn', async () => {
     check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
   });
 
-  const received: ImpEvent[] = [];
+  const firstStream = await stub.source.openStream();
+  const firstEvents = await Array.fromAsync(firstStream);
+  const secondStream = await stub.source.openStream();
+  const secondEvents = await Array.fromAsync(secondStream);
 
-  for (let open = 0; open < 2; open += 1) {
-    const stream = await stub.source.openStream();
-
-    for await (const event of stream) {
-      received.push(event);
-    }
-  }
-
-  expect(received).toStrictEqual([first, second]);
+  expect(firstEvents).toStrictEqual([first]);
+  expect(secondEvents).toStrictEqual([second]);
 });
 
 test('it ends each stream at once after the script runs out', async () => {
@@ -31,13 +26,8 @@ test('it ends each stream at once after the script runs out', async () => {
     check: { clientVersion: '0.3.0', serverVersion: '0.3.0', compatible: true },
   });
 
-  const received: ImpEvent[] = [];
-
   const stream = await stub.source.openStream();
-
-  for await (const event of stream) {
-    received.push(event);
-  }
+  const received = await Array.fromAsync(stream);
 
   expect(received).toBeEmpty();
 });

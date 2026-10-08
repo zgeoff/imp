@@ -94,7 +94,7 @@ test('it writes the prompt it is given', async () => {
 
   await reading;
 
-  expect(written[0]).toBe('value for gh: ');
+  expect(written).toStrictEqual(['value for gh: ', '\n']);
 });
 
 test('it reads the first line of piped stdin, trimmed, when stdin is no terminal', async () => {

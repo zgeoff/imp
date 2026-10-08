@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import {
   chmodSync,
   lstatSync,
@@ -16,34 +16,25 @@ import { checkHostName, readHostConfig, resolveConfigPath, writeHostConfig } fro
 import { UsageError } from './usage-error';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-hosts-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
   const env = { XDG_CONFIG_HOME: dir };
-  const owned = stack.move();
 
-  return {
-    env,
-    path: resolveConfigPath(env),
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { env, path: resolveConfigPath(env) };
 }
 
 test('#readHostConfig reads no hosts when there is no config file', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
 test('#writeHostConfig writes mode 0600 in a 0700 directory that holds only the config', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'home',
@@ -56,7 +47,7 @@ test('#writeHostConfig writes mode 0600 in a 0700 directory that holds only the 
 });
 
 test('#readHostConfig reads back the hosts a write saved', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeHostConfig(ctx.env, {
     current: 'home',
@@ -70,7 +61,7 @@ test('#readHostConfig reads back the hosts a write saved', () => {
 });
 
 test('#writeHostConfig keeps mode 0600 over a stale temp file of another mode', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeHostConfig(ctx.env, { current: 'home', hosts: {} });
   writeFileSync(`${ctx.path}.${String(process.pid)}.tmp`, 'stale', { mode: 0o644 });
@@ -80,8 +71,7 @@ test('#writeHostConfig keeps mode 0600 over a stale temp file of another mode', 
 });
 
 test('#writeHostConfig writes through a symlinked config.json and keeps the link', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const target = join(ctx.path, '..', '..', 'dotfiles-config.json');
 
   mkdirSync(join(ctx.path, '..'), { recursive: true });
@@ -102,7 +92,7 @@ test('#writeHostConfig writes through a symlinked config.json and keeps the link
 });
 
 test('#writeHostConfig rethrows a failure to resolve the config path other than a missing file', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   mkdirSync(join(ctx.path, '..'), { recursive: true });
   symlinkSync(ctx.path, ctx.path);
@@ -113,8 +103,7 @@ test('#writeHostConfig rethrows a failure to resolve the config path other than 
 });
 
 test('#readHostConfig warns when others can read the file', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const warn = mock<(line: string) => void>();
 
   writeHostConfig(ctx.env, { current: null, hosts: {} });
@@ -127,7 +116,7 @@ test('#readHostConfig warns when others can read the file', () => {
 });
 
 test('#readHostConfig leaves the mode of a file others can read as it is', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeHostConfig(ctx.env, { current: null, hosts: {} });
   chmodSync(ctx.path, 0o644);
@@ -140,7 +129,7 @@ test('#readHostConfig leaves the mode of a file others can read as it is', () =>
 });
 
 test('#readHostConfig rejects a file that is not valid JSON', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   mkdirSync(join(ctx.path, '..'), { recursive: true });
   writeFileSync(ctx.path, '{', { mode: 0o600 });
@@ -152,7 +141,7 @@ test('#readHostConfig rejects a file that is not valid JSON', () => {
 });
 
 test('#readHostConfig rejects JSON that is not an imp config', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   mkdirSync(join(ctx.path, '..'), { recursive: true });
   writeFileSync(ctx.path, JSON.stringify({ hosts: { home: { url: 1 } } }), { mode: 0o600 });
@@ -164,7 +153,7 @@ test('#readHostConfig rejects JSON that is not an imp config', () => {
 });
 
 test('#readHostConfig rethrows a read failure other than a missing file', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   mkdirSync(ctx.path, { recursive: true });
 
