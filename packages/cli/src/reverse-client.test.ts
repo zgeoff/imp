@@ -642,6 +642,11 @@ test('it ends the wait for a wake when the forward stops', async () => {
     },
   );
 
+  // a stop the test already made is a no-op
+  ctx.stack.defer(() => {
+    forwarding.stop();
+  });
+
   const [listen] = listens;
 
   invariant(listen);
@@ -656,11 +661,39 @@ test('it ends the wait for a wake when the forward stops', async () => {
 
   forwarding.stop();
 
+  // a second stream of impd's events, which sees the wake when the stopped
+  // forward's stream would have: impd sends each change to every stream
+  const reading = new AbortController();
+
+  ctx.stack.defer(() => {
+    reading.abort();
+  });
+
+  const events = await ctx.client.events.stream(undefined, { signal: reading.signal });
+
+  const reader = events[Symbol.asyncIterator]();
+  const seen: unknown[] = [];
+
+  await ctx.client.imps.start({ name: 'box' });
+
+  // each try reads the stream's next event
+  await waitFor(async () => {
+    const next = await reader.next();
+
+    seen.push(next.value);
+
+    expect(seen).toPartiallyContain({
+      ev: 'ImpChanged',
+      imp: expect.objectContaining({ state: 'running' }) as unknown,
+    });
+  });
+
   const [grace] = stub.calls;
 
   invariant(grace);
 
   expect(grace.signal.aborted).toBe(true);
+  expect(watched).not.toHaveBeenCalledWith('running');
   expect(listens).toHaveLength(1);
 });
 

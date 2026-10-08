@@ -13,6 +13,7 @@ import type {
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import type { ReverseLocal, ReverseSpec } from './parse-reverse';
+import { waitOrAbort } from './wait-or-abort';
 
 // what a reverse forward touches besides its sockets; tests swap it
 export interface ReverseIo {
@@ -59,24 +60,6 @@ const PROCESS_IO: ReverseIo = {
     console.error(`imp: ${text}`);
   },
 };
-
-// a timer that an abort clears, so a wait left behind keeps no process alive
-function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
-  const waited = Promise.withResolvers<void>();
-  const timer = setTimeout(waited.resolve, ms);
-
-  signal.addEventListener(
-    'abort',
-    () => {
-      clearTimeout(timer);
-
-      waited.resolve();
-    },
-    { once: true },
-  );
-
-  return waited.promise;
-}
 
 // The imp's state from the event stream, which opens with every imp. The
 // stream ends when impd restarts; it opens again after RETRY_MS.
