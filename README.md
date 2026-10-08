@@ -233,7 +233,7 @@ and sleep and wake.
 ```sh
 bun run typecheck && bun run lint && bun test
 bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, test/ and deploy/
-(cd agent && go test -race ./...)
+scripts/test-go.sh                # the agent's Go tests with -race, through the pinned gotestsum
 scripts/test-e2e.sh --clean       # end to end, from a clean state (--only fast for the CI subset)
 ```
 

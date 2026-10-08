@@ -14,7 +14,8 @@ bun run test:slow                 # a build silent past 360 s, through the Docke
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, deploy/, test/
 bun run lint:docs                 # every docs/ reference in code resolves
-(cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
+(cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
+scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
 scripts/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
