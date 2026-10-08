@@ -36,7 +36,37 @@ test('it records each request as impd sends it', async () => {
   ]);
 });
 
-test('it lists the services added, with the image user', async () => {
+test('it lists the services added by name, as the agent does, with the image user', async () => {
+  const ctx = await setupTest();
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'worker', argv: ['worker'] }, false);
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
+
+  const listed = await sendServicesList(ctx.vsockPath);
+
+  expect(listed).toStrictEqual({
+    services: [
+      { name: 'web', state: 'running', pid: 41, restarts: 0 },
+      { name: 'worker', state: 'running', pid: 40, restarts: 0 },
+    ],
+    image_user: 'dev',
+  });
+});
+
+test('it refuses an add of a name it has as SERVICE_EXISTS without replace', async () => {
+  const ctx = await setupTest();
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
+
+  expect(
+    sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd', '-f'] }, false),
+  ).rejects.toMatchObject({
+    code: 'SERVICE_EXISTS',
+    message: 'SERVICE_EXISTS: service web exists',
+  });
+});
+
+test('it keeps one service of a name it replaces', async () => {
   const ctx = await setupTest();
 
   await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);

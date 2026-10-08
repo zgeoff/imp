@@ -14,9 +14,9 @@ function sendResponse(socket: Socket, value: unknown): void {
   socket.end(encodeJsonFrame(FRAME_TYPES.response, value));
 }
 
-// An imp's guest agent that keeps services (`services.add`, `services.list`;
-// any other op is UNKNOWN_OP), recording each decoded request in `requests`.
-// It closes at the test's end, or at `close`.
+// An imp's guest agent that keeps services and records each request. Like
+// agent/internal/services, it refuses an add of a name it has without
+// `replace` as SERVICE_EXISTS, and lists by name; other ops are UNKNOWN_OP.
 export async function startStubServiceAgent(vsockPath: string) {
   const services: AgentService[] = [];
   const requests: unknown[] = [];
@@ -35,14 +35,29 @@ export async function startStubServiceAgent(vsockPath: string) {
     const def: unknown =
       typeof body === 'object' && body !== null ? Reflect.get(body, 'def') : null;
 
+    const isReplace =
+      typeof body === 'object' && body !== null && Reflect.get(body, 'replace') === true;
+
+    // the agent lists its services by name
     if (op === 'services.list') {
-      sendResponse(socket, { services, image_user: IMAGE_USER });
+      const listed = services.toSorted((left, right) => left.name.localeCompare(right.name));
+
+      sendResponse(socket, { services: listed, image_user: IMAGE_USER });
 
       return;
     }
 
     if (op === 'services.add' && typeof def === 'object' && def !== null) {
       const name = String(Reflect.get(def, 'name'));
+
+      if (!isReplace && services.some((service) => service.name === name)) {
+        sendResponse(socket, {
+          error: { code: 'SERVICE_EXISTS', message: `service ${name} exists` },
+        });
+
+        return;
+      }
+
       const kept = services.filter((service) => service.name !== name);
 
       services.splice(0, services.length, ...kept, {

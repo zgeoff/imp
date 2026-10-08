@@ -2,6 +2,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sendServicesAdd } from '@imp/daemon/src/agent-client/service-requests';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
@@ -16,6 +17,7 @@ import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-c
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { runCli } from '../test-utils/start-cli';
 import { startStubServiceAgent } from '../test-utils/start-stub-service-agent';
@@ -319,8 +321,67 @@ test('#serviceCommand adds the service and then sets the imp’s HTTP port for -
 
   const updated = await ctx.client.imps.get({ name: 'box' });
 
+  // impd writes its audit rows after it answers
+  const calls = await waitFor(async () => {
+    const listed = await ctx.client.audit.calls({ name: 'box' });
+
+    expect(listed).toHaveLength(2);
+
+    return listed;
+  });
+
   expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0 });
   expect(updated.httpPort).toBe(8081);
+
+  expect(agent.requests).toStrictEqual([
+    {
+      op: 'services.add',
+      def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f -p 8081'] },
+    },
+  ]);
+
+  // newest first: the port set came after the imp's create
+  expect(calls.map((call) => [call.procedure, call.outcome])).toStrictEqual([
+    ['imps.update', 'ok'],
+    ['imps.create', 'ok'],
+  ]);
+});
+
+test('#serviceCommand sets no HTTP port when the guest refuses the add', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  const agent = await startStubServiceAgent(vsockPath);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  // the guest has a service web already, so an add without --replace is refused
+  await sendServicesAdd(vsockPath, { name: 'web', argv: ['httpd'] }, false);
+
+  const result = await runCli({
+    args: ['service', 'add', 'box', 'web', '--cmd', 'httpd -f -p 8081', '--http-port', '8081'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  const updated = await ctx.client.imps.get({ name: 'box' });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: CONFLICT: service web already exists\n',
+    code: 1,
+  });
+
+  expect(imp.httpPort).not.toBe(8081);
+  expect(updated.httpPort).toBe(imp.httpPort);
+
+  expect(agent.requests).toStrictEqual([
+    { op: 'services.add', def: { name: 'web', argv: ['httpd'] } },
+    { op: 'services.add', def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f -p 8081'] } },
+  ]);
 });
 
 test('#serviceCommand says the service runs and how to set the port when an exec token may not set it', async () => {
@@ -338,12 +399,23 @@ test('#serviceCommand says the service runs and how to set the port when an exec
     env: { IMP_URL: ctx.url, IMP_TOKEN: made.secret },
   });
 
+  const updated = await ctx.client.imps.get({ name: 'box' });
+
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
       'imp: service web was added and runs, but the HTTP port was not set: setting the HTTP port needs a token with manage. Run `imp set box --http-port 8081` to set it.\n',
     code: 1,
   });
+
+  // the list of what the guest runs, then the add
+  expect(agent.requests).toStrictEqual([
+    { op: 'services.list' },
+    { op: 'services.add', def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd'] } },
+  ]);
+
+  expect(imp.httpPort).not.toBe(8081);
+  expect(updated.httpPort).toBe(imp.httpPort);
 });
 
 test('#serviceCommand refuses a bad --http-port before it calls impd', async () => {

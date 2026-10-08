@@ -38,6 +38,7 @@ import { createImpClient } from './create-imp-client';
 import { formatTunnelClose, readTunnelServerMessage, startProxy } from './proxy-client';
 import { sendLocalRequest } from './test-utils/send-local-request';
 import { runCli } from './test-utils/start-cli';
+import { startStubTunnelFaultProxy } from './test-utils/start-stub-tunnel-fault-proxy';
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -295,13 +296,12 @@ test('#startProxy sends the rest of an upload once the guest takes it again', as
   const size = 4 * TUNNEL_WINDOW_BYTES;
   const guest = Promise.withResolvers<Socket>();
 
-  // the guest's server takes the dial and reads nothing until the test lets
-  // it; once the upload is whole it answers with the bytes it got
+  // the guest holds the dial unanswered and unread, so the whole upload
+  // reaches the client before any ack can; once whole, it answers its size
   const agent = await startStubAgent(
     buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
     (socket, _request, frames) => {
       if (frames.length === 1) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
         socket.pause();
         guest.resolve(socket);
       } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
@@ -341,13 +341,15 @@ test('#startProxy sends the rest of an upload once the guest takes it again', as
 
   const reply = sendLocalRequest('127.0.0.1', port, new Uint8Array(size));
 
+  const dialed = await guest.promise;
+
+  dialed.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+
   await waitFor(() => {
     expect(onWindowFull).toHaveBeenCalled();
   });
 
-  const paused = await guest.promise;
-
-  paused.resume();
+  dialed.resume();
 
   const replied = await reply;
 
@@ -501,6 +503,102 @@ test('#startProxy reports impd’s refusal of a dial and resets the local connec
       'box:9: DIAL_FAILED: dial tcp 127.0.0.1:9: connection refused',
     );
   });
+});
+
+test('#startProxy ends only the tunnel that gets a message that is not JSON, and closes its local connection', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box' });
+
+  const decoder = new TextDecoder();
+
+  // the guest's server takes each dial and answers a request once it is whole
+  const agent = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, _request, frames) => {
+      if (frames.length === 1) {
+        socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+      } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
+        const asked = frames
+          .filter((frame) => frame.type === FRAME_TYPES.stdin)
+          .map((frame) => decoder.decode(frame.payload))
+          .join('');
+
+        socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode(`got ${asked}`)));
+        socket.end(encodeFrame(FRAME_TYPES.stdoutEof));
+      }
+    },
+  );
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  // a fault on the path to impd: impd itself never sends text that is not JSON
+  const faulty = startStubTunnelFaultProxy(ctx.stack, ctx.url);
+  const writeNotice = mock<(text: string) => void>();
+
+  const proxy = await startProxy(
+    { url: faulty.url, token: 'root-token', host: null },
+    'box',
+    [{ local: 0, remote: 5432 }],
+    { writeNotice },
+  );
+
+  ctx.stack.defer(() => {
+    proxy.stop();
+  });
+
+  const [port] = proxy.ports;
+
+  invariant(port);
+
+  const broken = connect({ host: '127.0.0.1', port });
+  const brokenEnd = Promise.withResolvers<boolean>();
+
+  broken.on('close', brokenEnd.resolve);
+
+  ctx.stack.defer(() => {
+    broken.destroy();
+  });
+
+  await waitFor(() => {
+    expect(faulty.tunnels[0]?.toClient).toContain('{"type":"opened"}');
+  });
+
+  const sibling = connect({ host: '127.0.0.1', port, allowHalfOpen: true });
+  const siblingReply = Promise.withResolvers<string>();
+  const siblingChunks: Buffer[] = [];
+
+  sibling.on('data', (chunk: Buffer) => {
+    siblingChunks.push(chunk);
+  });
+
+  sibling.on('error', siblingReply.reject);
+
+  sibling.on('close', () => {
+    siblingReply.resolve(Buffer.concat(siblingChunks).toString());
+  });
+
+  ctx.stack.defer(() => {
+    sibling.destroy();
+  });
+
+  await waitFor(() => {
+    expect(faulty.tunnels[1]?.toClient).toContain('{"type":"opened"}');
+  });
+
+  faulty.sendText(0, 'not json');
+
+  const hadError = await brokenEnd.promise;
+
+  sibling.end('hello');
+
+  const replied = await siblingReply.promise;
+
+  expect(hadError).toBe(false);
+  expect(faulty.tunnels[0]?.isClosed).toBe(true);
+  expect(replied).toBe('got hello');
+  expect(writeNotice).toHaveBeenCalledExactlyOnceWith('box:5432: impd broke the tunnel protocol');
 });
 
 test('#startProxy says impd restarted when impd closes an open tunnel to restart', async () => {
