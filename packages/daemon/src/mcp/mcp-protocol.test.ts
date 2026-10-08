@@ -11,7 +11,7 @@ const ToolResultSchema = z.object({
 });
 
 test('a cancelled create, fork or restore still answers, so the agent learns what it made', async () => {
-  await using ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
+  const ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
 
   await ctx.client.imps.create({ name: 'agent-src', image: 'ubuntu' });
   await ctx.client.checkpoints.create({ name: 'agent-src', label: 'cp' });
@@ -48,7 +48,7 @@ test('a cancelled create, fork or restore still answers, so the agent learns wha
 });
 
 test('a cancelled call stops reporting progress', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 

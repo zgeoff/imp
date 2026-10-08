@@ -28,7 +28,7 @@ async function setupImp() {
 }
 
 test('it lists checkpoints newest first', async () => {
-  await using ctx = await setupImp();
+  const ctx = await setupImp();
 
   const first = await createCheckpoint(ctx.db, {
     id: 'cp-1',
@@ -50,7 +50,7 @@ test('it lists checkpoints newest first', async () => {
 });
 
 test('it finds a checkpoint by id or by label', async () => {
-  await using ctx = await setupImp();
+  const ctx = await setupImp();
 
   const checkpoint = await createCheckpoint(ctx.db, {
     id: 'cp-3',
@@ -69,7 +69,7 @@ test('it finds a checkpoint by id or by label', async () => {
 });
 
 test('it rejects a duplicate label on one imp', async () => {
-  await using ctx = await setupImp();
+  const ctx = await setupImp();
 
   const checkpoint = { impId: ctx.imp.id, label: 'clean', sizeBytes: 1 };
 
@@ -82,7 +82,7 @@ test('it rejects a duplicate label on one imp', async () => {
 });
 
 test('it rejects a checkpoint for an imp that does not exist', async () => {
-  await using ctx = await setupImp();
+  const ctx = await setupImp();
 
   const orphan = { id: 'cp-x', impId: 'missing', label: null, sizeBytes: null };
 
@@ -93,7 +93,7 @@ test('it rejects a checkpoint for an imp that does not exist', async () => {
 });
 
 test('it removes a checkpoint, and removing the imp removes the rest', async () => {
-  await using ctx = await setupImp();
+  const ctx = await setupImp();
 
   const a = await createCheckpoint(ctx.db, {
     id: 'cp-4',

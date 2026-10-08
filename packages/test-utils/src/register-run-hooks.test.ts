@@ -1,22 +1,18 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const dir = await mkdtemp(join(tmpdir(), 'run-hooks-'));
 
-  stack.defer(() => rm(dir, { recursive: true, force: true }));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { dir, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { dir };
 }
 
 test('it puts an env override back before the next test of a run', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeFile(
     join(ctx.dir, 'env.test.ts'),
@@ -39,5 +35,6 @@ test('it puts an env override back before the next test of a run', async () => {
     { cwd: ctx.dir },
   );
 
+  expect(result.exitCode).toBe(0);
   expect(result.stderr.toString()).toInclude(' 2 pass');
 });

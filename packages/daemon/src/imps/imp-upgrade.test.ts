@@ -118,8 +118,7 @@ async function setupUpgradeTest() {
 }
 
 test('an agent upgrade keeps every imp, and kept drives restore their memory', async () => {
-  await using ctx = await setupUpgradeTest();
-
+  const ctx = await setupUpgradeTest();
   const broken = await ctx.createEveryState();
 
   const oldDrive = ctx.readIdentity().systemDrivePath;
@@ -170,7 +169,7 @@ test('an agent upgrade keeps every imp, and kept drives restore their memory', a
 });
 
 test('a sleeping imp whose drive is gone boots cold, says why and keeps its disk', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.writeDiskMarker('dev');
@@ -203,7 +202,7 @@ test('a sleeping imp whose drive is gone boots cold, says why and keeps its disk
 });
 
 test('a VM re-adopted after a drive change records the drive it booted from', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -235,7 +234,7 @@ test('a VM re-adopted after a drive change records the drive it booted from', as
 });
 
 test('a downgrade restores snapshots the newer drive wrote while that drive is kept', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -265,7 +264,7 @@ test('a downgrade restores snapshots the newer drive wrote while that drive is k
 });
 
 test('a snapshot from an older impd stays asleep and boots cold once', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.writeDiskMarker('dev');
@@ -306,7 +305,7 @@ test('a snapshot from an older impd stays asleep and boots cold once', async () 
 });
 
 test('a woken agent that is not the one the snapshot recorded boots cold', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -333,7 +332,7 @@ test('a woken agent that is not the one the snapshot recorded boots cold', async
 });
 
 test('a woken VM with the wrong agent that will not stop keeps its disk to itself', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -362,7 +361,7 @@ test('a woken VM with the wrong agent that will not stop keeps its disk to itsel
 });
 
 test('a boot whose vm.json cannot be written still runs, and logs why', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -380,7 +379,7 @@ test('a boot whose vm.json cannot be written still runs, and logs why', async ()
 });
 
 test('a VM booted by an impd that kept no identity says its next wake boots cold', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -400,7 +399,7 @@ test('a VM booted by an impd that kept no identity says its next wake boots cold
 });
 
 test('a sleep clears the reason the last boot was cold', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -420,7 +419,7 @@ test('a sleep clears the reason the last boot was cold', async () => {
 });
 
 test('drives in use stay when the data dir moved, by their file name', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -445,7 +444,7 @@ test('drives in use stay when the data dir moved, by their file name', async () 
 });
 
 test('system.info counts the imps an agent upgrade left outdated or without a snapshot', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   for (const name of ['kept', 'lost', 'off']) {
     await ctx.client.imps.create({ name });
@@ -476,7 +475,7 @@ test('system.info counts the imps an agent upgrade left outdated or without a sn
 });
 
 test('system.info counts a running imp on an older firecracker as a cold boot to come', async () => {
-  await using ctx = await setupUpgradeTest();
+  const ctx = await setupUpgradeTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 

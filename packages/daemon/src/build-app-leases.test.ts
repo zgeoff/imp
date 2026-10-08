@@ -52,7 +52,7 @@ async function setupTest(env: Readonly<Record<string, string>> = {}) {
 }
 
 test('two owners lease one imp, and each sees and releases only its own', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -90,7 +90,7 @@ test('two owners lease one imp, and each sees and releases only its own', async 
 });
 
 test('a renew moves the end of a live lease only, and wakes nothing', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 30 });
@@ -124,7 +124,7 @@ test('a renew moves the end of a live lease only, and wakes nothing', async () =
 });
 
 test('an acquire wakes the imp, and emits held with counts but no owners', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -141,7 +141,7 @@ test('an acquire wakes the imp, and emits held with counts but no owners', async
 });
 
 test('a lease may not take the label hold, which never blocks a sleep', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -153,7 +153,7 @@ test('a lease may not take the label hold, which never blocks a sleep', async ()
 });
 
 test('a sleep or stop of a leased imp fails with LEASED, as each caller may see it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -181,7 +181,7 @@ test('a sleep or stop of a leased imp fails with LEASED, as each caller may see 
 });
 
 test('a forced sleep ends the leases, keeps the holds, and a renew finds none', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -213,7 +213,7 @@ test('a forced sleep ends the leases, keeps the holds, and a renew finds none', 
 });
 
 test('an old-shape sleep of a held imp still sleeps it, and the hold survives', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.hold({ name: 'dev', seconds: 600 });
@@ -227,8 +227,7 @@ test('an old-shape sleep of a held imp still sleeps it, and the hold survives', 
 });
 
 test('hold 0 releases the caller’s hold and a legacy one, and keeps the others', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev' });
   const a = await ctx.createTokenClient('a');
   const b = await ctx.createTokenClient('b');
@@ -263,7 +262,7 @@ test('hold 0 releases the caller’s hold and a legacy one, and keeps the others
 });
 
 test('a new token with a deleted token’s name holds none of its leases', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -285,7 +284,7 @@ test('a new token with a deleted token’s name holds none of its leases', async
 });
 
 test('a list leaves out the imps a limited caller may not reach', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -303,7 +302,7 @@ test('a list leaves out the imps a limited caller may not reach', async () => {
 });
 
 test('the shutdown pass sleeps a leased imp and keeps its lease', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
@@ -317,7 +316,7 @@ test('the shutdown pass sleeps a leased imp and keeps its lease', async () => {
 
 test('a refusal names only the protected imps the caller may read', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  await using ctx = await setupTest({ IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' });
+  const ctx = await setupTest({ IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' });
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.sleep({ name: 'dev-a' });
@@ -357,7 +356,7 @@ test('a refusal names only the protected imps the caller may read', async () => 
 });
 
 test('every write sets holdUntil from the live leases, longer or shorter', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -406,7 +405,7 @@ test('every write sets holdUntil from the live leases, longer or shorter', async
 });
 
 test('a forced sleep that fails keeps the leases and emits no release', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
@@ -430,8 +429,7 @@ test('a forced sleep that fails keeps the leases and emits no release', async ()
 });
 
 test('a sleep of a sleeping leased imp, or a stop of a stopped one, answers as before', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 600 });
@@ -467,7 +465,7 @@ test('a sleep of a sleeping leased imp, or a stop of a stopped one, answers as b
 });
 
 test('hold 0 emits held even when it releases nothing', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await Bun.sleep(10);
@@ -483,7 +481,7 @@ test('hold 0 emits held even when it releases nothing', async () => {
 });
 
 test('an imp answer names its lease owners from the presenter’s one read', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });

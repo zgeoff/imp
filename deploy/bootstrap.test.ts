@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,21 +11,14 @@ import { runSourcedFunction } from '../scripts/test-utils/run-sourced-function';
 // render_env's args: env file, template, budget, image, image set, storage, zfs root,
 // firewall, ipv6, subnet6, ksm; it gets files through $(...), which drops trailing newlines.
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-bootstrap-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
@@ -200,7 +193,7 @@ test.each([
 ])(
   '#fstab_entry_state reads the fstab lines %p against the entry %p as %p',
   (lines, entry, state) => {
-    using ctx = setupTest();
+    const ctx = setupTest();
 
     const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -273,7 +266,7 @@ test.skipIf(
   process.env['IMP_HOST_TESTS'] !== 'required' &&
     Bun.spawnSync(['unshare', '-rn', 'nft', '-c', 'list ruleset']).exitCode !== 0,
 )('#render_firewall renders a ruleset nft accepts', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -832,7 +825,7 @@ test.each([
 ])(
   '#ksm_merges sees ksmd merging, with run %s and %s pages shared, as exit %d',
   (run, shared, exitCode) => {
-    using ctx = setupTest();
+    const ctx = setupTest();
 
     const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1032,8 +1025,7 @@ test('#ra_file_uplink reads the dotted interface name back from the accept_ra fi
 });
 
 test('#create_host_network creates the network with the arguments the unit uses', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker');
 
   runSourcedFunction({
@@ -1068,8 +1060,7 @@ test('#blank_env_key blanks the key and leaves every other line alone', () => {
 });
 
 test('#check_image_contract refuses an image from before the proxy, with how to get the new one', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', "echo 'unprivileged'");
 
   const result = runSourcedFunction({
@@ -1087,8 +1078,7 @@ test.each([
   ['', 1],
   ['socket-proxy', 0],
 ])('#check_image_contract answers an image labelled %p with exit %d', (label, exitCode) => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', `echo '${label}'`);
 
   const result = runSourcedFunction({
@@ -1102,7 +1092,7 @@ test.each([
 });
 
 test('#check_env_image refuses an env file whose last IMP_HOST_IMAGE is empty, naming the file', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_PORT=7070\nIMP_HOST_IMAGE=\n');
 
@@ -1121,7 +1111,7 @@ test.each([
   ['# IMP_HOST_IMAGE=imp-host:1\n', 0],
   ['IMP_HOST_IMAGE= \r\n', 1],
 ])('#check_env_image answers the env file %p with exit %d', (env, exitCode) => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeFileSync(join(ctx.dir, 'imp-host.env'), env);
 
@@ -1242,7 +1232,7 @@ test('#parse_args refuses an unknown argument', () => {
 });
 
 test('#parse_args refuses a Tailscale key file it cannot read', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1260,7 +1250,7 @@ test('#parse_args refuses a Tailscale key file it cannot read', () => {
 });
 
 test('#parse_args reads the Tailscale key from its file without blanks', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1344,7 +1334,7 @@ test('#resolve_ipv6 keeps on', () => {
 });
 
 test('#resolve_storage refuses to switch a zfs host to xfs, naming the env file', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1364,7 +1354,7 @@ test('#resolve_storage refuses to switch a zfs host to xfs, naming the env file'
 });
 
 test('#resolve_storage refuses a ZFS pool whose dataset is not the env file one', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1384,7 +1374,7 @@ test('#resolve_storage refuses a ZFS pool whose dataset is not the env file one'
 });
 
 test('#resolve_storage refuses --loop-file with zfs', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1402,7 +1392,7 @@ test('#resolve_storage refuses --loop-file with zfs', () => {
 });
 
 test('#resolve_subnet6 refuses an env file IMP_HOST_SUBNET6 that is no IPv6 /64', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1422,7 +1412,7 @@ test('#resolve_subnet6 refuses an env file IMP_HOST_SUBNET6 that is no IPv6 /64'
 });
 
 test('#resolve_subnet6 takes the env file IMP_HOST_SUBNET6 as Docker prints it', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 

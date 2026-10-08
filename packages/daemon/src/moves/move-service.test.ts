@@ -69,8 +69,7 @@ async function setupMoveTest(hook?: FetchHook, options: MoveTestOptions = {}) {
 }
 
 test('a stopped imp moves with its id, its checkpoints and its disk', async () => {
-  await using ctx = await setupMoveTest();
-
+  const ctx = await setupMoveTest();
   const status = await ctx.runMove();
   const moved = await ctx.targetApp.client.imps.get({ name: 'dev' });
   const checkpoints = await ctx.targetApp.client.checkpoints.list({ name: 'dev' });
@@ -97,7 +96,7 @@ test('a stopped imp moves with its id, its checkpoints and its disk', async () =
 });
 
 test('a marked imp fails fast with MOVING and Retry-After, and an abort before the stream undoes the mark', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
@@ -137,7 +136,7 @@ test('a marked imp fails fast with MOVING and Retry-After, and an abort before t
 });
 
 test('a public imp is refused a move, and a marked imp refuses an exposure change', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await updateImpExposure(ctx.source.db, ctx.impId, { auth: 'none', user: null, hash: null });
 
@@ -160,7 +159,7 @@ test('a public imp is refused a move, and a marked imp refuses an exposure chang
 });
 
 test('a running imp moves only with stop, which stops it first', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.sourceApp.client.imps.start({ name: 'dev' });
 
@@ -175,7 +174,7 @@ test('a running imp moves only with stop, which stops it first', async () => {
 });
 
 test('a receipt that does not hold leaves the source as it was and the target empty', async () => {
-  await using ctx = await setupMoveTest(async (request, forward) => {
+  const ctx = await setupMoveTest(async (request, forward) => {
     const response = await forward();
 
     if (!request.url.endsWith(MOVE_PATHS.receive) || response.status !== 200) {
@@ -199,7 +198,7 @@ test('a receipt that does not hold leaves the source as it was and the target em
 });
 
 test('a send to a target that is gone ends with the mark on, and says so', async () => {
-  await using ctx = await setupMoveTest(async (request, forward) => {
+  const ctx = await setupMoveTest(async (request, forward) => {
     // the abort fails late, so a status read while it goes would show the
     // send's error with the mark not yet settled
     if (request.url.endsWith(MOVE_PATHS.abort)) {
@@ -224,7 +223,7 @@ test('a send to a target that is gone ends with the mark on, and says so', async
 test('a commit lost after the receipt holds both copies until resume commits', async () => {
   const lost = { commits: 1 };
 
-  await using ctx = await setupMoveTest((request, forward) => {
+  const ctx = await setupMoveTest((request, forward) => {
     if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
       lost.commits -= 1;
 
@@ -258,7 +257,7 @@ test('a commit lost after the receipt holds both copies until resume commits', a
 test('a commit whose answer was lost fires onCommitted once, not again on resume', async () => {
   const lost = { answers: 1 };
 
-  await using ctx = await setupMoveTest(async (request, forward) => {
+  const ctx = await setupMoveTest(async (request, forward) => {
     const response = await forward();
 
     if (request.url.endsWith(MOVE_PATHS.commit) && lost.answers > 0) {
@@ -283,7 +282,7 @@ test('a commit whose answer was lost fires onCommitted once, not again on resume
 test('an abort after the target committed destroys the source copy instead', async () => {
   const lost = { answers: 1 };
 
-  await using ctx = await setupMoveTest(async (request, forward) => {
+  const ctx = await setupMoveTest(async (request, forward) => {
     const response = await forward();
 
     // the commit lands, but its answer never reaches the source
@@ -312,8 +311,7 @@ test('an abort after the target committed destroys the source copy instead', asy
 });
 
 test('a ticket streams once, in a header from the tailnet, and only for its name', async () => {
-  await using ctx = await setupMoveTest();
-
+  const ctx = await setupMoveTest();
   const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
 
   const url = `${TARGET_URL}${MOVE_PATHS.receive}`;
@@ -336,7 +334,7 @@ test('a ticket streams once, in a header from the tailnet, and only for its name
 });
 
 test('a ticket is refused for a name the target has, or a stream past its window', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.targetApp.client.imps.create({ name: 'taken', image: 'ubuntu' });
 
@@ -362,7 +360,7 @@ test('a ticket is refused for a name the target has, or a stream past its window
 });
 
 test('a stream longer than its ticket is cut off and leaves nothing on the target', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
@@ -384,7 +382,7 @@ test('a stream longer than its ticket is cut off and leaves nothing on the targe
 });
 
 test('a peer URL off the tailnet, or a name, is refused before any byte goes', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
@@ -401,7 +399,7 @@ test('a peer URL off the tailnet, or a name, is refused before any byte goes', a
 });
 
 test('the image goes along when the target lacks it, and only grants of known secrets carry', async () => {
-  await using ctx = await setupMoveTest(undefined, { hasImage: false });
+  const ctx = await setupMoveTest(undefined, { hasImage: false });
 
   await ctx.source.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.source.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_real' });
@@ -427,7 +425,7 @@ test('the image goes along when the target lacks it, and only grants of known se
 });
 
 test('a template copy keeps its owed identity reset, and its template stays a template', async () => {
-  await using ctx = await setupMoveTest(undefined, { hasImage: false });
+  const ctx = await setupMoveTest(undefined, { hasImage: false });
 
   await ctx.source.db
     .updateTable('images')
@@ -451,7 +449,7 @@ test('a template copy keeps its owed identity reset, and its template stays a te
 });
 
 test('an elastic imp keeps its max memory', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.source.db
     .updateTable('imps')
@@ -485,7 +483,7 @@ async function removeKeepsMaxMemory(
 }
 
 test('an elastic imp is refused a move to a target that would drop its max memory', async () => {
-  await using ctx = await setupMoveTest(removeKeepsMaxMemory);
+  const ctx = await setupMoveTest(removeKeepsMaxMemory);
 
   await ctx.source.db
     .updateTable('imps')
@@ -505,7 +503,7 @@ test('an elastic imp is refused a move to a target that would drop its max memor
 });
 
 test('a running elastic imp that --stop halted runs again when the target refuses its max memory', async () => {
-  await using ctx = await setupMoveTest(removeKeepsMaxMemory);
+  const ctx = await setupMoveTest(removeKeepsMaxMemory);
 
   await ctx.source.db
     .updateTable('imps')
@@ -529,7 +527,7 @@ test('a running elastic imp that --stop halted runs again when the target refuse
 test('a GC while the stream goes keeps every file the send reads', async () => {
   const hooks: { beforeStream: (() => Promise<unknown>) | null } = { beforeStream: null };
 
-  await using ctx = await setupMoveTest(async (request, forward) => {
+  const ctx = await setupMoveTest(async (request, forward) => {
     const isFirstPart = request.headers.get(MOVE_PART_HEADER) === '0';
 
     if (request.url.endsWith(MOVE_PATHS.receive) && isFirstPart) {
@@ -554,7 +552,7 @@ test('a GC while the stream goes keeps every file the send reads', async () => {
 });
 
 test('a marked imp refuses grant and egress changes, which the send already read', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.source.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
@@ -572,7 +570,7 @@ test('a marked imp refuses grant and egress changes, which the send already read
 test('a restart undoes a send cut short, and finishes one the target has verified', async () => {
   const lost = { commits: 1 };
 
-  await using ctx = await setupMoveTest((request, forward) => {
+  const ctx = await setupMoveTest((request, forward) => {
     if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
       lost.commits -= 1;
 
@@ -614,7 +612,7 @@ test('a restart undoes a send cut short, and finishes one the target has verifie
 });
 
 test('a target restart removes a stream cut short and tickets never used', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   const staged = await ctx.target.imps.createImp({
     name: 'half',
@@ -749,7 +747,7 @@ async function setupZfsMove(options: Readonly<{ hook?: FetchHook; isSourceXfs?: 
 }
 
 test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', async () => {
-  await using ctx = await setupZfsMove();
+  const ctx = await setupZfsMove();
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
@@ -774,7 +772,7 @@ test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', asy
 });
 
 test('after a move between ZFS hosts, a GC on either host finds nothing to drop or keep', async () => {
-  await using ctx = await setupZfsMove();
+  const ctx = await setupZfsMove();
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
@@ -825,7 +823,7 @@ function writeWrongSum(body: Uint8Array): boolean {
 test('a ZFS stream whose sum does not match never commits, and the move can go again', async () => {
   const state = { isCorrupted: false };
 
-  await using ctx = await setupZfsMove({
+  const ctx = await setupZfsMove({
     hook: async (request, forward) => {
       if (state.isCorrupted || request.headers.get(MOVE_PART_HEADER) === null) {
         return forward();
@@ -874,8 +872,7 @@ test('a ZFS stream whose sum does not match never commits, and the move can go a
 });
 
 test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots', async () => {
-  await using ctx = await setupZfsMove({ isSourceXfs: true });
-
+  const ctx = await setupZfsMove({ isSourceXfs: true });
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
@@ -900,7 +897,7 @@ test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots'
 test('a stream longer than 10 minutes goes on while its parts keep coming', async () => {
   const clock: { advance: (ms: number) => void } = { advance: () => {} };
 
-  await using ctx = await setupMoveTest(
+  const ctx = await setupMoveTest(
     (request, forward) => {
       // 50 s between parts, on the target's clock
       if (request.headers.has(MOVE_PART_HEADER)) {
@@ -924,7 +921,7 @@ test('a stream longer than 10 minutes goes on while its parts keep coming', asyn
 test('a part that comes more than 60 s after the last ends the stream', async () => {
   const clock: { advance: (ms: number) => void } = { advance: () => {} };
 
-  await using ctx = await setupMoveTest(
+  const ctx = await setupMoveTest(
     (request, forward) => {
       if (request.headers.get(MOVE_PART_HEADER) === '1') {
         clock.advance(61_000);
@@ -949,7 +946,7 @@ test('a part that comes more than 60 s after the last ends the stream', async ()
 test('a target that holds the imp unmarked counts as committed', async () => {
   const lost = { commits: 1 };
 
-  await using ctx = await setupMoveTest((request, forward) => {
+  const ctx = await setupMoveTest((request, forward) => {
     if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
       lost.commits -= 1;
 
@@ -974,7 +971,7 @@ test('a target that holds the imp unmarked counts as committed', async () => {
 test('a commit with the received copy gone is refused, and the source keeps its copy', async () => {
   const lost = { commits: 1 };
 
-  await using ctx = await setupMoveTest((request, forward) => {
+  const ctx = await setupMoveTest((request, forward) => {
     if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
       lost.commits -= 1;
 
@@ -997,7 +994,7 @@ test('a commit with the received copy gone is refused, and the source keeps its 
 test('a resume and an abort at once leave the imp live on exactly one host', async () => {
   const lost = { commits: 1 };
 
-  await using ctx = await setupMoveTest((request, forward) => {
+  const ctx = await setupMoveTest((request, forward) => {
     if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
       lost.commits -= 1;
 
@@ -1024,7 +1021,7 @@ test('a resume and an abort at once leave the imp live on exactly one host', asy
 });
 
 test('a receive takes a token with manage on the whole host', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   const made = await ctx.targetApp.client.tokens.create({
     name: 'mover',
@@ -1042,7 +1039,7 @@ test('a receive takes a token with manage on the whole host', async () => {
 });
 
 test('a marked imp refuses an exec, and each /move step is in the audit log', async () => {
-  await using ctx = await setupMoveTest();
+  const ctx = await setupMoveTest();
 
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 

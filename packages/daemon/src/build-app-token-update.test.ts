@@ -146,7 +146,7 @@ async function readFailure(call: Promise<unknown>): Promise<string> {
 }
 
 test('only a host-wide manage caller may change a grantable list, as with a grant', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createToken('agent', { grantable: ['gh'] });
 
@@ -191,8 +191,7 @@ test('only a host-wide manage caller may change a grantable list, as with a gran
 });
 
 test('a secret taken off the list loses its grants on the token’s imps, and only there', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh', 'npm'] });
 
   // made through the token, by the root token on one of its imps, and on an
@@ -228,8 +227,7 @@ test('a secret taken off the list loses its grants on the token’s imps, and on
 });
 
 test('each entry takes its secret’s generation now, as a fresh token does', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
   // a rebind gives gh another generation, so the list no longer covers it
@@ -266,8 +264,7 @@ test('each entry takes its secret’s generation now, as a fresh token does', as
 });
 
 test('the change is in the API audit log, refused or made', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const dev = await ctx.createToken('dev', {});
 
   await ctx.createToken('agent', { grantable: ['gh'] });
@@ -287,8 +284,7 @@ test('the change is in the API audit log, refused or made', async () => {
 });
 
 test('the token keeps its secret: its bearer, its id and its hash stay, through a restart', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
   const [before] = await listTokenRecords(ctx.db);
   const updated = await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
@@ -315,8 +311,7 @@ test('the token keeps its secret: its bearer, its id and its hash stay, through 
 });
 
 test('a grant checked before the update and run after it is refused in the transaction', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh', 'npm'] });
 
   const gapped = ctx.buildAppWithGap(async () => {
@@ -333,7 +328,7 @@ test('a grant checked before the update and run after it is refused in the trans
 });
 
 test('an update refuses what tokens.create refuses, and an empty list clears it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createToken('agent', { grantable: ['gh'] });
   await ctx.createToken('admin', { imps: null });

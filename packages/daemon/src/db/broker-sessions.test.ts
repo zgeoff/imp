@@ -5,7 +5,7 @@ import { createImage } from './images';
 import { createImp, removeImp } from './imps';
 
 test('a session run is kept while it runs, and goes with its imp', async () => {
-  await using database = await createTestDatabase();
+  const database = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(database.db, {

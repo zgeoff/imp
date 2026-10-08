@@ -21,7 +21,9 @@ import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'create-impd-'));
 
@@ -128,6 +130,9 @@ async function setupTest() {
 
   stack.defer(() => {
     impd.egress.stop();
+  });
+
+  stack.defer(() => {
     impd.diskUsage.stop();
   });
 
@@ -138,7 +143,6 @@ async function setupTest() {
   });
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
-  const owned = stack.move();
 
   return {
     config,
@@ -153,12 +157,12 @@ async function setupTest() {
     advance: (ms: number) => {
       clock.nowMs += ms;
     },
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
+    stack,
   };
 }
 
 test('it creates a running imp through the API it serves', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -175,9 +179,7 @@ test('it creates a running imp through the API it serves', async () => {
 });
 
 test('it adopts a running VM through the new runner when it boots again', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -200,27 +202,26 @@ test('it adopts a running VM through the new runner when it boots again', async 
     { ...ctx.deps, vms: ctx.vmm.startGeneration() },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
   const slept = await restarted.imps.sleepImp('dev');
 
-  expect({
-    state: slept.state,
-    boots: ctx.vmm.boots.length,
-    stops: ctx.vmm.stops,
-    alive: ctx.vmm.alive.has(before.pid),
-  }).toStrictEqual({ state: 'sleeping', boots: 1, stops: [], alive: false });
+  expect(slept.state).toBe('sleeping');
+  expect(ctx.vmm.boots).toHaveLength(1);
+  expect(ctx.vmm.stops).toStrictEqual([]);
+  expect(ctx.vmm.alive.has(before.pid)).toBeFalse();
 });
 
 test('it says CPU limits are kept on a host without a cpu controller', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   const restarted = await createImpd(
     { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
@@ -231,10 +232,13 @@ test('it says CPU limits are kept on a host without a cpu controller', async () 
     },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -244,9 +248,7 @@ test('it says CPU limits are kept on a host without a cpu controller', async () 
 });
 
 test('it says no jailed VM can start on a jailed host without a cpu controller', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   const restarted = await createImpd(
     { ...ctx.config, jailerBin: 'jailer', egressDnsPort: findFreePorts(1).take() },
@@ -257,10 +259,13 @@ test('it says no jailed VM can start on a jailed host without a cpu controller',
     },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -270,9 +275,7 @@ test('it says no jailed VM can start on a jailed host without a cpu controller',
 });
 
 test('it removes a system drive that no imp uses when it boots', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   const stale = buildSystemDrivePath(ctx.dataDir, 'e2'.repeat(32));
 
@@ -283,10 +286,13 @@ test('it removes a system drive that no imp uses when it boots', async () => {
     { ...ctx.deps, vms: ctx.vmm.startGeneration() },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -294,9 +300,7 @@ test('it removes a system drive that no imp uses when it boots', async () => {
 });
 
 test('it removes a builder that a stopped impd left when it boots', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   const image = await createImage(ctx.db, {
     name: 'ubuntu',
@@ -320,10 +324,13 @@ test('it removes a builder that a stopped impd left when it boots', async () => 
     { ...ctx.deps, vms: ctx.vmm.startGeneration() },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -332,9 +339,7 @@ test('it removes a builder that a stopped impd left when it boots', async () => 
 });
 
 test('it drops a move ticket whose stream never came when it boots', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   await ctx.db
     .insertInto('move_tickets')
@@ -359,10 +364,13 @@ test('it drops a move ticket whose stream never came when it boots', async () =>
     { ...ctx.deps, vms: ctx.vmm.startGeneration() },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -372,7 +380,7 @@ test('it drops a move ticket whose stream never came when it boots', async () =>
 });
 
 test('it ends a lease once its clock passes the lease end', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -392,16 +400,12 @@ test('it ends a lease once its clock passes the lease end', async () => {
 
   const left = await ctx.client.leases.list({});
 
-  expect({ held: held.map((lease) => lease.owner.label), left }).toStrictEqual({
-    held: ['job'],
-    left: [],
-  });
+  expect(held.map((lease) => lease.owner.label)).toStrictEqual(['job']);
+  expect(left).toStrictEqual([]);
 });
 
 test('it sets a lease end from the wall clock when no clock is given', async () => {
-  await using ctx = await setupTest();
-
-  await using restart = new AsyncDisposableStack();
+  const ctx = await setupTest();
 
   const { now: _frozen, ...wallClockDeps } = ctx.deps;
 
@@ -421,10 +425,13 @@ test('it sets a lease end from the wall clock when no clock is given', async () 
     { ...wallClockDeps, vms: ctx.vmm.startGeneration() },
   );
 
-  restart.defer(() => restarted.broker.stop());
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  restart.defer(() => {
+  ctx.stack.defer(() => {
     restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
     restarted.diskUsage.stop();
   });
 
@@ -441,13 +448,12 @@ test('it sets a lease end from the wall clock when no clock is given', async () 
 });
 
 test('it logs to stdout when no log is given', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const script = `
     import { loadConfig } from './config';
     import { createImpd } from './create-impd';
     import { openDatabase } from './db/open-database';
-import { HOST_ADD_WARNING, HOST_BUILD_WARNING } from './images/image-service';
     import { createXfsBackend } from './storage/xfs-backend';
 
     const dataDir = ${JSON.stringify(ctx.dataDir)};

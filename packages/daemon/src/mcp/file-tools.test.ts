@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { setupMcpTest } from './test-mcp';
 
 test('imp_write_file then imp_read_file round-trips text, the path passed as one argument', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -27,7 +27,7 @@ test('imp_write_file then imp_read_file round-trips text, the path passed as one
 });
 
 test('base64 carries bytes that are not UTF-8, and utf8 refuses them', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -70,7 +70,7 @@ test('base64 carries bytes that are not UTF-8, and utf8 refuses them', async () 
 });
 
 test('a file larger than maxBytes fails instead of coming back cut', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -87,7 +87,7 @@ test('a file larger than maxBytes fails instead of coming back cut', async () =>
 });
 
 test("a read or write that fails in the guest is an isError result with the command's stderr", async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -111,8 +111,7 @@ test("a read or write that fails in the guest is an isError result with the comm
 });
 
 test('a relative path is refused before anything runs', async () => {
-  await using ctx = await setupMcpTest();
-
+  const ctx = await setupMcpTest();
   const read = await ctx.runTool('imp_read_file', { name: 'dev', path: '-rf' });
 
   expect(read.isError).toBe(true);
@@ -121,7 +120,7 @@ test('a relative path is refused before anything runs', async () => {
 });
 
 test('imp_read_file works on a sleeping and on a stopped imp', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   ctx.guest.files.set('/etc/hostname', new TextEncoder().encode('box\n'));
 

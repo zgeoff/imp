@@ -60,7 +60,7 @@ test(
   async () => {
     // a and x own 300 MiB each; b reserves 720, so admitting it must sleep
     // both, oldest first: x, then a. Once b is in, a's 256 still fits.
-    await using ctx = await setupLifecycleTest({
+    const ctx = await setupLifecycleTest({
       IMP_RAM_BUDGET_MIB: '1000',
       IMP_DEFAULT_MEMORY_MIB: '256',
       IMP_BOOT_RESERVE_PERCENT: '100',
@@ -108,7 +108,7 @@ test(
 );
 
 test('a boot that fails leaves the imp in error with no VM and no reservation', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   ctx.fake.queue('boot', 'fail');
 
@@ -124,7 +124,7 @@ test('a boot that fails leaves the imp in error with no VM and no reservation', 
 });
 
 test('a VM that dies right after its boot is found stopped by the next read', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   ctx.fake.queue('boot', 'die');
 
@@ -142,7 +142,7 @@ test('a VM that dies right after its boot is found stopped by the next read', as
 });
 
 test('a failed wake falls back to a cold boot; a failed cold boot leaves an error', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -190,7 +190,7 @@ async function setupFullHost() {
 }
 
 test('a failed wake whose cold boot the budget refuses drops the used snapshot', async () => {
-  await using ctx = await setupFullHost();
+  const ctx = await setupFullHost();
 
   // the load ran the guest before the agent check failed
   ctx.fake.queue('wake', 'fail');
@@ -207,8 +207,7 @@ test('a failed wake whose cold boot the budget refuses drops the used snapshot',
 });
 
 test('a cold boot the budget refuses before anything loaded keeps the snapshot', async () => {
-  await using ctx = await setupFullHost();
-
+  const ctx = await setupFullHost();
   const paths = await ctx.findPaths('a');
 
   writeTestSnapshot(paths, Date.now(), { ...ctx.readIdentity(), firecrackerVersion: 'v0.1.0' });
@@ -224,7 +223,7 @@ test('a cold boot the budget refuses before anything loaded keeps the snapshot',
 });
 
 test('a cold boot that fails after its admit releases the reservation', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -247,7 +246,7 @@ test('a cold boot that fails after its admit releases the reservation', async ()
 });
 
 test('a snapshot that fails keeps the VM running; one lost after the kill stops the imp', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -272,7 +271,7 @@ test('a snapshot that fails keeps the VM running; one lost after the kill stops 
 });
 
 test('a restarted impd settles imps left in every state', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   const names = [
     'alive',
@@ -392,8 +391,7 @@ test('a restarted impd settles imps left in every state', async () => {
 test(
   'a creating imp whose VM will not stop does not keep the next impd from starting',
   async () => {
-    await using ctx = await setupLifecycleTest();
-
+    const ctx = await setupLifecycleTest();
     const image = await ctx.images.resolveImage('ubuntu');
 
     const pid = ctx.fake.spawnOrphan();
@@ -432,7 +430,7 @@ test(
 test(
   'impd stopping with a wake under way leaves every imp asleep for the next impd',
   async () => {
-    await using ctx = await setupLifecycleTest();
+    const ctx = await setupLifecycleTest();
 
     await ctx.client.imps.create({ name: 'waking' });
     await ctx.client.imps.create({ name: 'running' });
@@ -476,7 +474,7 @@ test(
 );
 
 test('impd restarting in place waits for a boot under way and re-adopts its VM', async () => {
-  await using ctx = await setupLifecycleTest();
+  const ctx = await setupLifecycleTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -520,7 +518,7 @@ test('impd restarting in place waits for a boot under way and re-adopts its VM',
 test(
   'an impd that dies mid-create leaves the next one an error record',
   async () => {
-    await using ctx = await setupLifecycleTest();
+    const ctx = await setupLifecycleTest();
 
     const bootGate = ctx.fake.hold('boot');
     const creating = ctx.client.imps.create({ name: 'dev' });

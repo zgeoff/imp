@@ -126,8 +126,7 @@ async function setupNames(hostId = HOST) {
 }
 
 test('each imp gets a service of this host’s, served to its own port', async () => {
-  await using ctx = await setupNames();
-
+  const ctx = await setupNames();
   const imp = await ctx.imps.createImp({ name: 'box' });
 
   await ctx.names.runSync();
@@ -160,7 +159,7 @@ test('each imp gets a service of this host’s, served to its own port', async (
 });
 
 test('a service by that name that is not this host’s is never written', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   ctx.fake.services.set('svc:box', { name: 'svc:box', comment: 'the web team', tags: [] });
 
@@ -185,7 +184,7 @@ test('a service by that name that is not this host’s is never written', async 
 });
 
 test('a service that appears after the list is read again before any write', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   await ctx.imps.createImp({ name: 'box' });
 
@@ -200,7 +199,7 @@ test('a service that appears after the list is read again before any write', asy
 });
 
 test('a destroyed imp’s service is cleared, then deleted; others stay', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   await ctx.imps.createImp({ name: 'box' });
   await ctx.names.runSync();
@@ -233,8 +232,7 @@ test('a destroyed imp’s service is cleared, then deleted; others stay', async 
 });
 
 test('a moving imp keeps its service until the target holds a verified copy', async () => {
-  await using ctx = await setupNames();
-
+  const ctx = await setupNames();
   const imp = await ctx.imps.createImp({ name: 'box' });
 
   await ctx.names.runSync();
@@ -257,7 +255,7 @@ test('a moving imp keeps its service until the target holds a verified copy', as
 });
 
 test('a second host never removes the first one’s services', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   await ctx.imps.createImp({ name: 'box' });
   await ctx.names.runSync();
@@ -271,7 +269,7 @@ test('a second host never removes the first one’s services', async () => {
 });
 
 test('an API outage fails every name, and the next pass brings them back', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   await ctx.imps.createImp({ name: 'box' });
 
@@ -294,7 +292,7 @@ test('an API outage fails every name, and the next pass brings them back', async
 });
 
 test('a name a device holds fails that imp only, and the create stands', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   const write = ctx.fake.api.writeService;
 
@@ -332,7 +330,7 @@ test('a name a device holds fails that imp only, and the create stands', async (
 });
 
 test('serve config for a service gone from the tailnet is cleared', async () => {
-  await using ctx = await setupNames();
+  const ctx = await setupNames();
 
   ctx.serve.served.set('svc:gone', listServeEntries('http://127.0.0.1:20005'));
 
@@ -344,7 +342,7 @@ test('serve config for a service gone from the tailnet is cleared', async () => 
 test('imp url shows the name once it is live, before the local URL', async () => {
   const live = new Set<string>();
 
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     readServiceUrl: (name) => (live.has(name) ? `https://${name}.tail1234.ts.net` : null),
   });
 

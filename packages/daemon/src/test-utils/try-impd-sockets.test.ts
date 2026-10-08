@@ -3,10 +3,7 @@ import { tryExecSocket, tryTunnelSocket } from './try-impd-sockets';
 
 // a loopback stand-in for impd's own /exec and /tunnel server, to test the
 // clients alone: it upgrades every request and echoes each message back
-// oxlint-disable-next-line require-await -- await using releases the stack if setup throws
-async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
+function setupTest() {
   const upgrades: { path: string; query: string; authorization: string | null }[] = [];
   const messages: unknown[] = [];
 
@@ -32,31 +29,29 @@ async function setupTest() {
     },
   });
 
-  stack.defer(() => server.stop(true));
-
-  const owned = stack.move();
+  onTestFinished(() => server.stop(true));
 
   return {
     port: String(server.port),
     upgrades,
     messages,
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('#tryExecSocket sends a start for the name and returns the first message', async () => {
-  await using ctx = await setupTest();
+  const ctx = setupTest();
 
   const reply = await tryExecSocket(ctx.port, 'ticket=abc', 'dev-a');
 
-  expect({ reply, messages: ctx.messages }).toStrictEqual({
-    reply: 'echo {"type":"start","name":"dev-a","argv":["true"],"tty":false}',
-    messages: [{ type: 'start', name: 'dev-a', argv: ['true'], tty: false }],
-  });
+  expect(reply).toBe('echo {"type":"start","name":"dev-a","argv":["true"],"tty":false}');
+
+  expect(ctx.messages).toStrictEqual([
+    { type: 'start', name: 'dev-a', argv: ['true'], tty: false },
+  ]);
 });
 
 test('#tryExecSocket starts dev when no name is given', async () => {
-  await using ctx = await setupTest();
+  const ctx = setupTest();
 
   await tryExecSocket(ctx.port, '');
 
@@ -64,7 +59,7 @@ test('#tryExecSocket starts dev when no name is given', async () => {
 });
 
 test('#tryExecSocket opens /exec with the query and the headers', async () => {
-  await using ctx = await setupTest();
+  const ctx = setupTest();
 
   await tryExecSocket(ctx.port, 'ticket=abc', 'dev', { authorization: 'Bearer t0k' });
 
@@ -109,18 +104,16 @@ test('#tryExecSocket returns closed when the server closes without a message', a
 });
 
 test('#tryTunnelSocket sends an open for the name on port 5432 and returns the first message', async () => {
-  await using ctx = await setupTest();
+  const ctx = setupTest();
 
   const reply = await tryTunnelSocket(ctx.port, '', {}, 'db');
 
-  expect({ reply, messages: ctx.messages }).toStrictEqual({
-    reply: 'echo {"type":"open","name":"db","port":5432}',
-    messages: [{ type: 'open', name: 'db', port: 5432 }],
-  });
+  expect(reply).toBe('echo {"type":"open","name":"db","port":5432}');
+  expect(ctx.messages).toStrictEqual([{ type: 'open', name: 'db', port: 5432 }]);
 });
 
 test('#tryTunnelSocket opens nope when no name is given', async () => {
-  await using ctx = await setupTest();
+  const ctx = setupTest();
 
   await tryTunnelSocket(ctx.port, '', {});
 
@@ -128,7 +121,7 @@ test('#tryTunnelSocket opens nope when no name is given', async () => {
 });
 
 test('#tryTunnelSocket opens /tunnel with the query and the headers', async () => {
-  await using ctx = await setupTest();
+  const ctx = setupTest();
 
   await tryTunnelSocket(ctx.port, 'ticket=abc', { authorization: 'Bearer t0k' });
 

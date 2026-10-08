@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +6,7 @@ import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import { TEST_TOKEN, buildTestApp, createImpTest } from './imps/test-imps';
 
 const ORIGIN = 'http://impd.test';
 
@@ -20,12 +20,21 @@ interface SendInit {
 }
 
 async function setupTest() {
+  // one stack: the app's harness goes before the dashboard dir it serves
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const dashboardDir = mkdtempSync(join(tmpdir(), 'imp-dashboard-'));
+
+  stack.defer(() => {
+    rmSync(dashboardDir, { recursive: true, force: true });
+  });
 
   mkdirSync(join(dashboardDir, 'assets'));
   writeFileSync(join(dashboardDir, 'index.html'), '<!doctype html><title>imp</title>');
 
-  const harness = await setupImpTest({ env: { IMP_DASHBOARD_DIR: dashboardDir } });
+  const harness = await createImpTest(stack, { env: { IMP_DASHBOARD_DIR: dashboardDir } });
 
   const built = buildTestApp(harness, harness);
 
@@ -54,11 +63,6 @@ async function setupTest() {
     ...built,
     send,
     sendLogin,
-    async [Symbol.asyncDispose]() {
-      await harness[Symbol.asyncDispose]();
-
-      rmSync(dashboardDir, { recursive: true, force: true });
-    },
   };
 }
 
@@ -81,8 +85,7 @@ function buildBrowserClient(
 }
 
 test('a login trades the token for a session the API accepts from its own page', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const login = await ctx.sendLogin();
 
   expect(login.response.status).toBe(204);
@@ -100,7 +103,7 @@ test('a login trades the token for a session the API accepts from its own page',
 });
 
 test('behind TLS the session is a __Host- cookie, and a logout clears both names', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   // the wake proxy's HTTPS listener sets x-forwarded-proto on the bare domain
   const login = await ctx.send('/auth/login', {
@@ -138,8 +141,7 @@ test('behind TLS the session is a __Host- cookie, and a logout clears both names
 });
 
 test('a login with the wrong token or from another origin sets nothing', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const wrong = await ctx.sendLogin('wrong');
 
   expect(wrong.response.status).toBe(401);
@@ -156,8 +158,7 @@ test('a login with the wrong token or from another origin sets nothing', async (
 });
 
 test('the session alone never authorizes a request from another origin', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const login = await ctx.sendLogin();
 
   const session = login.cookie ?? '';
@@ -193,7 +194,7 @@ test('the session alone never authorizes a request from another origin', async (
 });
 
 test('the API refuses a GET even with the token', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const response = await ctx.send('/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
     headers: { authorization: `Bearer ${TEST_TOKEN}` },
@@ -203,7 +204,7 @@ test('the API refuses a GET even with the token', async () => {
 });
 
 test('a logout clears the cookie, only from its own origin', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const foreign = await ctx.send('/auth/logout', {
     method: 'POST',
@@ -219,8 +220,7 @@ test('a logout clears the cookie, only from its own origin', async () => {
 });
 
 test('/exec does not take the session cookie', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const login = await ctx.sendLogin();
 
   const server = ctx.app.listen(0);
@@ -252,8 +252,7 @@ test('/exec does not take the session cookie', async () => {
 });
 
 test('the dashboard shell answers app routes without shadowing the API', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const root = await ctx.send('/');
   const shell = await ctx.send('/ui/imps/box');
   const health = await ctx.send('/health');

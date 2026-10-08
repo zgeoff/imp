@@ -15,7 +15,7 @@ async function startWithSshDir(setup: (sshDir: string) => void) {
   const sshDir = join(dataDir, 'ssh');
   const logs: string[] = [];
 
-  await using database = await createTestDatabase();
+  const database = await createTestDatabase();
 
   mkdirSync(sshDir, { mode: 0o700 });
   setup(sshDir);

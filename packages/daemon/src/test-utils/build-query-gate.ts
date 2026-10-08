@@ -1,11 +1,17 @@
+import { onTestFinished } from 'bun:test';
 import type { KyselyPlugin } from 'kysely';
 
 // Holds the result of the first select that names `name` once armed, until
-// released: a build stops there between finding its rootfs and its row.
+// released: a build stops there between finding its rootfs and its row. The
+// test's end releases a select still held.
 export function buildQueryGate(name: string) {
   const state = { armed: false, held: new Set<unknown>() };
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    released.resolve();
+  });
 
   const plugin: KyselyPlugin = {
     transformQuery: (args) => {

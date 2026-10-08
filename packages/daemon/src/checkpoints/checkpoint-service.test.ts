@@ -100,7 +100,6 @@ async function setupTest() {
 
       writeFileSync(disk, content);
     },
-    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
   };
 }
 
@@ -114,8 +113,7 @@ test('it generates short ids that labels cannot imitate', () => {
 });
 
 test('it freezes a running imp around the clone and records the checkpoint', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   ctx.events.length = 0;
@@ -136,7 +134,7 @@ test('it freezes a running imp around the clone and records the checkpoint', asy
 });
 
 test('it clones a stopped imp without freezing it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
   await ctx.imps.stopImp('dev');
@@ -151,8 +149,7 @@ test('it clones a stopped imp without freezing it', async () => {
 });
 
 test('it thaws and cleans up when the clone fails', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   ctx.events.length = 0;
@@ -172,7 +169,7 @@ test('it thaws and cleans up when the clone fails', async () => {
 });
 
 test('it rejects a taken label and a label shaped like an id', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
   await ctx.checkpoints.createCheckpoint('dev', 'clean');
@@ -190,8 +187,7 @@ test('it rejects a taken label and a label shaped like an id', async () => {
 });
 
 test('it restores a running imp: kill, swap the disk, drop the snapshot, boot', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const paths = buildImpPaths(ctx.dataDir, imp.id);
@@ -224,7 +220,7 @@ test('it restores a running imp: kill, swap the disk, drop the snapshot, boot', 
 });
 
 test('it restores a stopped imp and leaves it stopped', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
@@ -243,8 +239,7 @@ test('it restores a stopped imp and leaves it stopped', async () => {
 });
 
 test('it forks from a checkpoint and from the live disk into a new slot', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const source = await ctx.imps.createImp({ name: 'dev', vcpus: 3, memoryMib: 1024 });
 
   await ctx.writeDisk('dev', 'a=1');
@@ -284,7 +279,7 @@ test('it forks from a checkpoint and from the live disk into a new slot', async 
 });
 
 test('it creates no imp when the fork source or checkpoint is unknown', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
@@ -305,8 +300,7 @@ test('it creates no imp when the fork source or checkpoint is unknown', async ()
 });
 
 test('it deletes a checkpoint by label, and destroy removes the rest', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const paths = buildImpPaths(ctx.dataDir, imp.id);
@@ -332,8 +326,7 @@ test('it deletes a checkpoint by label, and destroy removes the rest', async () 
 });
 
 test('a restore whose clone fails leaves a sleeping imp asleep with its memory', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const paths = buildImpPaths(ctx.dataDir, imp.id);
@@ -356,7 +349,7 @@ test('a restore whose clone fails leaves a sleeping imp asleep with its memory',
 });
 
 test('a restore whose clone fails leaves a running imp running on its own disk', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
   await ctx.checkpoints.createCheckpoint('dev', 'v1');
@@ -378,8 +371,7 @@ test('a restore whose clone fails leaves a running imp running on its own disk',
 });
 
 test('a restore whose swap fails after the kill leaves the imp stopped on its old disk', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const paths = buildImpPaths(ctx.dataDir, imp.id);
@@ -407,7 +399,7 @@ test('a restore whose swap fails after the kill leaves the imp stopped on its ol
 });
 
 test('it retries with a new id when storage holds the id already', async () => {
-  await using harness = await setupImpTest();
+  const harness = await setupImpTest();
 
   await harness.createTestImage('base');
   await harness.imps.createImp({ name: 'dev' });
@@ -440,7 +432,7 @@ test('it retries with a new id when storage holds the id already', async () => {
 });
 
 test('a source gone, or made again under its name, before the disk copy refuses the fork and leaves nothing', async () => {
-  await using harness = await setupImpTest();
+  const harness = await setupImpTest();
 
   await harness.createTestImage('base');
   await harness.imps.createImp({ name: 'dev' });
@@ -505,7 +497,7 @@ test('a source gone, or made again under its name, before the disk copy refuses 
 });
 
 test('a refused fork’s cleanup leaves an imp that took the fork’s name in the meantime', async () => {
-  await using harness = await setupImpTest();
+  const harness = await setupImpTest();
 
   await harness.createTestImage('base');
   await harness.imps.createImp({ name: 'dev' });

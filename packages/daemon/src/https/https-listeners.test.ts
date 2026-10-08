@@ -1,8 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { connect } from 'node:tls';
 import { findPublicImp } from '../db/exposure';
 import { findImpByName, updateImpExposure } from '../db/imps';
-import { setupImpTest } from '../imps/test-imps';
+import { createImpTest } from '../imps/test-imps';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
@@ -74,7 +74,13 @@ function startFakeApi(port: number) {
 async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
   const ports = pickPorts();
 
-  const ctx = await setupImpTest({
+  // the listeners, proxy and fake API stop before the harness closes its
+  // database
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, {
     env: {
       IMP_API_PORT: String(ports.api),
       IMP_PROXY_PORT: String(ports.proxy),
@@ -85,6 +91,8 @@ async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
 
   const api = startFakeApi(ports.api);
 
+  stack.defer(() => api.stop(true));
+
   const proxy = startWakeProxy({
     config: ctx.config,
     db: ctx.db,
@@ -92,6 +100,8 @@ async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
     log: () => {},
     peers: createForwardedPeers(Date.now),
   });
+
+  stack.defer(() => proxy.stop());
 
   const logs: string[] = [];
 
@@ -113,6 +123,8 @@ async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
     },
     scope,
   });
+
+  stack.defer(() => listeners.stop());
 
   // an imp whose address is the fake API's, so a request to it shows what
   // the imp would get
@@ -150,12 +162,6 @@ async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
     // the imp's HTTP port to one nothing listens on
     breakWeb: () =>
       ctx.db.updateTable('imps').set({ http_port: 1 }).where('id', '=', imp.id).execute(),
-    [Symbol.asyncDispose]: async () => {
-      await listeners.stop();
-      await proxy.stop();
-      await api.stop(true);
-      await ctx[Symbol.asyncDispose]();
-    },
   };
 }
 
@@ -185,7 +191,7 @@ function readPeerName(port: number): Promise<string> {
 }
 
 test('nothing listens before the first certificate', async () => {
-  await using ctx = await setup();
+  const ctx = await setup();
 
   ctx.listeners.setAddresses(['127.0.0.1']);
 
@@ -195,8 +201,7 @@ test('nothing listens before the first certificate', async () => {
 });
 
 test('the bare domain reaches the API over https, and only one label names an imp', async () => {
-  await using ctx = await setup();
-
+  const ctx = await setup();
   const certificate = await createTestCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
@@ -236,8 +241,7 @@ test('the bare domain reaches the API over https, and only one label names an im
 });
 
 test('the API on the bare domain gets the dashboard session, and an imp never does', async () => {
-  await using ctx = await setup();
-
+  const ctx = await setup();
   const certificate = await createTestCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
@@ -265,8 +269,7 @@ test('the API on the bare domain gets the dashboard session, and an imp never do
 });
 
 test('plain http on the domain redirects to https, and wakes nothing', async () => {
-  await using ctx = await setup();
-
+  const ctx = await setup();
   const certificate = await createTestCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
@@ -292,8 +295,7 @@ test('plain http on the domain redirects to https, and wakes nothing', async () 
 });
 
 test('a new certificate serves new connections while an open WebSocket stays up', async () => {
-  await using ctx = await setup();
-
+  const ctx = await setup();
   const first = await createTestCertificate({ names: ['first.test', ...NAMES] });
   const second = await createTestCertificate({ names: ['second.test', ...NAMES] });
 
@@ -341,8 +343,7 @@ test('a new certificate serves new connections while an open WebSocket stays up'
 });
 
 test('an address that goes away stops being served', async () => {
-  await using ctx = await setup();
-
+  const ctx = await setup();
   const certificate = await createTestCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
@@ -362,8 +363,7 @@ test('an address that goes away stops being served', async () => {
 });
 
 test('an address it cannot bind is logged once and tried again', async () => {
-  await using ctx = await setup();
-
+  const ctx = await setup();
   const certificate = await createTestCertificate({ names: NAMES });
 
   // TEST-NET-1: no interface has it
@@ -391,7 +391,7 @@ async function setupPublic() {
 }
 
 test('a tailnet-only imp is a 404 on the public listener, whatever the Host says', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.sleepWeb();
 
@@ -423,7 +423,7 @@ test('a tailnet-only imp is a 404 on the public listener, whatever the Host says
 });
 
 test('a public imp without auth is served, and plain http redirects to port 443', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.updateWebExposure('none');
 
@@ -447,7 +447,7 @@ test('a public imp without auth is served, and plain http redirects to port 443'
 });
 
 test('a token imp asks for its token before the wake, and never forwards it', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.updateWebExposure('token');
   await ctx.sleepWeb();
@@ -481,7 +481,7 @@ test('a token imp asks for its token before the wake, and never forwards it', as
 });
 
 test('a basic auth imp takes its user and password, and nothing else', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.updateWebExposure('basic');
 
@@ -507,7 +507,7 @@ test('a basic auth imp takes its user and password, and nothing else', async () 
 });
 
 test('plain http on the public listener takes no slot and no wake', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.updateWebExposure('none');
   await ctx.sleepWeb();
@@ -535,7 +535,7 @@ test('plain http on the public listener takes no slot and no wake', async () => 
 });
 
 test('a WebSocket upgrade without the token gets a 401 and wakes nothing', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.updateWebExposure('token');
   await ctx.sleepWeb();
@@ -560,7 +560,7 @@ test('a WebSocket upgrade without the token gets a 401 and wakes nothing', async
 });
 
 test('the public listener names nothing in its errors, and resets X-Forwarded-For', async () => {
-  await using ctx = await setupPublic();
+  const ctx = await setupPublic();
 
   await ctx.updateWebExposure('none');
 

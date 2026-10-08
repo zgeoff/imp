@@ -124,7 +124,7 @@ async function removeKeepsLeases(request: Request, forward: () => Promise<Respon
 }
 
 test('a stop move of a leased imp without force is LEASED, before it halts or marks anything', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   await ctx.writeSourceLease(JOB, 600_000);
 
@@ -153,7 +153,7 @@ test('a stop move of a leased imp without force is LEASED, before it halts or ma
 });
 
 test('a forced stop move ends the leases from leases.*, and the hold arrives with its time left', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   const events: ImpEvent[] = [];
 
@@ -178,7 +178,7 @@ test('a forced stop move ends the leases from leases.*, and the hold arrives wit
 });
 
 test('a warm move keeps each lease with its time left on the target clock, and its owners', async () => {
-  await using ctx = await setupLeaseTest({ isWarm: true });
+  const ctx = await setupLeaseTest({ isWarm: true });
 
   await ctx.writeSourceLease(JOB, 600_000);
   await ctx.writeSourceLease({ principal: 'token:abc', label: 'ci', display: 'ci' }, 900_000);
@@ -217,7 +217,7 @@ test('a warm move keeps each lease with its time left on the target clock, and i
 });
 
 test('a cold move of a stopped imp keeps its hold, and the commit says it is held', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   const events: ImpEvent[] = [];
 
@@ -257,7 +257,7 @@ test('each lease ends from when the target read the header; one that ended durin
     };
   };
 
-  await using ctx = await setupLeaseTest({ target: { createStorage } });
+  const ctx = await setupLeaseTest({ target: { createStorage } });
 
   clock.advance = ctx.target.advance;
 
@@ -289,7 +289,7 @@ test('a forced prepare that fails after the halt keeps the leases, and the imp r
     };
   };
 
-  await using ctx = await setupLeaseTest({ source: { createStorage } });
+  const ctx = await setupLeaseTest({ source: { createStorage } });
 
   await ctx.writeSourceLease(JOB, 600_000);
 
@@ -313,9 +313,13 @@ test('a forced prepare that fails after the halt keeps the leases, and the imp r
   expect(status).toMatchObject({ isDone: true, error: null });
 });
 
-test('an older target is refused an imp with only a hold or a legacy hold, before any byte goes', async () => {
-  for (const owner of [HOLD, { ...HOLD, principal: 'legacy', display: 'legacy' }]) {
-    await using ctx = await setupLeaseTest({ hook: removeKeepsLeases });
+test.each([
+  ['a hold', HOLD],
+  ['a legacy hold', { ...HOLD, principal: 'legacy', display: 'legacy' }],
+])(
+  'an older target is refused an imp with only %s, before any byte goes',
+  async (_label, owner) => {
+    const ctx = await setupLeaseTest({ hook: removeKeepsLeases });
 
     await ctx.writeSourceLease(JOB, 600_000);
     await ctx.writeSourceLease(owner, 300_000);
@@ -336,12 +340,11 @@ test('an older target is refused an imp with only a hold or a legacy hold, befor
     ]);
 
     expect(landed).toBeUndefined();
-  }
-});
+  },
+);
 
 test('an older target takes an imp with no lease', async () => {
-  await using ctx = await setupLeaseTest({ hook: removeKeepsLeases });
-
+  const ctx = await setupLeaseTest({ hook: removeKeepsLeases });
   const status = await ctx.runMove('dev', true);
 
   expect(status).toMatchObject({ isDone: true, error: null });
@@ -350,7 +353,7 @@ test('an older target takes an imp with no lease', async () => {
 test('an abort after the receipt keeps the source leases, and the target has none', async () => {
   const lost = { commits: 1 };
 
-  await using ctx = await setupLeaseTest({
+  const ctx = await setupLeaseTest({
     hook: (request, forward) => {
       if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
         lost.commits -= 1;
@@ -380,7 +383,7 @@ test('an abort after the receipt keeps the source leases, and the target has non
 });
 
 test("a target restart removes a staged imp's leases with it, and keeps a committed imp's", async () => {
-  await using ctx = await setupLeaseTest({
+  const ctx = await setupLeaseTest({
     hook: (request, forward) =>
       request.url.endsWith(MOVE_PATHS.commit)
         ? Promise.reject(new Error('the network dropped the commit'))
@@ -406,7 +409,7 @@ test("a target restart removes a staged imp's leases with it, and keeps a commit
 });
 
 test('a target restart after the commit keeps the leases', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.writeSourceLease(HOLD, 300_000);
@@ -419,7 +422,7 @@ test('a target restart after the commit keeps the leases', async () => {
 });
 
 test('a lease call on a marked imp fails with MOVING', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
@@ -438,7 +441,7 @@ test('a lease call on a marked imp fails with MOVING', async () => {
 
 test("after a warm commit the target's idle loop and governor leave the leased imp awake", async () => {
   // the idle loop reads the wall clock, so these clocks run
-  await using ctx = await setupLeaseTest({
+  const ctx = await setupLeaseTest({
     isWarm: true,
     isFrozen: false,
     target: { env: { IMP_IDLE_TIMEOUT_S: '1', IMP_RAM_BUDGET_MIB: '3000' } },
@@ -488,7 +491,7 @@ test('an expose that lands between the halt and the mark undoes the mark, keeps 
     };
   };
 
-  await using ctx = await setupLeaseTest({ source: { createStorage } });
+  const ctx = await setupLeaseTest({ source: { createStorage } });
 
   hooks.onOpen = async () => {
     await updateImpExposure(ctx.source.db, ctx.impId, { auth: 'none', user: null, hash: null });
@@ -511,7 +514,7 @@ test('an expose that lands between the halt and the mark undoes the mark, keeps 
 });
 
 test('an imp with more leases than a move carries is refused at the offer, and runs again', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   // holds, which a forced stop keeps
   for (let index = 0; index <= MAX_MOVED_LEASES; index += 1) {
@@ -529,7 +532,7 @@ test('an imp with more leases than a move carries is refused at the offer, and r
 });
 
 test('a lease whose owner is longer than a header carries is refused at the offer, and the imp runs again', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   const principal = `tailnet-user:${'x'.repeat(300)}@example.com`;
 
@@ -548,7 +551,7 @@ test('a lease whose owner is longer than a header carries is refused at the offe
 });
 
 test('a hold that ends past 100 years moves with 100 years left', async () => {
-  await using ctx = await setupLeaseTest();
+  const ctx = await setupLeaseTest();
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.writeSourceLease(HOLD, MAX_LEASE_REMAINING_MS + 60_000);

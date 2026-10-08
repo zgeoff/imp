@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { removeImp, updateImpMove } from '../db/imps';
-import { setupImpTest } from '../imps/test-imps';
+import { createImpTest, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
@@ -47,7 +47,7 @@ async function isServingImp(port: number, name: string): Promise<boolean> {
 test('overlapping listener syncs end with the listeners the database holds', async () => {
   const ports = pickPorts();
 
-  await using ctx = await setupImpTest({ env: ports });
+  const ctx = await setupImpTest({ env: ports });
 
   const proxy = startWakeProxy({
     config: ctx.config,
@@ -94,6 +94,14 @@ async function setupUpstreamTest(
   respond: (request: Request) => Response | Promise<Response> = () => new Response('ok'),
 ) {
   const cookies: (string | null)[] = [];
+  const ports = pickPorts();
+
+  // one stack: the proxy stops, then the upstream, then the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, { env: ports });
 
   const upstream = Bun.serve({
     port: 0,
@@ -116,9 +124,7 @@ async function setupUpstreamTest(
     },
   });
 
-  const ports = pickPorts();
-
-  const ctx = await setupImpTest({ env: ports });
+  stack.defer(() => upstream.stop(true));
 
   const proxy = startWakeProxy({
     config: ctx.config,
@@ -127,6 +133,8 @@ async function setupUpstreamTest(
     log: () => {},
     peers: createForwardedPeers(Date.now),
   });
+
+  stack.defer(() => proxy.stop());
 
   await ctx.createTestImage('ubuntu');
 
@@ -138,16 +146,11 @@ async function setupUpstreamTest(
   return {
     cookies,
     port: Number(ports.IMP_PORT_BASE) + imp.slot,
-    async [Symbol.asyncDispose]() {
-      await proxy.stop();
-      await upstream.stop(true);
-      await ctx[Symbol.asyncDispose]();
-    },
   };
 }
 
 test('the proxy keeps the dashboard session cookie from an imp over HTTP', async () => {
-  await using ctx = await setupUpstreamTest();
+  const ctx = await setupUpstreamTest();
 
   const response = await fetch(`http://127.0.0.1:${String(ctx.port)}/`, {
     headers: { cookie: 'a=1; imp_session=v1.2.secret; __Host-imp_session=v1.2.secret; b=2' },
@@ -159,7 +162,7 @@ test('the proxy keeps the dashboard session cookie from an imp over HTTP', async
 });
 
 test('the proxy keeps the dashboard session cookie from an imp over a WebSocket', async () => {
-  await using ctx = await setupUpstreamTest();
+  const ctx = await setupUpstreamTest();
 
   const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.port)}/`, {
     headers: { cookie: 'a=1; imp_session=v1.2.secret' },
@@ -197,7 +200,7 @@ test('the API route hands a peer handle only to the paths that resolve a caller'
 
   const ports = pickPorts();
 
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { ...ports, IMP_API_PORT: String(api.port) },
   });
 
@@ -269,7 +272,7 @@ test('the API route passes a streamed answer on line by line', async () => {
     },
   });
 
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { ...pickPorts(), IMP_API_PORT: String(api.port) },
   });
 
@@ -343,7 +346,7 @@ test('a request on an imp’s port goes to the imp whatever its Host says', asyn
     },
   });
 
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: {
       ...pickPorts(),
       IMP_API_PORT: String(api.port),
@@ -421,7 +424,7 @@ test('a client that goes away stops the request to the imp', async () => {
   const aborted = Promise.withResolvers<void>();
 
   // answers only once the request is aborted
-  await using ctx = await setupUpstreamTest(async (request) => {
+  const ctx = await setupUpstreamTest(async (request) => {
     request.signal.addEventListener('abort', () => {
       aborted.resolve();
     });
@@ -457,7 +460,7 @@ test('a slot that could not listen warns again once a new imp holds it', async (
   const ports = pickPorts();
   const logs: string[] = [];
 
-  await using ctx = await setupImpTest({ env: ports });
+  const ctx = await setupImpTest({ env: ports });
 
   // something else holds the imp port of slot 0
   const squatter = Bun.serve({
@@ -505,7 +508,7 @@ test('a slot that could not listen warns again once a new imp holds it', async (
 test('a request to a moving imp gets 503 with Retry-After', async () => {
   const ports = pickPorts();
 
-  await using ctx = await setupImpTest({ env: ports });
+  const ctx = await setupImpTest({ env: ports });
 
   const proxy = startWakeProxy({
     config: ctx.config,

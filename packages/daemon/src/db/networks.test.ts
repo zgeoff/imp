@@ -43,15 +43,14 @@ async function setupNetwork() {
 }
 
 test('it refuses a second network by the same name', async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const again = await writeNetwork(ctx.db, 'lab');
 
   expect(again).toBeNull();
 });
 
 test('an imp created on a network is a member from its insert', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.createMember('web', 0);
   await ctx.createMember('db', 1);
@@ -71,8 +70,7 @@ test('an imp created on a network is a member from its insert', async () => {
 });
 
 test("a destroyed imp's memberships go with its row", async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const web = await ctx.createMember('web', 0);
 
   await ctx.createMember('db', 1);
@@ -85,7 +83,7 @@ test("a destroyed imp's memberships go with its row", async () => {
 });
 
 test("a removed network's memberships go with it", async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.createMember('web', 0);
 
@@ -97,8 +95,7 @@ test("a removed network's memberships go with it", async () => {
 });
 
 test('join and leave say whether they changed anything', async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const web = await ctx.createMember('web', 0);
 
   const changes = [

@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import type { Socket } from 'node:net';
 import * as z from 'zod';
@@ -12,7 +12,7 @@ import type { InstallBundle } from '../broker/guest-trust';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { setupImpTest } from './test-imps';
+import { createImpTest } from './test-imps';
 
 // An exec with `require: ['broker']` starts only once impd set the broker's
 // variables and the CA bundle for the boot it starts in.
@@ -79,7 +79,12 @@ async function readRefusal(opening: Promise<{ readonly close: () => void }>): Pr
 async function setupRequireTest(installBundle?: InstallBundle) {
   const options = installBundle === undefined ? {} : { installBundle };
 
-  const ctx = await setupImpTest(options);
+  // one stack: the stub agent closes before the harness it serves
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, options);
 
   await ctx.createTestImage('base');
 
@@ -151,6 +156,10 @@ async function setupRequireTest(installBundle?: InstallBundle) {
     );
   });
 
+  stack.defer(() => {
+    agent.close();
+  });
+
   const createGrant = async () => {
     await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
     await ctx.broker.addGrant('dev', 'gh');
@@ -179,19 +188,13 @@ async function setupRequireTest(installBundle?: InstallBundle) {
     createGrant,
     writeSessionAgent,
     readExecs,
-    async [Symbol.asyncDispose]() {
-      agent.close();
-
-      await ctx[Symbol.asyncDispose]();
-    },
   };
 }
 
 const REQUIRED = { argv: ['true'], tty: false, require: ['broker'] } as const;
 
 test('without a grant, an exec that requires the broker starts nothing', async () => {
-  await using ctx = await setupRequireTest();
-
+  const ctx = await setupRequireTest();
   const refused = await readRefusal(ctx.imps.openExec('dev', REQUIRED));
 
   expect(refused).toContain('no grant');
@@ -208,7 +211,7 @@ test('without a grant, an exec that requires the broker starts nothing', async (
 test('a failed CA bundle step refuses the exec, and the next exec tries it again', async () => {
   const state = { fail: true };
 
-  await using ctx = await setupRequireTest(() =>
+  const ctx = await setupRequireTest(() =>
     state.fail ? Promise.reject(new Error('no /bin/sh')) : Promise.resolve(),
   );
 
@@ -232,7 +235,7 @@ test('a failed CA bundle step refuses the exec, and the next exec tries it again
 });
 
 test('the bundle step runs before the first exec of a boot, and again after a reboot', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   await ctx.createGrant();
 
@@ -262,7 +265,7 @@ test('the bundle step runs before the first exec of a boot, and again after a re
 });
 
 test('an env that replaces a broker variable is refused, and names it', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   await ctx.createGrant();
 
@@ -282,7 +285,7 @@ test('an env that replaces a broker variable is refused, and names it', async ()
 });
 
 test('an outer exec never meets the broker requirement', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   await ctx.createGrant();
 
@@ -304,7 +307,7 @@ test('no lifecycle operation runs between the bundle step and the start', async 
     install.reached = resolve;
   });
 
-  await using ctx = await setupRequireTest(
+  const ctx = await setupRequireTest(
     () =>
       new Promise<void>((resolve) => {
         install.release = resolve;
@@ -345,7 +348,7 @@ test('no lifecycle operation runs between the bundle step and the start', async 
 });
 
 test('a stop that takes the lock first leaves the exec to boot the imp and check again', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   await ctx.createGrant();
 
@@ -383,7 +386,7 @@ function buildSessionStart(session: string, required: boolean) {
 }
 
 test('an attach that requires the broker passes only to a session started with it', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   ctx.writeSessionAgent();
 
@@ -420,7 +423,7 @@ test('an attach that requires the broker passes only to a session started with i
 });
 
 test('an attach after an impd restart passes; one after a cold boot does not', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   ctx.writeSessionAgent();
 
@@ -462,7 +465,7 @@ test('an attach after an impd restart passes; one after a cold boot does not', a
 });
 
 test('a run that exited keeps its record while it is listed, so a resume of it passes', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   ctx.writeSessionAgent();
 
@@ -497,7 +500,7 @@ test('a run that exited keeps its record while it is listed, so a resume of it p
 });
 
 test('a resume of an exited run started without the requirement is refused before the agent', async () => {
-  await using ctx = await setupRequireTest();
+  const ctx = await setupRequireTest();
 
   ctx.writeSessionAgent();
 

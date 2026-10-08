@@ -14,20 +14,21 @@ import {
   writeBuildContext,
 } from './write-build-context';
 
+// `stack` releases in reverse: a test defers what must end before the dir goes
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dir = await mkdtemp(join(tmpdir(), 'imp-build-context-'));
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { dir, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { dir, stack };
 }
 
 test('#readBuildContext returns the Dockerfile at the asked path and its text', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -47,7 +48,7 @@ test('#readBuildContext returns the Dockerfile at the asked path and its text', 
 });
 
 test('#readBuildContext falls back to a lowercase dockerfile beside a missing Dockerfile', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -64,7 +65,7 @@ test('#readBuildContext falls back to a lowercase dockerfile beside a missing Do
 });
 
 test('#readBuildContext prefers Dockerfile to the lowercase dockerfile beside it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -84,7 +85,7 @@ test('#readBuildContext prefers Dockerfile to the lowercase dockerfile beside it
 });
 
 test('#readBuildContext falls back to a lowercase dockerfile in a subdirectory', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -110,7 +111,7 @@ test.each([
 });
 
 test('#readBuildContext rejects a context without the named Dockerfile', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -125,7 +126,7 @@ test('#readBuildContext rejects a context without the named Dockerfile', async (
 });
 
 test('#readBuildContext rejects a Dockerfile that is a directory', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -143,7 +144,7 @@ test('#readBuildContext rejects a Dockerfile that is a directory', async () => {
 });
 
 test('#readBuildContext rejects a Dockerfile that is a symlink', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -161,7 +162,7 @@ test('#readBuildContext rejects a Dockerfile that is a symlink', async () => {
 });
 
 test('#readBuildContext rejects a Dockerfile larger than the limit', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -176,7 +177,7 @@ test('#readBuildContext rejects a Dockerfile larger than the limit', async () =>
 });
 
 test('#readBuildContext rejects two entries at one name', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -194,7 +195,7 @@ test('#readBuildContext rejects two entries at one name', async () => {
 });
 
 test('#readBuildContext rejects an entry under a symlink', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -213,7 +214,7 @@ test('#readBuildContext rejects an entry under a symlink', async () => {
 });
 
 test('#readBuildContext rejects an entry under a file', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -284,7 +285,7 @@ test.each([
     'the build context entry "app" carries the pax record GNU.sparse.map',
   ],
 ] as const)('#readBuildContext rejects %s', async (_case, entry, message) => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -299,7 +300,7 @@ test.each([
 });
 
 test('#readBuildContext rejects a gzipped tar as not a tar', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -314,7 +315,7 @@ test('#readBuildContext rejects a gzipped tar as not a tar', async () => {
 });
 
 test('#readBuildContext rejects plain text as not a tar', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -327,7 +328,7 @@ test('#readBuildContext rejects plain text as not a tar', async () => {
 });
 
 test('#readBuildContext rejects with the reason of a signal aborted before the read', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -343,7 +344,7 @@ test('#readBuildContext rejects with the reason of a signal aborted before the r
 });
 
 test('#writeBuildContext writes the files, directories, symlinks and long names again', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -389,7 +390,7 @@ test('#writeBuildContext writes the files, directories, symlinks and long names 
 });
 
 test('#writeBuildContext keeps the permission bits and cuts the mtime to whole seconds', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -418,7 +419,7 @@ test('#writeBuildContext keeps the permission bits and cuts the mtime to whole s
 });
 
 test('#writeBuildContext puts the given text in place of the Dockerfile the check read', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -451,7 +452,7 @@ test('#writeBuildContext puts the given text in place of the Dockerfile the chec
 });
 
 test('#writeBuildContext drops a user xattr', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -475,7 +476,7 @@ test('#writeBuildContext drops a user xattr', async () => {
 });
 
 test('#writeBuildContext rejects a context whose Dockerfile differs from the one the check read', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
 
@@ -498,7 +499,7 @@ test('#writeBuildContext rejects a context whose Dockerfile differs from the one
 });
 
 test('#writeBuildContext rejects with the reason of a signal aborted during its read', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -520,9 +521,19 @@ test('#writeBuildContext rejects with the reason of a signal aborted during its 
     controller.signal,
   );
 
+  // the writer settles before the dir goes, once the feed closes and the
+  // signal aborts
+  ctx.stack.defer(async () => {
+    await Promise.allSettled([writing]);
+  });
+
   const feed = await open(input, 'w');
 
-  onTestFinished(() => feed.close());
+  ctx.stack.defer(() => feed.close());
+
+  ctx.stack.defer(() => {
+    controller.abort();
+  });
 
   // every entry, without the two zero blocks that end the tar
   await feed.write(bytes.subarray(0, -1024));
@@ -539,7 +550,7 @@ test('#writeBuildContext rejects with the reason of a signal aborted during its 
 });
 
 test('#writeBuildContext rejects with an error of the text of a reason that is not an error', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -560,9 +571,19 @@ test('#writeBuildContext rejects with an error of the text of a reason that is n
     controller.signal,
   );
 
+  // the writer settles before the dir goes, once the feed closes and the
+  // signal aborts
+  ctx.stack.defer(async () => {
+    await Promise.allSettled([writing]);
+  });
+
   const feed = await open(input, 'w');
 
-  onTestFinished(() => feed.close());
+  ctx.stack.defer(() => feed.close());
+
+  ctx.stack.defer(() => {
+    controller.abort();
+  });
 
   // every entry, without the two zero blocks that end the tar
   await feed.write(bytes.subarray(0, -1024));
@@ -579,7 +600,7 @@ test('#writeBuildContext rejects with an error of the text of a reason that is n
 });
 
 test('#writeBuildContext rejects with the write failure as it is', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const input = join(ctx.dir, 'in.tar');
   const output = join(ctx.dir, 'out.tar');
@@ -607,8 +628,10 @@ test('#writeBuildContext rejects with the write failure as it is', async () => {
     { stdout: 'pipe', stderr: 'inherit' },
   );
 
-  onTestFinished(() => {
+  ctx.stack.defer(async () => {
     child.kill();
+
+    await child.exited;
   });
 
   const printed = await new Response(child.stdout).text();

@@ -158,8 +158,7 @@ async function readFailure(call: Promise<unknown>): Promise<string> {
 }
 
 test('a token may grant and revoke a listed secret on its imps, and nothing past either', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
   const outcomes: string[] = [];
@@ -208,8 +207,7 @@ test('a token may grant and revoke a listed secret on its imps, and nothing past
 });
 
 test('a grant is refused without manage, without a list, and for a secret it cannot name', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
   const plain = await ctx.createToken('plain');
   const reader = await ctx.createToken('reader', { scope: 'exec' });
@@ -240,7 +238,7 @@ test('a grant is refused without manage, without a list, and for a secret it can
 });
 
 test('tokens.create takes a list only with manage and imps, of secrets that exist', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const create = (
     scope: Scope,
@@ -307,8 +305,7 @@ test('tokens.create takes a list only with manage and imps, of secrets that exis
 });
 
 test('a dashboard session made with the token has the same authority, no more', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
   const browser = await ctx.createSession(agent.secret);
 
@@ -332,7 +329,7 @@ test('a dashboard session made with the token has the same authority, no more', 
 });
 
 test('a token that may grant forks and moves nothing, and leaves nothing behind', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
 
@@ -366,8 +363,7 @@ test('a token that may grant forks and moves nothing, and leaves nothing behind'
 });
 
 test('a listed secret deleted, or deleted and made again, grants nothing, even after a restart', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
   const browser = await ctx.createSession(agent.secret);
 
@@ -411,8 +407,7 @@ test('a listed secret deleted, or deleted and made again, grants nothing, even a
 });
 
 test('a grant a token made outlives sleep, wake, a checkpoint restore and a restart', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh', 'npm'] });
 
   await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
@@ -450,8 +445,7 @@ test('a grant a token made outlives sleep, wake, a checkpoint restore and a rest
 });
 
 test('an imp made from a template gets no grants, and a destroyed imp takes its own', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
   await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
@@ -471,7 +465,7 @@ test('an imp made from a template gets no grants, and a destroyed imp takes its 
 });
 
 test('no answer, error, log line or audit row holds a secret value', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const printed: string[] = [];
 
@@ -550,8 +544,7 @@ test('no answer, error, log line or audit row holds a secret value', async () =>
 });
 
 test('a secret deleted and made again after the access check is refused in the transaction', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
   const gapped = ctx.buildAppWithGap(async () => {
@@ -569,8 +562,7 @@ test('a secret deleted and made again after the access check is refused in the t
 });
 
 test('a token removed after the access check makes no grant and revokes none', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
@@ -595,8 +587,7 @@ test('a token removed after the access check makes no grant and revokes none', a
 });
 
 test('a list entry from before a rebind is refused', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
   await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
@@ -620,8 +611,7 @@ test('a list entry from before a rebind is refused', async () => {
 });
 
 test('a checkpoint restore keeps the host’s grants now: a revoke or a rebind stays', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const imp = await findImpByName(ctx.db, 'dev-a');
 
   const isGranted = (host: string) => ctx.broker.isGranted(imp?.id ?? '', host);
@@ -664,8 +654,7 @@ test('a checkpoint restore keeps the host’s grants now: a revoke or a rebind s
 });
 
 test('a token that may grant restores no backup, before anything happens', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await ctx.createToken('agent', { grantable: ['gh'] });
   const refused = await readFailure(agent.client.backups.restore({ name: 'dev-a', as: 'dev-b' }));
   const after = await ctx.client.imps.list();
@@ -675,7 +664,7 @@ test('a token that may grant restores no backup, before anything happens', async
 });
 
 test('its ssh keys and dashboard sessions may not fork or move, even with every entry stale', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const key = createEd25519Key().public;
   const parsed = utils.parseKey(key);
@@ -732,7 +721,7 @@ test('its ssh keys and dashboard sessions may not fork or move, even with every 
 // host-wide caller, none it could not grant for a caller with patterns.
 
 test('root and host-wide manage forks copy every grant; a scoped fork copies none, live or from a checkpoint', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
@@ -781,7 +770,7 @@ test('root and host-wide manage forks copy every grant; a scoped fork copies non
 });
 
 test('a grant made on the fork before the copy is named as a clash', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.secrets.add({
     name: 'gh-api',
@@ -809,7 +798,7 @@ test('a grant made on the fork before the copy is named as a clash', async () =>
 });
 
 test('a rebind between the fork and the copy copies the grants left after it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
@@ -836,7 +825,7 @@ test('a rebind between the fork and the copy copies the grants left after it', a
 });
 
 test('a source destroyed and made again under its name before the copy lends the fork nothing', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
@@ -858,7 +847,7 @@ test('a source destroyed and made again under its name before the copy lends the
 });
 
 test('a revoke on the source after a fork does not reach the fork', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
@@ -873,7 +862,7 @@ test('a revoke on the source after a fork does not reach the fork', async () => 
 });
 
 test('a fork whose copy fails as a whole is still returned, with the error and no grant', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
@@ -897,7 +886,7 @@ test('a fork whose copy fails as a whole is still returned, with the error and n
 });
 
 test('an older client reads a fork answer with the new fields', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
@@ -943,8 +932,7 @@ async function setupListedFork() {
 }
 
 test('a listed caller’s fork copies the secrets on its list, and names the rest', async () => {
-  await using ctx = await setupListedFork();
-
+  const ctx = await setupListedFork();
   const outcome = await ctx.runCopy();
   const grants = await ctx.client.grants.list({ name: 'dev-b' });
 
@@ -957,7 +945,7 @@ test('a listed caller’s fork copies the secrets on its list, and names the res
 });
 
 test('a list entry from before a rebind copies nothing of that secret', async () => {
-  await using ctx = await setupListedFork();
+  const ctx = await setupListedFork();
 
   // rebound after the access check, and granted again at its new generation
   await ctx.client.secrets.add({
@@ -986,7 +974,7 @@ test('a list entry from before a rebind copies nothing of that secret', async ()
 });
 
 test('a token removed after the access check copies no grant', async () => {
-  await using ctx = await setupListedFork();
+  const ctx = await setupListedFork();
 
   await ctx.client.tokens.delete({ name: 'agent' });
 
@@ -998,7 +986,7 @@ test('a token removed after the access check copies no grant', async () => {
 });
 
 test('a secret taken off the list after the access check copies nothing of it', async () => {
-  await using ctx = await setupListedFork();
+  const ctx = await setupListedFork();
 
   // the update drops gh from dev-a; the root token grants it again
   await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });

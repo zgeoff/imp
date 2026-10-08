@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName, updateImpActivity } from '../db/imps';
@@ -7,7 +7,7 @@ import type { ImpDatabase } from '../db/open-database';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { setupImpTest, waitForOutcome } from './test-imps';
+import { createImpTest, setupImpTest, waitForOutcome } from './test-imps';
 
 // these tests wait up to 10 s for held calls to settle; a loaded host is slow
 const SLOW_TEST_TIMEOUT_MS = 30_000;
@@ -31,17 +31,22 @@ async function holdFor(db: ImpDatabase, impId: string, ms: number): Promise<void
 }
 
 async function setupRunningImp(env: Readonly<Record<string, string>> = {}) {
-  const ctx = await setupImpTest({ env });
+  // one stack: an agent a test starts closes before the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack, { env });
 
   await ctx.createTestImage('ubuntu');
 
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  return { ...ctx, impId: imp.id };
+  return { ...ctx, impId: imp.id, stack };
 }
 
 test('a background sleep skips an imp that was held after the caller looked', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const id = ctx.impId;
 
@@ -60,7 +65,7 @@ test('a background sleep skips an imp that was held after the caller looked', as
 });
 
 test('the idle loop skips an imp active since it looked; the governor does not', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const id = ctx.impId;
 
@@ -77,7 +82,7 @@ test('the idle loop skips an imp active since it looked; the governor does not',
 });
 
 test('a background sleep skips an imp with an open connection or a taken lock', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const id = ctx.impId;
   const release = ctx.imps.tracker.open(id, 'proxy');
@@ -101,7 +106,7 @@ test('a background sleep skips an imp with an open connection or a taken lock', 
 });
 
 test('a sleep right after a cold boot waits until the guest is old enough', async () => {
-  await using ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
+  const ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
 
   ctx.fake.setGuestUptime(100);
 
@@ -115,7 +120,7 @@ test('a sleep right after a cold boot waits until the guest is old enough', asyn
 });
 
 test('an idle sleep that waits for a young guest gives way to a request', async () => {
-  await using ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
+  const ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
 
   ctx.fake.setGuestUptime(0);
 
@@ -144,7 +149,7 @@ test('an idle sleep that waits for a young guest gives way to a request', async 
 });
 
 test('an idle sleep that waits for a young guest gives way to a hold', async () => {
-  await using ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
+  const ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
 
   ctx.fake.setGuestUptime(0);
 
@@ -168,7 +173,7 @@ test('an idle sleep that waits for a young guest gives way to a hold', async () 
 
 test('the governor sleeps young guests at once to admit a boot', async () => {
   // three imps own 300 MiB each; a 720 MiB boot needs all three asleep
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: {
       IMP_RAM_BUDGET_MIB: '1000',
       IMP_DEFAULT_MEMORY_MIB: '256',
@@ -202,7 +207,7 @@ test('the governor sleeps young guests at once to admit a boot', async () => {
 });
 
 test('impd stopping sleeps held and connected imps too', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const id = ctx.impId;
 
@@ -220,7 +225,7 @@ test('impd stopping sleeps held and connected imps too', async () => {
 });
 
 test('exec counts its session before the wake and drops it when the wake fails', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const id = ctx.impId;
 
@@ -246,7 +251,7 @@ test('exec counts its session before the wake and drops it when the wake fails',
 });
 
 test('a tunnel counts as a tunnel, not an exec, from before the wake', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const id = ctx.impId;
 
@@ -274,7 +279,7 @@ test('a tunnel counts as a tunnel, not an exec, from before the wake', async () 
 });
 
 test('impd stopping waits for a boot under way, sleeps that imp, and refuses later boots', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   await ctx.imps.stopImp('dev');
 
@@ -301,7 +306,7 @@ test('impd stopping waits for a boot under way, sleeps that imp, and refuses lat
 test(
   'a governor pass during impd stopping neither hangs nor wakes anything',
   async () => {
-    await using ctx = await setupImpTest({
+    const ctx = await setupImpTest({
       env: { IMP_RAM_BUDGET_MIB: '500', IMP_DEFAULT_MEMORY_MIB: '256' },
     });
 
@@ -333,7 +338,7 @@ test(
 );
 
 test('a create that impd stopping cuts short is recorded as an error', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   await ctx.imps.sleepAllImps();
 
@@ -345,7 +350,7 @@ test('a create that impd stopping cuts short is recorded as an error', async () 
 });
 
 test('a destroy issued while the create boots waits for it, then removes the imp', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
 
@@ -372,7 +377,7 @@ test('a destroy issued while the create boots waits for it, then removes the imp
 });
 
 test('a session exec on an agent from before sessions fails before it connects', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const rejection = await ctx.imps
     .openExec('dev', { argv: ['sh'], tty: true, session: 'main' })
@@ -383,7 +388,7 @@ test('a session exec on an agent from before sessions fails before it connects',
 });
 
 test('a unix socket dial on an agent from before 0.6.0 fails as AGENT_OUTDATED, a tcp one does not', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const paths = buildImpPaths(ctx.dataDir, ctx.impId);
   const identity = readVmIdentity(paths);
@@ -407,7 +412,7 @@ test('a unix socket dial on an agent from before 0.6.0 fails as AGENT_OUTDATED, 
 });
 
 test('an outer exec to an older agent is refused before it is sent', async () => {
-  await using ctx = await setupRunningImp();
+  const ctx = await setupRunningImp();
 
   const paths = buildImpPaths(ctx.dataDir, ctx.impId);
   const identity = readVmIdentity(paths);
@@ -418,6 +423,10 @@ test('an outer exec to an older agent is refused before it is sent', async () =>
 
   const agent = await startStubAgent(paths.vsockSocket, (socket) => {
     socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+  });
+
+  ctx.stack.defer(() => {
+    agent.close();
   });
 
   const openOuter = () =>
@@ -459,8 +468,7 @@ test('an outer exec to an older agent is refused before it is sent', async () =>
 });
 
 test('neither the idle loop nor the governor sleeps an image builder', async () => {
-  await using ctx = await setupRunningImp();
-
+  const ctx = await setupRunningImp();
   const builder = await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
 
   const byIdle = await ctx.imps.trySleepImp(builder.id, 'idle', {
@@ -474,7 +482,12 @@ test('neither the idle loop nor the governor sleeps an image builder', async () 
 });
 
 test('an imp destroyed and made again under its id, as on a move home, logs again', async () => {
-  await using ctx = await setupImpTest();
+  // one stack: each agent closes before the harness
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const ctx = await createImpTest(stack);
 
   await ctx.createTestImage('ubuntu');
 
@@ -493,7 +506,7 @@ test('an imp destroyed and made again under its id, as on a move home, logs agai
   };
 
   // a start creates the logged session; a tap gets STARTED and stays open
-  const startAgent = () => {
+  const startAgent = async () => {
     const paths = buildImpPaths(ctx.dataDir, id);
     const identity = readVmIdentity(paths);
 
@@ -503,20 +516,29 @@ test('an imp destroyed and made again under its id, as on a move home, logs agai
 
     writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
-    return startStubAgent(buildImpPaths(ctx.dataDir, id).vsockSocket, (socket, request, frames) => {
-      if (frames.length === 1) {
-        const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
+    const agent = await startStubAgent(
+      buildImpPaths(ctx.dataDir, id).vsockSocket,
+      (socket, request, frames) => {
+        if (frames.length === 1) {
+          const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
 
-        socket.write(
-          encodeJsonFrame(FRAME_TYPES.started, {
-            pid: 9,
-            session: 'main',
-            created: !isTap,
-            output,
-          }),
-        );
-      }
+          socket.write(
+            encodeJsonFrame(FRAME_TYPES.started, {
+              pid: 9,
+              session: 'main',
+              created: !isTap,
+              output,
+            }),
+          );
+        }
+      },
+    );
+
+    stack.defer(() => {
+      agent.close();
     });
+
+    return agent;
   };
 
   const sessionLogsDir = buildImpPaths(ctx.dataDir, id).sessionLogsDir;

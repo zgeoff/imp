@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { BunSqliteDriver } from './bun-sqlite-driver';
@@ -54,8 +54,7 @@ async function setupTest() {
 }
 
 test('the hold is the latest end of the live leases, and no end beats every end', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const first = await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
   const later = new Date(AT + 120_000);
@@ -87,7 +86,7 @@ test('the hold is the latest end of the live leases, and no end beats every end'
 });
 
 test('a write moves the end and keeps when the lease was made', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -107,7 +106,7 @@ test('a write moves the end and keeps when the lease was made', async () => {
 });
 
 test('a lease past its end is gone from the list, and a later write prunes it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -132,7 +131,7 @@ test('a lease past its end is gone from the list, and a later write prunes it', 
 });
 
 test('two owners each remove only their own lease', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -163,7 +162,7 @@ test('two owners each remove only their own lease', async () => {
 });
 
 test('a forced clear takes only the leases made through leases.*', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   for (const lease of [
     ctx.buildLease({}),
@@ -198,7 +197,7 @@ test('a forced clear takes only the leases made through leases.*', async () => {
 });
 
 test('a destroy takes the leases with the imp', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -214,17 +213,16 @@ test('the migration moves a live hold to legacy, and drops one that ended', asyn
 
   sqlite.run('PRAGMA foreign_keys = ON;');
 
-  await using db = Object.assign(
-    new Kysely<DatabaseSchema>({
-      dialect: {
-        createAdapter: () => new SqliteAdapter(),
-        createDriver: () => new BunSqliteDriver(sqlite),
-        createIntrospector: (kysely) => new SqliteIntrospector(kysely),
-        createQueryCompiler: () => new SqliteQueryCompiler(),
-      },
-    }),
-    { [Symbol.asyncDispose]: () => db.destroy() },
-  );
+  const db = new Kysely<DatabaseSchema>({
+    dialect: {
+      createAdapter: () => new SqliteAdapter(),
+      createDriver: () => new BunSqliteDriver(sqlite),
+      createIntrospector: (kysely) => new SqliteIntrospector(kysely),
+      createQueryCompiler: () => new SqliteQueryCompiler(),
+    },
+  });
+
+  onTestFinished(() => db.destroy());
 
   await runMigrationsTo(db, '012_add_networks');
 

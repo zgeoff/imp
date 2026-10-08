@@ -13,7 +13,7 @@ afterEach(() => {
 // The idle loop reads the wall clock; the test moves it past the lease's end
 // rather than wait for it, so the order of the checks is fixed.
 test('after the later of two leases is released, the idle loop sleeps the imp once the earlier ends', async () => {
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { IMP_IDLE_TIMEOUT_S: String(IDLE_TIMEOUT_MS / 1000) },
   });
 

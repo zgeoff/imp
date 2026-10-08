@@ -2,8 +2,7 @@ import { expect, test } from 'bun:test';
 import { setupMcpTest } from './test-mcp';
 
 test('imp_create boots an imp and imp_list shows it with its state', async () => {
-  await using ctx = await setupMcpTest();
-
+  const ctx = await setupMcpTest();
   const created = await ctx.runTool('imp_create', { name: 'dev', image: 'ubuntu' });
 
   expect(created.isError).toBe(false);
@@ -21,7 +20,7 @@ test('imp_create boots an imp and imp_list shows it with its state', async () =>
 });
 
 test('the guard hides other imps and refuses them before impd is called', async () => {
-  await using ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
+  const ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
 
   await ctx.client.imps.create({ name: 'prod', image: 'ubuntu' });
   await ctx.client.imps.create({ name: 'agent-one', image: 'ubuntu' });
@@ -52,8 +51,7 @@ test('the guard hides other imps and refuses them before impd is called', async 
 });
 
 test('imp_create without a name picks one under the prefix', async () => {
-  await using ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
-
+  const ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
   const created = await ctx.runTool('imp_create', { image: 'ubuntu' });
   const imps = await ctx.client.imps.list();
 
@@ -65,8 +63,7 @@ test('imp_create without a name picks one under the prefix', async () => {
 });
 
 test('an allow-list alone needs an explicit name to create', async () => {
-  await using ctx = await setupMcpTest({ guard: { allow: ['box'] } });
-
+  const ctx = await setupMcpTest({ guard: { allow: ['box'] } });
   const unnamed = await ctx.runTool('imp_create', { image: 'ubuntu' });
 
   expect(unnamed).toMatchObject({ isError: true });
@@ -78,7 +75,7 @@ test('an allow-list alone needs an explicit name to create', async () => {
 });
 
 test('imp_sleep, imp_url and imp_destroy act on the imp', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -102,8 +99,7 @@ test('imp_sleep, imp_url and imp_destroy act on the imp', async () => {
 });
 
 test("impd's errors come back as isError results led by their code", async () => {
-  await using ctx = await setupMcpTest();
-
+  const ctx = await setupMcpTest();
   const missing = await ctx.runTool('imp_sleep', { name: 'ghost' });
 
   expect(missing.isError).toBe(true);
@@ -111,8 +107,7 @@ test("impd's errors come back as isError results led by their code", async () =>
 });
 
 test('arguments that fail the schema are an isError result that names the field', async () => {
-  await using ctx = await setupMcpTest();
-
+  const ctx = await setupMcpTest();
   const bad = await ctx.runTool('imp_create', { name: 'Not A Name', extra: 1 });
 
   expect(bad.isError).toBe(true);
@@ -122,15 +117,14 @@ test('arguments that fail the schema are an isError result that names the field'
 });
 
 test('imp_image_list lists the images', async () => {
-  await using ctx = await setupMcpTest();
-
+  const ctx = await setupMcpTest();
   const images = await ctx.runTool('imp_image_list');
 
   expect(images.structuredContent).toMatchObject({ images: [{ name: 'ubuntu' }] });
 });
 
 test('imp_fork copies a sleeping or stopped imp, now or from a checkpoint', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'asleep', image: 'ubuntu' });
   await ctx.client.imps.create({ name: 'off', image: 'ubuntu' });
@@ -154,7 +148,7 @@ test('imp_fork copies a sleeping or stopped imp, now or from a checkpoint', asyn
 });
 
 test('imp_fork names the grants the fork did not get beside the imp', async () => {
-  await using ctx = await setupMcpTest({ tokenImps: ['dev-*'] });
+  const ctx = await setupMcpTest({ tokenImps: ['dev-*'] });
 
   await ctx.client.imps.create({ name: 'dev-a', image: 'ubuntu' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-168' });

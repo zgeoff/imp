@@ -77,8 +77,7 @@ async function waitForAudit(db: ImpDatabase, procedure: string, count: number) {
 }
 
 test('a host-wide copy is a 0600 file under the data directory with the schema version', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const copy = await ctx.client.system.copyDatabase({ name: 'before-upgrade' });
 
   const path = join(ctx.dataDir, 'db-copies', 'before-upgrade.sqlite');
@@ -119,8 +118,7 @@ test('a host-wide copy is a 0600 file under the data directory with the schema v
 });
 
 test('a copy without a name is named for the time, and a taken name is a conflict', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const unnamed = await ctx.client.system.copyDatabase({});
 
   await ctx.client.system.copyDatabase({ name: 'before-upgrade' });
@@ -132,8 +130,7 @@ test('a copy without a name is named for the time, and a taken name is a conflic
 });
 
 test('a name that is not a name, and a caller with imp patterns, are refused', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const scoped = await ctx.createClient(['dev*']);
   const hostWide = await ctx.createClient();
 

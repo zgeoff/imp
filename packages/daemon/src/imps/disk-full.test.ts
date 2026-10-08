@@ -22,7 +22,7 @@ async function setupDiskTest() {
 }
 
 test('a sleep the disk cannot take leaves the imp awake and says DISK_FULL', async () => {
-  await using ctx = await setupDiskTest();
+  const ctx = await setupDiskTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -39,7 +39,7 @@ test('a sleep the disk cannot take leaves the imp awake and says DISK_FULL', asy
 });
 
 test('an admission the disk keeps from making room says DISK_FULL', async () => {
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { IMP_RAM_BUDGET_MIB: '1000', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 

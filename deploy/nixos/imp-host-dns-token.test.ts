@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   mkdirSync,
   mkdtempSync,
@@ -14,26 +14,19 @@ import { join } from 'node:path';
 // The DNS token's staging, as the NixOS module runs it before each start, on a change to the
 // file, and every 5 minutes.
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-dns-token-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('it stages the token into a directory of its own, 0400, without printing it', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   writeFileSync(join(ctx.dir, 'dns-token'), 'cf-first\n');
 
@@ -55,7 +48,7 @@ test('it stages the token into a directory of its own, 0400, without printing it
 });
 
 test('it leaves the staged file untouched, silently, when the token has not changed', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('imp-host-dns-token.sh', import.meta.url).pathname;
 
@@ -72,7 +65,7 @@ test('it leaves the staged file untouched, silently, when the token has not chan
 });
 
 test('it stages a new token as a new file in the same directory, which the container mounts', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('imp-host-dns-token.sh', import.meta.url).pathname;
 
@@ -95,7 +88,7 @@ test('it stages a new token as a new file in the same directory, which the conta
 });
 
 test('it waits, without failing the start, for a source that is missing before any token', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const result = Bun.spawnSync([
     'bash',
@@ -116,7 +109,7 @@ test('it waits, without failing the start, for a source that is missing before a
 test.each([[''], [' \n']])(
   'it keeps the staged token, without failing the start, when the source holds %p',
   (content) => {
-    using ctx = setupTest();
+    const ctx = setupTest();
 
     const script = new URL('imp-host-dns-token.sh', import.meta.url).pathname;
 
@@ -140,7 +133,7 @@ test.each([[''], [' \n']])(
 );
 
 test('it keeps the staged token, without failing the start, when the source is removed', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('imp-host-dns-token.sh', import.meta.url).pathname;
 
@@ -157,7 +150,7 @@ test('it keeps the staged token, without failing the start, when the source is r
 });
 
 test('it keeps the staged token, without failing the start, when the source cannot be read', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const script = new URL('imp-host-dns-token.sh', import.meta.url).pathname;
 

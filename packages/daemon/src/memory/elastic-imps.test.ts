@@ -1,18 +1,25 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findImpByName } from '../db/imps';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildTestApp, createImpTest } from '../imps/test-imps';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMemoryMax, createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 
-// Elastic imps through the router, on the fake VMs: what create accepts, and
-// what a sleep and a wake do with the plugged memory.
-async function setupElasticTest(env: Readonly<Record<string, string>> = {}, cgroups?: CpuCgroups) {
-  const harness = await setupImpTest({ env, ...(cgroups !== undefined && { cgroups }) });
+// Elastic imps through the router, on the fake VMs. A test whose cgroup root
+// must outlive the harness passes the stack that holds it; registering the
+// same stack's release twice does nothing.
+async function setupElasticTest(
+  env: Readonly<Record<string, string>> = {},
+  cgroups?: CpuCgroups,
+  stack: Readonly<AsyncDisposableStack> = new AsyncDisposableStack(),
+) {
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, { env, ...(cgroups !== undefined && { cgroups }) });
 
   await harness.createTestImage('ubuntu');
 
@@ -28,7 +35,7 @@ async function setupElasticTest(env: Readonly<Record<string, string>> = {}, cgro
 }
 
 test('a max above 4 × memory, or below it, is refused at create', async () => {
-  await using ctx = await setupElasticTest();
+  const ctx = await setupElasticTest();
 
   const tooBig = await ctx.client.imps
     .create({ name: 'big', memoryMib: 256, maxMemoryMib: 1025 })
@@ -55,7 +62,7 @@ test('a max above 4 × memory, or below it, is refused at create', async () => {
 });
 
 test('an imp whose max is larger than the whole RAM budget never boots', async () => {
-  await using ctx = await setupElasticTest({ IMP_RAM_BUDGET_MIB: '1024' });
+  const ctx = await setupElasticTest({ IMP_RAM_BUDGET_MIB: '1024' });
 
   // its memory fits, but the guest could grow past the budget
   const refused = await ctx.client.imps
@@ -67,8 +74,7 @@ test('an imp whose max is larger than the whole RAM budget never boots', async (
 });
 
 test('a sleep unplugs what the guest can spare, and the wake allows what it kept', async () => {
-  await using ctx = await setupElasticTest();
-
+  const ctx = await setupElasticTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -97,8 +103,7 @@ test('a sleep unplugs what the guest can spare, and the wake allows what it kept
 });
 
 test('a sleep during a plug records what the plug asked for, so the wake allows it', async () => {
-  await using ctx = await setupElasticTest();
-
+  const ctx = await setupElasticTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -124,7 +129,7 @@ test('a sleep during a plug records what the plug asked for, so the wake allows 
 });
 
 test('an imp that does not grow sleeps without asking its guest', async () => {
-  await using ctx = await setupElasticTest();
+  const ctx = await setupElasticTest();
 
   await ctx.client.imps.create({ name: 'plain', memoryMib: 256 });
 
@@ -137,9 +142,13 @@ test('an imp that does not grow sleeps without asking its guest', async () => {
 });
 
 // a cgroup root in a temp dir with the cpu and memory controllers handed to
-// imps/, as setup-cgroups.sh leaves it
-function setupCgroupRoot() {
+// imps/, as setup-cgroups.sh leaves it; removed by `stack`
+function setupCgroupRoot(stack: Readonly<AsyncDisposableStack>) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  stack.defer(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   mkdirSync(join(dir, 'imps'), { recursive: true });
   writeFileSync(join(dir, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
@@ -158,16 +167,18 @@ function setupCgroupRoot() {
       current.cgroups = createCpuCgroups({ root: dir, log: () => {} });
     },
     readMemoryMax: (impId: string) => readFileSync(join(dir, 'imps', impId, 'memory.max'), 'utf8'),
-    [Symbol.dispose]: () => {
-      rmSync(dir, { recursive: true, force: true });
-    },
   };
 }
 
 test("memory.max follows the guest: its memory at boot, raised by a grow, the plug's size at wake", async () => {
-  using root = setupCgroupRoot();
+  // one stack: the harness goes before the cgroup root it writes
+  const stack = new AsyncDisposableStack();
 
-  await using ctx = await setupElasticTest({}, root.cgroups);
+  onTestFinished(() => stack.disposeAsync());
+
+  const root = setupCgroupRoot(stack);
+
+  const ctx = await setupElasticTest({}, root.cgroups, stack);
 
   // an agent that moves its container's limit with the guest
   ctx.fake.agent.version = '0.17.0';
@@ -206,10 +217,14 @@ test("memory.max follows the guest: its memory at boot, raised by a grow, the pl
 });
 
 test('after a restart, adopt allows what the guest holds before a sleep can set up its cgroup', async () => {
-  using root = setupCgroupRoot();
+  // one stack: the harness goes before the cgroup root it writes
+  const stack = new AsyncDisposableStack();
 
-  await using ctx = await setupElasticTest({}, root.cgroups);
+  onTestFinished(() => stack.disposeAsync());
 
+  const root = setupCgroupRoot(stack);
+
+  const ctx = await setupElasticTest({}, root.cgroups, stack);
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -238,7 +253,7 @@ test('after a restart, adopt allows what the guest holds before a sleep can set 
 });
 
 test('an elastic imp whose agent predates elastic memory is not grown, and the log says why', async () => {
-  await using ctx = await setupElasticTest();
+  const ctx = await setupElasticTest();
 
   await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
 

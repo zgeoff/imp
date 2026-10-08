@@ -6,7 +6,8 @@ import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { StubVmError } from '../test-utils/build-stub-vmm';
 import type { VmOutcome, VmStep } from '../test-utils/build-stub-vmm';
-import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
+import { runWithStack } from '../test-utils/run-with-stack';
+import { buildTestApp, createImpTest, findBrokenInvariants } from './test-imps';
 
 const NAMES = ['a', 'b', 'c', 'd'] as const;
 
@@ -102,242 +103,261 @@ test(
           fc.scheduler(),
           fc.array(opArb, { minLength: 4, maxLength: 16 }),
           scriptArb,
-          async (scheduler, ops, script) => {
-            routerErrors.mockClear();
 
-            // each governor sleep, with whether the imp was held when it went;
-            // the read queues before the sleep's own record update, under its lock
-            const governorSleeps: Promise<{ readonly name: string; readonly held: boolean }>[] = [];
+          // each case releases its impd before the next, pass or fail
+          (scheduler, ops, script) =>
+            runWithStack(async (stack) => {
+              routerErrors.mockClear();
 
-            const holder: { db: ImpDatabase | null; now: () => number } = {
-              db: null,
-              now: Date.now,
-            };
+              // each governor sleep, with whether the imp was held when it went;
+              // the read queues before the sleep's own record update, under its lock
+              const governorSleeps: Promise<{ readonly name: string; readonly held: boolean }>[] =
+                [];
 
-            const readSleep = async (name: string, at: number) => {
-              const imp = holder.db === null ? undefined : await findImpByName(holder.db, name);
-              const holdUntil = imp?.holdUntil?.getTime() ?? 0;
+              const holder: { db: ImpDatabase | null; now: () => number } = {
+                db: null,
+                now: Date.now,
+              };
 
-              return { name, held: holdUntil > at };
-            };
+              const readSleep = async (name: string, at: number) => {
+                const imp = holder.db === null ? undefined : await findImpByName(holder.db, name);
+                const holdUntil = imp?.holdUntil?.getTime() ?? 0;
 
-            await using ctx = await setupImpTest({
-              env: ENV,
-              onLog: (message) => {
-                const match = GOVERNOR_SLEEP.exec(message);
-                const name = match?.groups?.['name'];
+                return { name, held: holdUntil > at };
+              };
 
-                if (name !== undefined) {
-                  governorSleeps.push(readSleep(name, holder.now()));
-                }
-              },
-            });
+              const ctx = await createImpTest(stack, {
+                env: ENV,
+                onLog: (message) => {
+                  const match = GOVERNOR_SLEEP.exec(message);
+                  const name = match?.groups?.['name'];
 
-            holder.db = ctx.db;
-            holder.now = ctx.now;
-
-            await ctx.createTestImage('ubuntu');
-
-            const client = buildTestApp(ctx, ctx).client;
-
-            // c asleep, a and b awake, d not created yet
-            for (const name of ['c', 'a', 'b']) {
-              await client.imps.create({ name });
-              await client.checkpoints.create({ name, label: 'base' });
-
-              if (name === 'c') {
-                await client.imps.sleep({ name });
-              }
-            }
-
-            for (const [index, step] of STEPS.entries()) {
-              ctx.fake.queue(step, ...(script[index] ?? []));
-            }
-
-            ctx.fake.setPace(() => scheduler.schedule(Promise.resolve()));
-
-            const runOp = async (op: LifecycleOp): Promise<void> => {
-              switch (op.kind) {
-                case 'create': {
-                  await client.imps.create({ name: op.name });
-
-                  break;
-                }
-                case 'sleep': {
-                  await client.imps.sleep({ name: op.name });
-
-                  break;
-                }
-                case 'wake': {
-                  await client.imps.wake({ name: op.name });
-
-                  break;
-                }
-                case 'start': {
-                  await client.imps.start({ name: op.name });
-
-                  break;
-                }
-                case 'stop': {
-                  await client.imps.stop({ name: op.name });
-
-                  break;
-                }
-                case 'restore': {
-                  await client.checkpoints.restore({ name: op.name, checkpoint: 'base' });
-
-                  break;
-                }
-                case 'hold': {
-                  await client.imps.hold({ name: op.name, seconds: 30 });
-
-                  break;
-                }
-                case 'destroy': {
-                  await client.imps.destroy({ name: op.name });
-
-                  break;
-                }
-                case 'crash': {
-                  const imp = await findImpByName(ctx.db, op.name);
-
-                  ctx.fake.alive.delete(imp?.pid ?? 0);
-                  break;
-                }
-                case 'outdate': {
-                  // firecracker changed under the snapshot: its wake boots
-                  // cold. Only the version moves, as on a real upgrade.
-                  const imp = await findImpByName(ctx.db, op.name);
-
-                  const paths = buildImpPaths(ctx.dataDir, imp?.id ?? '');
-                  const meta = readSnapshotMeta(paths);
-
-                  if (meta !== null) {
-                    writeSnapshotMeta(paths, { ...meta, firecrackerVersion: 'v0.1.0' });
+                  if (name !== undefined) {
+                    governorSleeps.push(readSleep(name, holder.now()));
                   }
+                },
+              });
 
-                  break;
-                }
-                case 'enforce': {
-                  await ctx.governor.enforce();
+              holder.db = ctx.db;
+              holder.now = ctx.now;
 
-                  break;
-                }
-                case 'sigterm': {
-                  // impd stopping: every imp to sleep, and no boot after that
-                  await ctx.imps.sleepAllImps();
+              await ctx.createTestImage('ubuntu');
 
-                  break;
-                }
-                case 'tick': {
-                  ctx.advance(40_000);
-                  break;
+              const client = buildTestApp(ctx, ctx).client;
+
+              // c asleep, a and b awake, d not created yet
+              for (const name of ['c', 'a', 'b']) {
+                await client.imps.create({ name });
+                await client.checkpoints.create({ name, label: 'base' });
+
+                if (name === 'c') {
+                  await client.imps.sleep({ name });
                 }
               }
-            };
 
-            // every op starts where the scheduler lets it; a rejection is kept
-            const calls = ops.map(async (op) => {
-              await scheduler.schedule(Promise.resolve());
-
-              try {
-                await runOp(op);
-
-                return null;
-              } catch (error) {
-                return error;
-              }
-            });
-
-            const settled = { done: false };
-
-            const all = Promise.all(calls).then((errors) => {
-              settled.done = true;
-
-              return errors;
-            });
-
-            for (let round = 0; !settled.done; round += 1) {
-              if (round === MAX_SETTLE_ROUNDS) {
-                throw new Error('a call never settled');
+              for (const [index, step] of STEPS.entries()) {
+                ctx.fake.queue(step, ...(script[index] ?? []));
               }
 
-              await scheduler.waitIdle();
+              ctx.fake.setPace(() => scheduler.schedule(Promise.resolve()));
 
-              ctx.fake.releaseHangs();
+              const runOp = async (op: LifecycleOp): Promise<void> => {
+                switch (op.kind) {
+                  case 'create': {
+                    await client.imps.create({ name: op.name });
 
-              await Bun.sleep(0);
-            }
+                    break;
+                  }
+                  case 'sleep': {
+                    await client.imps.sleep({ name: op.name });
 
-            const errors = await all;
+                    break;
+                  }
+                  case 'wake': {
+                    await client.imps.wake({ name: op.name });
 
-            // from here on the VMs behave, so the checks below see what the
-            // ops left, not new failures
-            ctx.fake.setPace(() => Promise.resolve());
-            ctx.fake.clearQueues();
+                    break;
+                  }
+                  case 'start': {
+                    await client.imps.start({ name: op.name });
 
-            await ctx.imps.waitForLifecycle();
+                    break;
+                  }
+                  case 'stop': {
+                    await client.imps.stop({ name: op.name });
 
-            const unknown = errors.filter(
-              (error) =>
-                error !== null &&
-                !(
-                  typeof error === 'object' &&
-                  'code' in error &&
-                  KNOWN_CODES.has(String(error.code))
-                ),
-            );
+                    break;
+                  }
+                  case 'restore': {
+                    await client.checkpoints.restore({ name: op.name, checkpoint: 'base' });
 
-            // the error the router logged for each internal error
-            const realErrors = routerErrors.mock.calls
-              .map((call): unknown => call[1])
-              .filter((error) => !(error instanceof StubVmError));
+                    break;
+                  }
+                  case 'hold': {
+                    await client.imps.hold({ name: op.name, seconds: 30 });
 
-            const sleeps = await Promise.all(governorSleeps);
+                    break;
+                  }
+                  case 'destroy': {
+                    await client.imps.destroy({ name: op.name });
 
-            const pinnedSleeps = sleeps.filter((sleep) => sleep.held);
+                    break;
+                  }
+                  case 'crash': {
+                    const imp = await findImpByName(ctx.db, op.name);
 
-            const quiescent = await findBrokenInvariants(ctx, false);
+                    ctx.fake.alive.delete(imp?.pid ?? 0);
+                    break;
+                  }
+                  case 'outdate': {
+                    // firecracker changed under the snapshot: its wake boots
+                    // cold. Only the version moves, as on a real upgrade.
+                    const imp = await findImpByName(ctx.db, op.name);
 
-            // the list runs the liveness pass that repairs dead VMs
-            await client.imps.list();
+                    const paths = buildImpPaths(ctx.dataDir, imp?.id ?? '');
+                    const meta = readSnapshotMeta(paths);
 
-            const repaired = await findBrokenInvariants(ctx, true);
+                    if (meta !== null) {
+                      writeSnapshotMeta(paths, { ...meta, firecrackerVersion: 'v0.1.0' });
+                    }
 
-            expect(unknown).toEqual([]);
-            expect(realErrors).toEqual([]);
-            expect(pinnedSleeps).toEqual([]);
-            expect(quiescent).toEqual([]);
-            expect(repaired).toEqual([]);
+                    break;
+                  }
+                  case 'enforce': {
+                    await ctx.governor.enforce();
 
-            // the governor may sleep every running imp without a hold: none
-            // is locked or has an open exec session or request
-            const beforeEnforce = await listImps(ctx.db);
+                    break;
+                  }
+                  case 'sigterm': {
+                    // impd stopping: every imp to sleep, and no boot after that
+                    await ctx.imps.sleepAllImps();
 
-            const busy = beforeEnforce.filter(
-              (imp) => ctx.imps.isImpBusy(imp.id) || ctx.imps.tracker.count(imp.id) > 0,
-            );
+                    break;
+                  }
+                  case 'tick': {
+                    ctx.advance(40_000);
+                    break;
+                  }
+                }
+              };
 
-            expect(busy).toEqual([]);
+              // every op starts where the scheduler lets it; a rejection is kept
+              const calls = ops.map(async (op) => {
+                await scheduler.schedule(Promise.resolve());
 
-            // this never reaches the shortfall, which the governor property
-            // "enforce on a crowded host" covers
-            await ctx.governor.enforce();
+                try {
+                  await runOp(op);
 
-            const usage = await ctx.governor.readUsage();
-            const imps = await listImps(ctx.db);
+                  return null;
+                } catch (error) {
+                  return error;
+                }
+              });
 
-            const runningUnheld = imps.filter(
-              (imp) =>
-                imp.state === 'running' &&
-                (imp.holdUntil === null || imp.holdUntil.getTime() <= ctx.now()),
-            );
+              const settled = { done: false };
 
-            const overMib = usage.usedMib - ctx.config.ramBudgetMib;
+              const all = Promise.all(calls).then((errors) => {
+                settled.done = true;
 
-            // under the budget, or no imp the governor may sleep is running
-            expect(overMib <= 0 || runningUnheld.length === 0).toBeTrue();
-          },
+                return errors;
+              });
+
+              // released first, pass or fail: every call and the lifecycle work
+              // they started end before the impd goes, so no late error lands
+              // in the next case's console.error spy
+              stack.defer(async () => {
+                ctx.fake.setPace(() => Promise.resolve());
+                ctx.fake.clearQueues();
+                ctx.fake.releaseHangs();
+
+                await scheduler.waitIdle();
+
+                await all;
+
+                await ctx.imps.waitForLifecycle();
+              });
+
+              for (let round = 0; !settled.done; round += 1) {
+                if (round === MAX_SETTLE_ROUNDS) {
+                  throw new Error('a call never settled');
+                }
+
+                await scheduler.waitIdle();
+
+                ctx.fake.releaseHangs();
+
+                await Bun.sleep(0);
+              }
+
+              const errors = await all;
+
+              // from here on the VMs behave, so the checks below see what the
+              // ops left, not new failures
+              ctx.fake.setPace(() => Promise.resolve());
+              ctx.fake.clearQueues();
+
+              await ctx.imps.waitForLifecycle();
+
+              const unknown = errors.filter(
+                (error) =>
+                  error !== null &&
+                  !(
+                    typeof error === 'object' &&
+                    'code' in error &&
+                    KNOWN_CODES.has(String(error.code))
+                  ),
+              );
+
+              // the error the router logged for each internal error
+              const realErrors = routerErrors.mock.calls
+                .map((call): unknown => call[1])
+                .filter((error) => !(error instanceof StubVmError));
+
+              const sleeps = await Promise.all(governorSleeps);
+
+              const pinnedSleeps = sleeps.filter((sleep) => sleep.held);
+
+              const quiescent = await findBrokenInvariants(ctx, false);
+
+              // the list runs the liveness pass that repairs dead VMs
+              await client.imps.list();
+
+              const repaired = await findBrokenInvariants(ctx, true);
+
+              expect(unknown).toEqual([]);
+              expect(realErrors).toEqual([]);
+              expect(pinnedSleeps).toEqual([]);
+              expect(quiescent).toEqual([]);
+              expect(repaired).toEqual([]);
+
+              // the governor may sleep every running imp without a hold: none
+              // is locked or has an open exec session or request
+              const beforeEnforce = await listImps(ctx.db);
+
+              const busy = beforeEnforce.filter(
+                (imp) => ctx.imps.isImpBusy(imp.id) || ctx.imps.tracker.count(imp.id) > 0,
+              );
+
+              expect(busy).toEqual([]);
+
+              // this never reaches the shortfall, which the governor property
+              // "enforce on a crowded host" covers
+              await ctx.governor.enforce();
+
+              const usage = await ctx.governor.readUsage();
+              const imps = await listImps(ctx.db);
+
+              const runningUnheld = imps.filter(
+                (imp) =>
+                  imp.state === 'running' &&
+                  (imp.holdUntil === null || imp.holdUntil.getTime() <= ctx.now()),
+              );
+
+              const overMib = usage.usedMib - ctx.config.ramBudgetMib;
+
+              // under the budget, or no imp the governor may sleep is running
+              expect(overMib <= 0 || runningUnheld.length === 0).toBeTrue();
+            }),
         ),
         { numRuns: 300 },
       );

@@ -127,7 +127,7 @@ async function readErrorCode(call: Promise<unknown>): Promise<string | null> {
 }
 
 test('every procedure refuses a token whose scope is below what it needs', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const clients = new Map<Scope, ContractRouterClient<ImpContract>>();
 
@@ -154,8 +154,7 @@ test('every procedure refuses a token whose scope is below what it needs', async
 });
 
 test('every host-wide procedure refuses a manage token limited to some imps', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const limited = await ctx.createTokenClient('limited', 'manage', ['dev-*']);
 
   const hostPaths = Object.entries(PROCEDURE_ACCESS)
@@ -171,8 +170,7 @@ test('every host-wide procedure refuses a manage token limited to some imps', as
 });
 
 test('the root token makes, lists and removes tokens; the secret shows once', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
 
   expect(made.secret).toMatch(/^imp_[\w-]{16}\.[\w-]{43}$/);
@@ -212,7 +210,7 @@ test('the root token makes, lists and removes tokens; the secret shows once', as
 });
 
 test('a token limited to dev-* sees and touches only its imps', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -255,7 +253,7 @@ test('a token limited to dev-* sees and touches only its imps', async () => {
 });
 
 test('a token limited to dev-* cannot copy another imp through its template', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'prod' });
   await ctx.client.imps.create({ name: 'dev-src' });
@@ -286,7 +284,7 @@ test('a token limited to dev-* cannot copy another imp through its template', as
 });
 
 test('a limited token’s event stream holds only its imps', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -317,7 +315,7 @@ test('a limited token’s event stream holds only its imps', async () => {
 });
 
 test('a read token cannot exec, and an exec token for dev-* cannot reach another imp', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const server = ctx.app.listen(0);
 
@@ -349,7 +347,7 @@ test('a read token cannot exec, and an exec token for dev-* cannot reach another
 });
 
 test('a ticket opens nothing once its token is removed', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const server = ctx.app.listen(0);
 
@@ -372,7 +370,7 @@ test('a ticket opens nothing once its token is removed', async () => {
 });
 
 test('removing a token closes its open sockets', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const server = ctx.app.listen(0);
 
@@ -409,7 +407,7 @@ test('removing a token closes its open sockets', async () => {
 // A removal that lands after the token passed its check but before the
 // socket opened: the socket must close all the same.
 test('a socket that opens after its token is revoked closes at once', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const server = ctx.app.listen(0);
 
@@ -441,7 +439,7 @@ test('a socket that opens after its token is revoked closes at once', async () =
 });
 
 test('a token limited to no imps at all is refused', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const made = ctx.client.tokens.create({ name: 'none', scope: 'read', imps: [] });
 
@@ -451,7 +449,7 @@ test('a token limited to no imps at all is refused', async () => {
 });
 
 test('a tailnet identity reaches the API only through a peer handle impd made', async () => {
-  await using ctx = await setupTest({ tailnet: true });
+  const ctx = await setupTest({ tailnet: true });
 
   const server = ctx.app.listen(0);
 
@@ -482,7 +480,7 @@ test('a tailnet identity reaches the API only through a peer handle impd made', 
 });
 
 test('a tailnet identity opens no socket for a page on an imp’s port', async () => {
-  await using ctx = await setupTest({ tailnet: true });
+  const ctx = await setupTest({ tailnet: true });
 
   const server = ctx.app.listen(0);
 

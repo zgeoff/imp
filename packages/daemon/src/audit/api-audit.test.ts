@@ -12,7 +12,7 @@ test('the imp is an imp namespace’s input name, or the created imp’s', () =>
 });
 
 test('an open is audited with its outcome, and a failed write is logged', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   const logs: string[] = [];
 

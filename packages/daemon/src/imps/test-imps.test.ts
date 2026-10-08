@@ -4,11 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import {
   buildTestApp,
+  createImpTest,
   findBrokenInvariants,
   setupImpTest,
   waitForOutcome,
@@ -16,7 +18,7 @@ import {
 } from './test-imps';
 
 test('#setupImpTest boots imps on the stub VMM', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -30,7 +32,7 @@ test('#setupImpTest boots imps on the stub VMM', async () => {
 });
 
 test('#setupImpTest re-adopts a running VM after restartImpd', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -48,13 +50,81 @@ test('#setupImpTest re-adopts a running VM after restartImpd', async () => {
   expect(after).toMatchObject({ state: 'running', pid: before.pid });
 });
 
-test('#setupImpTest removes its data dir and closes its database on dispose', async () => {
+test('#setupImpTest removes its data dir and closes its database on release', async () => {
   const ctx = await setupImpTest();
 
   await ctx[Symbol.asyncDispose]();
 
   expect(existsSync(ctx.dataDir)).toBeFalse();
   expect(listImps(ctx.db)).rejects.toThrow();
+});
+
+test('#setupImpTest removes its data dir when the test finishes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const run = runChildTests(
+    dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { existsSync } from 'node:fs';",
+      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
+      "const left = { dataDir: '' };",
+      "test('it sets up', async () => { left.dataDir = (await setupImpTest()).dataDir; });",
+      "test('it finds the data dir gone', () => { expect(existsSync(left.dataDir)).toBeFalse(); });",
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
+});
+
+test('#setupImpTest lets the test end release it again after an explicit release', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  // a second release that threw would fail the child's test
+  const run = runChildTests(
+    dir,
+    [
+      "import { test } from 'bun:test';",
+      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
+      "test('it releases early', async () => { await (await setupImpTest())[Symbol.asyncDispose](); });",
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 1 pass');
+});
+
+test('#setupImpTest removes its data dir when a setup step throws', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const run = runChildTests(
+    dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { existsSync } from 'node:fs';",
+      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
+      'const seen: string[] = [];',
+      "test('it fails to set up', () => {",
+      '  const setup = setupImpTest({',
+      "    createStorage: (dataDir) => { seen.push(dataDir); throw new Error('no storage'); },",
+      '  });',
+      "  expect(setup).rejects.toThrow('no storage');",
+      '});',
+      "test('it finds the data dir gone', () => {",
+      '  expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);',
+      '});',
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });
 
 test('#setupImpTest keeps a data dir the caller passed', async () => {
@@ -69,24 +139,29 @@ test('#setupImpTest keeps a data dir the caller passed', async () => {
   expect(existsSync(dataDir)).toBeTrue();
 });
 
-test('#setupImpTest removes its data dir when a setup step throws', async () => {
+test('#createImpTest has its data dir removed by the stack after a setup step throws', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const seen: string[] = [];
 
-  const setup = setupImpTest({
+  const setup = createImpTest(stack, {
     createStorage: (dataDir) => {
       seen.push(dataDir);
       throw new Error('no storage');
     },
   });
 
-  await setup.catch(() => {});
-
   expect(setup).rejects.toThrowWithMessage(Error, 'no storage');
+
+  await stack.disposeAsync();
+
   expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);
 });
 
 test('#buildTestApp serves the API over the harness', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -99,7 +174,7 @@ test('#buildTestApp serves the API over the harness', async () => {
 });
 
 test('#setupImpTest moves a frozen clock only when the test advances it', async () => {
-  await using ctx = await setupImpTest({ frozenClockMs: 1_000_000 });
+  const ctx = await setupImpTest({ frozenClockMs: 1_000_000 });
 
   ctx.advance(500);
 
@@ -107,7 +182,7 @@ test('#setupImpTest moves a frozen clock only when the test advances it', async 
 });
 
 test('#findBrokenInvariants finds nothing wrong with a running imp and its VM', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -118,7 +193,7 @@ test('#findBrokenInvariants finds nothing wrong with a running imp and its VM', 
 });
 
 test('#findBrokenInvariants reports a VM that runs for no running imp', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   const pid = ctx.fake.spawnOrphan();
 
@@ -128,7 +203,7 @@ test('#findBrokenInvariants reports a VM that runs for no running imp', async ()
 });
 
 test('#findBrokenInvariants reports a running imp whose VM died once liveness ran', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -145,7 +220,7 @@ test('#findBrokenInvariants reports a running imp whose VM died once liveness ra
 });
 
 test('#writeTestSnapshot writes the files and the meta a wake loads', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   const paths = buildImpPaths(ctx.dataDir, 'imp-a');
 
@@ -157,18 +232,17 @@ test('#writeTestSnapshot writes the files and the meta a wake loads', async () =
     systemDrive: 'd1',
   });
 
-  expect({ isLoadable: hasSnapshot(paths), meta: readSnapshotMeta(paths) }).toStrictEqual({
-    isLoadable: true,
-    meta: {
-      firecrackerVersion: 'v1.17.0',
-      snapshotVersion: 'v12.0.0',
-      hostKernel: 'test',
-      guestKernel: 'k',
-      systemDrive: 'd1',
-      createdAt: 1234,
-      memoryMib: 2048,
-      ramMib: 300,
-    },
+  expect(hasSnapshot(paths)).toBeTrue();
+
+  expect(readSnapshotMeta(paths)).toStrictEqual({
+    firecrackerVersion: 'v1.17.0',
+    snapshotVersion: 'v12.0.0',
+    hostKernel: 'test',
+    guestKernel: 'k',
+    systemDrive: 'd1',
+    createdAt: 1234,
+    memoryMib: 2048,
+    ramMib: 300,
   });
 });
 

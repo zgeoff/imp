@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   cpSync,
   existsSync,
@@ -16,7 +16,7 @@ import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
 import { findSecret } from '../db/secrets';
 import { createTemplateService } from '../images/template-service';
-import { setupImpTest } from '../imps/test-imps';
+import { createImpTest } from '../imps/test-imps';
 import { createNetworkService } from '../networks/network-service';
 import { buildImpPaths } from '../storage/data-layout';
 import type { BackupConfig } from './backup-config';
@@ -133,9 +133,25 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
 }
 
 // Imps on the harness's XFS backend over a fake repository, which a second
-// host can share to restore from (`repoDir`).
-async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`)) {
-  const harness = await setupImpTest();
+// host can share to restore from: given the first host, it uses its
+// repository and its stack, so both harnesses go before the repository.
+async function setupTest(
+  source?: Readonly<{ repoDir: string; stack: Readonly<AsyncDisposableStack> }>,
+) {
+  const stack = source?.stack ?? new AsyncDisposableStack();
+
+  // a second registration of a shared stack's release does nothing
+  onTestFinished(() => stack.disposeAsync());
+
+  const ownRepoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`);
+
+  stack.defer(() => {
+    rmSync(ownRepoDir, { recursive: true, force: true });
+  });
+
+  const repoDir = source?.repoDir ?? ownRepoDir;
+
+  const harness = await createImpTest(stack);
 
   const clock = { now: new Date('2026-10-02T00:00:00Z') };
   const fake = createFakeRestic(repoDir, () => clock.now);
@@ -203,6 +219,7 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     ...harness,
     image,
     repoDir,
+    stack,
     clock,
     fake,
     events,
@@ -245,14 +262,11 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     advance: (ms: number) => {
       clock.now = new Date(clock.now.getTime() + ms);
     },
-    async [Symbol.asyncDispose]() {
-      await harness[Symbol.asyncDispose]();
-    },
   };
 }
 
 test('a run freezes running imps, copies the rest as they are and lists what it holds', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.imps.createImp({ name: 'idle' });
@@ -300,7 +314,7 @@ test('a run freezes running imps, copies the rest as they are and lists what it 
 });
 
 test('a restore rebuilds the imp stopped, with its checkpoints in order', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.backups.runBackup();
@@ -341,7 +355,7 @@ test('a restore rebuilds the imp stopped, with its checkpoints in order', async 
 });
 
 test('--at picks the newest backup at or before it that holds the imp', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.backups.runBackup();
@@ -377,7 +391,7 @@ test('--at picks the newest backup at or before it that holds the imp', async ()
 });
 
 test('a restore refuses a name in use and --all on a host with imps, unless merged', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.backups.runBackup();
@@ -398,13 +412,13 @@ test('a restore refuses a name in use and --all on a host with imps, unless merg
 });
 
 test('restore --all on a fresh host brings back every imp and its image', async () => {
-  await using source = await setupTest();
+  const source = await setupTest();
 
   await source.createDevImp();
   await source.imps.createImp({ name: 'web' });
   await source.backups.runBackup();
 
-  await using fresh = await setupTest(source.repoDir);
+  const fresh = await setupTest(source);
 
   fresh.fake.snapshots.push(...source.fake.snapshots);
 
@@ -429,7 +443,7 @@ test('restore --all on a fresh host brings back every imp and its image', async 
 });
 
 test('templates round-trip with their source, and --all brings back unused ones', async () => {
-  await using source = await setupTest();
+  const source = await setupTest();
 
   const templates = createTemplateService({
     config: source.config,
@@ -464,7 +478,7 @@ test('templates round-trip with their source, and --all brings back unused ones'
     ['dev', false],
   ]);
 
-  await using fresh = await setupTest(source.repoDir);
+  const fresh = await setupTest(source);
 
   fresh.fake.snapshots.push(...source.fake.snapshots);
 
@@ -500,7 +514,7 @@ test('a digest tag is the head of a docker ID or the random tail of a template u
 });
 
 test('a restore that fails part way leaves no imp behind', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
 
@@ -522,7 +536,7 @@ test('a restore that fails part way leaves no imp behind', async () => {
 });
 
 test('the schedule prunes once a day and checks once a week, loudly on failure', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
   await ctx.backups.runScheduled();
@@ -580,7 +594,7 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
 });
 
 test('a prune that meets a lock tries again on the next tick, not the next run', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
@@ -614,7 +628,7 @@ test('a prune that meets a lock tries again on the next tick, not the next run',
 });
 
 test('after six prunes in a row meet a lock, the next try waits for a run', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
@@ -661,7 +675,7 @@ test('after six prunes in a row meet a lock, the next try waits for a run', asyn
 });
 
 test('a prune that fails for another reason waits for the next run', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
@@ -685,7 +699,7 @@ test('a prune that fails for another reason waits for the next run', async () =>
 });
 
 test('an imp being created is left out of the run', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
@@ -715,7 +729,7 @@ function readTree(dir: string): Map<string, string> {
 }
 
 test('no secret, key, password or token of the host reaches a backup', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_never_backed_up' });
@@ -750,7 +764,7 @@ test('no secret, key, password or token of the host reaches a backup', async () 
 });
 
 test('a restore regrants by name, and keeps the egress policy and its list', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
@@ -778,7 +792,7 @@ test('a restore regrants by name, and keeps the egress policy and its list', asy
 });
 
 test('a restore puts the imp back on its networks, made again when gone', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const networks = createNetworkService({ db: ctx.db, egress: ctx.egress, imps: ctx.imps });
 
@@ -799,7 +813,7 @@ test('a restore puts the imp back on its networks, made again when gone', async 
 });
 
 test('an egress policy this impd cannot read comes back none, never more open', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
 
@@ -825,7 +839,7 @@ test('an egress policy this impd cannot read comes back none, never more open', 
 });
 
 test('a restore fetches one file at a time and leaves none behind', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
 
@@ -847,7 +861,7 @@ test('a restore fetches one file at a time and leaves none behind', async () => 
 });
 
 test('a manual run that succeeds ends the backoff of a failed scheduled run', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.state.failBackup = true;
 
@@ -870,7 +884,7 @@ test('a manual run that succeeds ends the backoff of a failed scheduled run', as
 });
 
 test('a failed scheduled run waits twice as long each time, up to the interval', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const MINUTE_MS = 60 * 1000;
 
@@ -924,7 +938,7 @@ test('a failed scheduled run waits twice as long each time, up to the interval',
 });
 
 test('a restore holds the storage gate for its image and room for each file', async () => {
-  await using source = await setupTest();
+  const source = await setupTest();
 
   await source.createDevImp();
 
@@ -937,7 +951,7 @@ test('a restore holds the storage gate for its image and room for each file', as
   expect(usedBytes).toBeGreaterThan(0);
   expect(usedBytes).toBeLessThan(1024 ** 2);
 
-  await using fresh = await setupTest(source.repoDir);
+  const fresh = await setupTest(source);
 
   fresh.fake.snapshots.push(...source.fake.snapshots);
 
@@ -974,7 +988,7 @@ test('a restore holds the storage gate for its image and room for each file', as
 });
 
 test('a restore grants against the secret as it is now, and a stale list entry stays refused', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
@@ -1027,7 +1041,7 @@ test('a restore grants against the secret as it is now, and a stale list entry s
 });
 
 test('a restore that fails leaves the host’s imps, secrets and grants as they were', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.createDevImp();
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });

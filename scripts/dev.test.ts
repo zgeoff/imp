@@ -1,32 +1,25 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildStubDevDocker } from './test-utils/build-stub-dev-docker';
 import { createStubBin } from './test-utils/create-stub-bin';
 import { runSourcedFunction } from './test-utils/run-sourced-function';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-dev-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('it stops before it asks docker anything when there is no machine id', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', 'exit 1');
 
   const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'prune'], {
@@ -46,7 +39,7 @@ test('it stops before it asks docker anything when there is no machine id', () =
 });
 
 test('it removes the own tag of a gone checkout on this machine, then the leftovers', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
@@ -63,12 +56,13 @@ test('it removes the own tag of a gone checkout on this machine, then the leftov
   const docker = createStubBin(
     ctx.dir,
     'docker',
-    `case "$*" in
-  "image ls --filter label=imp.worktree --format "*) echo '${tag} id-gone' ;;
-  "image inspect -f "*" id-gone") printf '%s\\t%s\\n' '${join(ctx.dir, 'gone')}' fake-machine-id ;;
-  "ps -aq --filter ancestor=id-gone" | "image rm "* | "image prune "*) ;;
-  *) exit 1 ;;
-esac`,
+    buildStubDevDocker([
+      {
+        tag,
+        id: 'id-gone',
+        labels: { worktree: join(ctx.dir, 'gone'), machine: 'fake-machine-id' },
+      },
+    ]),
   );
 
   const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'prune'], {
@@ -95,7 +89,7 @@ esac`,
 });
 
 test("it never removes a live checkout's image, another machine's, or an unmarked one", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
@@ -118,17 +112,29 @@ test("it never removes a live checkout's image, another machine's, or an unmarke
   const docker = createStubBin(
     ctx.dir,
     'docker',
-    `case "$*" in
-  "image ls --filter label=imp.worktree --format "*)
-    printf '%s\\n' '${live.stdout.trim()} id-live' '${other.stdout.trim()} id-other' \\
-      '${bare.stdout.trim()} id-unmarked' 'imp-host:dev-empty-4 id-empty' '<none>:<none> id-dangling' ;;
-  "image inspect -f "*" id-live") printf '%s\\t%s\\n' '${ctx.dir}' fake-machine-id ;;
-  "image inspect -f "*" id-other") printf '%s\\t%s\\n' '${join(ctx.dir, 'other')}' another-machine ;;
-  "image inspect -f "*" id-unmarked") printf '%s\\t%s\\n' '${join(ctx.dir, 'unmarked')}' '' ;;
-  "image inspect -f "*" id-empty") printf '%s\\t%s\\n' '' fake-machine-id ;;
-  "ps -aq "* | "image rm "* | "image prune "*) ;;
-  *) exit 1 ;;
-esac`,
+    buildStubDevDocker([
+      {
+        tag: live.stdout.trim(),
+        id: 'id-live',
+        labels: { worktree: ctx.dir, machine: 'fake-machine-id' },
+      },
+      {
+        tag: other.stdout.trim(),
+        id: 'id-other',
+        labels: { worktree: join(ctx.dir, 'other'), machine: 'another-machine' },
+      },
+      {
+        tag: bare.stdout.trim(),
+        id: 'id-unmarked',
+        labels: { worktree: join(ctx.dir, 'unmarked'), machine: '' },
+      },
+      {
+        tag: 'imp-host:dev-empty-4',
+        id: 'id-empty',
+        labels: { worktree: '', machine: 'fake-machine-id' },
+      },
+      { tag: '<none>:<none>', id: 'id-dangling', labels: null },
+    ]),
   );
 
   const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'prune'], {
@@ -149,7 +155,7 @@ esac`,
 });
 
 test('it keeps a gone checkout image it cannot remove, and says why', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
@@ -170,19 +176,26 @@ test('it keeps a gone checkout image it cannot remove, and says why', () => {
   const docker = createStubBin(
     ctx.dir,
     'docker',
-    `case "$*" in
-  "image ls --filter label=imp.worktree --format "*)
-    printf '%s\\n' '${stuck.stdout.trim()} id-stuck' 'imp-host:pinned id-pinned' \\
-      '${used.stdout.trim()} id-used' 'imp-host:dev-broken-5 id-broken' ;;
-  "image inspect -f "*" id-stuck") printf '%s\\t%s\\n' '${join(ctx.dir, 'stuck')}' fake-machine-id ;;
-  "image inspect -f "*" id-pinned") printf '%s\\t%s\\n' '${join(ctx.dir, 'stuck')}' fake-machine-id ;;
-  "image inspect -f "*" id-used") printf '%s\\t%s\\n' '${join(ctx.dir, 'used')}' fake-machine-id ;;
-  "image inspect -f "*) exit 1 ;;
-  "ps -aq --filter ancestor=id-used") echo c0ffee ;;
-  "ps -aq "* | "image prune "*) ;;
-  "image rm "*) exit 1 ;;
-  *) exit 1 ;;
-esac`,
+    buildStubDevDocker([
+      {
+        tag: stuck.stdout.trim(),
+        id: 'id-stuck',
+        labels: { worktree: join(ctx.dir, 'stuck'), machine: 'fake-machine-id' },
+        isStuck: true,
+      },
+      {
+        tag: 'imp-host:pinned',
+        id: 'id-pinned',
+        labels: { worktree: join(ctx.dir, 'stuck'), machine: 'fake-machine-id' },
+      },
+      {
+        tag: used.stdout.trim(),
+        id: 'id-used',
+        labels: { worktree: join(ctx.dir, 'used'), machine: 'fake-machine-id' },
+        container: 'c0ffee',
+      },
+      { tag: 'imp-host:dev-broken-5', id: 'id-broken', labels: null },
+    ]),
   );
 
   const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'prune'], {

@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,26 +6,19 @@ import { buildStubHostDocker } from './build-stub-host-docker';
 import { createStubBin } from './create-stub-bin';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-host-docker-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('it answers the image ids and contract labels of the running and the pulled image', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -52,7 +45,7 @@ test('it answers the image ids and contract labels of the running and the pulled
 });
 
 test('it answers the running image id for the pulled image when that runs already', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -74,7 +67,7 @@ test('it answers the running image id for the pulled image when that runs alread
 });
 
 test("it prints the pulled image's unit and an empty seccomp profile", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -101,7 +94,7 @@ test("it prints the pulled image's unit and an empty seccomp profile", () => {
 });
 
 test('it fails to print the deploy file it is told cannot be read', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -127,7 +120,7 @@ test('it fails to print the deploy file it is told cannot be read', () => {
 });
 
 test('it prints the compose config and logs the variables compose saw', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -154,7 +147,7 @@ test('it prints the compose config and logs the variables compose saw', () => {
 });
 
 test('it fails compose config, after printing its error, as an old Compose does', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -184,7 +177,7 @@ test('it fails compose config, after printing its error, as an old Compose does'
 });
 
 test('it fails a call that upgrade.sh does not make', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -208,7 +201,7 @@ test('it fails a call that upgrade.sh does not make', () => {
 });
 
 test('it lists the awake imps as running, and sleeps each but the sleepless one', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -239,7 +232,7 @@ test('it lists the awake imps as running, and sleeps each but the sleepless one'
 });
 
 test('it lists no imps when none are awake', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -260,7 +253,7 @@ test('it lists no imps when none are awake', () => {
 });
 
 test('it answers inspect, pull, plain imp ls and compose up with success and no output', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -284,11 +277,14 @@ test('it answers inspect, pull, plain imp ls and compose up with success and no 
     { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
   );
 
-  expect(result.stdout.toString()).toBe('inspect 0\npull 0\nls 0\nup 0\n');
+  expect({ stdout: result.stdout.toString(), stderr: result.stderr.toString() }).toStrictEqual({
+    stdout: 'inspect 0\npull 0\nls 0\nup 0\n',
+    stderr: '',
+  });
 });
 
 test('it fails a pull of another image than the one it was given', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -309,7 +305,7 @@ test('it fails a pull of another image than the one it was given', () => {
 });
 
 test('it answers imp info with an empty object unless told otherwise', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -330,7 +326,7 @@ test('it answers imp info with an empty object unless told otherwise', () => {
 });
 
 test('it answers imp info with what it was given', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -352,7 +348,7 @@ test('it answers imp info with what it was given', () => {
 });
 
 test('it fails imp info when told to', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,

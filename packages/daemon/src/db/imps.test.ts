@@ -32,7 +32,7 @@ function createWithSlot(db: ImpDatabase, imageId: string, name: string): Promise
 }
 
 test('it creates an imp in the creating state and finds it by name and id', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -57,7 +57,7 @@ test('it creates an imp in the creating state and finds it by name and id', asyn
 });
 
 test('a create in a free slot emits one ImpAdded, once it commits', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -83,7 +83,7 @@ test('a create in a free slot emits one ImpAdded, once it commits', async () => 
 });
 
 test('it allocates the lowest free slot, reusing a gap', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -107,7 +107,7 @@ test('it allocates the lowest free slot, reusing a gap', async () => {
 });
 
 test('it gives concurrent creates distinct slots', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -125,7 +125,7 @@ test('it gives concurrent creates distinct slots', async () => {
 });
 
 test('it throws when every slot is taken', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -145,7 +145,7 @@ test('it throws when every slot is taken', async () => {
 });
 
 test('each imp gets its own jail uid, the lowest free one', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -170,7 +170,7 @@ test('each imp gets its own jail uid, the lowest free one', async () => {
 });
 
 test('a live ticket keeps its slot from a new imp until the commit', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -221,7 +221,7 @@ test('a live ticket keeps its slot from a new imp until the commit', async () =>
 });
 
 test('it rejects a duplicate name', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -240,7 +240,7 @@ test('it rejects a duplicate name', async () => {
 });
 
 test('it rejects a duplicate slot', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -261,7 +261,7 @@ test('it rejects a duplicate slot', async () => {
 });
 
 test('it rejects an imp whose image does not exist', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   expect(createImp(ctx.db, buildNewImp('missing', 'dev', 0))).rejects.toThrowWithMessage(
     Error,
@@ -270,7 +270,7 @@ test('it rejects an imp whose image does not exist', async () => {
 });
 
 test('it updates the state and only the fields the change names', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -317,7 +317,7 @@ test('it updates the state and only the fields the change names', async () => {
 });
 
 test('it records activity', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -339,7 +339,7 @@ test('it records activity', async () => {
 });
 
 test('it lists imps by name', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -363,7 +363,7 @@ test('it lists imps by name', async () => {
 });
 
 test('it applies a compare-and-set change only while the row matches', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -396,7 +396,7 @@ test('it applies a compare-and-set change only while the row matches', async () 
 });
 
 test('a new disk size emits ImpChanged resized; a pending grow alone does not', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {

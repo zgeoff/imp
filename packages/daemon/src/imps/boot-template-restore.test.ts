@@ -94,7 +94,7 @@ async function setupRestoreTest(isJailed = false) {
 }
 
 test('the second boot of a shape builds its template; the next restores it', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'once' });
 
@@ -134,7 +134,7 @@ test('the second boot of a shape builds its template; the next restores it', asy
 
 // a template has no hot-plug region, so it would restore a guest that cannot grow
 test('an elastic imp boots the kernel even when its memory has a template', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
@@ -147,7 +147,7 @@ test('an elastic imp boots the kernel even when its memory has a template', asyn
 });
 
 test('a restore that fails in the template removes it; the imp boots the kernel', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
@@ -168,7 +168,7 @@ test('a restore that fails in the template removes it; the imp boots the kernel'
 });
 
 test('a restore that fails after the claim keeps the template for the next imp', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
@@ -184,7 +184,7 @@ test('a restore that fails after the claim keeps the template for the next imp',
 });
 
 test('a clone that fails fails the create before any restore, and costs the template nothing', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
@@ -216,7 +216,7 @@ test('a clone that fails fails the create before any restore, and costs the temp
 });
 
 test('a grow that fails after the clone ends the restored VM, and costs the template nothing', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
@@ -254,7 +254,7 @@ test('a grow that fails after the clone ends the restored VM, and costs the temp
 });
 
 test('a restore claims the identity reset an imp owes, and a done reset clears it', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
@@ -269,7 +269,7 @@ test('a restore claims the identity reset an imp owes, and a done reset clears i
 });
 
 test('a shape with no template yet never waits for its build', async () => {
-  await using ctx = await setupRestoreTest();
+  const ctx = await setupRestoreTest();
 
   const held = ctx.fake.hold('template');
 
@@ -287,7 +287,7 @@ test('a shape with no template yet never waits for its build', async () => {
 });
 
 test('a jailed restore runs as the imp, with the template and its drive bound in', async () => {
-  await using ctx = await setupRestoreTest(true);
+  const ctx = await setupRestoreTest(true);
 
   await ctx.client.imps.create({ name: 'once' });
   await ctx.client.imps.create({ name: 'first' });
@@ -318,7 +318,7 @@ test('a jailed restore runs as the imp, with the template and its drive bound in
 // the mounts made before its prepare, so a restore that starts first finds
 // an empty mountpoint (#147). A late clone stands in for that mount.
 test('a jailed restore starts once the clone is in place, and overlaps the grow', async () => {
-  await using ctx = await setupRestoreTest(true);
+  const ctx = await setupRestoreTest(true);
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();

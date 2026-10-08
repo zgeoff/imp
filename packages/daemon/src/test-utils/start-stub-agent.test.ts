@@ -3,31 +3,24 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { FRAME_TYPES, encodeFrame, encodeJsonFrame } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
 import { startStubAgent } from './start-stub-agent';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const dir = await mkdtemp(join(tmpdir(), 'stub-agent-'));
 
-  stack.defer(() => rm(dir, { recursive: true, force: true }));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { dir, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { dir };
 }
 
 test('it answers the CONNECT line with the handshake reply', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
-
-  onTestFinished(() => {
-    agent.close();
-  });
+  await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
 
   const client = createConnection(join(ctx.dir, 'v.sock'));
 
@@ -53,16 +46,12 @@ test('it answers the CONNECT line with the handshake reply', async () => {
 });
 
 test('it hands each frame to the handler with the request and the frames so far', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const calls: { request: AgentFrame; frames: AgentFrame[] }[] = [];
 
-  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), (_socket, request, frames) => {
+  await startStubAgent(join(ctx.dir, 'v.sock'), (_socket, request, frames) => {
     calls.push({ request, frames: [...frames] });
-  });
-
-  onTestFinished(() => {
-    agent.close();
   });
 
   const client = createConnection(join(ctx.dir, 'v.sock'));
@@ -102,13 +91,8 @@ test('it hands each frame to the handler with the request and the frames so far'
 });
 
 test('it decodes frames sent in the same chunk as the CONNECT line', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
-
-  onTestFinished(() => {
-    agent.close();
-  });
 
   const client = createConnection(join(ctx.dir, 'v.sock'));
 
@@ -133,13 +117,8 @@ test('it decodes frames sent in the same chunk as the CONNECT line', async () =>
 });
 
 test('it waits for the rest of a CONNECT line split across chunks', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
-
-  onTestFinished(() => {
-    agent.close();
-  });
 
   const client = createConnection(join(ctx.dir, 'v.sock'));
 
@@ -171,23 +150,17 @@ test('it waits for the rest of a CONNECT line split across chunks', async () => 
     }
   });
 
-  expect({ reply, received: agent.received }).toStrictEqual({
-    reply: 'OK 1073741824\n',
-    received: [{ type: 1, payload: Buffer.from('{"op":"ping"}') }],
-  });
+  expect(reply).toBe('OK 1073741824\n');
+  expect(agent.received).toStrictEqual([{ type: 1, payload: Buffer.from('{"op":"ping"}') }]);
 });
 
 test('it keeps the frames of every connection in received', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const requests: AgentFrame[] = [];
 
   const agent = await startStubAgent(join(ctx.dir, 'v.sock'), (_socket, request) => {
     requests.push(request);
-  });
-
-  onTestFinished(() => {
-    agent.close();
   });
 
   const first = createConnection(join(ctx.dir, 'v.sock'));
@@ -216,27 +189,22 @@ test('it keeps the frames of every connection in received', async () => {
     }
   });
 
-  expect({ received: agent.received, requests }).toStrictEqual({
-    received: expect.toIncludeSameMembers([
-      { type: 1, payload: Buffer.from('{"n":1}') },
-      { type: 1, payload: Buffer.from('{"n":2}') },
-    ]),
-    requests: expect.toIncludeSameMembers([
-      { type: 1, payload: Buffer.from('{"n":1}') },
-      { type: 1, payload: Buffer.from('{"n":2}') },
-    ]),
-  });
+  expect(agent.received).toIncludeSameMembers([
+    { type: 1, payload: Buffer.from('{"n":1}') },
+    { type: 1, payload: Buffer.from('{"n":2}') },
+  ]);
+
+  expect(requests).toIncludeSameMembers([
+    { type: 1, payload: Buffer.from('{"n":1}') },
+    { type: 1, payload: Buffer.from('{"n":2}') },
+  ]);
 });
 
 test('it hands the handler the socket that replies to the client', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  const agent = await startStubAgent(join(ctx.dir, 'v.sock'), (socket) => {
+  await startStubAgent(join(ctx.dir, 'v.sock'), (socket) => {
     socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
-  });
-
-  onTestFinished(() => {
-    agent.close();
   });
 
   const client = createConnection(join(ctx.dir, 'v.sock'));
@@ -270,8 +238,7 @@ test('it hands the handler the socket that replies to the client', async () => {
 });
 
 test('it stops accepting connections once closed', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const agent = await startStubAgent(join(ctx.dir, 'v.sock'), () => {});
 
   agent.close();
@@ -287,4 +254,27 @@ test('it stops accepting connections once closed', async () => {
   });
 
   expect(failed).resolves.toMatchObject({ code: expect.toBeOneOf(['ENOENT', 'ECONNREFUSED']) });
+});
+
+test('it closes when the test finishes', async () => {
+  const ctx = await setupTest();
+
+  const run = runChildTests(
+    ctx.dir,
+    [
+      "import { expect, test } from 'bun:test';",
+      "import { createConnection } from 'node:net';",
+      `import { startStubAgent } from ${JSON.stringify(join(import.meta.dir, 'start-stub-agent.ts'))};`,
+      `const path = ${JSON.stringify(join(ctx.dir, 'v.sock'))};`,
+      "test('it starts', async () => { await startStubAgent(path, () => {}); });",
+      "test('it finds it closed', () => {",
+      '  const client = createConnection(path);',
+      "  const failed = new Promise((resolve) => { client.once('error', resolve); });",
+      '  expect(failed).resolves.toMatchObject({ code: expect.stringMatching(/ENOENT|ECONNREFUSED/) });',
+      '});',
+    ].join('\n'),
+  );
+
+  expect(run.exitCode).toBe(0);
+  expect(run.output).toInclude(' 2 pass');
 });

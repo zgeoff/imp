@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { setupMcpTest } from './test-mcp';
 
 test('checkpoint, list, restore and delete work on a running, sleeping and stopped imp', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'awake', image: 'ubuntu' });
   await ctx.client.imps.create({ name: 'asleep', image: 'ubuntu' });
@@ -34,7 +34,7 @@ test('checkpoint, list, restore and delete work on a running, sleeping and stopp
 });
 
 test('a restore to a checkpoint that does not exist is an isError result', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 

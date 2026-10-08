@@ -1149,7 +1149,7 @@ test('#buildStubZfs fails every command after a crash until a restart', async ()
 
   fake.crashBefore((command) => command.startsWith('zfs create'));
 
-  await fake.run(['zfs', 'create', 'tank/imp/a']).catch(() => null);
+  await Promise.allSettled([fake.run(['zfs', 'create', 'tank/imp/a'])]);
 
   const result = fake.run(['zfs', 'version']);
 
@@ -1161,7 +1161,7 @@ test('#buildStubZfs runs commands again after a restart', async () => {
 
   fake.crashBefore((command) => command.startsWith('zfs create'));
 
-  await fake.run(['zfs', 'create', 'tank/imp/a']).catch(() => null);
+  await Promise.allSettled([fake.run(['zfs', 'create', 'tank/imp/a'])]);
 
   fake.restart();
 

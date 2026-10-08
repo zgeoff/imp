@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,27 +8,19 @@ import { readEnvValues } from '../../scripts/test-utils/read-env-values';
 // The NixOS module's env writer, run with bash as the module runs it, with a stub ip for the
 // host's addresses. `nix flake check` covers the rest (deploy/nixos/tests).
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-host-env-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('it sizes a zfs host as bootstrap.sh does, and sets the ARC cap it leaves out', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -66,8 +58,7 @@ test('it sizes a zfs host as bootstrap.sh does, and sets the ARC cap it leaves o
 });
 
 test('it writes the module settings into an env file only its owner reads', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -105,8 +96,7 @@ test('it writes the module settings into an env file only its owner reads', () =
 });
 
 test('it keeps an ARC cap already set, and leaves it out of the budget', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -145,8 +135,7 @@ test('it keeps an ARC cap already set, and leaves it out of the budget', () => {
 });
 
 test('it sets arcMaxMiB over an ARC cap already set', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -184,11 +173,10 @@ test('it sets arcMaxMiB over an ARC cap already set', () => {
 });
 
 test('it sets no ARC cap on an xfs host, and leaves none out of the budget', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
-  writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
+  writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=xfs\n');
   writeFileSync(join(ctx.dir, 'meminfo'), `MemTotal: ${String(64_000 * 1024)} kB\n`);
   writeFileSync(join(ctx.dir, 'zfs_arc_max'), '0\n');
 
@@ -223,8 +211,7 @@ test('it sets no ARC cap on an xfs host, and leaves none out of the budget', () 
 });
 
 test('it writes a set ramBudgetMiB over the formula', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -261,8 +248,7 @@ test('it writes a set ramBudgetMiB over the formula', () => {
 });
 
 test('it refuses a small host whose budget comes out below the floor, writing nothing', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -303,8 +289,7 @@ test('it refuses a small host whose budget comes out below the floor, writing no
 });
 
 test('it starts a small host whose ramBudgetMiB is set', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -341,8 +326,7 @@ test('it starts a small host whose ramBudgetMiB is set', () => {
 });
 
 test('it copies the secrets file in, where a later line replaces an earlier one', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -388,8 +372,7 @@ test('it copies the secrets file in, where a later line replaces an earlier one'
 });
 
 test('it refuses a secrets file it cannot read, writing nothing', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -428,8 +411,7 @@ test('it refuses a secrets file it cannot read, writing nothing', () => {
 });
 
 test('it names the backup password file, never the password, when one is staged', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -477,8 +459,7 @@ test('it names the backup password file, never the password, when one is staged'
 });
 
 test('it keeps backups off when the staged backup password is empty', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');
@@ -519,7 +500,7 @@ test('it keeps backups off when the staged backup password is empty', () => {
 });
 
 test("it writes the host's own global addresses last, over the secrets file's", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const ip = createStubBin(
     ctx.dir,
@@ -566,8 +547,7 @@ EOF`,
 });
 
 test('it leaves the host addresses empty, with a warning, when ip fails', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip', 'exit 1');
 
   writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n');

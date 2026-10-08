@@ -29,7 +29,7 @@ function buildOomCgroups(kills: Readonly<OomKillCount>): CpuCgroups {
 test('a sleep the memory limit cut short says so', async () => {
   const kills: OomKillCount = { count: 3 };
 
-  await using ctx = await setupImpTest({ cgroups: buildOomCgroups(kills) });
+  const ctx = await setupImpTest({ cgroups: buildOomCgroups(kills) });
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -60,7 +60,7 @@ test('a sleep the memory limit cut short says so', async () => {
 test('a wake the memory limit cut short says so, then boots cold', async () => {
   const kills: OomKillCount = { count: 0 };
 
-  await using ctx = await setupImpTest({ cgroups: buildOomCgroups(kills) });
+  const ctx = await setupImpTest({ cgroups: buildOomCgroups(kills) });
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -84,7 +84,7 @@ test('a wake the memory limit cut short says so, then boots cold', async () => {
 });
 
 test('an OOM kill from before the sleep or the wake is not this failure', async () => {
-  await using ctx = await setupImpTest({ cgroups: buildOomCgroups({ count: 1 }) });
+  const ctx = await setupImpTest({ cgroups: buildOomCgroups({ count: 1 }) });
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
