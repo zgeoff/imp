@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
-import { buildMockImp } from './build-mock-imp';
+import type { Imp } from '@imp/api';
+import { impCollection } from './imp-collection';
 
-test('it builds a default imp', () => {
-  expect(buildMockImp()).toStrictEqual({
+test('it creates a default imp', async () => {
+  const imp: Imp = await impCollection.create({});
+
+  expect(imp).toStrictEqual({
     id: expect.toBeString(),
     name: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
     image: expect.toSatisfy((value: string) => /^[a-z]{6}$/.test(value)),
@@ -21,8 +24,8 @@ test('it builds a default imp', () => {
   });
 });
 
-test('it applies overrides on top of the defaults', () => {
-  const imp = buildMockImp({ name: 'web', state: 'sleeping', ramMib: 300 });
+test('it applies overrides on top of the defaults', async () => {
+  const imp: Imp = await impCollection.create({ name: 'web', state: 'sleeping', ramMib: 300 });
 
   expect(imp).toStrictEqual({
     id: expect.toBeString(),

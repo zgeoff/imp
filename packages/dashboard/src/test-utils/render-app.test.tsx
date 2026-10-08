@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test';
-import { buildMockImp } from './build-mock-imp';
-import { buildStubImpd } from './build-stub-impd';
+import { impCollection } from '../mocks/db/imp-collection';
+import { createDashboardSession } from './create-dashboard-session';
 import { renderApp } from './render-app';
 
 test('it renders the page at the given path under /ui', async () => {
-  const rendered = renderApp(buildStubImpd(), '/images');
+  await createDashboardSession();
+
+  const rendered = renderApp('/images');
 
   const heading = await rendered.findByRole('heading', { name: 'Images' });
 
@@ -13,31 +15,29 @@ test('it renders the page at the given path under /ui', async () => {
 });
 
 test('it renders the imps list when no path is given', async () => {
-  const rendered = renderApp(buildStubImpd());
+  await createDashboardSession();
+
+  const rendered = renderApp();
 
   const heading = await rendered.findByRole('heading', { name: 'Imps' });
 
   expect(heading).toBeInTheDocument();
 });
 
-test('it answers queries from the stub impd it is given', async () => {
-  const stub = buildStubImpd();
+test('it answers queries from the mock impd', async () => {
+  await createDashboardSession();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  await impCollection.create({ name: 'web' });
 
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /web/ });
 
   expect(row).toBeInTheDocument();
 });
 
-test('it opens the login page when the stub impd answers with a 401', async () => {
-  const stub = buildStubImpd();
-
-  stub.state.unauthorized = true;
-
-  const rendered = renderApp(stub, '/images');
+test('it opens the login page when the browser holds no session', async () => {
+  const rendered = renderApp('/images');
 
   await rendered.findByLabelText('API token');
 

@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, mock } from 'bun:test';
 import { registerRunHooks } from '@imp/test-utils/register-run-hooks';
-import { IMPD_ORIGIN, knownTokens } from './src/mocks/handlers';
+import { resetMockDb } from './src/mocks/db/reset-mock-db';
+import { IMPD_ORIGIN } from './src/mocks/handlers';
+import { impdEventListeners } from './src/mocks/impd-events';
 import { server } from './src/mocks/node';
 import { buildStubBrowserFetch } from './src/test-utils/build-stub-browser-fetch';
 
@@ -25,9 +27,13 @@ beforeAll(() => {
   globalThis.fetch = buildStubBrowserFetch(globalThis.fetch, `${IMPD_ORIGIN}/ui/`);
 });
 
+// the mock impd's records, and any event stream an unmounted app left open
 afterEach(() => {
   server.resetHandlers();
-  knownTokens.clear();
+
+  resetMockDb();
+
+  impdEventListeners.clear();
   mock.restore();
 });
 

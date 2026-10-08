@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
-import { buildMockImage } from './build-mock-image';
+import type { Image } from '@imp/api';
+import { imageCollection } from './image-collection';
 
-test('it builds a default image', () => {
-  expect(buildMockImage()).toStrictEqual({
+test('it creates a default image', async () => {
+  const image: Image = await imageCollection.create({});
+
+  expect(image).toStrictEqual({
     id: expect.toBeString(),
     name: expect.toSatisfy((value: string) => /^[a-z]{6}$/.test(value)),
     ref: expect.toSatisfy((value: string) => /^docker\.io\/library\/[a-z]{6}:latest$/.test(value)),
@@ -13,8 +16,12 @@ test('it builds a default image', () => {
   });
 });
 
-test('it applies overrides on top of the defaults', () => {
-  const image = buildMockImage({ name: 'base', source: 'imp', sizeBytes: 512 });
+test('it applies overrides on top of the defaults', async () => {
+  const image: Image = await imageCollection.create({
+    name: 'base',
+    source: 'imp',
+    sizeBytes: 512,
+  });
 
   expect(image).toStrictEqual({
     id: expect.toBeString(),

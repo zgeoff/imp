@@ -1,16 +1,24 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { buildMockIdentity } from '../test-utils/build-mock-identity';
-import { buildMockToken } from '../test-utils/build-mock-token';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
+import { http } from 'msw';
+import { tokenCollection } from '../mocks/db/token-collection';
+import { RPC_URL } from '../mocks/handlers';
+import { server } from '../mocks/node';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
+import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it makes a token limited to some imps and shows its secret', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
-  const rendered = renderApp(stub, '/tokens');
+
+  const admin = await tokenCollection.create({ name: 'admin' });
+
+  await createDashboardSession({ token: admin });
+
+  const rendered = renderApp('/tokens');
 
   const field = await rendered.findByLabelText('Name');
 
@@ -22,21 +30,26 @@ test('it makes a token limited to some imps and shows its secret', async () => {
   const card = await rendered.findByRole('region', { name: 'Secret of ci' });
   const row = await rendered.findByRole('row', { name: /ci/ });
 
-  expect(within(card).getByText('imp_stub.ci-secret')).toBeInTheDocument();
-  expect(within(row).getByText('dev-*, ci-*')).toBeInTheDocument();
+  const token = tokenCollection.findFirst((query) => query.where({ name: 'ci' }));
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'tokens.create', input: { name: 'ci', scope: 'exec', imps: ['dev-*', 'ci-*'] } },
-  ]);
+  invariant(token);
+
+  expect(within(card).getByText(token.secret)).toBeInTheDocument();
+  expect(within(row).getByText('dev-*, ci-*')).toBeInTheDocument();
+  expect(token.scope).toBe('exec');
+  expect(token.imps).toStrictEqual(['dev-*', 'ci-*']);
 });
 
 test('it deletes a token after a confirm', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.tokens.push(buildMockToken({ name: 'old' }));
+  const admin = await tokenCollection.create({ name: 'admin' });
 
-  const rendered = renderApp(stub, '/tokens');
+  await createDashboardSession({ token: admin });
+
+  await tokenCollection.create({ name: 'old' });
+
+  const rendered = renderApp('/tokens');
 
   const row = await rendered.findByRole('row', { name: /old/ });
 
@@ -50,15 +63,48 @@ test('it deletes a token after a confirm', async () => {
     expect(rendered.queryByRole('row', { name: /old/ })).toBeNull();
   });
 
-  expect(stub.state.calls).toStrictEqual([{ path: 'tokens.delete', input: { name: 'old' } }]);
+  expect(tokenCollection.findFirst((query) => query.where({ name: 'old' }))).toBeUndefined();
+});
+
+test('it sends no grantable list for a token made without one', async () => {
+  const user = userEvent.setup();
+  const received = mock<(input: unknown) => void>();
+
+  const admin = await tokenCollection.create({ name: 'admin' });
+
+  await createDashboardSession({ token: admin });
+
+  server.use(
+    http.post(`${RPC_URL}/tokens/create`, async (info) => {
+      const input = await readRpcInput(info.request);
+
+      received(input);
+    }),
+  );
+
+  const rendered = renderApp('/tokens');
+
+  const field = await rendered.findByLabelText('Name');
+
+  await user.type(field, 'ci');
+  await user.selectOptions(rendered.getByLabelText('Scope'), 'exec');
+  await user.type(rendered.getByLabelText('Imps'), 'dev-*, ci-*');
+  await user.click(rendered.getByRole('button', { name: 'Make token' }));
+  await rendered.findByRole('region', { name: 'Secret of ci' });
+
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    name: 'ci',
+    scope: 'exec',
+    imps: ['dev-*', 'ci-*'],
+  });
 });
 
 test('it hides the tokens link from a caller limited to some imps', async () => {
-  const stub = buildStubImpd();
+  const token = await tokenCollection.create({ name: 'dev', imps: ['dev-*'] });
 
-  stub.state.identity = buildMockIdentity({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+  await createDashboardSession({ token });
 
-  const rendered = renderApp(stub, '/');
+  const rendered = renderApp('/');
 
   await rendered.findByText('dev (manage)');
 
@@ -66,11 +112,11 @@ test('it hides the tokens link from a caller limited to some imps', async () => 
 });
 
 test('it links to tokens for a caller that manages the whole host', async () => {
-  const stub = buildStubImpd();
+  const token = await tokenCollection.create({ name: 'admin' });
 
-  stub.state.identity = buildMockIdentity({ name: 'root', scope: 'manage', imps: null });
+  await createDashboardSession({ token });
 
-  const rendered = renderApp(stub, '/');
+  const rendered = renderApp('/');
 
   const link = await rendered.findByRole('link', { name: 'Tokens' });
 
@@ -78,16 +124,16 @@ test('it links to tokens for a caller that manages the whole host', async () => 
 });
 
 test('it lists the SSH keys bound to each token', async () => {
-  const stub = buildStubImpd();
+  const admin = await tokenCollection.create({ name: 'admin' });
 
-  stub.state.tokens.push(
-    buildMockToken({
-      name: 'laptop',
-      sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
-    }),
-  );
+  await createDashboardSession({ token: admin });
 
-  const rendered = renderApp(stub, '/tokens');
+  await tokenCollection.create({
+    name: 'laptop',
+    sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
+  });
+
+  const rendered = renderApp('/tokens');
 
   const row = await rendered.findByRole('row', { name: /laptop/ });
 

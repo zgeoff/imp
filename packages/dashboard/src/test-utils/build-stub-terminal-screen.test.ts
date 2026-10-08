@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { buildStubTerminalScreen } from './build-stub-terminal-screen';
 
 test('it records what is written to it as text', () => {
@@ -11,28 +11,22 @@ test('it records what is written to it as text', () => {
 
 test('it passes typed keys to the key listener', () => {
   const stub = buildStubTerminalScreen();
-  const keys: string[] = [];
+  const handleKeys = mock(() => {});
 
-  stub.screen.onData((data) => {
-    keys.push(data);
-  });
-
+  stub.screen.onData(handleKeys);
   stub.emitKeys('ls\r');
 
-  expect(keys).toStrictEqual(['ls\r']);
+  expect(handleKeys).toHaveBeenCalledExactlyOnceWith('ls\r');
 });
 
 test('it passes a new size to the resize listener', () => {
   const stub = buildStubTerminalScreen();
-  const sizes: unknown[] = [];
+  const handleResize = mock(() => {});
 
-  stub.screen.onResize((size) => {
-    sizes.push(size);
-  });
-
+  stub.screen.onResize(handleResize);
   stub.emitResize({ cols: 120, rows: 40 });
 
-  expect(sizes).toStrictEqual([{ cols: 120, rows: 40 }]);
+  expect(handleResize).toHaveBeenCalledExactlyOnceWith({ cols: 120, rows: 40 });
 });
 
 test('it records each disposed listener', () => {

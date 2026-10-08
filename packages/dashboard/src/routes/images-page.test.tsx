@@ -1,17 +1,21 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { buildMockImage } from '../test-utils/build-mock-image';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
+import { http } from 'msw';
+import { imageCollection } from '../mocks/db/image-collection';
+import { RPC_URL } from '../mocks/handlers';
+import { server } from '../mocks/node';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
+import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists each image with its size', async () => {
-  const stub = buildStubImpd();
+  await createDashboardSession();
 
-  stub.state.images.push(buildMockImage({ name: 'base', sizeBytes: 512 * 1024 * 1024 }));
+  await imageCollection.create({ name: 'base', sizeBytes: 512 * 1024 * 1024 });
 
-  const rendered = renderApp(stub, '/images');
+  const rendered = renderApp('/images');
 
   const row = await rendered.findByRole('row', { name: /base/ });
 
@@ -19,9 +23,11 @@ test('it lists each image with its size', async () => {
 });
 
 test('it adds an image from a ref', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
-  const rendered = renderApp(stub, '/images');
+
+  await createDashboardSession();
+
+  const rendered = renderApp('/images');
 
   const field = await rendered.findByLabelText('Image ref');
 
@@ -32,18 +38,44 @@ test('it adds an image from a ref', async () => {
 
   expect(row).toBeInTheDocument();
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'images.add', input: { ref: 'docker.io/library/node:22' } },
+  expect(imageCollection.findMany().map((image) => image.ref)).toStrictEqual([
+    'docker.io/library/node:22',
   ]);
 });
 
+test('it sends only the ref of an image added without a name', async () => {
+  const user = userEvent.setup();
+  const received = mock<(input: unknown) => void>();
+
+  await createDashboardSession();
+
+  server.use(
+    http.post(`${RPC_URL}/images/add`, async (info) => {
+      const input = await readRpcInput(info.request);
+
+      received(input);
+    }),
+  );
+
+  const rendered = renderApp('/images');
+
+  const field = await rendered.findByLabelText('Image ref');
+
+  await user.type(field, 'docker.io/library/node:22');
+  await user.click(rendered.getByRole('button', { name: 'Add image' }));
+  await rendered.findByRole('row', { name: /docker\.io\/library\/node:22/ });
+
+  expect(received).toHaveBeenCalledExactlyOnceWith({ ref: 'docker.io/library/node:22' });
+});
+
 test('it deletes an image after a confirm', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.images.push(buildMockImage({ name: 'base' }));
+  await createDashboardSession();
 
-  const rendered = renderApp(stub, '/images');
+  await imageCollection.create({ name: 'base' });
+
+  const rendered = renderApp('/images');
 
   const row = await rendered.findByRole('row', { name: /base/ });
 
@@ -57,5 +89,5 @@ test('it deletes an image after a confirm', async () => {
     expect(rendered.queryByRole('row', { name: /base/ })).toBeNull();
   });
 
-  expect(stub.state.calls).toStrictEqual([{ path: 'images.delete', input: { name: 'base' } }]);
+  expect(imageCollection.count()).toBe(0);
 });

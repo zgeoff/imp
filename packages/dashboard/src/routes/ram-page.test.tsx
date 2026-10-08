@@ -1,19 +1,17 @@
 import { expect, test } from 'bun:test';
 import { within } from '@testing-library/react';
-import { buildMockImp } from '../test-utils/build-mock-imp';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
+import { impCollection } from '../mocks/db/imp-collection';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists imps by the RAM they own, largest first', async () => {
-  const stub = buildStubImpd();
+  await createDashboardSession();
 
-  stub.state.imps.push(
-    buildMockImp({ name: 'idle', state: 'sleeping' }),
-    buildMockImp({ name: 'small', ramMib: 100, rssMib: 150 }),
-    buildMockImp({ name: 'big', ramMib: 900, rssMib: 1000 }),
-  );
+  await impCollection.create({ name: 'idle', state: 'sleeping' });
+  await impCollection.create({ name: 'small', ramMib: 100, rssMib: 150 });
+  await impCollection.create({ name: 'big', ramMib: 900, rssMib: 1000 });
 
-  const rendered = renderApp(stub, '/ram');
+  const rendered = renderApp('/ram');
 
   await rendered.findByRole('row', { name: /big/ });
 
@@ -26,11 +24,11 @@ test('it lists imps by the RAM they own, largest first', async () => {
 });
 
 test('it shows the RAM an imp owns, its resident memory and its size', async () => {
-  const stub = buildStubImpd();
+  await createDashboardSession();
 
-  stub.state.imps.push(buildMockImp({ name: 'small', ramMib: 100, rssMib: 150, memoryMib: 2048 }));
+  await impCollection.create({ name: 'small', ramMib: 100, rssMib: 150, memoryMib: 2048 });
 
-  const rendered = renderApp(stub, '/ram');
+  const rendered = renderApp('/ram');
 
   const row = await rendered.findByRole('row', { name: /small/ });
 
@@ -38,7 +36,9 @@ test('it shows the RAM an imp owns, its resident memory and its size', async () 
 });
 
 test('it shows the RAM meter of the host', async () => {
-  const rendered = renderApp(buildStubImpd(), '/ram');
+  await createDashboardSession();
+
+  const rendered = renderApp('/ram');
 
   const meter = await rendered.findByRole('meter', { name: 'RAM in use' });
 
