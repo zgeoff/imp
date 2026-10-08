@@ -918,6 +918,166 @@ test('#startResolverServer stays up when a guest goes before its reply, and logs
   expect(logs).toStrictEqual([]);
 });
 
+test('#startResolverServer reports a reply that the kernel refuses after a guest went, logs nothing, and answers the next query', async () => {
+  const ports = findFreePorts(1);
+  const logs: string[] = [];
+  const errors: unknown[] = [];
+  const reached: string[] = [];
+  const released = Promise.withResolvers<void>();
+
+  const report = createSocketErrorReport(
+    (message) => {
+      logs.push(message);
+    },
+    () => 0,
+  );
+
+  // holds the first two replies until the first guest has closed its port,
+  // so both go out in one burst, before the loop reads the ICMP error
+  const server = await startResolverServer(
+    ports.take(),
+    parseSubnet('127.0.0.0/16'),
+    async (_source, message) => {
+      const name = dnsPacket.decode(Buffer.from(message)).questions?.[0]?.name ?? '';
+
+      reached.push(name);
+
+      if (name !== 'c.example') {
+        await released.promise;
+      }
+
+      return message;
+    },
+    {
+      log: (message) => {
+        logs.push(message);
+      },
+      reportError: (...args) => {
+        errors.push(args.at(-1));
+
+        report(...args);
+      },
+    },
+  );
+
+  onTestFinished(() => {
+    server.stop();
+  });
+
+  const gone = await Bun.udpSocket({ hostname: '127.0.0.2' });
+
+  onTestFinished(() => {
+    gone.close();
+  });
+
+  const replies: Uint8Array[] = [];
+
+  const client = await Bun.udpSocket({
+    hostname: '127.0.0.2',
+    socket: {
+      data: (_socket, data) => {
+        replies.push(new Uint8Array(data));
+      },
+    },
+  });
+
+  onTestFinished(() => {
+    client.close();
+  });
+
+  gone.send(buildMockDnsQuery({ name: 'a.example', type: 'A' }), server.port, '127.0.0.1');
+
+  await waitFor(() => {
+    expect(reached).toStrictEqual(['a.example']);
+  });
+
+  client.send(buildMockDnsQuery({ name: 'b.example', type: 'A' }), server.port, '127.0.0.1');
+
+  await waitFor(() => {
+    expect(reached).toStrictEqual(['a.example', 'b.example']);
+  });
+
+  gone.close();
+  released.resolve();
+
+  await waitFor(() => {
+    expect(errors).toPartiallyContain({ code: 'ECONNREFUSED', syscall: 'send' });
+  });
+
+  const query = buildMockDnsQuery({ name: 'c.example', type: 'A' });
+
+  client.send(query, server.port, '127.0.0.1');
+
+  // the refused send took b.example's reply with it: the guest asks again
+  await waitFor(() => {
+    expect(replies).toStrictEqual([query]);
+  });
+
+  expect(logs).toStrictEqual([]);
+});
+
+test('#startResolverServer reports a TCP query whose handler fails, and answers the next one', async () => {
+  const ports = findFreePorts(1);
+  const errors: unknown[] = [];
+
+  const server = await startResolverServer(
+    ports.take(),
+    parseSubnet('127.0.0.0/16'),
+    (_source, message) => {
+      const name = dnsPacket.decode(Buffer.from(message)).questions?.[0]?.name;
+
+      if (name === 'broken.example') {
+        return Promise.reject(new Error('the policy store is gone'));
+      }
+
+      return Promise.resolve(message);
+    },
+    {
+      log: () => {},
+      reportError: (...args) => {
+        errors.push(args.at(-1));
+      },
+    },
+  );
+
+  onTestFinished(() => {
+    server.stop();
+  });
+
+  const received = Promise.withResolvers<Buffer>();
+
+  // 127.0.0.2 is slot 0's guest in 127.0.0.0/16
+  const client = connect({ host: '127.0.0.1', port: server.port, localAddress: '127.0.0.2' });
+
+  onTestFinished(() => {
+    client.destroy();
+  });
+
+  client.on('data', (chunk: Buffer) => {
+    received.resolve(chunk);
+  });
+
+  const broken = buildMockDnsQuery({ name: 'broken.example', type: 'A' });
+  const query = buildMockDnsQuery({ name: 'ok.example', type: 'A' });
+  const framed = Buffer.alloc(4 + broken.byteLength + query.byteLength);
+
+  framed.writeUInt16BE(broken.byteLength, 0);
+  framed.set(broken, 2);
+  framed.writeUInt16BE(query.byteLength, 2 + broken.byteLength);
+  framed.set(query, 4 + broken.byteLength);
+  client.write(framed);
+
+  const reply = await received.promise;
+
+  const expected = Buffer.alloc(2 + query.byteLength);
+
+  expected.writeUInt16BE(query.byteLength, 0);
+  expected.set(query, 2);
+
+  expect(reply).toStrictEqual(expected);
+  expect(errors).toStrictEqual([new Error('the policy store is gone')]);
+});
+
 test('#createSocketErrorReport logs nothing of an ICMP error or an unreachable guest', () => {
   const logs: string[] = [];
 
