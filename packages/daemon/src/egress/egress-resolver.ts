@@ -236,7 +236,8 @@ export interface ResolverServerOptions {
   readonly now?: () => number;
   readonly limits?: ResolverServerLimits;
 
-  // where the UDP socket's errors go; createSocketErrorReport by default
+  // where the UDP socket's errors and failed replies go;
+  // createSocketErrorReport by default
   readonly reportError?: (...args: readonly unknown[]) => void;
 }
 
@@ -306,17 +307,19 @@ export async function startResolverServer(
 
   const open = new Map<number, number>();
 
+  // an unhandled error would end impd; the ICMP error of a reply to a guest
+  // that went is routine, anything else is logged
+  const reportError =
+    options.reportError ?? createSocketErrorReport(options.log, options.now ?? Date.now);
+
   const udp = await Bun.udpSocket({
     hostname: '0.0.0.0',
     port,
     socket: {
       data: (socket, data, remotePort, address) => {
-        void sendUdpReply(handle, { socket, data, remotePort, address });
+        void sendUdpReply(handle, { socket, data, remotePort, address }, reportError);
       },
-
-      // an unhandled error would end impd; the ICMP error of a reply to a
-      // guest that went is routine, anything else is logged
-      error: options.reportError ?? createSocketErrorReport(options.log, options.now ?? Date.now),
+      error: reportError,
     },
   });
 
@@ -378,7 +381,7 @@ export async function startResolverServer(
           const message = new Uint8Array(buffered.subarray(2, 2 + length));
 
           socket.data.buffered = buffered.subarray(2 + length);
-          void sendTcpReply(handle, socket, message);
+          void sendTcpReply(handle, socket, message, reportError);
         }
       },
     },
@@ -400,10 +403,20 @@ interface UdpQuery {
   readonly address: string;
 }
 
-async function sendUdpReply(handle: QueryHandler, query: UdpQuery): Promise<void> {
-  const reply = await handle(query.address, new Uint8Array(query.data));
+// Bun throws a pending ICMP error from the next send when that send comes
+// before the loop reads it, so a failed reply goes where socket errors go
+async function sendUdpReply(
+  handle: QueryHandler,
+  query: UdpQuery,
+  reportError: (error: unknown) => void,
+): Promise<void> {
+  try {
+    const reply = await handle(query.address, new Uint8Array(query.data));
 
-  query.socket.send(reply, query.remotePort, query.address);
+    query.socket.send(reply, query.remotePort, query.address);
+  } catch (error) {
+    reportError(error);
+  }
 }
 
 interface TcpClient {
@@ -416,12 +429,17 @@ async function sendTcpReply(
   handle: QueryHandler,
   socket: TcpClient,
   message: Uint8Array,
+  reportError: (error: unknown) => void,
 ): Promise<void> {
-  const reply = await handle(socket.remoteAddress, message);
+  try {
+    const reply = await handle(socket.remoteAddress, message);
 
-  const framed = Buffer.alloc(2 + reply.byteLength);
+    const framed = Buffer.alloc(2 + reply.byteLength);
 
-  framed.writeUInt16BE(reply.byteLength, 0);
-  framed.set(reply, 2);
-  socket.write(framed);
+    framed.writeUInt16BE(reply.byteLength, 0);
+    framed.set(reply, 2);
+    socket.write(framed);
+  } catch (error) {
+    reportError(error);
+  }
 }
