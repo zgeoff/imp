@@ -3,18 +3,20 @@ import { waitFor } from '@imp/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http } from 'msw';
+import { hostCollection } from '../mocks/db/host-collection';
+import { imageCollection } from '../mocks/db/image-collection';
 import { impCollection } from '../mocks/db/imp-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
-import { systemInfoCollection } from '../mocks/db/system-info-collection';
 import { RPC_URL } from '../mocks/handlers';
 import { emitImpdEvent, impdEventListeners } from '../mocks/impd-events';
 import { server } from '../mocks/node';
 import { buildMockImpChangedEvent } from '../test-utils/build-mock-imp-changed-event';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists a running imp with its state, RAM, disk and a sleep button', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web', ramMib: 300, diskMib: 32_768 });
 
   const rendered = renderApp();
@@ -28,7 +30,7 @@ test('it lists a running imp with its state, RAM, disk and a sleep button', asyn
 });
 
 test('it lists a sleeping imp with its notes and a wake button', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   await impCollection.create({
     name: 'old',
@@ -45,7 +47,8 @@ test('it lists a sleeping imp with its notes and a wake button', async () => {
 });
 
 test('it lists a failed imp with its error and a restart button', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'bad', state: 'error', error: 'boot failed: no agent' });
 
   const rendered = renderApp();
@@ -57,8 +60,10 @@ test('it lists a failed imp with its error and a restart button', async () => {
 });
 
 test('it shows the RAM in use against the budget of the host', async () => {
-  await sessionCollection.create({});
-  await systemInfoCollection.create({ ramBudgetMib: 4096, ramUsedMib: 1024 });
+  await createDashboardSession();
+
+  await hostCollection.create({ ramBudgetMib: 4096 });
+  await impCollection.create({ name: 'web', ramMib: 1024 });
 
   const rendered = renderApp();
 
@@ -69,7 +74,7 @@ test('it shows the RAM in use against the budget of the host', async () => {
 });
 
 test('it invites a first imp when there are none', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const rendered = renderApp();
 
@@ -81,7 +86,8 @@ test('it invites a first imp when there are none', async () => {
 test('it moves the row of an imp to the state its lifecycle button asks for', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();
@@ -99,7 +105,8 @@ test('it moves the row of an imp to the state its lifecycle button asks for', as
 test('it asks before destroying an imp', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();
@@ -117,7 +124,8 @@ test('it asks before destroying an imp', async () => {
 test('it destroys an imp once the destroy is confirmed', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();
@@ -141,7 +149,10 @@ test('it sends only the fields that were filled in for a new imp', async () => {
   const user = userEvent.setup();
   const received = mock<(input: unknown) => void>();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
+  await hostCollection.create({ defaultImage: 'node' });
+  await imageCollection.create({ name: 'node' });
 
   server.use(
     http.post(`${RPC_URL}/imps/create`, async (info) => {
@@ -168,7 +179,8 @@ test('it sends only the fields that were filled in for a new imp', async () => {
 });
 
 test('it shows a change impd streams without waiting for the next poll', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();

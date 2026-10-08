@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import type { Identity } from '@imp/api';
 import { createImpClient } from '@zgeoff/imp-client';
 import { isUnauthorized } from '../lib/build-query-client';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { sessionCollection } from './db/session-collection';
 import { tokenCollection } from './db/token-collection';
 import {
@@ -25,28 +25,24 @@ test('#resolveLogin answers 204 to the secret of a known token', async () => {
   expect(response.status).toBe(204);
 });
 
-test('#resolveLogin opens a session with the scope and imps of the token', async () => {
-  await tokenCollection.create({
-    name: 'dev',
-    scope: 'exec',
-    imps: ['dev-*'],
-    secret: 'imp_dev.secret',
-  });
+test('#resolveLogin opens a session with the token of the secret', async () => {
+  await tokenCollection.create({ name: 'dev', secret: 'imp_dev.secret' });
 
   await fetch(LOGIN_URL, { method: 'POST', body: JSON.stringify({ token: 'imp_dev.secret' }) });
 
-  const sessions: (Identity & { readonly expiresAt: Date })[] = sessionCollection.findMany();
+  const sessions: { readonly token: string; readonly expiresAt: Date }[] =
+    sessionCollection.findMany();
 
-  expect(sessions).toStrictEqual([
-    {
-      kind: 'dashboard',
-      name: 'dev',
-      scope: 'exec',
-      imps: ['dev-*'],
-      grantable: [],
-      expiresAt: expect.toBeAfter(new Date()),
-    },
-  ]);
+  expect(sessions).toStrictEqual([{ token: 'dev', expiresAt: expect.toBeAfter(new Date()) }]);
+});
+
+test('#resolveLogin replaces the session the browser held', async () => {
+  await tokenCollection.create({ name: 'dev', secret: 'imp_dev.secret' });
+  await sessionCollection.create({ token: 'old' });
+
+  await fetch(LOGIN_URL, { method: 'POST', body: JSON.stringify({ token: 'imp_dev.secret' }) });
+
+  expect(sessionCollection.findMany().map((session) => session.token)).toStrictEqual(['dev']);
 });
 
 test('#resolveLogin refuses a token impd does not know', async () => {
@@ -100,8 +96,7 @@ test('#resolveLogout answers 204 to a request a browser marks same-origin', asyn
 });
 
 test('#resolveLogout ends the session of the browser', async () => {
-  await sessionCollection.create({});
-
+  await createDashboardSession();
   await fetch(LOGOUT_URL, { method: 'POST' });
 
   expect(sessionCollection.count()).toBe(0);
@@ -149,7 +144,7 @@ test('#resolveRpc answers a call without a session with the 401 of impd', () => 
 });
 
 test('#resolveRpc answers the 404 of impd to a procedure the mock impd leaves out', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const response = await fetch(`${RPC_URL}/backups/list`, { method: 'POST' });
   const body = await response.text();
@@ -161,13 +156,15 @@ test('#resolveRpc answers the 404 of impd to a procedure the mock impd leaves ou
 test('#resolveRpc answers a session that has expired with the 401 of impd', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
-  await sessionCollection.create({ expiresAt: new Date(Date.now() - 1000) });
+  const token = await tokenCollection.create({});
+
+  await sessionCollection.create({ token: token.name, expiresAt: new Date(Date.now() - 1000) });
 
   expect(client.imps.list()).rejects.toSatisfy(isUnauthorized);
 });
 
 test('#resolveRpc answers a call from another site with the 401 of impd', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const request = new Request(`${RPC_URL}/tokens/whoami`, {
     method: 'POST',
@@ -180,7 +177,7 @@ test('#resolveRpc answers a call from another site with the 401 of impd', async 
 });
 
 test('#resolveRpc answers a call a browser marks same-origin with the session', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const request = new Request(`${RPC_URL}/tokens/whoami`, {
     method: 'POST',
@@ -195,7 +192,7 @@ test('#resolveRpc answers a call a browser marks same-origin with the session', 
 test('#resolveLogout ends the event streams the dashboard holds open', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const stream = await client.events.stream();
 
@@ -208,4 +205,29 @@ test('#resolveLogout ends the event streams the dashboard holds open', async () 
   const ended = await pending;
 
   expect(ended.done).toBe(true);
+});
+
+test('#resolveRpc answers a session whose token was deleted with the 401 of impd', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await sessionCollection.create({ token: 'gone' });
+
+  expect(client.imps.list()).rejects.toSatisfy(isUnauthorized);
+});
+
+test('#resolveRpc reads the token of the session again on each request', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await tokenCollection.create({ name: 'dev' });
+  await sessionCollection.create({ token: 'dev' });
+
+  await tokenCollection.update((query) => query.where({ name: 'dev' }), {
+    data(token) {
+      token.scope = 'read';
+    },
+  });
+
+  const identity = await client.tokens.whoami();
+
+  expect(identity.scope).toBe('read');
 });

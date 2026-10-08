@@ -4,14 +4,15 @@ import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http } from 'msw';
 import { imageCollection } from '../mocks/db/image-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
 import { RPC_URL } from '../mocks/handlers';
 import { server } from '../mocks/node';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists each image with its size', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await imageCollection.create({ name: 'base', sizeBytes: 512 * 1024 * 1024 });
 
   const rendered = renderApp('/images');
@@ -24,7 +25,7 @@ test('it lists each image with its size', async () => {
 test('it adds an image from a ref', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const rendered = renderApp('/images');
 
@@ -46,7 +47,7 @@ test('it sends only the ref of an image added without a name', async () => {
   const user = userEvent.setup();
   const received = mock<(input: unknown) => void>();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   server.use(
     http.post(`${RPC_URL}/images/add`, async (info) => {
@@ -70,7 +71,8 @@ test('it sends only the ref of an image added without a name', async () => {
 test('it deletes an image after a confirm', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await imageCollection.create({ name: 'base' });
 
   const rendered = renderApp('/images');

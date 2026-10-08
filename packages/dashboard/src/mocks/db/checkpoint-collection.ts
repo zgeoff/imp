@@ -5,9 +5,14 @@ import * as z from 'zod';
 
 // impd's checkpoints, each of the imp it names; one without a label, as
 // `imp checkpoint` takes one
+const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+
 const CheckpointRowSchema = CheckpointSchema.extend({
   imp: NameSchema.default(() => faker.string.alpha({ length: 8, casing: 'lower' })),
-  id: z.string().default(() => faker.string.alphanumeric({ length: 10, casing: 'lower' })),
+
+  // impd's `cp-` and six of its letters (buildCheckpointId in packages/daemon
+  // checkpoints/checkpoint-service.ts, whose imports reach past the browser)
+  id: z.string().default(() => `cp-${faker.string.fromCharacters(CHECKPOINT_ID_ALPHABET, 6)}`),
   createdAt: z.date().default(() => faker.date.past()),
   diskMib: z
     .int()

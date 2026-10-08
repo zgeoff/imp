@@ -20,6 +20,7 @@ test('it creates a default imp', async () => {
     url: expect.toSatisfy((value: string) => /^https?:\/\//.test(value)),
     createdAt: expect.toBeValidDate(),
     lastActiveAt: expect.toBeValidDate(),
+    cpu: { limit: null, weight: 100 },
   });
 });
 
@@ -41,6 +42,7 @@ test('it applies overrides on top of the defaults', async () => {
     url: expect.toBeString(),
     createdAt: expect.toBeValidDate(),
     lastActiveAt: expect.toBeValidDate(),
+    cpu: { limit: null, weight: 100 },
     ramMib: 300,
   });
 });

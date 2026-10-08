@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { ExecError } from '@zgeoff/imp-client';
 import { buildStubExecHandle } from '../../test-utils/build-stub-exec-handle';
 import { createConsoleSource, toTerminalConnection } from './create-console-source';
@@ -69,23 +69,20 @@ test('#toTerminalConnection reports a rejection that is not an Error by its text
 
 test('#createConsoleSource opens a login shell on the imp sized to the terminal', async () => {
   const stub = buildStubExecHandle({ exit: new Promise(() => {}) });
-  const opened: unknown[] = [];
+  const openConsole = mock(() => Promise.resolve(stub.handle));
+  const source = createConsoleSource({ openConsole }, 'web');
 
-  const source = createConsoleSource(
-    {
-      openConsole: (name, options) => {
-        opened.push([name, options?.cols, options?.rows]);
+  const controller = new AbortController();
 
-        return Promise.resolve(stub.handle);
-      },
-    },
-    'web',
-  );
-
-  await source.open({ cols: 100, rows: 30 }, new AbortController().signal);
+  await source.open({ cols: 100, rows: 30 }, controller.signal);
 
   expect(source.label).toBe('console on web');
-  expect(opened).toStrictEqual([['web', 100, 30]]);
+
+  expect(openConsole).toHaveBeenCalledExactlyOnceWith('web', {
+    cols: 100,
+    rows: 30,
+    signal: controller.signal,
+  });
 });
 
 test('#createConsoleSource passes resizes, keys and the close to the exec', async () => {

@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
 import { within } from '@testing-library/react';
 import { impCollection } from '../mocks/db/imp-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists imps by the RAM they own, largest first', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'idle', state: 'sleeping' });
   await impCollection.create({ name: 'small', ramMib: 100, rssMib: 150 });
   await impCollection.create({ name: 'big', ramMib: 900, rssMib: 1000 });
@@ -23,7 +24,8 @@ test('it lists imps by the RAM they own, largest first', async () => {
 });
 
 test('it shows the RAM an imp owns, its resident memory and its size', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'small', ramMib: 100, rssMib: 150, memoryMib: 2048 });
 
   const rendered = renderApp('/ram');
@@ -34,7 +36,7 @@ test('it shows the RAM an imp owns, its resident memory and its size', async () 
 });
 
 test('it shows the RAM meter of the host', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const rendered = renderApp('/ram');
 

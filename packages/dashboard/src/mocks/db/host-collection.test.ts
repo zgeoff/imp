@@ -1,76 +1,80 @@
 import { expect, test } from 'bun:test';
-import type { SystemInfo } from '@imp/api';
-import { systemInfoCollection } from './system-info-collection';
+import { hostCollection } from './host-collection';
 
-test('it creates a default host on XFS, off the tailnet, with nothing to boot cold', async () => {
-  const info: SystemInfo = await systemInfoCollection.create({});
+test('it creates a default host on XFS, off the tailnet, on impd defaults', async () => {
+  const host: Record<string, unknown> = await hostCollection.create({});
 
-  expect(info).toStrictEqual({
+  expect(host).toStrictEqual({
     version: expect.toSatisfy((value: string) => /^\d+\.\d+\.\d+$/.test(value)),
     ramBudgetMib: expect.toSatisfy((mib: number) => mib >= 4096 && mib % 1024 === 0),
-    ramUsedMib: expect.toBeWithin(0, 4097),
-    ramReservedMib: expect.toBeWithin(0, 1025),
-    ramCommittedMib: expect.toBeWithin(0, 8193),
-    awakeCount: expect.toBeWithin(0, 11),
-    impCount: expect.toBeWithin(0, 21),
-    sessionCount: expect.toBeWithin(0, 11),
+    ramReservedMib: 0,
     firecrackerVersion: expect.toSatisfy((value: string) => /^v\d+\.\d+\.\d+$/.test(value)),
     guestKernel: {
       version: null,
       sha256: expect.toSatisfy((value: string) => /^[0-9a-fA-F]{64}$/.test(value)),
     },
     systemDrive: { sha256: expect.toSatisfy((value: string) => /^[0-9a-fA-F]{64}$/.test(value)) },
-    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
-    storage: {
-      backend: 'xfs',
+    backend: 'xfs',
+    disk: {
       usedBytes: expect.toBeNumber(),
       availableBytes: expect.toBeNumber(),
       reserveBytes: expect.toBeNumber(),
       pendingBytes: 0,
       isLow: false,
-      impDiskBytes: expect.toBeNumber(),
     },
     tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
+    cpu: { hostCpus: expect.toBeWithin(2, 65), limitsEnforced: true },
+    defaultImage: 'base',
+    defaultMemoryMib: 2048,
+    defaultVcpus: 2,
+    isEgressEnforced: true,
+    ksm: null,
+    publicIp: null,
+    publicRecords: null,
+    https: null,
   });
 });
 
 test('it applies overrides on top of the defaults, nested objects whole', async () => {
-  const info: SystemInfo = await systemInfoCollection.create({
+  const host: Record<string, unknown> = await hostCollection.create({
     ramBudgetMib: 4096,
-    storage: {
-      backend: 'zfs',
+    backend: 'zfs',
+    disk: {
       usedBytes: 1024,
       availableBytes: 2048,
       reserveBytes: 512,
       pendingBytes: 0,
       isLow: true,
-      impDiskBytes: 256,
     },
     tailscale: { enabled: true, state: 'Running', hostname: 'box', ip: '100.64.0.1', names: null },
+    cpu: { hostCpus: 4, limitsEnforced: false },
+    publicIp: '203.0.113.7',
   });
 
-  expect(info).toStrictEqual({
+  expect(host).toStrictEqual({
     version: expect.toBeString(),
     ramBudgetMib: 4096,
-    ramUsedMib: expect.toBeNumber(),
-    ramReservedMib: expect.toBeNumber(),
-    ramCommittedMib: expect.toBeNumber(),
-    awakeCount: expect.toBeNumber(),
-    impCount: expect.toBeNumber(),
-    sessionCount: expect.toBeNumber(),
+    ramReservedMib: 0,
     firecrackerVersion: expect.toBeString(),
     guestKernel: { version: null, sha256: expect.toBeString() },
     systemDrive: { sha256: expect.toBeString() },
-    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
-    storage: {
-      backend: 'zfs',
+    backend: 'zfs',
+    disk: {
       usedBytes: 1024,
       availableBytes: 2048,
       reserveBytes: 512,
       pendingBytes: 0,
       isLow: true,
-      impDiskBytes: 256,
     },
     tailscale: { enabled: true, state: 'Running', hostname: 'box', ip: '100.64.0.1', names: null },
+    cpu: { hostCpus: 4, limitsEnforced: false },
+    defaultImage: 'base',
+    defaultMemoryMib: 2048,
+    defaultVcpus: 2,
+    isEgressEnforced: true,
+    ksm: null,
+    publicIp: '203.0.113.7',
+    publicRecords: null,
+    https: null,
   });
 });

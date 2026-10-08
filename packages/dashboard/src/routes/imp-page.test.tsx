@@ -5,16 +5,16 @@ import userEvent from '@testing-library/user-event';
 import { http } from 'msw';
 import { checkpointCollection } from '../mocks/db/checkpoint-collection';
 import { impCollection } from '../mocks/db/imp-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
 import { RPC_URL } from '../mocks/handlers';
 import { server } from '../mocks/node';
 import { buildMockDiskUsage } from '../test-utils/build-mock-disk-usage';
 import { buildMockImpResources } from '../test-utils/build-mock-imp-resources';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it shows the RAM and disk use of the imp', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   await impCollection.create({
     name: 'web',
@@ -38,7 +38,8 @@ test('it shows the RAM and disk use of the imp', async () => {
 });
 
 test('it lists the checkpoints of the imp', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
   await checkpointCollection.create({ imp: 'web', label: 'before-upgrade' });
 
@@ -52,7 +53,8 @@ test('it lists the checkpoints of the imp', async () => {
 test('it takes a checkpoint with a label', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp('/imps/web');
@@ -72,7 +74,8 @@ test('it restores the named checkpoint after a confirm', async () => {
   const user = userEvent.setup();
   const received = mock<(input: unknown) => void>();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
   await checkpointCollection.create({ imp: 'web', id: 'cp1', label: 'before-upgrade' });
 
@@ -103,7 +106,8 @@ test('it opens the new imp after a fork from a checkpoint', async () => {
   const user = userEvent.setup();
   const received = mock<(input: unknown) => void>();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
   await checkpointCollection.create({ imp: 'web', id: 'cp1', label: 'before-upgrade' });
 
@@ -137,7 +141,7 @@ test('it opens the new imp after a fork from a checkpoint', async () => {
 });
 
 test('it says so when the imp does not exist', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const rendered = renderApp('/imps/gone');
 
@@ -158,7 +162,8 @@ test('it goes back to the list without asking for the imp it destroyed', async (
     server.events.removeAllListeners('response:mocked');
   });
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp('/imps/web');
@@ -178,7 +183,7 @@ test('it goes back to the list without asking for the imp it destroyed', async (
 });
 
 test('it shows the network use and awake time of the running imp', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   await impCollection.create({
     name: 'web',
@@ -199,7 +204,7 @@ test('it shows the network use and awake time of the running imp', async () => {
 test('it sets a CPU limit on the running imp', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   await impCollection.create({
     name: 'web',
@@ -228,7 +233,8 @@ test('it sends the weight of the imp beside a new CPU limit', async () => {
   const user = userEvent.setup();
   const received = mock<(input: unknown) => void>();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web', cpu: { limit: null, weight: 200 } });
 
   server.use(

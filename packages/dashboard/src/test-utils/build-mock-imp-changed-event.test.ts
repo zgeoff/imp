@@ -23,6 +23,7 @@ test('it builds a default imp changed event', () => {
       url: expect.toBeString(),
       createdAt: expect.toBeValidDate(),
       lastActiveAt: expect.toBeValidDate(),
+      cpu: { limit: null, weight: 100 },
     },
   });
 });
@@ -53,6 +54,7 @@ test('it applies overrides on top of the defaults', () => {
       url: expect.toBeString(),
       createdAt: expect.toBeValidDate(),
       lastActiveAt: expect.toBeValidDate(),
+      cpu: { limit: null, weight: 100 },
     },
   });
 });

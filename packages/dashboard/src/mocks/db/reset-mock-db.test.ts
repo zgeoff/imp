@@ -1,30 +1,19 @@
 import { expect, test } from 'bun:test';
-import { checkpointCollection } from './checkpoint-collection';
-import { imageCollection } from './image-collection';
-import { impCollection } from './imp-collection';
+import { Collection } from '@msw/data';
+import * as db from './index';
 import { resetMockDb } from './reset-mock-db';
-import { sessionCollection } from './session-collection';
-import { systemInfoCollection } from './system-info-collection';
-import { tokenCollection } from './token-collection';
 
-test('it empties every collection', async () => {
-  await impCollection.create({});
-  await checkpointCollection.create({});
-  await imageCollection.create({});
-  await tokenCollection.create({});
-  await sessionCollection.create({});
-  await systemInfoCollection.create({});
+test('it empties every collection the store exports', async () => {
+  const collections = Object.values(db).filter((value) => value instanceof Collection);
+
+  await Promise.all(collections.map((collection) => collection.create({})));
+
+  const seeded = collections.map((collection) => collection.count());
 
   resetMockDb();
 
-  const counts = [
-    impCollection,
-    checkpointCollection,
-    imageCollection,
-    tokenCollection,
-    sessionCollection,
-    systemInfoCollection,
-  ].map((collection) => collection.count());
+  const counts = collections.map((collection) => collection.count());
 
+  expect(seeded).toSatisfyAll((count: number) => count === 1);
   expect(counts).toSatisfyAll((count: number) => count === 0);
 });

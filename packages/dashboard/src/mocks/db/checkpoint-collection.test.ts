@@ -7,7 +7,7 @@ test('it creates a default checkpoint without a label', async () => {
 
   expect(checkpoint).toStrictEqual({
     imp: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
-    id: expect.toSatisfy((value: string) => /^[a-z0-9]{10}$/.test(value)),
+    id: expect.toSatisfy((value: string) => /^cp-[a-km-np-z2-9]{6}$/.test(value)),
     createdAt: expect.toBeValidDate(),
     diskMib: expect.toSatisfy((mib: number) => mib >= 1024 && mib % 1024 === 0),
   });

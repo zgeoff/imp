@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
 import { impCollection } from '../mocks/db/imp-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
+import { createDashboardSession } from './create-dashboard-session';
 import { renderApp } from './render-app';
 
 test('it renders the page at the given path under /ui', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const rendered = renderApp('/images');
 
@@ -15,7 +15,7 @@ test('it renders the page at the given path under /ui', async () => {
 });
 
 test('it renders the imps list when no path is given', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   const rendered = renderApp();
 
@@ -25,7 +25,8 @@ test('it renders the imps list when no path is given', async () => {
 });
 
 test('it answers queries from the mock impd', async () => {
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();

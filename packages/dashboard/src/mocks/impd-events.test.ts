@@ -1,5 +1,7 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import type { Imp } from '@imp/api';
 import { EVENT_VERSION } from '@imp/api';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { buildMockImp } from '../test-utils/build-mock-imp';
 import { buildMockImpChangedEvent } from '../test-utils/build-mock-imp-changed-event';
 import { emitImpdEvent, impdEventListeners, impdLogouts, openImpdEventStream } from './impd-events';
@@ -63,10 +65,12 @@ test('#openImpdEventStream sends events emitted while it was not reading, in ord
   expect(secondEvent.value).toStrictEqual(woke);
 });
 
-test('#openImpdEventStream wakes a waiting reader for an event emitted later', async () => {
+test('#openImpdEventStream sends a reader that read its snapshot an event emitted later', async () => {
+  const readImps = mock((): readonly Imp[] => []);
+
   const stream = openImpdEventStream(
     { imps: null, expiresAt: new Date(Date.now() + 60_000) },
-    () => [],
+    readImps,
     undefined,
   );
 
@@ -75,7 +79,9 @@ test('#openImpdEventStream wakes a waiting reader for an event emitted later', a
   const pending = stream.next();
   const event = buildMockImpChangedEvent({ imp: { name: 'web' } });
 
-  await Promise.resolve();
+  await waitFor(() => {
+    expect(readImps).toHaveBeenCalledOnce();
+  });
 
   emitImpdEvent(event);
 
@@ -107,15 +113,19 @@ test('#openImpdEventStream leaves out the events of imps outside the patterns', 
 test('#openImpdEventStream lets go of its listener once the caller aborts it', async () => {
   const controller = new AbortController();
 
+  const readImps = mock((): readonly Imp[] => []);
+
   const stream = openImpdEventStream(
     { imps: null, expiresAt: new Date(Date.now() + 60_000) },
-    () => [],
+    readImps,
     controller.signal,
   );
 
   const pending = stream.next();
 
-  await Promise.resolve();
+  await waitFor(() => {
+    expect(readImps).toHaveBeenCalledOnce();
+  });
 
   const listening = impdEventListeners.size;
 
@@ -128,10 +138,42 @@ test('#openImpdEventStream lets go of its listener once the caller aborts it', a
   expect(impdEventListeners.size).toBe(0);
 });
 
-test('#openImpdEventStream ends at a logout', async () => {
-  const stream = openImpdEventStream(
+test('#emitImpdEvent sends the event to every open stream', async () => {
+  const first = openImpdEventStream(
     { imps: null, expiresAt: new Date(Date.now() + 60_000) },
     () => [],
+    undefined,
+  );
+
+  onTestFinished(() => first.return(undefined));
+
+  const second = openImpdEventStream(
+    { imps: null, expiresAt: new Date(Date.now() + 60_000) },
+    () => [],
+    undefined,
+  );
+
+  onTestFinished(() => second.return(undefined));
+
+  const event = buildMockImpChangedEvent({ imp: { name: 'web' } });
+  const firstPending = first.next();
+  const secondPending = second.next();
+
+  emitImpdEvent(event);
+
+  const firstReceived = await firstPending;
+  const secondReceived = await secondPending;
+
+  expect(firstReceived.value).toStrictEqual(event);
+  expect(secondReceived.value).toStrictEqual(event);
+});
+
+test('#impdLogouts ends every open stream at a logout', async () => {
+  const readImps = mock((): readonly Imp[] => []);
+
+  const stream = openImpdEventStream(
+    { imps: null, expiresAt: new Date(Date.now() + 60_000) },
+    readImps,
     undefined,
   );
 
@@ -139,7 +181,9 @@ test('#openImpdEventStream ends at a logout', async () => {
 
   const pending = stream.next();
 
-  await Promise.resolve();
+  await waitFor(() => {
+    expect(readImps).toHaveBeenCalledOnce();
+  });
 
   impdLogouts.logOut();
 
@@ -148,17 +192,45 @@ test('#openImpdEventStream ends at a logout', async () => {
   expect(ended.done).toBe(true);
 });
 
-// the session's expiry runs on impd's real timer, so this one is 50 ms off
-test('#openImpdEventStream ends when the session expires', async () => {
-  const stream = openImpdEventStream(
+// The expiry runs on impd's real timer, so the short stream ends 50 ms on:
+// it must still pass the event sent before then, and the control, a day
+// from expiry, must still be open after it ends
+test('#openImpdEventStream ends when the session expires and not before', async () => {
+  const expiring = openImpdEventStream(
     { imps: null, expiresAt: new Date(Date.now() + 50) },
     () => [],
     undefined,
   );
 
-  onTestFinished(() => stream.return(undefined));
+  onTestFinished(() => expiring.return(undefined));
 
-  const ended = await stream.next();
+  const control = openImpdEventStream(
+    { imps: null, expiresAt: new Date(Date.now() + 86_400_000) },
+    () => [],
+    undefined,
+  );
 
+  onTestFinished(() => control.return(undefined));
+
+  const before = buildMockImpChangedEvent({ imp: { name: 'web' } });
+  const after = buildMockImpChangedEvent({ imp: { name: 'db' } });
+  const expiringNext = expiring.next();
+  const controlFirstNext = control.next();
+
+  emitImpdEvent(before);
+
+  const passed = await expiringNext;
+  const ended = await expiring.next();
+  const controlFirst = await controlFirstNext;
+
+  const controlNext = control.next();
+
+  emitImpdEvent(after);
+
+  const controlRead = await controlNext;
+
+  expect(passed.value).toStrictEqual(before);
   expect(ended.done).toBe(true);
+  expect(controlFirst.value).toStrictEqual(before);
+  expect(controlRead.value).toStrictEqual(after);
 });

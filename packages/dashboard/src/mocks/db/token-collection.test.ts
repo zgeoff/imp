@@ -2,17 +2,17 @@ import { expect, test } from 'bun:test';
 import type { Token } from '@imp/api';
 import { tokenCollection } from './token-collection';
 
-test('it creates a default token with its secret', async () => {
+test('it creates a default manage token for every imp with its secret', async () => {
   const token: Token & { readonly secret: string } = await tokenCollection.create({});
 
   expect(token).toStrictEqual({
     name: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
-    scope: 'read',
+    scope: 'manage',
     imps: null,
     sshKeys: [],
     grantable: [],
     createdAt: expect.toBeValidDate(),
-    secret: expect.toSatisfy((value: string) => /^imp_[a-z0-9]{12}\.[A-Za-z0-9]{43}$/.test(value)),
+    secret: expect.toSatisfy((value: string) => /^imp_[\w-]{16}\.[\w-]{43}$/.test(value)),
   });
 });
 

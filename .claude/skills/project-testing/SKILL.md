@@ -44,19 +44,25 @@ the dashboard's own MSW server (`src/mocks/node.ts`). Its handlers (`src/mocks/h
 impd's `/auth/login`, `/auth/logout` and `/rpc/*` at `http://impd.test`, so the real SDK's fetch
 reaches them. `/rpc/*` runs oRPC's own fetch handler over `src/mocks/impd-router.ts`, an
 `implement(impContract)` router of the procedures the dashboard calls. It reuses impd's own code
-from `packages/daemon`: `checkAccess` on every call, the errors of `api-errors.ts`,
-`requireTransition` for lifecycle moves, `isSameOrigin`, `toLeaseSummary`, `createLogouts` and
-`openEventStream`. A procedure it leaves out answers impd's `not found` 404. The router reads and
-writes the `@msw/data` collections in `src/mocks/db/` (imps, checkpoints, images, tokens with their
-secrets, sessions, system info, whose default row the first read keeps), which the preload empties
-after each test with `resetMockDb`. A row in the sessions collection stands for the one browser's
-session cookie, which Bun's fetch does not keep: a call gets impd's 401 without one, after its
-`expiresAt`, or from another origin. Login with a token's secret creates one; logout clears it and
-ends every open event stream. Lifecycle calls emit impd's events; `emitImpdEvent` sends one for a
-change made elsewhere, each stream passes only the events of the session's imps, and the preload
-clears `impdEventListeners`. `src/test-utils/render-app.tsx` (`renderApp`) mounts the whole app with
-the production `createBrowserImpd`, and `read-rpc-input.ts` reads a call's input in a per-test MSW
-handler.
+from `packages/daemon`: `checkAccess` and the builder check on every call, the errors of
+`api-errors.ts`, `requireTransition` for lifecycle moves, `resolveCpuSettings`, `deriveImageName`,
+the ssh key parser, `isSameOrigin`, `toLeaseSummary`, `createLogouts` and `openEventStream`. A few
+small functions are copied with a comment instead, because their modules pull Bun-only types into
+the dashboard's DOM typecheck or are not exported. A procedure it leaves out answers impd's
+`not found` 404. The router reads and writes the `@msw/data` collections in `src/mocks/db/` (imps,
+checkpoints, images, tokens with their secrets, sessions, secrets, imp policies, and the host, whose
+default row the first read keeps; `system.info` derives its counts from the imp rows), which the
+preload empties after each test with `resetMockDb`. Lists come back in impd's order: imps and tokens
+by name, checkpoints newest first. A row in the sessions collection stands for the one browser's
+session cookie, which Bun's fetch does not keep. It names the token, which each call re-reads, so a
+changed or deleted token takes effect at once. A call gets impd's 401 without a session, after its
+`expiresAt`, once its token is gone, or from another origin. Login with a token's secret replaces
+the session; logout clears it and ends every open event stream. A test logs in with
+`createDashboardSession` (`src/test-utils/create-dashboard-session.ts`). Lifecycle calls emit impd's
+events; `emitImpdEvent` sends one for a change made elsewhere, each stream passes only the events of
+the session's imps, and the preload clears `impdEventListeners`. `src/test-utils/render-app.tsx`
+(`renderApp`) mounts the whole app with the production `createBrowserImpd`, and `read-rpc-input.ts`
+reads a call's input in a per-test MSW handler.
 
 The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
 `packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores

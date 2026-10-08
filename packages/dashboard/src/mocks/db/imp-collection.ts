@@ -37,6 +37,9 @@ export const ImpRowSchema = ImpSchema.extend({
   url: z.url().default(() => faker.internet.url()),
   createdAt: z.date().default(() => faker.date.past()),
   lastActiveAt: z.date().default(() => faker.date.recent()),
+
+  // impd gives every imp its CPU settings: no limit, weight 100
+  cpu: ImpSchema.shape.cpu.unwrap().default(() => ({ limit: null, weight: 100 })),
 });
 
 export const impCollection = new Collection({ schema: ImpRowSchema });

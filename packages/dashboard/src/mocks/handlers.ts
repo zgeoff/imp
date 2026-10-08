@@ -6,6 +6,7 @@ import { sessionCollection } from './db/session-collection';
 import { tokenCollection } from './db/token-collection';
 import { impdLogouts } from './impd-events';
 import { impdRouter } from './impd-router';
+import type { ImpdSession } from './impd-router';
 
 // the impd that serves the dashboard in the tests (test-setup.ts sets the
 // page's URL under it)
@@ -44,12 +45,7 @@ async function resolveLoginBody(json: unknown): Promise<Response> {
 
   sessionCollection.clear();
 
-  await sessionCollection.create({
-    name: token.name,
-    scope: token.scope,
-    imps: token.imps,
-    grantable: token.grantable,
-  });
+  await sessionCollection.create({ token: token.name });
 
   return new HttpResponse(null, { status: 204 });
 }
@@ -73,13 +69,39 @@ export function resolveLogout(context: RouteContext): Response {
   return new HttpResponse(null, { status: 204 });
 }
 
+// impd's readSessionCaller (packages/daemon auth/authenticate.ts): the
+// browser's session, from impd's own origin, before it expires, as its
+// token is now; a session whose token is gone logs nobody in
+function readSession(request: Request): ImpdSession | null {
+  const session = isSameOrigin(request) ? sessionCollection.findFirst() : undefined;
+
+  if (session === undefined || session.expiresAt.getTime() <= Date.now()) {
+    return null;
+  }
+
+  const token = tokenCollection.findFirst((query) => query.where({ name: session.token }));
+
+  if (token === undefined) {
+    return null;
+  }
+
+  return {
+    kind: 'dashboard',
+    name: token.name,
+    scope: token.scope,
+    imps: token.imps,
+    grantable: token.grantable,
+    expiresAt: session.expiresAt,
+  };
+}
+
 // impd's /rpc (packages/daemon build-app.ts): the browser's session, only
 // from impd's own origin and before it expires, or impd's 401; oRPC's own
 // fetch handler answers through impdRouter
 export async function resolveRpc(context: RouteContext): Promise<Response> {
-  const session = isSameOrigin(context.request) ? sessionCollection.findFirst() : undefined;
+  const session = readSession(context.request);
 
-  if (session === undefined || session.expiresAt.getTime() <= Date.now()) {
+  if (session === null) {
     return HttpResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 

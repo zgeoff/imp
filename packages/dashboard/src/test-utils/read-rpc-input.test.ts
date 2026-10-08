@@ -2,16 +2,17 @@ import { expect, mock, test } from 'bun:test';
 import { createImpClient } from '@zgeoff/imp-client';
 import { http } from 'msw';
 import { impCollection } from '../mocks/db/imp-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
 import { IMPD_ORIGIN, RPC_URL } from '../mocks/handlers';
 import { server } from '../mocks/node';
+import { createDashboardSession } from './create-dashboard-session';
 import { readRpcInput } from './read-rpc-input';
 
 test('it reads the input of a call as the procedure receives it', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
   const received = mock<(input: unknown) => void>();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   server.use(
@@ -30,7 +31,8 @@ test('it reads the input of a call as the procedure receives it', async () => {
 test('it leaves the request for the handler after it to read', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   server.use(

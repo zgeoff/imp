@@ -2,10 +2,10 @@ import { expect, mock, test } from 'bun:test';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { impCollection } from '../mocks/db/imp-collection';
-import { sessionCollection } from '../mocks/db/session-collection';
 import { tokenCollection } from '../mocks/db/token-collection';
 import { LOGIN_URL, LOGOUT_URL, resolveLogin } from '../mocks/handlers';
 import { server } from '../mocks/node';
+import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { renderApp } from '../test-utils/render-app';
 
 test('it stays on the login page with a message for a token impd does not know', async () => {
@@ -70,7 +70,8 @@ test('it opens the imps list for a token impd knows', async () => {
 test('it clears what the dashboard knew and opens the login page on log out', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
+
   await impCollection.create({ name: 'web' });
 
   const rendered = renderApp();
@@ -86,7 +87,7 @@ test('it clears what the dashboard knew and opens the login page on log out', as
 test('it says so and stays when the log out fails', async () => {
   const user = userEvent.setup();
 
-  await sessionCollection.create({});
+  await createDashboardSession();
 
   server.use(http.post(LOGOUT_URL, () => new HttpResponse(null, { status: 502 })));
 
