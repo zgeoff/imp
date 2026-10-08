@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,19 +6,15 @@ import { buildStubAgentTar } from '../test-utils/build-stub-agent-tar';
 import { createLocalExtractor } from './extract-local';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const root = await mkdtemp(join(tmpdir(), 'cp-'));
 
-  stack.defer(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { root, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { root };
 }
 
 test('it keeps modes and symlinks and reads the total from the first entry', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
 
@@ -61,7 +57,7 @@ test('it keeps modes and symlinks and reads the total from the first entry', asy
 });
 
 test('it gives the top entry the name of a dest that is not a directory', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'renamed');
 
@@ -82,7 +78,7 @@ test('it gives the top entry the name of a dest that is not a directory', async 
 });
 
 test('it refuses names that leave the copy and extracts the rest', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
 
@@ -123,7 +119,7 @@ test('it refuses names that leave the copy and extracts the rest', async () => {
 });
 
 test('it refuses an entry with an empty name inside the copy', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const warn = mock<(text: string) => void>();
@@ -154,7 +150,7 @@ test('it refuses an entry with an empty name inside the copy', async () => {
 });
 
 test('it refuses a file written through a symlink from the same archive', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const outside = join(ctx.root, 'outside');
@@ -189,7 +185,7 @@ test('it refuses a file written through a symlink from the same archive', async 
 });
 
 test('it never writes through a symlink already on this machine', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const outside = join(ctx.root, 'outside');
@@ -228,7 +224,7 @@ test('it never writes through a symlink already on this machine', async () => {
 });
 
 test('it refuses the copy when its destination is a symlink', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const outside = join(ctx.root, 'outside');
@@ -263,7 +259,7 @@ test('it refuses the copy when its destination is a symlink', async () => {
 });
 
 test('it refuses an entry whose parent the archive never made', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const warn = mock<(text: string) => void>();
@@ -294,7 +290,7 @@ test('it refuses an entry whose parent the archive never made', async () => {
 });
 
 test('it links a hard link inside the copy and drops setuid', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
 
@@ -329,7 +325,7 @@ test('it links a hard link inside the copy and drops setuid', async () => {
 });
 
 test('it refuses a hard link to a name outside the copy', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const warn = mock<(text: string) => void>();
@@ -365,7 +361,7 @@ test('it refuses a hard link to a name outside the copy', async () => {
 });
 
 test('it refuses a hard link to a directory', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const warn = mock<(text: string) => void>();
@@ -398,7 +394,7 @@ test('it refuses a hard link to a directory', async () => {
 });
 
 test('it skips a device with a warning', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const dest = join(ctx.root, 'dest');
   const warn = mock<(text: string) => void>();
@@ -430,8 +426,7 @@ test('it skips a device with a warning', async () => {
 });
 
 test('it fails the copy when the imp sends an empty archive', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const archive = await buildStubAgentTar([]);
 
   const extractor = createLocalExtractor(
@@ -450,7 +445,7 @@ test('it fails the copy when the imp sends an empty archive', async () => {
 });
 
 test('it resolves a write past the extract buffer once the extract took it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const progress = {
     setTotal: mock<(bytes: number) => void>(),
@@ -473,8 +468,7 @@ test('it resolves a write past the extract buffer once the extract took it', asy
 });
 
 test('it wakes a waiting write when the extract fails', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const archive = await buildStubAgentTar([{ name: '../big.bin', content: 'x'.repeat(1_048_576) }]);
 
   const extractor = createLocalExtractor(

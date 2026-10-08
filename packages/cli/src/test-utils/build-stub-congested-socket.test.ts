@@ -1,7 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
 import { buildStubCongestedSocket } from './build-stub-congested-socket';
-import { startStubImpd } from './start-stub-impd';
 
 test('it reports the queued bytes the test sets as its buffered amount', () => {
   const ws = new WebSocket('ws://127.0.0.1:1/exec');
@@ -18,15 +16,33 @@ test('it reports the queued bytes the test sets as its buffered amount', () => {
 });
 
 test('it sends through the real socket', async () => {
-  using impd = startStubImpd();
+  const stack = new AsyncDisposableStack();
 
-  const ws = new WebSocket(`${impd.url.replace('http', 'ws')}/exec`, {
-    headers: { authorization: `Bearer ${impd.token}` },
+  onTestFinished(() => stack.disposeAsync());
+
+  const received = Promise.withResolvers<string>();
+
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request, bunServer) =>
+      bunServer.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 }),
+    websocket: {
+      message: (_ws, data) => {
+        received.resolve(String(data));
+      },
+    },
   });
 
-  const stub = buildStubCongestedSocket(ws);
+  stack.defer(async () => {
+    await server.stop(true);
+  });
 
-  onTestFinished(() => {
+  const stub = buildStubCongestedSocket(
+    new WebSocket(`ws://127.0.0.1:${String(server.port)}/exec`),
+  );
+
+  stack.defer(() => {
     stub.socket.close();
   });
 
@@ -34,9 +50,9 @@ test('it sends through the real socket', async () => {
     stub.socket.send(JSON.stringify({ type: 'stdin_eof' }));
   });
 
-  await waitFor(() => {
-    expect(impd.received).toStrictEqual([{ type: 'stdin_eof' }]);
-  });
+  const text = await received.promise;
+
+  expect(text).toBe('{"type":"stdin_eof"}');
 });
 
 test('it sets the binary type on the real socket', () => {

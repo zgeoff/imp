@@ -28,13 +28,15 @@ import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import tar from 'tar-stream';
-import { startStubImpd } from '../test-utils/start-stub-impd';
+import { buildStubExecPeer } from '../test-utils/build-stub-exec-peer';
 import { openToolExec } from './open-tool-exec';
 
 // impd, booted on stand-ins and listening on a loopback port, with a
 // running imp `box` whose agent each test starts on its vsock path
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   const dataDir = await mkdtemp(join(tmpdir(), 'exec-client-'));
 
@@ -151,17 +153,14 @@ async function setupTest() {
 
   const imp = await createImpClient({ url, token: 'root-token' }).imps.create({ name: 'box' });
 
-  const owned = stack.move();
-
   return {
     config: { url, token: 'root-token', host: null },
     paths: buildImpPaths(dataDir, imp.id),
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
 test('it sends an archive whole through impd to the imp’s tool and returns its exit code', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const identity = readVmIdentity(ctx.paths);
 
@@ -195,8 +194,6 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
       socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
     }
   });
-
-  onTestFinished(agent.close);
 
   const dir = await mkdtemp(join(tmpdir(), 'open-tool-exec-'));
 
@@ -250,7 +247,7 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
 });
 
 test('it rejects with impd’s code and message when impd refuses the exec', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   // the stub VMM records an agent from before imp cp
   const opening = openToolExec({
@@ -269,71 +266,63 @@ test('it rejects with impd’s code and message when impd refuses the exec', asy
 });
 
 test('it holds stdin at the window when impd withholds its acks', async () => {
-  using impd = startStubImpd({
-    onExec: (peer, message) => {
-      if (message.type === 'start') {
-        peer.send({ type: 'started', pid: 9 });
-      }
-    },
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 9 });
+    }
   });
 
   const exec = await openToolExec({
-    config: { url: impd.url, token: impd.token, host: null },
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
     name: 'box',
     tool: 'tar',
     args: ['extract', '/srv/proj'],
     onStdout: () => Promise.resolve(),
     onStderr: () => {},
+    connect: peer.connect,
   });
 
   onTestFinished(exec.close);
 
   // a window and two frames: the last frame needs an ack to go
-  const state = { sent: false };
-
-  const sendStdin = async (): Promise<void> => {
-    await exec.writeStdin(new Uint8Array(EXEC_STDIN_WINDOW_BYTES + 2 * EXEC_MAX_STDIN_FRAME_BYTES));
-
-    state.sent = true;
-  };
-
-  void sendStdin();
+  const writing = exec.writeStdin(
+    new Uint8Array(EXEC_STDIN_WINDOW_BYTES + 2 * EXEC_MAX_STDIN_FRAME_BYTES),
+  );
 
   await waitFor(() => {
     expect(
-      impd.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
+      peer.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
     ).toBe(EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES);
   });
 
-  expect(state.sent).toBeFalse();
+  expect(Bun.peek.status(writing)).toBe('pending');
 
   expect(
-    impd.received.flatMap((message) => (message.type === 'stdin' ? [message.bytes] : [])),
+    peer.received.flatMap((message) => (message.type === 'stdin' ? [message.bytes] : [])),
   ).toSatisfyAll((bytes: number) => bytes <= EXEC_MAX_STDIN_FRAME_BYTES);
 });
 
 test('it sends the rest of stdin once impd acks the window', async () => {
   const link = { ack: (bytes: number): void => void bytes };
 
-  using impd = startStubImpd({
-    onExec: (peer, message) => {
-      if (message.type === 'start') {
-        peer.send({ type: 'started', pid: 9 });
+  const peer = buildStubExecPeer((peerLink, message) => {
+    if (message.type === 'start') {
+      peerLink.send({ type: 'started', pid: 9 });
 
-        link.ack = (bytes) => {
-          peer.send({ type: 'stdin_ack', bytes });
-        };
-      }
-    },
+      link.ack = (bytes) => {
+        peerLink.send({ type: 'stdin_ack', bytes });
+      };
+    }
   });
 
   const exec = await openToolExec({
-    config: { url: impd.url, token: impd.token, host: null },
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
     name: 'box',
     tool: 'tar',
     args: ['extract', '/srv/proj'],
     onStdout: () => Promise.resolve(),
     onStderr: () => {},
+    connect: peer.connect,
   });
 
   onTestFinished(exec.close);
@@ -344,7 +333,7 @@ test('it sends the rest of stdin once impd acks the window', async () => {
 
   await waitFor(() => {
     expect(
-      impd.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
+      peer.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
     ).toBe(EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES);
   });
 
@@ -352,29 +341,25 @@ test('it sends the rest of stdin once impd acks the window', async () => {
 
   await writing;
 
-  await waitFor(() => {
-    expect(
-      impd.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
-    ).toBe(EXEC_STDIN_WINDOW_BYTES + 2 * EXEC_MAX_STDIN_FRAME_BYTES);
-  });
+  expect(
+    peer.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
+  ).toBe(EXEC_STDIN_WINDOW_BYTES + 2 * EXEC_MAX_STDIN_FRAME_BYTES);
 });
 
 test('it holds its stdout ack while the caller is still writing the output', async () => {
-  using impd = startStubImpd({
-    onExec: (peer, message) => {
-      if (message.type === 'start') {
-        peer.send({ type: 'started', pid: 9 });
-        peer.sendFrame(1, 'x'.repeat(300));
-        peer.sendFrame(1, 'y'.repeat(200));
-      }
-    },
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 9 });
+      link.sendFrame(1, 'x'.repeat(300));
+      link.sendFrame(1, 'y'.repeat(200));
+    }
   });
 
   const seen: number[] = [];
   const writing = Promise.withResolvers<void>();
 
   const exec = await openToolExec({
-    config: { url: impd.url, token: impd.token, host: null },
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
@@ -384,6 +369,7 @@ test('it holds its stdout ack while the caller is still writing the output', asy
       await writing.promise;
     },
     onStderr: () => {},
+    connect: peer.connect,
   });
 
   onTestFinished(() => {
@@ -395,27 +381,25 @@ test('it holds its stdout ack while the caller is still writing the output', asy
     expect(seen).toStrictEqual([300, 200]);
   });
 
-  expect(impd.received).toStrictEqual([
+  expect(peer.received).toStrictEqual([
     { type: 'start', name: 'box', tool: 'tar', argv: ['create', 'x'], tty: false },
   ]);
 });
 
 test('it acks stdout to impd once the caller wrote it', async () => {
-  using impd = startStubImpd({
-    onExec: (peer, message) => {
-      if (message.type === 'start') {
-        peer.send({ type: 'started', pid: 9 });
-        peer.sendFrame(1, 'x'.repeat(300));
-        peer.sendFrame(1, 'y'.repeat(200));
-      }
-    },
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 9 });
+      link.sendFrame(1, 'x'.repeat(300));
+      link.sendFrame(1, 'y'.repeat(200));
+    }
   });
 
   const seen: number[] = [];
   const writing = Promise.withResolvers<void>();
 
   const exec = await openToolExec({
-    config: { url: impd.url, token: impd.token, host: null },
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
@@ -425,6 +409,7 @@ test('it acks stdout to impd once the caller wrote it', async () => {
       await writing.promise;
     },
     onStderr: () => {},
+    connect: peer.connect,
   });
 
   onTestFinished(exec.close);
@@ -436,47 +421,78 @@ test('it acks stdout to impd once the caller wrote it', async () => {
   writing.resolve();
 
   await waitFor(() => {
-    expect(impd.received.slice(1)).toStrictEqual([
+    expect(peer.received.slice(1)).toStrictEqual([
       { type: 'stdout_ack', bytes: 300 },
       { type: 'stdout_ack', bytes: 200 },
     ]);
   });
 });
 
-test('it rejects when impd faults with a message the protocol does not know', () => {
-  using impd = startStubImpd({
-    onExec: (peer) => {
-      peer.sendText(JSON.stringify({ type: 'progress', percent: 50 }));
-    },
+test('it rejects and closes the socket when impd faults with a message the protocol does not know', async () => {
+  const peer = buildStubExecPeer((link) => {
+    link.sendText(JSON.stringify({ type: 'progress', percent: 50 }));
   });
 
   const opening = openToolExec({
-    config: { url: impd.url, token: impd.token, host: null },
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
     onStdout: () => Promise.resolve(),
     onStderr: () => {},
+    connect: peer.connect,
   });
 
   expect(opening).rejects.toThrowWithMessage(Error, 'impd sent a message the CLI does not know');
+
+  await expect(peer.closed).toResolve();
 });
 
 test('it rejects and names impd when impd faults by closing the connection unanswered', () => {
-  using impd = startStubImpd({
-    onExec: (peer) => {
-      peer.close(1011, 'gone');
-    },
+  const peer = buildStubExecPeer((link) => {
+    link.close(1011, 'gone');
   });
 
   const opening = openToolExec({
-    config: { url: impd.url, token: impd.token, host: null },
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
     onStdout: () => Promise.resolve(),
     onStderr: () => {},
+    connect: peer.connect,
   });
 
-  expect(opening).rejects.toThrowWithMessage(Error, `the connection to impd at ${impd.url} closed`);
+  expect(opening).rejects.toThrowWithMessage(
+    Error,
+    'the connection to impd at http://impd.test closed',
+  );
+});
+
+test('it rejects with impd’s code and message when impd ends the exec with an error after the start', async () => {
+  const peer = buildStubExecPeer((link, message) => {
+    if (message.type === 'start') {
+      link.send({ type: 'started', pid: 9 });
+    }
+
+    if (message.type === 'stdin_eof') {
+      link.send({ type: 'error', code: 'AGENT_GONE', message: 'the agent went away' });
+    }
+  });
+
+  const exec = await openToolExec({
+    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    name: 'box',
+    tool: 'tar',
+    args: ['create', 'x'],
+    onStdout: () => Promise.resolve(),
+    onStderr: () => {},
+    connect: peer.connect,
+  });
+
+  onTestFinished(exec.close);
+
+  exec.endStdin();
+
+  expect(exec.waitExit()).rejects.toThrowWithMessage(Error, 'AGENT_GONE: the agent went away');
 });
