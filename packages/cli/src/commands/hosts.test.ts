@@ -2,15 +2,28 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  FRAME_TYPES,
+  encodeFrame,
+  encodeJsonFrame,
+} from '@imp/daemon/src/agent-client/frame-codec';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
+import {
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
 import { invariant } from '@imp/test-utils/invariant';
+import { createImpClient } from '@zgeoff/imp-client';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
 
@@ -129,7 +142,7 @@ async function setupTest() {
 
   invariant(app.server?.port);
 
-  return { env, url: `http://127.0.0.1:${String(app.server.port)}` };
+  return { env, db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
 }
 
 test('it saves the host as current when impd accepts the token', async () => {
@@ -370,6 +383,55 @@ test('it names the --host when impd refuses the saved token on exec’s socket',
     stdout: '',
     stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
     code: 255,
+  });
+});
+
+test('it sends the saved token of --host over IMP_TOKEN on exec’s socket', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const imp = await createImpClient({ url: ctx.url, token: 'login-token' }).imps.create({
+    name: 'box',
+  });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
+
+  invariant(identity);
+
+  // an agent that runs outer execs; the stub VMM records an older one
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
+
+  await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('ran')));
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
+    }
+  });
+
+  writeHostConfig(ctx.env, {
+    current: null,
+    hosts: { work: { url: ctx.url, token: 'login-token' } },
+  });
+
+  const exec = await runCli({
+    args: ['--host', 'work', 'exec', 'box', '--', 'true'],
+    env: { ...ctx.env, IMP_TOKEN: 'ignored' },
+  });
+
+  expect(exec).toStrictEqual({
+    stdout: 'ran',
+    stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+    code: 0,
   });
 });
 

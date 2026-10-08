@@ -21,14 +21,17 @@ import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
+import { startStubNewerImpd } from '../test-utils/start-stub-newer-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 import { startStubSilentHost } from '../test-utils/start-stub-silent-host';
 import { listAllImps, listForkWarnings, readConsoleSession } from './imps';
 
 // The CLI's home, and one real impd per entry of `hosts`, each on its own
-// data dir and database and on a loopback port for the CLI child. `isPublic`
-// lets imps.expose work; `isKsm` turns IMP_KSM on, with the `ksm` handle's saving
-async function setupTest(hosts: readonly Readonly<{ isPublic?: boolean; isKsm?: boolean }>[] = []) {
+// data dir and database and on a loopback port for the CLI child; `env` adds
+// to each impd's config, and the `ksm` handle sets what KSM saves
+async function setupTest(
+  hosts: readonly Readonly<{ env: Readonly<Record<string, string>> }>[] = [],
+) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -60,13 +63,7 @@ async function setupTest(hosts: readonly Readonly<{ isPublic?: boolean; isKsm?: 
       IMP_JAILER: 'false',
       IMP_BOOT_TEMPLATES: 'false',
       IMP_EGRESS_DNS_PORT: String(dnsPorts.take()),
-      ...(host.isPublic === true && {
-        IMP_DOMAIN: 'imp.example.com',
-        IMP_DNS_PROVIDER: 'cloudflare',
-        IMP_DNS_API_TOKEN: 'unused',
-        IMP_PUBLIC_IP: '203.0.113.7',
-      }),
-      ...(host.isKsm === true && { IMP_KSM: '1' }),
+      ...host.env,
     });
 
     // the system drive impd boots imps with
@@ -80,6 +77,10 @@ async function setupTest(hosts: readonly Readonly<{ isPublic?: boolean; isKsm?: 
 
     // what KSM saves in each awake VM, as /proc reports it
     const ksm = { profitMib: 0 };
+
+    // impd's clock, held a minute past every span the test opens, so an
+    // imp's awake time reads the same on every call
+    const clock = { nowMs: Date.now() + 60_000 };
 
     const impd = await createImpd(config, {
       db,
@@ -102,6 +103,7 @@ async function setupTest(hosts: readonly Readonly<{ isPublic?: boolean; isKsm?: 
       // the host's free space, so a create never meets this machine's disk
       readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
       log: () => {},
+      now: () => clock.nowMs,
       readIdentity: (files, ipv6Prefix) => ({
         firecrackerVersion: 'v1.17.0',
         snapshotVersion: 'v12.0.0',
@@ -290,7 +292,7 @@ test.each([
 });
 
 test('#exec runs nothing for --require on an impd older than 0.30.0, without execRequire', async () => {
-  const ctx = await setupTest([{}]);
+  const ctx = await setupTest([{ env: {} }]);
 
   const [box] = ctx.hosts;
 
@@ -326,7 +328,7 @@ test('#console refuses --log without a session before any call to impd', async (
 });
 
 test('#console makes no call past the feature check for --log on an impd from before session logs', async () => {
-  const ctx = await setupTest([{}]);
+  const ctx = await setupTest([{ env: {} }]);
 
   const [box] = ctx.hosts;
 
@@ -350,7 +352,7 @@ test('#console makes no call past the feature check for --log on an impd from be
 });
 
 test('#ls lists every saved host and exits 3 when one of them fails', async () => {
-  const ctx = await setupTest([{}, {}]);
+  const ctx = await setupTest([{ env: {} }, { env: {} }]);
 
   const [box, laptop] = ctx.hosts;
 
@@ -401,13 +403,13 @@ test('#ls lists every saved host and exits 3 when one of them fails', async () =
     ['laptop', 'dev', 'sleeping'],
   ]);
 
-  expect(rows[1]).toInclude('  sending');
+  expect(rows[1]).toEndWith('  sending');
   expect(listed.stderr).toMatch(/^imp: gone: [^\n]+\n$/u);
   expect(listed.code).toBe(3);
 });
 
 test('#listAllImps gives up on a host that never answers once its timer runs out', async () => {
-  const ctx = await setupTest([{}]);
+  const ctx = await setupTest([{ env: {} }]);
 
   const [box] = ctx.hosts;
 
@@ -486,7 +488,7 @@ test('#listAllImps gives up on a host that never answers once its timer runs out
 });
 
 test('#ls never prints a saved token under --all', async () => {
-  const ctx = await setupTest([{}]);
+  const ctx = await setupTest([{ env: {} }]);
 
   const [box] = ctx.hosts;
 
@@ -511,7 +513,7 @@ test('#ls never prints a saved token under --all', async () => {
 });
 
 test('#ls writes the imps and the errors of every host as JSON for --all --json', async () => {
-  const ctx = await setupTest([{}, {}]);
+  const ctx = await setupTest([{ env: {} }, { env: {} }]);
 
   const [box, laptop] = ctx.hosts;
 
@@ -550,14 +552,13 @@ test('#ls writes the imps and the errors of every host as JSON for --all --json'
   const boxImps = await box.client.imps.list();
   const laptopImps = await laptop.client.imps.list();
 
-  // what the CLI received, dates as JSON writes them, with each imp's host;
-  // the presenter reads awakeMs off the wall clock
+  // what the CLI received, dates as JSON writes them, with each imp's host
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
   const sent: unknown = JSON.parse(
     JSON.stringify([
       ...boxImps.map((imp) => Object.assign(imp, { host: 'box' })),
       ...laptopImps.map((imp) => Object.assign(imp, { host: 'laptop' })),
     ]),
-    (key, value: unknown) => (key === 'awakeMs' ? (expect.any(Number) as unknown) : value),
   );
 
   expect(body).toStrictEqual({
@@ -602,7 +603,7 @@ test('#ls writes an empty JSON list and exits 1 when no host answers --all --jso
 });
 
 test('#ls lists every host’s builders under --all --builders', async () => {
-  const ctx = await setupTest([{}, {}]);
+  const ctx = await setupTest([{ env: {} }, { env: {} }]);
 
   const [box, laptop] = ctx.hosts;
 
@@ -656,17 +657,23 @@ test('#ls lists every host’s builders under --all --builders', async () => {
 
   const body: unknown = JSON.parse(listed.stdout);
 
-  expect(body).toMatchObject({
-    imps: [
-      { host: 'box', name: 'box-builder' },
-      { host: 'laptop', name: 'laptop-builder' },
-    ],
-    errors: [],
-  });
+  const boxBuilder = await box.client.imps.get({ name: 'box-builder' });
+  const laptopBuilder = await laptop.client.imps.get({ name: 'laptop-builder' });
+
+  // what the CLI received, dates as JSON writes them, with each imp's host
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(
+    JSON.stringify([
+      { ...boxBuilder, host: 'box' },
+      { ...laptopBuilder, host: 'laptop' },
+    ]),
+  );
+
+  expect(body).toStrictEqual({ imps: sent, errors: [] });
 });
 
 test('#ls lists no builder under plain --all', async () => {
-  const ctx = await setupTest([{}, {}]);
+  const ctx = await setupTest([{ env: {} }, { env: {} }]);
 
   const [box, laptop] = ctx.hosts;
 
@@ -760,7 +767,7 @@ test('#new refuses --place with --host', async () => {
 });
 
 test('#ls lists the current host alone without --all', async () => {
-  const ctx = await setupTest([{}]);
+  const ctx = await setupTest([{ env: {} }]);
 
   const [box] = ctx.hosts;
 
@@ -783,9 +790,46 @@ test('#ls lists the current host alone without --all', async () => {
   const listed = await runCli({ args: ['ls', '--json'], env: ctx.home });
   const imps = await box.client.imps.list();
 
-  // dates as JSON writes them; the presenter reads awakeMs off the wall clock
-  const sent: unknown = JSON.parse(JSON.stringify(imps), (key, value: unknown) =>
-    key === 'awakeMs' ? (expect.any(Number) as unknown) : value,
+  // dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(JSON.stringify(imps));
+
+  expect({ ...listed, stdout: JSON.parse(listed.stdout) as unknown }).toStrictEqual({
+    stdout: sent,
+    stderr: '',
+    code: 0,
+  });
+});
+
+test('#ls passes through as sent a host field that a newer impd adds to its imps', async () => {
+  const ctx = await setupTest([{ env: {} }]);
+
+  const [box] = ctx.hosts;
+
+  invariant(box);
+
+  await createImage(box.db, { name: 'base', ref: 'base:1', digest: 'sha256:base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, 'sha256:base').rootfs, 'rootfs');
+  await box.client.imps.create({ name: 'db' });
+
+  // a release after this CLI's adds `host` to each imp
+  const newer = startStubNewerImpd(ctx.stack, box.fetch, {
+    withFields: { 'imps/list': { host: 'peer' } },
+  });
+
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: { box: { url: newer.url, token: 'imps-token' } },
+  });
+
+  const listed = await runCli({ args: ['ls', '--json'], env: ctx.home });
+  const imps = await box.client.imps.list();
+
+  // dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(
+    JSON.stringify(imps.map((imp) => Object.assign(imp, { host: 'peer' }))),
   );
 
   expect({ ...listed, stdout: JSON.parse(listed.stdout) as unknown }).toStrictEqual({
@@ -795,8 +839,46 @@ test('#ls lists the current host alone without --all', async () => {
   });
 });
 
+test('#ls names the saved host under --all over a host field that a newer impd adds', async () => {
+  const ctx = await setupTest([{ env: {} }]);
+
+  const [box] = ctx.hosts;
+
+  invariant(box);
+
+  await createImage(box.db, { name: 'base', ref: 'base:1', digest: 'sha256:base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, 'sha256:base').rootfs, 'rootfs');
+  await box.client.imps.create({ name: 'db' });
+
+  // a release after this CLI's adds `host` to each imp
+  const newer = startStubNewerImpd(ctx.stack, box.fetch, {
+    withFields: { 'imps/list': { host: 'peer' } },
+  });
+
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: { box: { url: newer.url, token: 'imps-token' } },
+  });
+
+  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.home });
+  const imps = await box.client.imps.list();
+
+  // dates as JSON writes them, each imp under its saved host's name
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(
+    JSON.stringify(imps.map((imp) => Object.assign(imp, { host: 'box' }))),
+  );
+
+  expect({ ...listed, stdout: JSON.parse(listed.stdout) as unknown }).toStrictEqual({
+    stdout: { imps: sent, errors: [] },
+    stderr: '',
+    code: 0,
+  });
+});
+
 test('#new skips a host without the image and moves past a RAM refusal under --place', async () => {
-  const ctx = await setupTest([{ isKsm: true }, {}, {}]);
+  const ctx = await setupTest([{ env: { IMP_KSM: '1' } }, { env: {} }, { env: {} }]);
 
   const [big, small, bare] = ctx.hosts;
 
@@ -854,11 +936,9 @@ test('#new skips a host without the image and moves past a RAM refusal under --p
 
   const created = await small.client.imps.get({ name: 'dev' });
 
-  // dates as JSON writes them; the presenter reads awakeMs off the wall clock
-  const sent: unknown = JSON.parse(
-    JSON.stringify({ host: 'small', imp: created }),
-    (key, value: unknown) => (key === 'awakeMs' ? (expect.any(Number) as unknown) : value),
-  );
+  // dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(JSON.stringify({ host: 'small', imp: created }));
 
   expect(placed.stderr).toBe(
     [
@@ -882,8 +962,50 @@ test('#new skips a host without the image and moves past a RAM refusal under --p
   expect(bareDev).toBeUndefined();
 });
 
+test('#new places on a reachable host under --place when another saved host does not answer', async () => {
+  const ctx = await setupTest([{ env: {} }]);
+
+  const [box] = ctx.hosts;
+
+  invariant(box);
+
+  await createImage(box.db, { name: 'base', ref: 'base:1', digest: 'sha256:base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, 'sha256:base').rootfs, 'rootfs');
+
+  // nothing listens at gone's address
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: {
+      box: { url: box.url, token: 'imps-token' },
+      gone: { url: 'http://127.0.0.1:1', token: 'imps-token' },
+    },
+  });
+
+  const placed = await runCli({
+    args: ['new', 'dev', '--image', 'base', '--place', '--json'],
+    env: ctx.home,
+  });
+
+  const created = await box.client.imps.get({ name: 'dev' });
+
+  // dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const sent: unknown = JSON.parse(JSON.stringify({ host: 'box', imp: created }));
+
+  expect({ ...placed, stdout: JSON.parse(placed.stdout) as unknown }).toStrictEqual({
+    stdout: sent,
+    stderr: [
+      'imp: gone: skipped: Unable to connect. Is the computer able to access the url?',
+      'imp: placing on box',
+      '',
+    ].join('\n'),
+    code: 0,
+  });
+});
+
 test('#new refuses --place for a name a saved host has already', async () => {
-  const ctx = await setupTest([{}, {}]);
+  const ctx = await setupTest([{ env: {} }, { env: {} }]);
 
   const [box, laptop] = ctx.hosts;
 
@@ -927,7 +1049,18 @@ test('#new refuses --place for a name a saved host has already', async () => {
 });
 
 test('#new passes over a host whose token is limited, then exposes, under --place --public', async () => {
-  const ctx = await setupTest([{}, { isPublic: true }]);
+  const ctx = await setupTest([
+    { env: {} },
+    {
+      // a domain and a public address, so imps.expose works
+      env: {
+        IMP_DOMAIN: 'imp.example.com',
+        IMP_DNS_PROVIDER: 'cloudflare',
+        IMP_DNS_API_TOKEN: 'unused',
+        IMP_PUBLIC_IP: '203.0.113.7',
+      },
+    },
+  ]);
 
   const [big, small] = ctx.hosts;
 
@@ -972,10 +1105,9 @@ test('#new passes over a host whose token is limited, then exposes, under --plac
   // the create's answer, from before the expose
   const { public: _exposed, ...created } = await small.client.imps.get({ name: 'dev' });
 
-  // dates as JSON writes them; the presenter reads awakeMs off the wall clock
-  const imp: unknown = JSON.parse(JSON.stringify(created), (key, value: unknown) =>
-    key === 'awakeMs' ? (expect.any(Number) as unknown) : value,
-  );
+  // dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
+  const imp: unknown = JSON.parse(JSON.stringify(created));
 
   expect(placed.stderr).toBe(
     [
@@ -1004,7 +1136,7 @@ test('#new passes over a host whose token is limited, then exposes, under --plac
 });
 
 test('#new names the host of a failure after a placed create, and still writes the imp', async () => {
-  const ctx = await setupTest([{}]);
+  const ctx = await setupTest([{ env: {} }]);
 
   const [box] = ctx.hosts;
 
@@ -1029,14 +1161,14 @@ test('#new names the host of a failure after a placed create, and still writes t
 
   const created = await box.client.imps.get({ name: 'dev' });
 
-  // dates as JSON writes them; the presenter reads awakeMs off the wall clock
+  // dates as JSON writes them
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- the wire turns dates into strings, as JSON does
   const sent: unknown = JSON.parse(
     JSON.stringify({
       host: 'box',
       imp: created,
       error: 'PRECONDITION_FAILED: public imps need IMP_DOMAIN and IMP_PUBLIC_IP on the host',
     }),
-    (key, value: unknown) => (key === 'awakeMs' ? (expect.any(Number) as unknown) : value),
   );
 
   expect(placed.stderr).toBe(
