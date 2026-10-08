@@ -55,3 +55,19 @@ done
     });
   },
 );
+
+test.skipIf(!canUnshare(['ip', 'link']))(
+  'it leaves no IPv6 address tentative in any namespace once it returns',
+  () => {
+    const run = runInNetns({
+      script: `${buildStubPublicNetwork()}
+ip -6 addr show tentative
+for namespace in g0 g3 wan; do ip -n $namespace -6 addr show tentative; done
+`,
+      env: {},
+      mount: true,
+    });
+
+    expect(run).toStrictEqual({ stdout: '', stderr: '', exitCode: 0 });
+  },
+);

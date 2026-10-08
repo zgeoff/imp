@@ -5,10 +5,14 @@ export function buildStubPublicNetwork(): string {
   return `
 mount -t tmpfs tmpfs /run
 mkdir -p /run/netns
+# no duplicate address detection: a link-local address still tentative
+# makes a guest's first IPv6 packet fail neighbour discovery
+sysctl -qw net.ipv6.conf.default.accept_dad=0
 sysctl -qw net.ipv4.ip_forward=1
 sysctl -qw net.ipv6.conf.all.forwarding=1
 for n in 0 3; do
   ip netns add g$n
+  ip netns exec g$n sysctl -qw net.ipv6.conf.default.accept_dad=0
   ip link add imp$n type veth peer name eth0 netns g$n
   ip addr add 10.66.0.$((n * 4 + 1))/30 dev imp$n
   ip -6 addr add fd12:3456:789a::$n:1/112 dev imp$n nodad
@@ -21,6 +25,7 @@ for n in 0 3; do
   ip -n g$n -6 route add default via fd12:3456:789a::$n:1
 done
 ip netns add wan
+ip netns exec wan sysctl -qw net.ipv6.conf.default.accept_dad=0
 ip link add up0 type veth peer name eth0 netns wan
 ip addr add 44.0.0.1/24 dev up0
 ip -6 addr add 2a00:44::1/64 dev up0 nodad
