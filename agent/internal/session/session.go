@@ -75,6 +75,9 @@ type session struct {
 	tapped   uint64
 	// tapless is set once a pump gave up waiting for a tap, until one attaches
 	tapless bool
+	// heldForTap is set while the pump holds its next read for a tap, so a
+	// caller can see the hold rather than guess when it began
+	heldForTap bool
 	// tapProgress wakes a waiting pump when a tap wrote output out
 	tapProgress chan struct{}
 	// tapWait is the package's, as the session started
@@ -210,14 +213,17 @@ func (s *session) waitForTap() {
 	for {
 		s.mu.Lock()
 		if s.untapped()+readSize <= ringSize || s.tapless {
+			s.heldForTap = false
 			s.mu.Unlock()
 			return
 		}
 		if expired {
 			s.tapless = true
+			s.heldForTap = false
 			s.mu.Unlock()
 			return
 		}
+		s.heldForTap = true
 		s.mu.Unlock()
 		select {
 		case <-s.tapProgress:

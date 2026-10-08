@@ -1,94 +1,151 @@
 package proc
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
-func TestMerge(t *testing.T) {
-	tests := []struct {
+func TestMergeAddsOrReplacesEachKeyWithoutChangingTheBase(t *testing.T) {
+	for _, tc := range []struct {
 		name        string
 		base, extra []string
 		want        []string
 	}{
-		{"empty", nil, nil, []string{}},
-		{"add", []string{"A=1"}, []string{"B=2"}, []string{"A=1", "B=2"}},
-		{"replace in place", []string{"A=1", "B=2"}, []string{"A=3"}, []string{"A=3", "B=2"}},
-		{"last wins", nil, []string{"A=1", "A=2"}, []string{"A=2"}},
-		{"value with =", []string{"A=x=y"}, []string{"B="}, []string{"A=x=y", "B="}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			base := slices.Clone(tt.base)
-			got := Merge(tt.base, tt.extra)
-			if !slices.Equal(got, tt.want) {
-				t.Fatalf("Merge = %q, want %q", got, tt.want)
-			}
-			if !slices.Equal(base, tt.base) {
-				t.Fatalf("Merge changed base to %q", tt.base)
-			}
+		{name: "empty", base: nil, extra: nil, want: []string{}},
+		{name: "add", base: []string{"A=1"}, extra: []string{"B=2"}, want: []string{"A=1", "B=2"}},
+		{name: "replace in place", base: []string{"A=1", "B=2"}, extra: []string{"A=3"}, want: []string{"A=3", "B=2"}},
+		{name: "last wins", base: nil, extra: []string{"A=1", "A=2"}, want: []string{"A=2"}},
+		{name: "value with =", base: []string{"A=x=y"}, extra: []string{"B="}, want: []string{"A=x=y", "B="}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := slices.Clone(tc.base)
+
+			got := Merge(tc.base, tc.extra)
+
+			assert.Check(t, cmp.DeepEqual(got, tc.want))
+			assert.Check(t, cmp.DeepEqual(tc.base, before), "Merge changed its base")
 		})
 	}
 }
 
-func TestGet(t *testing.T) {
-	env := []string{"A=1", "B=2", "A=3", "C"}
-	for key, want := range map[string]string{"A": "3", "B": "2", "C": "", "D": ""} {
-		if got := Get(env, key); got != want {
-			t.Errorf("Get(%q) = %q, want %q", key, got, want)
-		}
-	}
-}
-
-func TestLookPath(t *testing.T) {
-	a, b := t.TempDir(), t.TempDir()
-	write := func(p string, mode os.FileMode) {
-		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(filepath.Join(a, "noexec"), 0o644)
-	write(filepath.Join(b, "noexec"), 0o755)
-	write(filepath.Join(a, "tool"), 0o755)
-	write(filepath.Join(b, "tool"), 0o755)
-	if err := os.Mkdir(filepath.Join(a, "dir"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	env := []string{"PATH=" + a + ":" + b}
-
-	tests := []struct {
-		file string
+func TestGetReturnsTheLastValueOfAKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
 		want string
-		err  bool
 	}{
-		{"tool", filepath.Join(a, "tool"), false},
-		// A non-executable match is skipped, as a shell would.
-		{"noexec", filepath.Join(b, "noexec"), false},
-		{"dir", "", true},
-		{"missing", "", true},
-		{filepath.Join(a, "tool"), filepath.Join(a, "tool"), false},
-		{filepath.Join(a, "noexec"), "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.file, func(t *testing.T) {
-			got, err := LookPath(tt.file, env)
-			if tt.err {
-				if err == nil {
-					t.Fatalf("LookPath = %q, want an error", got)
-				}
-				return
-			}
-			if err != nil || got != tt.want {
-				t.Fatalf("LookPath = %q, %v; want %q", got, err, tt.want)
-			}
+		{name: "repeated key", key: "A", want: "3"},
+		{name: "single key", key: "B", want: "2"},
+		{name: "entry without =", key: "C", want: ""},
+		{name: "missing key", key: "D", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := []string{"A=1", "B=2", "A=3", "C"}
+
+			assert.Equal(t, Get(env, tc.key), tc.want)
 		})
 	}
 }
 
-func TestLookPathUsesEnvPath(t *testing.T) {
-	if _, err := LookPath("sh", []string{"PATH=" + t.TempDir()}); err == nil {
-		t.Fatal("found sh outside the given PATH")
+// pathDirs makes two PATH directories, a then b, holding the binaries the
+// LookPath cases resolve.
+func pathDirs(t *testing.T) (a, b string) {
+	t.Helper()
+	a, b = t.TempDir(), t.TempDir()
+	for _, f := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{filepath.Join(a, "noexec"), 0o644},
+		{filepath.Join(b, "noexec"), 0o755},
+		{filepath.Join(a, "tool"), 0o755},
+		{filepath.Join(b, "tool"), 0o755},
+	} {
+		assert.NilError(t, os.WriteFile(f.path, []byte("#!/bin/sh\n"), f.mode))
 	}
+	assert.NilError(t, os.Mkdir(filepath.Join(a, "dir"), 0o755))
+	return a, b
+}
+
+func TestLookPathFindsTheFirstExecutableMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		file func(a, b string) string
+		want func(a, b string) string
+	}{
+		{
+			name: "first PATH entry",
+			file: func(a, b string) string { return "tool" },
+			want: func(a, b string) string { return filepath.Join(a, "tool") },
+		},
+		{
+			// A non-executable match is skipped, as a shell would.
+			name: "non-executable match skipped",
+			file: func(a, b string) string { return "noexec" },
+			want: func(a, b string) string { return filepath.Join(b, "noexec") },
+		},
+		{
+			name: "path with a slash",
+			file: func(a, b string) string { return filepath.Join(a, "tool") },
+			want: func(a, b string) string { return filepath.Join(a, "tool") },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := pathDirs(t)
+
+			got, err := LookPath(tc.file(a, b), []string{"PATH=" + a + ":" + b})
+
+			assert.NilError(t, err)
+			assert.Equal(t, got, tc.want(a, b))
+		})
+	}
+}
+
+// The error text is the EXEC_FAILED message the host shows.
+func TestLookPathFailsWithoutAnExecutableMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		file string
+	}{
+		{name: "directory", file: "dir"},
+		{name: "missing", file: "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := pathDirs(t)
+
+			got, err := LookPath(tc.file, []string{"PATH=" + a + ":" + b})
+
+			assert.Check(t, cmp.Error(err, tc.file+": executable file not found in $PATH"))
+			assert.Check(t, cmp.Equal(got, ""))
+		})
+	}
+}
+
+func TestLookPathRefusesANonExecutablePathWithASlash(t *testing.T) {
+	a, b := pathDirs(t)
+	file := filepath.Join(a, "noexec")
+
+	_, err := LookPath(file, []string{"PATH=" + a + ":" + b})
+
+	assert.Check(t, cmp.Error(err, file+": permission denied"))
+}
+
+func TestLookPathRefusesAMissingPathWithASlash(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "missing")
+
+	_, err := LookPath(file, []string{"PATH=/usr/bin:/bin"})
+
+	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist))
+}
+
+func TestLookPathSearchesOnlyThePathOfTheGivenEnv(t *testing.T) {
+	got, err := LookPath("sh", []string{"PATH=" + t.TempDir()})
+
+	assert.Check(t, cmp.Error(err, "sh: executable file not found in $PATH"), "found sh at %q outside the given PATH", got)
 }

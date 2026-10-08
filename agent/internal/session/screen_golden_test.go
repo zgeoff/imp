@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 // goldenOutput is a program's output, the same on every run: text, colours,
@@ -54,9 +57,10 @@ func TestHistoryReplayMatchesTheGolden(t *testing.T) {
 	for _, chunk := range goldenOutput() {
 		h.Write(chunk)
 	}
+
 	got := replay(h)
+
 	sum := sha256.Sum256(got)
-	if len(got) != goldenReplayBytes || hex.EncodeToString(sum[:]) != goldenReplaySHA256 {
-		t.Fatalf("replay is %d bytes, sha256 %x; the golden is %d bytes, %s", len(got), sum, goldenReplayBytes, goldenReplaySHA256)
-	}
+	assert.Check(t, cmp.Equal(len(got), goldenReplayBytes))
+	assert.Check(t, cmp.Equal(hex.EncodeToString(sum[:]), goldenReplaySHA256))
 }

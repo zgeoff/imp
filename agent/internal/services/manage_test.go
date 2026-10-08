@@ -3,219 +3,271 @@ package services
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
+	"syscall"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 
 	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
+// newManagedSupervisor is a supervisor with its own services.d.
 func newManagedSupervisor(t *testing.T) *Supervisor {
 	t.Helper()
 	s := newSupervisor(t)
 	s.dir = filepath.Join(t.TempDir(), "services.d")
-	t.Cleanup(s.StopAll)
 	return s
 }
 
+// requireCode fails the test unless err is a proto.Error with code.
 func requireCode(t *testing.T, err error, code string) {
 	t.Helper()
 	var pe *proto.Error
-	if !errors.As(err, &pe) || pe.Code != code {
-		t.Fatalf("err = %v, want %s", err, code)
-	}
+	assert.Assert(t, errors.As(err, &pe), "err = %v, want %s", err, code)
+	assert.Equal(t, pe.Code, code)
 }
 
 // waitRunning waits for the named service to run with a pid other than not.
 func waitRunning(t *testing.T, s *Supervisor, name string, not int) proto.ServiceStatus {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, st := range s.List() {
+	var got proto.ServiceStatus
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		list := s.List()
+		for _, st := range list {
 			if st.Name == name && st.State == "running" && st.Pid != not {
-				return st
+				got = st
+				return poll.Success()
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("%s did not run: %+v", name, s.List())
-	return proto.ServiceStatus{}
+		return poll.Continue("%s is not running with a pid other than %d: %+v", name, not, list)
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
+	return got
 }
 
-func readFile(t *testing.T, path string) Def {
+func readDefFile(t *testing.T, path string) Def {
 	t.Helper()
 	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	var d Def
-	if err := json.Unmarshal(b, &d); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, json.Unmarshal(b, &d))
 	return d
 }
 
-func TestAddWritesTheFileAndStarts(t *testing.T) {
+func TestAddWritesTheFileAndStartsTheService(t *testing.T) {
 	s := newManagedSupervisor(t)
-	def := Def{Name: "web", Argv: []string{"sleep", "30"}, Env: []string{"A=1"}}
-	if err := s.Add(def, false); err != nil {
-		t.Fatal(err)
-	}
+
+	err := s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}, Env: []string{"A=1"}}, false)
+
+	assert.NilError(t, err)
 	st := waitRunning(t, s, "web", 0)
-	want := Def{Name: "web", Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: "always", Source: "api"}
-	if !reflect.DeepEqual(st.Def, want) {
-		t.Fatalf("def = %+v, want %+v", st.Def, want)
-	}
+	assert.Check(t, cmp.DeepEqual(st.Def, Def{Name: "web", Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: "always", Source: "api"}))
 	// the file holds no name: its own name is the service's
-	inFile := want
-	inFile.Name = ""
-	if got := readFile(t, filepath.Join(s.dir, "web.json")); !reflect.DeepEqual(got, inFile) {
-		t.Fatalf("file = %+v, want %+v", got, inFile)
-	}
-	if _, err := os.Stat(filepath.Join(s.dir, "web.json.tmp")); !os.IsNotExist(err) {
-		t.Fatalf("the temp file is left: %v", err)
-	}
+	assert.Check(t, cmp.DeepEqual(readDefFile(t, filepath.Join(s.dir, "web.json")), Def{Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: "always", Source: "api"}))
+	_, statErr := os.Stat(filepath.Join(s.dir, "web.json.tmp"))
+	assert.Check(t, cmp.ErrorIs(statErr, fs.ErrNotExist), "the temp file is left")
+}
 
-	requireCode(t, s.Add(def, false), proto.ErrServiceTaken)
+func TestAddRefusesAServiceThatRuns(t *testing.T) {
+	s := newManagedSupervisor(t)
+	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	waitRunning(t, s, "web", 0)
 
-	if err := s.Add(Def{Name: "web", Argv: []string{"sleep", "31"}}, true); err != nil {
-		t.Fatal(err)
-	}
-	again := waitRunning(t, s, "web", st.Pid)
-	if again.Def.Argv[1] != "31" || readFile(t, filepath.Join(s.dir, "web.json")).Argv[1] != "31" {
-		t.Fatalf("the replace did not apply: %+v", again)
-	}
+	err := s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false)
+
+	requireCode(t, err, proto.ErrServiceTaken)
+}
+
+func TestAddWithReplaceRestartsTheServiceFromTheNewDefinition(t *testing.T) {
+	s := newManagedSupervisor(t)
+	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	first := waitRunning(t, s, "web", 0)
+
+	err := s.Add(Def{Name: "web", Argv: []string{"sleep", "31"}}, true)
+
+	assert.NilError(t, err)
+	again := waitRunning(t, s, "web", first.Pid)
+	assert.Check(t, cmp.DeepEqual(again.Def.Argv, []string{"sleep", "31"}))
+	assert.Check(t, cmp.DeepEqual(readDefFile(t, filepath.Join(s.dir, "web.json")).Argv, []string{"sleep", "31"}))
 }
 
 func TestAddRefusesAFileWrittenByHand(t *testing.T) {
 	s := newManagedSupervisor(t)
-	if err := writeDef(fsroot.Host, filepath.Join(s.dir, "db.json"), Def{Argv: []string{"true"}}); err != nil {
-		t.Fatal(err)
-	}
-	requireCode(t, s.Add(Def{Name: "db", Argv: []string{"true"}}, false), proto.ErrServiceTaken)
+	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "db.json"), Def{Argv: []string{"true"}}))
+
+	err := s.Add(Def{Name: "db", Argv: []string{"true"}}, false)
+
+	requireCode(t, err, proto.ErrServiceTaken)
 }
 
-func TestAddChecksTheDefinition(t *testing.T) {
-	s := newManagedSupervisor(t)
-	for _, def := range []Def{
-		{Name: "", Argv: []string{"x"}},
-		{Name: "../x", Argv: []string{"x"}},
-		{Name: "Web", Argv: []string{"x"}},
-		{Name: "a_b", Argv: []string{"x"}},
-		{Name: "a.b", Argv: []string{"x"}},
-		{Name: "web", Argv: nil},
-		{Name: "web", Argv: []string{"x"}, Restart: "sometimes"},
+func TestAddRefusesABadDefinitionAndWritesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		def  Def
+	}{
+		{name: "an empty name", def: Def{Name: "", Argv: []string{"x"}}},
+		{name: "a path", def: Def{Name: "../x", Argv: []string{"x"}}},
+		{name: "an uppercase name", def: Def{Name: "Web", Argv: []string{"x"}}},
+		{name: "an underscore", def: Def{Name: "a_b", Argv: []string{"x"}}},
+		{name: "a dot", def: Def{Name: "a.b", Argv: []string{"x"}}},
+		{name: "no argv", def: Def{Name: "web", Argv: nil}},
+		{name: "an unknown restart policy", def: Def{Name: "web", Argv: []string{"x"}, Restart: "sometimes"}},
 	} {
-		requireCode(t, s.Add(def, false), proto.ErrBadRequest)
-	}
-	if entries, _ := os.ReadDir(s.dir); len(entries) != 0 {
-		t.Fatalf("a refused add wrote %v", entries)
+		t.Run(tc.name, func(t *testing.T) {
+			s := newManagedSupervisor(t)
+
+			err := s.Add(tc.def, false)
+
+			requireCode(t, err, proto.ErrBadRequest)
+			_, statErr := os.Stat(s.dir)
+			assert.Check(t, cmp.ErrorIs(statErr, fs.ErrNotExist), "a refused add wrote services.d")
+		})
 	}
 }
 
-func TestRemoveAndRestartCheckTheName(t *testing.T) {
-	s := newManagedSupervisor(t)
+// setupEscape points s at a services.d two levels down and writes the file
+// that the name ../../tmp/x would reach from it.
+func setupEscape(t *testing.T, s *Supervisor) (victim string) {
+	t.Helper()
 	base := t.TempDir()
 	s.dir = filepath.Join(base, "a", "b", "services.d")
-	// the file a path outside services.d would reach
-	victim := filepath.Join(base, "a", "tmp", "x.json")
-	if err := os.MkdirAll(filepath.Dir(victim), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(victim, []byte(`{"argv":["sleep","30"]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	requireCode(t, s.Remove("../../tmp/x"), proto.ErrBadRequest)
-	requireCode(t, s.Restart("../../tmp/x"), proto.ErrBadRequest)
-	if !exists(fsroot.Host, victim) {
-		t.Fatal("remove deleted a file outside services.d")
-	}
-	if len(s.List()) != 0 {
-		t.Fatalf("restart started %+v", s.List())
-	}
+	victim = filepath.Join(base, "a", "tmp", "x.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(victim), 0o755))
+	assert.NilError(t, os.WriteFile(victim, []byte(`{"argv":["sleep","30"]}`), 0o644))
+	return victim
 }
 
-func TestRemoveStopsAndDeletes(t *testing.T) {
+func TestRemoveRefusesANameOutsideServicesD(t *testing.T) {
 	s := newManagedSupervisor(t)
-	if err := s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false); err != nil {
-		t.Fatal(err)
-	}
+	victim := setupEscape(t, s)
+
+	err := s.Remove("../../tmp/x")
+
+	requireCode(t, err, proto.ErrBadRequest)
+	assert.Check(t, exists(fsroot.Host, victim), "remove deleted a file outside services.d")
+}
+
+func TestRestartRefusesANameOutsideServicesD(t *testing.T) {
+	s := newManagedSupervisor(t)
+	setupEscape(t, s)
+
+	err := s.Restart("../../tmp/x")
+
+	requireCode(t, err, proto.ErrBadRequest)
+	assert.Check(t, cmp.Len(s.List(), 0), "restart started a service")
+}
+
+func TestRemoveStopsTheServiceAndDeletesItsFile(t *testing.T) {
+	s := newManagedSupervisor(t)
+	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
 	st := waitRunning(t, s, "web", 0)
-	if err := s.Remove("web"); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.List()) != 0 {
-		t.Fatalf("list = %+v after remove", s.List())
-	}
-	if exists(fsroot.Host, filepath.Join(s.dir, "web.json")) {
-		t.Fatal("the file is left")
-	}
-	if err := syscallKill(st.Pid); err == nil {
-		t.Fatalf("pid %d still runs", st.Pid)
-	}
-	requireCode(t, s.Remove("web"), proto.ErrNoService)
+
+	err := s.Remove("web")
+
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(s.List(), 0))
+	assert.Check(t, !exists(fsroot.Host, filepath.Join(s.dir, "web.json")), "the file is left")
+	assert.Check(t, cmp.ErrorIs(syscall.Kill(st.Pid, 0), syscall.ESRCH), "pid %d still runs", st.Pid)
 }
 
-func TestRestartReadsTheFile(t *testing.T) {
+func TestRemoveReportsNoServiceForOneAlreadyRemoved(t *testing.T) {
 	s := newManagedSupervisor(t)
-	if err := s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	waitRunning(t, s, "web", 0)
+	assert.NilError(t, s.Remove("web"))
+
+	err := s.Remove("web")
+
+	requireCode(t, err, proto.ErrNoService)
+}
+
+func TestRestartRunsTheEditedFile(t *testing.T) {
+	s := newManagedSupervisor(t)
+	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
 	first := waitRunning(t, s, "web", 0)
+	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "web.json"), Def{Name: "web", Argv: []string{"sleep", "32"}}))
 
-	path := filepath.Join(s.dir, "web.json")
-	if err := writeDef(fsroot.Host, path, Def{Name: "web", Argv: []string{"sleep", "32"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Restart("web"); err != nil {
-		t.Fatal(err)
-	}
+	err := s.Restart("web")
+
+	assert.NilError(t, err)
 	second := waitRunning(t, s, "web", first.Pid)
-	if second.Def.Argv[1] != "32" {
-		t.Fatalf("restart ran %v, want the edited file", second.Def.Argv)
-	}
+	assert.DeepEqual(t, second.Def.Argv, []string{"sleep", "32"})
+}
 
-	// a file written after boot starts on its first restart
-	if err := writeDef(fsroot.Host, filepath.Join(s.dir, "late.json"), Def{Argv: []string{"sleep", "30"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Restart("late"); err != nil {
-		t.Fatal(err)
-	}
+func TestRestartStartsAFileWrittenAfterBoot(t *testing.T) {
+	s := newManagedSupervisor(t)
+	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "late.json"), Def{Argv: []string{"sleep", "30"}}))
+
+	err := s.Restart("late")
+
+	assert.NilError(t, err)
 	waitRunning(t, s, "late", 0)
+}
 
-	requireCode(t, s.Restart("nope"), proto.ErrNoService)
+func TestRestartReportsNoServiceForAnUnknownName(t *testing.T) {
+	s := newManagedSupervisor(t)
+
+	err := s.Restart("nope")
+
+	requireCode(t, err, proto.ErrNoService)
+}
+
+func TestRestartRefusesAFileThatDoesNotParse(t *testing.T) {
+	s := newManagedSupervisor(t)
+	assert.NilError(t, os.MkdirAll(s.dir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(s.dir, "web.json"), []byte(`{`), 0o644))
+
+	err := s.Restart("web")
+
+	requireCode(t, err, proto.ErrBadRequest)
+	assert.Check(t, cmp.Len(s.List(), 0), "restart started a service")
 }
 
 func TestRestartKeepsAServiceWhoseFileIsGone(t *testing.T) {
 	s := newManagedSupervisor(t)
 	s.Start(Def{Name: "mem", Argv: []string{"sleep", "30"}, Restart: "always"})
 	first := waitRunning(t, s, "mem", 0)
-	if err := s.Restart("mem"); err != nil {
-		t.Fatal(err)
-	}
-	waitRunning(t, s, "mem", first.Pid)
+
+	err := s.Restart("mem")
+
+	assert.NilError(t, err)
+	again := waitRunning(t, s, "mem", first.Pid)
+	assert.DeepEqual(t, again.Def, Def{Name: "mem", Argv: []string{"sleep", "30"}, Restart: "always"})
 }
 
-func TestManagingAfterStopAllIsRefused(t *testing.T) {
+func TestAddAfterStopAllIsRefusedAsPoweringOff(t *testing.T) {
 	s := newManagedSupervisor(t)
 	s.StopAll()
-	requireCode(t, s.Add(Def{Name: "web", Argv: []string{"true"}}, false), proto.ErrPoweringOff)
-	requireCode(t, s.Restart("web"), proto.ErrPoweringOff)
+
+	err := s.Add(Def{Name: "web", Argv: []string{"true"}}, false)
+
+	requireCode(t, err, proto.ErrPoweringOff)
+}
+
+func TestRestartAfterStopAllIsRefusedAsPoweringOff(t *testing.T) {
+	s := newManagedSupervisor(t)
+	s.StopAll()
+
+	err := s.Restart("web")
+
+	requireCode(t, err, proto.ErrPoweringOff)
 }
 
 func TestListSaysWhichServicesRunAsRoot(t *testing.T) {
 	s := newManagedSupervisor(t)
 	s.Start(Def{Name: "rooted", Argv: []string{"sleep", "30"}, Restart: "always"})
 	s.Start(Def{Name: "nobody", Argv: []string{"sleep", "30"}, User: "65534", Restart: "always"})
-	got := map[string]bool{}
+
+	root := map[string]bool{}
 	for _, st := range s.List() {
-		got[st.Name] = st.Root
+		root[st.Name] = st.Root
 	}
-	if !got["rooted"] || got["nobody"] {
-		t.Fatalf("root = %v, want rooted only", got)
-	}
+
+	assert.DeepEqual(t, root, map[string]bool{"rooted": true, "nobody": false})
 }

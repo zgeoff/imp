@@ -2,13 +2,18 @@ package listen
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/fsroot"
@@ -30,38 +35,53 @@ type host struct {
 func startHost(t *testing.T, serve func(r *proto.Reader, w *proto.Writer) error) *host {
 	t.Helper()
 	hostEnd, guestEnd := net.Pipe()
+	t.Cleanup(func() { hostEnd.Close() })
+	assert.NilError(t, hostEnd.SetDeadline(time.Now().Add(5*time.Second)))
 	h := &host{conn: hostEnd, r: proto.NewReader(hostEnd), w: proto.NewWriter(hostEnd), served: make(chan error, 1)}
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		h.served <- serve(proto.NewReader(guestEnd), proto.NewWriter(guestEnd))
 		guestEnd.Close()
 	}()
-	t.Cleanup(func() { hostEnd.Close() })
-	hostEnd.SetDeadline(time.Now().Add(5 * time.Second))
+	// registered after the close above, so it runs first: the close ends
+	// Serve, and the test does not end before it returns
+	t.Cleanup(func() {
+		hostEnd.Close()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("Serve did not return after the host closed")
+		}
+	})
 	return h
 }
 
 func (h *host) next(t *testing.T, want proto.Type, v any) {
 	t.Helper()
 	f, err := h.r.Next()
-	if err != nil {
-		t.Fatalf("read frame: %v", err)
-	}
-	if f.Type != want {
-		t.Fatalf("got %s %s, want %s", f.Type, f.Payload, want)
-	}
+	assert.NilError(t, err, "read frame")
+	assert.Equal(t, f.Type, want, "frame %s", f.Payload)
 	if v != nil {
-		if err := json.Unmarshal(f.Payload, v); err != nil {
-			t.Fatalf("decode %s: %v", f.Payload, err)
-		}
+		assert.NilError(t, json.Unmarshal(f.Payload, v), "decode %s", f.Payload)
 	}
 }
 
-// newManager serves sockets as the test's own user, under a short relative
-// root: a unix socket path has a 108-byte limit.
-func newManager(t *testing.T) *Manager {
+// shortDir makes a directory of the test's own with a short path: a unix
+// socket path has a 108-byte limit, which a t.TempDir under a long TMPDIR
+// can pass.
+func shortDir(t *testing.T) string {
 	t.Helper()
-	t.Chdir(t.TempDir())
-	return NewManager("agents", "forwards", imagecfg.NewLive(imagecfg.Config{User: fmt.Sprint(os.Getuid())}), testBinder(), fsroot.Host)
+	dir, err := os.MkdirTemp("/tmp", "listen")
+	assert.NilError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+// newManager serves sockets as the test's own user, under roots in dir.
+func newManager(t *testing.T, dir string) *Manager {
+	t.Helper()
+	return NewManager(filepath.Join(dir, "agents"), filepath.Join(dir, "forwards"), imagecfg.NewLive(imagecfg.Config{User: fmt.Sprint(os.Getuid())}), testBinder(), fsroot.Host)
 }
 
 var testReaper *reaper.Reaper
@@ -89,224 +109,219 @@ func listen(t *testing.T, m *Manager) (*host, proto.Listening) {
 	h := startHost(t, m.ServeAgent)
 	var resp proto.Listening
 	h.next(t, proto.TypeResponse, &resp)
-	if !resp.OK || resp.Listener == "" {
-		t.Fatalf("listen: %+v", resp)
-	}
+	assert.Assert(t, resp.OK && resp.Listener != "", "listen: %+v", resp)
 	return h, resp
 }
 
 func dialSocket(t *testing.T, path string) net.Conn {
 	t.Helper()
 	c, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatalf("dial %s: %v", path, err)
-	}
+	assert.NilError(t, err, "dial %s", path)
 	t.Cleanup(func() { c.Close() })
-	c.SetDeadline(time.Now().Add(5 * time.Second))
+	assert.NilError(t, c.SetDeadline(time.Now().Add(5*time.Second)))
 	return c
 }
 
-func requireClosed(t *testing.T, c net.Conn) {
-	t.Helper()
-	if _, err := c.Read(make([]byte, 1)); err != io.EOF {
-		t.Fatalf("read: %v, want EOF", err)
-	}
+// readEnd reads c until its first byte or error and returns the error: io.EOF
+// when the agent closed it.
+func readEnd(c net.Conn) error {
+	_, err := c.Read(make([]byte, 1))
+	return err
 }
 
-func TestSocketIsTheUsersAlone(t *testing.T) {
-	m := newManager(t)
+func TestServeAgentMakesTheSocketAndItsDirectoryTheUsersAlone(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
+
 	_, resp := listen(t, m)
 
-	for path, want := range map[string]os.FileMode{resp.Path: 0o600, filepath.Dir(resp.Path): 0o700} {
-		info, err := os.Lstat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != want {
-			t.Errorf("%s: mode %o, want %o", path, got, want)
-		}
-	}
+	sock, err := os.Lstat(resp.Path)
+	assert.NilError(t, err)
+	dir, err := os.Lstat(filepath.Dir(resp.Path))
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(sock.Mode().Perm(), os.FileMode(0o600)))
+	assert.Check(t, cmp.Equal(dir.Mode().Perm(), os.FileMode(0o700)))
 }
 
-func TestClientIsRelayedAndSocketGoesWithTheHost(t *testing.T) {
-	m := newManager(t)
+func TestAcceptRelaysTheClientAndTheHostBothWays(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
 	control, resp := listen(t, m)
-
 	client := dialSocket(t, resp.Path)
 	var conn proto.Connection
 	control.next(t, proto.TypeConnection, &conn)
-
 	relay := startHost(t, func(r *proto.Reader, w *proto.Writer) error {
 		return m.Accept(proto.Request{Listener: resp.Listener, Connection: conn.ID}, r, w)
 	})
 	relay.next(t, proto.TypeResponse, nil)
 
-	// the client's request reaches the host, the host's answer the client
-	if _, err := client.Write([]byte("request")); err != nil {
-		t.Fatal(err)
-	}
+	_, err := client.Write([]byte("request"))
+	assert.NilError(t, err)
 	f, err := relay.r.Next()
-	if err != nil || f.Type != proto.TypeStdout || string(f.Payload) != "request" {
-		t.Fatalf("got %v %v", f, err)
-	}
-	if err := relay.w.Write(proto.TypeStdin, []byte("answer")); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
+	assert.NilError(t, relay.w.Write(proto.TypeStdin, []byte("answer")))
 	buf := make([]byte, 6)
-	if _, err := io.ReadFull(client, buf); err != nil || string(buf) != "answer" {
-		t.Fatalf("client read %q, %v", buf, err)
-	}
+	_, err = io.ReadFull(client, buf)
+	assert.NilError(t, err)
+
+	assert.Check(t, cmp.Equal(f.Type, proto.TypeStdout))
+	assert.Check(t, cmp.Equal(string(f.Payload), "request"))
+	assert.Check(t, cmp.Equal(string(buf), "answer"))
+}
+
+func TestServeAgentRemovesTheSocketDirectoryWhenTheHostCloses(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
+	control, resp := listen(t, m)
 
 	control.conn.Close()
-	if err := <-control.served; err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	if _, err := os.Stat(filepath.Dir(resp.Path)); !os.IsNotExist(err) {
-		t.Fatalf("socket dir still there: %v", err)
-	}
+	err := <-control.served
+
+	assert.Check(t, err, "listen")
+	_, err = os.Stat(filepath.Dir(resp.Path))
+	assert.Check(t, cmp.ErrorIs(err, os.ErrNotExist))
 }
 
 // impd refuses a client when the user's ssh refuses the agent channel; the
-// client must see the close at once, not after the pending timeout
-func TestAcceptThatClosesEndsTheClient(t *testing.T) {
-	m := newManager(t)
+// client must see the close at once, not after the pending timeout.
+func TestAcceptClosesTheClientWhenTheHostEndsTheRelay(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
 	control, resp := listen(t, m)
-
 	client := dialSocket(t, resp.Path)
 	var conn proto.Connection
 	control.next(t, proto.TypeConnection, &conn)
-
 	relay := startHost(t, func(r *proto.Reader, w *proto.Writer) error {
 		return m.Accept(proto.Request{Listener: resp.Listener, Connection: conn.ID}, r, w)
 	})
 	relay.next(t, proto.TypeResponse, nil)
+
 	relay.conn.Close()
 
-	requireClosed(t, client)
+	assert.Check(t, cmp.ErrorIs(readEnd(client), io.EOF))
 }
 
-func TestUnknownConnection(t *testing.T) {
-	m := newManager(t)
+func TestAcceptRefusesAnUnknownConnection(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
 	_, resp := listen(t, m)
 
 	relay := startHost(t, func(r *proto.Reader, w *proto.Writer) error {
 		return m.Accept(proto.Request{Listener: resp.Listener, Connection: 99}, r, w)
 	})
+
 	var got proto.ErrorResponse
 	relay.next(t, proto.TypeResponse, &got)
-	if got.Error == nil || got.Error.Code != proto.ErrNoConnection {
-		t.Fatalf("got %+v, want NO_CONNECTION", got)
-	}
+	assert.Assert(t, got.Error != nil, "got %+v, want an error", got)
+	assert.Check(t, cmp.Equal(got.Error.Code, proto.ErrNoConnection))
 }
 
-func TestWaitingClientsAreCapped(t *testing.T) {
-	m := newManager(t)
+func TestServeAgentNumbersWaitingClientsAndClosesThoseOverTheCap(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
 	control, resp := listen(t, m)
 
-	for i := range maxPending {
+	var ids, want []uint64
+	for i := range 16 {
 		dialSocket(t, resp.Path)
 		var conn proto.Connection
 		control.next(t, proto.TypeConnection, &conn)
-		if conn.ID != uint64(i+1) {
-			t.Fatalf("connection %d has id %d", i+1, conn.ID)
-		}
+		ids = append(ids, conn.ID)
+		want = append(want, uint64(i+1))
 	}
-	requireClosed(t, dialSocket(t, resp.Path))
+	over := dialSocket(t, resp.Path)
+
+	assert.Check(t, cmp.DeepEqual(ids, want))
+	assert.Check(t, cmp.ErrorIs(readEnd(over), io.EOF))
 }
 
-func TestUnpairedClientTimesOut(t *testing.T) {
+func TestServeAgentClosesAClientTheHostNeverPairs(t *testing.T) {
 	old := pendingTimeout
 	pendingTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { pendingTimeout = old })
-
-	m := newManager(t)
+	m := newManager(t, shortDir(t))
 	control, resp := listen(t, m)
 
 	client := dialSocket(t, resp.Path)
 	control.next(t, proto.TypeConnection, nil)
 
-	requireClosed(t, client)
+	assert.Check(t, cmp.ErrorIs(readEnd(client), io.EOF))
 }
 
-func TestOtherUsersAreRefused(t *testing.T) {
+func TestAllowsOnlyTheSocketsOwner(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("root is always allowed")
 	}
-	t.Chdir(t.TempDir())
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: "s", Net: "unix"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	dialSocket(t, "s")
+	path := filepath.Join(shortDir(t), "s")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	assert.NilError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	dialSocket(t, path)
 	c, err := ln.AcceptUnix()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	assert.NilError(t, err)
+	t.Cleanup(func() { c.Close() })
 
 	owner := &listener{uid: uint32(os.Getuid())}
 	other := &listener{uid: 65534}
-	if !owner.allows(c) || other.allows(c) {
-		t.Fatalf("owner allows %v, other allows %v", owner.allows(c), other.allows(c))
-	}
+
+	assert.Check(t, owner.allows(c), "the owner is refused")
+	assert.Check(t, !other.allows(c), "another user is allowed")
 }
 
-func TestBadUserFails(t *testing.T) {
-	t.Chdir(t.TempDir())
-	m := NewManager("agents", "forwards", imagecfg.NewLive(imagecfg.Config{User: "no-such-user"}), testBinder(), fsroot.Host)
+func TestServeAgentRefusesAnUnknownUserAndLeavesNoDirectory(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := NewManager(filepath.Join(dir, "agents"), filepath.Join(dir, "forwards"), imagecfg.NewLive(imagecfg.Config{User: "no-such-user"}), testBinder(), fsroot.Host)
+
 	h := startHost(t, m.ServeAgent)
+
 	var got proto.ErrorResponse
 	h.next(t, proto.TypeResponse, &got)
-	if got.Error == nil {
-		t.Fatalf("got %+v, want an error", got)
+	assert.Check(t, got.Error != nil, "got %+v, want an error", got)
+	entries, err := os.ReadDir(filepath.Join(dir, "agents"))
+	if !errors.Is(err, os.ErrNotExist) {
+		assert.NilError(t, err)
 	}
-	if entries, _ := os.ReadDir("agents"); len(entries) != 0 {
-		t.Fatalf("left %d dirs", len(entries))
-	}
+	assert.Check(t, cmp.Len(entries, 0))
 }
 
-// serveListen starts a listen connection and reads its answer
+// serveListen starts a listen connection and reads its answer.
 func serveListen(t *testing.T, m *Manager, network, address string) (*host, proto.Listening, *proto.Error) {
 	t.Helper()
 	h := startHost(t, func(r *proto.Reader, w *proto.Writer) error {
 		return m.Serve(proto.Request{Network: network, Address: address}, r, w)
 	})
 	f, err := h.r.Next()
-	if err != nil || f.Type != proto.TypeResponse {
-		t.Fatalf("listen answer: %v %v", f, err)
-	}
+	assert.NilError(t, err, "listen answer")
+	assert.Equal(t, f.Type, proto.TypeResponse, "listen answer %s", f.Payload)
 	var failed proto.ErrorResponse
 	if json.Unmarshal(f.Payload, &failed) == nil && failed.Error != nil {
 		return h, proto.Listening{}, failed.Error
 	}
 	var resp proto.Listening
-	if err := json.Unmarshal(f.Payload, &resp); err != nil || !resp.OK || resp.Listener == "" {
-		t.Fatalf("listen: %s %v", f.Payload, err)
-	}
+	assert.NilError(t, json.Unmarshal(f.Payload, &resp), "listen: %s", f.Payload)
+	assert.Assert(t, resp.OK && resp.Listener != "", "listen: %s", f.Payload)
 	return h, resp, nil
 }
 
 func requireListening(t *testing.T, m *Manager, network, address string) (*host, proto.Listening) {
 	t.Helper()
 	h, resp, failed := serveListen(t, m, network, address)
-	if failed != nil {
-		t.Fatalf("listen %s %s: %v", network, address, failed)
-	}
+	assert.Assert(t, failed == nil, "listen %s %s: %v", network, address, failed)
 	return h, resp
 }
 
-func requireRefused(t *testing.T, m *Manager, network, address, code string) {
+func refusal(t *testing.T, m *Manager, network, address string) string {
 	t.Helper()
 	_, _, failed := serveListen(t, m, network, address)
-	if failed == nil || failed.Code != code {
-		t.Fatalf("listen %s %q: got %v, want %s", network, address, failed, code)
-	}
+	assert.Assert(t, failed != nil, "listen %s %q was not refused", network, address)
+	return failed.Code
 }
 
-// relayOnce pairs the next client with an accept and checks bytes reach the
-// host
-func relayOnce(t *testing.T, m *Manager, control *host, listener string, client net.Conn) {
+// relayOnce pairs the next client with an accept and returns what the host
+// read of the client's "ping".
+func relayOnce(t *testing.T, m *Manager, control *host, listener string, client net.Conn) proto.Frame {
 	t.Helper()
 	var conn proto.Connection
 	control.next(t, proto.TypeConnection, &conn)
@@ -314,167 +329,228 @@ func relayOnce(t *testing.T, m *Manager, control *host, listener string, client 
 		return m.Accept(proto.Request{Listener: listener, Connection: conn.ID}, r, w)
 	})
 	relay.next(t, proto.TypeResponse, nil)
-	if _, err := client.Write([]byte("ping")); err != nil {
-		t.Fatal(err)
-	}
+	_, err := client.Write([]byte("ping"))
+	assert.NilError(t, err)
 	f, err := relay.r.Next()
-	if err != nil || f.Type != proto.TypeStdout || string(f.Payload) != "ping" {
-		t.Fatalf("got %v %v", f, err)
-	}
+	assert.NilError(t, err)
+	return f
 }
 
-func endListener(t *testing.T, control *host) {
+func endListener(t *testing.T, control *host) error {
 	t.Helper()
 	control.conn.Close()
-	if err := <-control.served; err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	return <-control.served
 }
 
-func TestAForwardWithNoPathGetsASocketOfItsOwn(t *testing.T) {
-	m := newManager(t)
+func TestServeGivesAForwardWithNoPathASocketOfItsOwn(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
+
+	_, resp := requireListening(t, m, "unix", "")
+
+	assert.Check(t, cmp.Equal(filepath.Base(filepath.Dir(filepath.Dir(resp.Path))), "forwards"), "path %s is not under the forward root", resp.Path)
+	sock, err := os.Lstat(resp.Path)
+	assert.NilError(t, err)
+	dir, err := os.Lstat(filepath.Dir(resp.Path))
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(sock.Mode().Perm(), os.FileMode(0o600)))
+	assert.Check(t, cmp.Equal(dir.Mode().Perm(), os.FileMode(0o700)))
+}
+
+func TestServeRelaysAClientOfAForwardWithNoPath(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
 	control, resp := requireListening(t, m, "unix", "")
 
-	if filepath.Base(filepath.Dir(filepath.Dir(resp.Path))) != "forwards" {
-		t.Fatalf("path %s is not under the forward root", resp.Path)
-	}
-	for path, want := range map[string]os.FileMode{resp.Path: 0o600, filepath.Dir(resp.Path): 0o700} {
-		info, err := os.Lstat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != want {
-			t.Errorf("%s: mode %o, want %o", path, got, want)
-		}
-	}
-	relayOnce(t, m, control, resp.Listener, dialSocket(t, resp.Path))
+	f := relayOnce(t, m, control, resp.Listener, dialSocket(t, resp.Path))
 
-	endListener(t, control)
-	if _, err := os.Stat(filepath.Dir(resp.Path)); !os.IsNotExist(err) {
-		t.Fatalf("socket dir still there: %v", err)
-	}
+	assert.Check(t, cmp.Equal(f.Type, proto.TypeStdout))
+	assert.Check(t, cmp.Equal(string(f.Payload), "ping"))
 }
 
-func TestAClientPathIsBoundRelayedAndRemoved(t *testing.T) {
-	m := newManager(t)
-	path := inCwd(t, "app.sock")
+func TestServeRemovesAForwardsOwnSocketDirectoryWhenTheHostCloses(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
+	control, resp := requireListening(t, m, "unix", "")
+
+	err := endListener(t, control)
+
+	assert.Check(t, err, "listen")
+	_, err = os.Stat(filepath.Dir(resp.Path))
+	assert.Check(t, cmp.ErrorIs(err, os.ErrNotExist))
+}
+
+func TestServeBindsAClientPathAsTheUsersSocket(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := newManager(t, dir)
+	path := filepath.Join(dir, "app.sock")
+
+	_, resp := requireListening(t, m, "unix", path)
+
+	assert.Check(t, cmp.Equal(resp.Path, path))
+	info, err := os.Lstat(path)
+	assert.NilError(t, err)
+	assert.Check(t, info.Mode()&os.ModeSocket != 0, "mode %s is no socket", info.Mode())
+	assert.Check(t, cmp.Equal(info.Mode().Perm(), os.FileMode(0o600)))
+}
+
+func TestServeRelaysAClientOfAClientPath(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := newManager(t, dir)
+	path := filepath.Join(dir, "app.sock")
 	control, resp := requireListening(t, m, "unix", path)
 
-	if resp.Path != path {
-		t.Fatalf("path %s, want %s", resp.Path, path)
-	}
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
-		t.Fatalf("socket %v, %v", info, err)
-	}
-	relayOnce(t, m, control, resp.Listener, dialSocket(t, "app.sock"))
+	f := relayOnce(t, m, control, resp.Listener, dialSocket(t, path))
 
-	endListener(t, control)
-	if _, err := os.Lstat(path); !os.IsNotExist(err) {
-		t.Fatalf("the socket is still there: %v", err)
-	}
+	assert.Check(t, cmp.Equal(f.Type, proto.TypeStdout))
+	assert.Check(t, cmp.Equal(string(f.Payload), "ping"))
 }
 
-// a forward that ended with a forced sleep leaves its socket; the next
-// listen on the path replaces it
-func TestAStaleSocketIsReplaced(t *testing.T) {
-	m := newManager(t)
-	path := inCwd(t, "app.sock")
-	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: "app.sock", Net: "unix"})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestServeRemovesAClientPathSocketWhenTheHostCloses(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := newManager(t, dir)
+	path := filepath.Join(dir, "app.sock")
+	control, _ := requireListening(t, m, "unix", path)
+
+	err := endListener(t, control)
+
+	assert.Check(t, err, "listen")
+	_, err = os.Lstat(path)
+	assert.Check(t, cmp.ErrorIs(err, os.ErrNotExist))
+}
+
+// A forward that ended with a forced sleep leaves its socket; the next
+// listen on the path replaces it.
+func TestServeReplacesAStaleSocketAtTheClientPath(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := newManager(t, dir)
+	path := filepath.Join(dir, "app.sock")
+	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	assert.NilError(t, err)
 	stale.SetUnlinkOnClose(false)
-	stale.Close()
+	assert.NilError(t, stale.Close())
 
 	control, _ := requireListening(t, m, "unix", path)
-	dialSocket(t, "app.sock")
+	dialSocket(t, path)
+
 	control.next(t, proto.TypeConnection, nil)
 }
 
-func TestAFileThatIsNotASocketIsKept(t *testing.T) {
-	m := newManager(t)
-	path := inCwd(t, "notes")
-	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+func TestServeRefusesAndKeepsAFileThatIsNotASocket(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := newManager(t, dir)
+	path := filepath.Join(dir, "notes")
+	assert.NilError(t, os.WriteFile(path, []byte("keep"), 0o600))
 
-	requireRefused(t, m, "unix", path, proto.ErrListenFailed)
-	if b, err := os.ReadFile(path); err != nil || string(b) != "keep" {
-		t.Fatalf("the file became %q, %v", b, err)
+	code := refusal(t, m, "unix", path)
+
+	assert.Check(t, cmp.Equal(code, proto.ErrListenFailed))
+	b, err := os.ReadFile(path)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(string(b), "keep"))
+}
+
+func TestServeRefusesABadListenRequest(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		network string
+		address func(t *testing.T) string
+	}{
+		{name: "a missing directory", network: "unix", address: func(t *testing.T) string { return filepath.Join(t.TempDir(), "no", "such", "app.sock") }},
+		{name: "a relative path", network: "unix", address: func(*testing.T) string { return "relative.sock" }},
+		{name: "every interface", network: "tcp", address: func(*testing.T) string { return "0.0.0.0:0" }},
+		{name: "a port out of range", network: "tcp", address: func(*testing.T) string { return "127.0.0.1:70000" }},
+		{name: "udp", network: "udp", address: func(*testing.T) string { return "127.0.0.1:0" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newManager(t, shortDir(t))
+
+			code := refusal(t, m, tc.network, tc.address(t))
+
+			assert.Check(t, cmp.Equal(code, proto.ErrBadRequest))
+		})
 	}
 }
 
-func TestBadListenRequests(t *testing.T) {
-	m := newManager(t)
-	missing := filepath.Join(t.TempDir(), "no", "such", "app.sock")
-
-	requireRefused(t, m, "unix", missing, proto.ErrBadRequest)
-	requireRefused(t, m, "unix", "relative.sock", proto.ErrBadRequest)
-	requireRefused(t, m, "tcp", "0.0.0.0:0", proto.ErrBadRequest)
-	requireRefused(t, m, "tcp", "127.0.0.1:70000", proto.ErrBadRequest)
-	requireRefused(t, m, "udp", "127.0.0.1:0", proto.ErrBadRequest)
-}
-
-// the listener removes its own socket and nothing a process put at the
-// name meanwhile
-func TestCloseLeavesAnotherSocketAtThePathAlone(t *testing.T) {
-	m := newManager(t)
-	path := inCwd(t, "app.sock")
+// The listener removes its own socket and nothing a process put at the name
+// meanwhile.
+func TestServeLeavesAnotherSocketAtThePathAloneWhenTheHostCloses(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	m := newManager(t, dir)
+	path := filepath.Join(dir, "app.sock")
 	control, _ := requireListening(t, m, "unix", path)
+	assert.NilError(t, os.Remove(path))
+	other, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	assert.NilError(t, err)
+	t.Cleanup(func() { other.Close() })
 
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	other, err := net.ListenUnix("unix", &net.UnixAddr{Name: "app.sock", Net: "unix"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
+	err = endListener(t, control)
 
-	endListener(t, control)
-	if _, err := os.Lstat(path); err != nil {
-		t.Fatalf("the other socket went: %v", err)
-	}
+	assert.Check(t, err, "listen")
+	_, err = os.Lstat(path)
+	assert.Check(t, err, "the other socket went")
 }
 
-func TestATCPPortOnLoopback(t *testing.T) {
-	m := newManager(t)
+func TestServeListensOnALoopbackTCPPort(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
+
+	_, resp := requireListening(t, m, "tcp", "127.0.0.1:0")
+
+	assert.Check(t, resp.Port != 0, "got %+v, want a port", resp)
+	assert.Check(t, cmp.Equal(resp.Path, ""))
+}
+
+func TestServeRelaysAClientOfALoopbackTCPPort(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
+	control, resp := requireListening(t, m, "tcp", "127.0.0.1:0")
+	client, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", resp.Port))
+	assert.NilError(t, err)
+	t.Cleanup(func() { client.Close() })
+	assert.NilError(t, client.SetDeadline(time.Now().Add(5*time.Second)))
+
+	f := relayOnce(t, m, control, resp.Listener, client)
+
+	assert.Check(t, cmp.Equal(f.Type, proto.TypeStdout))
+	assert.Check(t, cmp.Equal(string(f.Payload), "ping"))
+}
+
+func TestServeClosesTheLoopbackTCPPortWhenTheHostCloses(t *testing.T) {
+	t.Parallel()
+	m := newManager(t, shortDir(t))
 	control, resp := requireListening(t, m, "tcp", "127.0.0.1:0")
 
-	if resp.Port == 0 || resp.Path != "" {
-		t.Fatalf("got %+v, want a port", resp)
-	}
-	client, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", resp.Port))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	client.SetDeadline(time.Now().Add(5 * time.Second))
-	relayOnce(t, m, control, resp.Listener, client)
+	err := endListener(t, control)
 
-	endListener(t, control)
-	if c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", resp.Port)); err == nil {
+	assert.Check(t, err, "listen")
+	// Binding the port, without listening, proves the listener let it go
+	// and keeps any other listener from taking it before the dial.
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	assert.NilError(t, err)
+	t.Cleanup(func() { syscall.Close(fd) })
+	assert.NilError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Port: resp.Port, Addr: [4]byte{127, 0, 0, 1}}), "the port is still held")
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", resp.Port))
+	if err == nil {
 		c.Close()
-		t.Fatal("the port still listens")
 	}
-}
-
-// inCwd is name in the test's directory, which newManager made the working
-// directory: clients dial the short relative name, under the 108-byte limit
-// of a unix socket path, which the bind, through /proc/self/fd, does not have
-func inCwd(t *testing.T, name string) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return filepath.Join(dir, name)
+	assert.Check(t, cmp.ErrorIs(err, syscall.ECONNREFUSED))
 }
 
 // A socket's directory is judged by where it is, not by its path: a link
 // such as Debian's /var/run -> /run leads onto a tmpfs.
-func TestOnlySocketsOnATmpfsGoWithTheContainer(t *testing.T) {
+func TestOnTmpfsJudgesADirectoryByWhereItIs(t *testing.T) {
+	t.Parallel()
+	// /dev/shm is the tmpfs the system provides; a fresh directory in it is
+	// this test's own.
 	tmpfs, err := os.MkdirTemp("/dev/shm", "imp-listen-")
 	if err != nil {
 		t.Skip("no tmpfs at /dev/shm:", err)
@@ -485,22 +561,17 @@ func TestOnlySocketsOnATmpfsGoWithTheContainer(t *testing.T) {
 		t.Skip("the test's temp dir is itself on a tmpfs")
 	}
 	varRun := filepath.Join(disk, "var-run")
-	if err := os.Symlink(tmpfs, varRun); err != nil {
-		t.Fatal(err)
-	}
-	for dir, want := range map[string]bool{tmpfs: true, varRun: true, disk: false} {
-		if got := onDir(t, dir); got != want {
-			t.Errorf("%s: on a tmpfs %v, want %v", dir, got, want)
-		}
-	}
+	assert.NilError(t, os.Symlink(tmpfs, varRun))
+
+	assert.Check(t, onDir(t, tmpfs), "the tmpfs directory")
+	assert.Check(t, onDir(t, varRun), "a link onto the tmpfs")
+	assert.Check(t, !onDir(t, disk), "the disk directory")
 }
 
 func onDir(t *testing.T, dir string) bool {
 	t.Helper()
 	d, err := os.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	assert.NilError(t, err)
+	t.Cleanup(func() { d.Close() })
 	return onTmpfs(int(d.Fd()))
 }

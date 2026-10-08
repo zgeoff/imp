@@ -28,6 +28,14 @@ const (
 // rootIoctl is a variable so tests can run without root.
 var rootIoctl = ioctlRoot
 
+// afterFunc schedules the auto-thaw; a variable so a test can run a fired
+// timer's callback at the moment it chooses.
+var afterFunc = time.AfterFunc
+
+// autoThawFired, when a test sets it, runs as an auto-thaw callback starts,
+// before it takes freezeMu. Nil in the agent.
+var autoThawFired func()
+
 var (
 	errFrozen      = &proto.Error{Code: proto.ErrFrozen, Message: "the root filesystem is already frozen"}
 	errPoweringOff = &proto.Error{Code: proto.ErrPoweringOff, Message: "the guest is powering off"}
@@ -61,8 +69,11 @@ func (s *Server) freeze(timeout time.Duration) error {
 	gen := s.freezeGen
 	// Stop cannot cancel a callback that already fired and waits on
 	// freezeMu, so the callback checks that its freeze is still current.
-	s.thawTimer = time.AfterFunc(timeout, func() {
+	s.thawTimer = afterFunc(timeout, func() {
 		defer safe.Recover("auto-thaw", nil)
+		if autoThawFired != nil {
+			autoThawFired()
+		}
 		s.freezeMu.Lock()
 		defer s.freezeMu.Unlock()
 		if gen != s.freezeGen {

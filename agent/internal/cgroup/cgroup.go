@@ -152,6 +152,9 @@ func (g *Group) Kill() error {
 func (g *Group) WaitEmpty(deadline time.Time) bool {
 	for {
 		populated, err := g.populated()
+		if waitEmptyRead != nil {
+			waitEmptyRead(populated, err)
+		}
 		if err == nil && !populated {
 			return true
 		}
@@ -161,6 +164,10 @@ func (g *Group) WaitEmpty(deadline time.Time) bool {
 		time.Sleep(min(poll, time.Until(deadline)))
 	}
 }
+
+// waitEmptyRead, when set, sees each read WaitEmpty makes; nil outside
+// tests, which use it to know a read happened.
+var waitEmptyRead func(populated bool, err error)
 
 func (g *Group) populated() (bool, error) {
 	f, err := os.Open(filepath.Join(g.path, "cgroup.events"))

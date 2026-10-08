@@ -7,11 +7,16 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
@@ -29,6 +34,7 @@ func TestMain(m *testing.M) {
 }
 
 func newTestManager(t *testing.T) *Manager {
+	t.Helper()
 	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), testBootID)
 	t.Cleanup(func() {
 		for _, s := range m.List() {
@@ -54,14 +60,47 @@ func connect(t *testing.T, m *Manager, req proto.Request) *host {
 	return serve(t, m, req, guest, conn)
 }
 
-func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *host {
+// runServe runs m.Serve on guest and returns the channel its result comes
+// on. Cleanup closes the host's end, conn, and waits for Serve to return.
+func runServe(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) chan error {
 	t.Helper()
-	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 1024), served: make(chan error, 1)}
+	served := make(chan error, 1)
+	exited := make(chan struct{})
+	t.Cleanup(func() {
+		conn.Close()
+		joined(t, exited, "Serve")
+	})
 	go func() {
-		h.served <- m.Serve(req, guest, proto.NewReader(guest), proto.NewWriter(guest))
+		defer close(exited)
+		served <- m.Serve(req, guest, proto.NewReader(guest), proto.NewWriter(guest))
 		guest.Close()
 	}()
+	return served
+}
+
+// joined waits for done to close, as a goroutine the test started does
+// once it ends, and fails the test if it does not.
+func joined(t *testing.T, done <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Errorf("%s did not end after the host closed", what)
+	}
+}
+
+func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *host {
+	t.Helper()
+	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 1024)}
+	h.served = runServe(t, m, req, guest, conn)
+	read := make(chan struct{})
+	// runs before runServe's cleanup, which closes conn and ends the reader
+	t.Cleanup(func() {
+		conn.Close()
+		joined(t, read, "the host's frame reader")
+	})
 	go func() {
+		defer close(read)
 		defer close(h.frames)
 		r := proto.NewReader(conn)
 		for {
@@ -72,7 +111,6 @@ func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *h
 			h.frames <- f
 		}
 	}()
-	t.Cleanup(func() { conn.Close() })
 	return h
 }
 
@@ -91,9 +129,7 @@ func (h *host) next(t *testing.T) proto.Frame {
 	t.Helper()
 	select {
 	case f, ok := <-h.frames:
-		if !ok {
-			t.Fatal("connection closed")
-		}
+		assert.Assert(t, ok, "connection closed")
 		return f
 	case <-time.After(5 * time.Second):
 		t.Fatal("no frame within 5s")
@@ -104,14 +140,8 @@ func (h *host) next(t *testing.T) proto.Frame {
 func (h *host) started(t *testing.T) proto.Started {
 	t.Helper()
 	f := h.next(t)
-	if f.Type != proto.TypeStarted {
-		t.Fatalf("first frame %s %q, want STARTED", f.Type, f.Payload)
-	}
-	var st proto.Started
-	if err := json.Unmarshal(f.Payload, &st); err != nil {
-		t.Fatal(err)
-	}
-	return st
+	assert.Equal(t, f.Type, proto.TypeStarted, "first frame %q", f.Payload)
+	return decode[proto.Started](t, f)
 }
 
 // until reads output until it contains want, and fails on any other frame.
@@ -119,9 +149,7 @@ func (h *host) until(t *testing.T, want string) {
 	t.Helper()
 	for !strings.Contains(h.out.String(), want) {
 		f := h.next(t)
-		if f.Type != proto.TypeStdout {
-			t.Fatalf("got %s %q while waiting for %q in %q", f.Type, f.Payload, want, h.out.String())
-		}
+		assert.Equal(t, f.Type, proto.TypeStdout, "frame %q while waiting for %q in %q", f.Payload, want, h.out.String())
 		h.out.Write(f.Payload)
 	}
 }
@@ -145,48 +173,48 @@ func (h *host) last(t *testing.T) proto.Frame {
 func (h *host) errorCode(t *testing.T) string {
 	t.Helper()
 	f := h.next(t)
-	var resp proto.ErrorResponse
-	if f.Type != proto.TypeResponse || json.Unmarshal(f.Payload, &resp) != nil || resp.Error == nil {
-		t.Fatalf("got %s %q, want an error RESPONSE", f.Type, f.Payload)
-	}
+	assert.Equal(t, f.Type, proto.TypeResponse, "frame %q", f.Payload)
+	resp := decode[proto.ErrorResponse](t, f)
+	assert.Assert(t, resp.Error != nil, "RESPONSE %q is no error", f.Payload)
 	return resp.Error.Code
 }
 
 func (h *host) send(t *testing.T, typ proto.Type, payload []byte) {
 	t.Helper()
-	if err := h.w.Write(typ, payload); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, h.w.Write(typ, payload))
 }
 
 func (h *host) detach(t *testing.T) {
 	t.Helper()
 	h.conn.Close()
+	h.waitServed(t)
+}
+
+// waitServed waits for the guest side's Serve to return.
+func (h *host) waitServed(t *testing.T) {
+	t.Helper()
 	select {
 	case <-h.served:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return after the host closed")
+		t.Fatal("Serve did not return")
 	}
 }
 
 func decode[T any](t *testing.T, f proto.Frame) T {
 	t.Helper()
 	var v T
-	if err := json.Unmarshal(f.Payload, &v); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, json.Unmarshal(f.Payload, &v), "%s frame %q", f.Type, f.Payload)
 	return v
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !ok() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if ok() {
+			return poll.Success()
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return poll.Continue("waiting for %s", what)
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 }
 
 func find(m *Manager, name string) (proto.SessionInfo, bool) {
@@ -198,66 +226,85 @@ func find(m *Manager, name string) (proto.SessionInfo, bool) {
 	return proto.SessionInfo{}, false
 }
 
-func TestDetachLeavesTheProcessRunning(t *testing.T) {
+func TestServeStartsANewSessionUnderTheRequestedName(t *testing.T) {
 	m := newTestManager(t)
-	h := start(t, m, "main", `trap 'echo got-hup' HUP; echo ready; while read l; do echo "said $l"; done`)
+	h := start(t, m, "main", `echo ready; sleep 30`)
+
 	st := h.started(t)
-	if !st.Created || st.Session != "main" {
-		t.Fatalf("STARTED %+v, want a new session main", st)
-	}
+
+	assert.Check(t, st.Created, "STARTED did not report a new session")
+	assert.Check(t, cmp.Equal(st.Session, "main"))
+	assert.Check(t, cmp.Equal(m.Attached(), 1))
+}
+
+func TestServeLeavesTheProcessRunningWhenTheViewerDetaches(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "main", `echo ready; while read l; do echo "said $l"; done`)
+	st := h.started(t)
 	h.until(t, "ready")
-	if m.Attached() != 1 {
-		t.Fatalf("Attached() = %d, want 1", m.Attached())
-	}
+
 	h.detach(t)
 
 	info, ok := find(m, "main")
-	if !ok || info.State != proto.SessionRunning || info.Attached {
-		t.Fatalf("after detach: %+v, %v", info, ok)
-	}
-	if syscall.Kill(st.Pid, 0) != nil {
-		t.Fatal("the process is gone")
-	}
-	if m.Attached() != 0 {
-		t.Fatalf("Attached() = %d, want 0", m.Attached())
-	}
+	assert.Assert(t, ok, "the session is gone")
+	assert.Check(t, cmp.Equal(info.State, proto.SessionRunning))
+	assert.Check(t, !info.Attached, "the session still counts a viewer")
+	assert.Check(t, syscall.Kill(st.Pid, 0), "the process is gone")
+	assert.Check(t, cmp.Equal(m.Attached(), 0))
+}
+
+// A later viewer gets the same process, the replay of what the session wrote
+// while the first viewer watched, and live input; the detach sent no SIGHUP.
+func TestServeReattachesToTheRunningProcessWithItsReplay(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "main", `trap 'echo got-hup' HUP; echo ready; while read l; do echo "said $l"; done`)
+	first := h.started(t)
+	h.until(t, "ready")
+	h.detach(t)
 
 	again := attach(t, m, "main")
-	st2 := again.started(t)
-	if st2.Created || st2.Pid != st.Pid {
-		t.Fatalf("STARTED %+v, want pid %d attached", st2, st.Pid)
-	}
-	// the replay: what the session wrote while the first viewer watched
+	st := again.started(t)
 	again.until(t, "ready")
 	again.send(t, proto.TypeStdin, []byte("hello\n"))
 	again.until(t, "said hello")
-	if strings.Contains(again.out.String(), "got-hup") {
-		t.Fatal("the detach sent SIGHUP")
-	}
+
+	assert.Check(t, !st.Created, "the attach made a new session")
+	assert.Check(t, cmp.Equal(st.Pid, first.Pid))
+	assert.Check(t, !strings.Contains(again.out.String(), "got-hup"), "the detach sent SIGHUP")
 }
 
-func TestReattachRedraws(t *testing.T) {
+// A viewer that comes back at the same size still makes the program redraw.
+func TestServeSendsAResizeOnReattachAtTheSameSize(t *testing.T) {
 	m := newTestManager(t)
 	h := start(t, m, "main", `trap 'echo winch-$(stty size)' WINCH; echo ready; while :; do sleep 0.05; done`)
 	h.started(t)
 	h.until(t, "ready")
 	h.detach(t)
 
-	// the same size: the session still sees a resize
 	same := attach(t, m, "main")
 	same.started(t)
+
 	same.until(t, "winch-24 80")
-	same.detach(t)
+}
+
+func TestServeResizesTheSessionToANewViewersSize(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "main", `trap 'echo winch-$(stty size)' WINCH; echo ready; while :; do sleep 0.05; done`)
+	h.started(t)
+	h.until(t, "ready")
+	h.detach(t)
 
 	wide := connect(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "main", Cols: 120, Rows: 40})
 	wide.started(t)
 	wide.until(t, "winch-40 120")
-	if info, _ := find(m, "main"); info.Cols != 120 || info.Rows != 40 {
-		t.Fatalf("size %dx%d, want 120x40", info.Cols, info.Rows)
-	}
+
+	info, ok := find(m, "main")
+	assert.Assert(t, ok, "the session is gone")
+	assert.Check(t, cmp.Equal(info.Cols, uint16(120)))
+	assert.Check(t, cmp.Equal(info.Rows, uint16(40)))
 }
 
-func TestTakeover(t *testing.T) {
+func TestServeHandsTheSessionToANewViewerAndDetachesTheOldOne(t *testing.T) {
 	m := newTestManager(t)
 	first := start(t, m, "main", `echo ready; while read l; do echo "said $l"; done`)
 	first.started(t)
@@ -266,29 +313,22 @@ func TestTakeover(t *testing.T) {
 	second := attach(t, m, "main")
 	second.started(t)
 	f := first.last(t)
-	if f.Type != proto.TypeDetached || decode[proto.Detached](t, f).Reason != proto.DetachTakenOver {
-		t.Fatalf("first viewer got %s %q, want DETACHED taken_over", f.Type, f.Payload)
-	}
-	select {
-	case <-first.served:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the first connection stayed open")
-	}
+	first.waitServed(t)
 	second.send(t, proto.TypeStdin, []byte("hi\n"))
 	second.until(t, "said hi")
+
+	assert.Equal(t, f.Type, proto.TypeDetached, "first viewer got %q", f.Payload)
+	assert.Check(t, cmp.Equal(decode[proto.Detached](t, f).Reason, proto.DetachTakenOver))
 }
 
 // A viewer whose host stopped reading, but never closed, does not keep a
 // new viewer out.
-func TestTakeoverOfAHalfOpenViewer(t *testing.T) {
+func TestServeHandsTheSessionOnFromAHalfOpenViewer(t *testing.T) {
 	shortenLastWrite(t)
 	m := newTestManager(t)
 	guest, conn := net.Pipe()
-	stuck := &host{conn: conn, served: make(chan error, 1)}
-	go func() {
-		stuck.served <- m.Serve(proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, proto.NewReader(guest), proto.NewWriter(guest))
-	}()
-	t.Cleanup(func() { conn.Close() })
+	stuck := &host{conn: conn}
+	stuck.served = runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, conn)
 	waitFor(t, "the session", func() bool { _, ok := find(m, "main"); return ok })
 
 	second := attach(t, m, "main")
@@ -298,178 +338,233 @@ func TestTakeoverOfAHalfOpenViewer(t *testing.T) {
 	second.until(t, "said hi")
 
 	// the stuck connection's writes time out, and its Serve returns
-	select {
-	case <-stuck.served:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the half-open viewer's Serve did not return")
-	}
+	stuck.waitServed(t)
 }
 
 func shortenLastWrite(t *testing.T) {
+	t.Helper()
 	saved := lastWriteTimeout
 	lastWriteTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { lastWriteTimeout = saved })
 }
 
-func TestExitWhileDetached(t *testing.T) {
+func TestServeRecordsTheExitOfADetachedSession(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "job", `read go; echo bye; exit 3`)
+	h.started(t)
+	h.send(t, proto.TypeStdin, []byte("go\n"))
+
+	h.detach(t)
+
+	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })
+	info, _ := find(m, "job")
+	assert.Assert(t, info.Exit != nil, "no exit recorded")
+	assert.Check(t, cmp.Equal(info.Exit.Code, 3))
+}
+
+func TestServeGivesALaterViewerTheReplayAndTheExitOfADetachedSession(t *testing.T) {
 	m := newTestManager(t)
 	h := start(t, m, "job", `read go; echo bye; exit 3`)
 	h.started(t)
 	h.send(t, proto.TypeStdin, []byte("go\n"))
 	h.detach(t)
-
 	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })
-	info, _ := find(m, "job")
-	if info.Exit == nil || info.Exit.Code != 3 {
-		t.Fatalf("exit %+v, want code 3", info.Exit)
-	}
 
 	later := attach(t, m, "job")
 	later.started(t)
 	f := later.last(t)
-	if f.Type != proto.TypeExit || decode[proto.Exit](t, f).Code != 3 {
-		t.Fatalf("got %s %q, want EXIT 3", f.Type, f.Payload)
-	}
-	if !strings.Contains(later.out.String(), "bye") {
-		t.Fatalf("replay %q lost the last output", later.out.String())
-	}
-	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
-	if code := attach(t, m, "job").errorCode(t); code != proto.ErrNoSession {
-		t.Fatalf("attach after the EXIT: %s, want NO_SESSION", code)
-	}
+
+	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 3))
+	assert.Check(t, cmp.Contains(later.out.String(), "bye"), "the replay lost the last output")
 }
 
-func TestExitWhileAttached(t *testing.T) {
+// Once a viewer has the EXIT, the session goes and its name finds nothing.
+func TestServeRemovesAnExitedSessionOnceAViewerHasTheExit(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "job", `read go; echo bye; exit 3`)
+	h.started(t)
+	h.send(t, proto.TypeStdin, []byte("go\n"))
+	h.detach(t)
+	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })
+	later := attach(t, m, "job")
+	later.started(t)
+	later.last(t)
+
+	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
+	code := attach(t, m, "job").errorCode(t)
+
+	assert.Check(t, cmp.Equal(code, proto.ErrNoSession))
+}
+
+func TestServeSendsTheExitToTheAttachedViewerAndRemovesTheSession(t *testing.T) {
 	m := newTestManager(t)
 	h := start(t, m, "job", `echo bye; exit 4`)
 	h.started(t)
+
 	f := h.last(t)
-	if f.Type != proto.TypeExit || decode[proto.Exit](t, f).Code != 4 {
-		t.Fatalf("got %s %q, want EXIT 4", f.Type, f.Payload)
-	}
+
+	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 4))
 	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
 }
 
-func TestKill(t *testing.T) {
+func TestKillHangsUpTheSessionsProcess(t *testing.T) {
 	m := newTestManager(t)
 	h := start(t, m, "main", `echo ready; sleep 30`)
 	h.started(t)
 	h.until(t, "ready")
-	if err := m.Kill("main"); err != nil {
-		t.Fatal(err)
-	}
+
+	err := m.Kill("main")
+
+	assert.NilError(t, err)
 	f := h.last(t)
-	if exit := decode[proto.Exit](t, f); f.Type != proto.TypeExit || exit.Signal != int(syscall.SIGHUP) {
-		t.Fatalf("got %s %q, want EXIT by SIGHUP", f.Type, f.Payload)
-	}
-	var pe *proto.Error
-	if err := m.Kill("main"); !errors.As(err, &pe) || pe.Code != proto.ErrNoSession {
-		t.Fatalf("second kill: %v, want NO_SESSION", err)
-	}
+	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Signal, int(syscall.SIGHUP)))
 }
 
-func TestKillEscalates(t *testing.T) {
+func TestKillRefusesASessionThatIsAlreadyKilled(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "main", `echo ready; sleep 30`)
+	h.started(t)
+	h.until(t, "ready")
+	assert.NilError(t, m.Kill("main"))
+
+	err := m.Kill("main")
+
+	var pe *proto.Error
+	assert.Assert(t, errors.As(err, &pe), "second kill: %v, want a protocol error", err)
+	assert.Check(t, cmp.Equal(pe.Code, proto.ErrNoSession))
+}
+
+// A process that ignores SIGHUP gets SIGKILL after the kill grace.
+func TestKillEscalatesToSIGKILLForAProcessThatIgnoresSIGHUP(t *testing.T) {
+	// It waits out the real kill grace; it owns its manager and changes no
+	// package setting, so it waits beside the other such test.
+	t.Parallel()
 	m := newTestManager(t)
 	h := start(t, m, "main", `trap "" HUP; echo ready; while :; do sleep 0.05; done`)
 	h.started(t)
 	h.until(t, "ready")
-	m.Kill("main")
+
+	assert.NilError(t, m.Kill("main"))
+
 	f := h.last(t)
-	if exit := decode[proto.Exit](t, f); exit.Signal != int(syscall.SIGKILL) {
-		t.Fatalf("got %+v, want SIGKILL", exit)
-	}
+	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Signal, int(syscall.SIGKILL)))
 }
 
-func TestBadRequests(t *testing.T) {
-	m := newTestManager(t)
-	tests := []struct {
+func TestServeRefusesABadRequestAndKeepsNoSession(t *testing.T) {
+	for _, tc := range []struct {
 		name string
 		req  proto.Request
 		code string
 	}{
-		{"no tty", proto.Request{Op: proto.OpExec, Session: "main", Argv: []string{"true"}}, proto.ErrBadRequest},
-		{"bad name", proto.Request{Op: proto.OpExec, Session: "Main", TTY: true, Argv: []string{"true"}}, proto.ErrBadRequest},
-		{"long name", proto.Request{Op: proto.OpExec, Session: strings.Repeat("a", 33), TTY: true, Argv: []string{"true"}}, proto.ErrBadRequest},
-		{"no such program", proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"no-such-program"}}, proto.ErrExecFailed},
-		{"attach to nothing", proto.Request{Op: proto.OpSessionAttach, Session: "none"}, proto.ErrNoSession},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if code := connect(t, m, tt.req).errorCode(t); code != tt.code {
-				t.Fatalf("code %s, want %s", code, tt.code)
-			}
+		{name: "no tty", req: proto.Request{Op: proto.OpExec, Session: "main", Argv: []string{"true"}}, code: proto.ErrBadRequest},
+		{name: "bad name", req: proto.Request{Op: proto.OpExec, Session: "Main", TTY: true, Argv: []string{"true"}}, code: proto.ErrBadRequest},
+		{name: "long name", req: proto.Request{Op: proto.OpExec, Session: strings.Repeat("a", 33), TTY: true, Argv: []string{"true"}}, code: proto.ErrBadRequest},
+		{name: "no such program", req: proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"no-such-program"}}, code: proto.ErrExecFailed},
+		{name: "attach to nothing", req: proto.Request{Op: proto.OpSessionAttach, Session: "none"}, code: proto.ErrNoSession},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestManager(t)
+
+			code := connect(t, m, tc.req).errorCode(t)
+
+			assert.Check(t, cmp.Equal(code, tc.code))
+			assert.Check(t, cmp.Len(m.List(), 0))
 		})
-	}
-	if n := len(m.List()); n != 0 {
-		t.Fatalf("%d sessions after failed requests", n)
 	}
 }
 
-func TestSessionLimit(t *testing.T) {
-	m := newTestManager(t)
-	// exited sessions whose EXIT nobody got count too
-	for i := range MaxSessions {
-		script := "sleep 30"
-		if i == 0 {
-			// late enough that the detach comes first, so no viewer gets the EXIT
-			script = "sleep 0.2; exit 0"
-		}
-		h := start(t, m, fmt.Sprintf("s%d", i), script)
+// fillSessions starts sessions s1 up to the cap's last slot and detaches
+// from each, so they run on with no viewer.
+func fillSessions(t *testing.T, m *Manager, from int) {
+	t.Helper()
+	for i := from; i < MaxSessions; i++ {
+		h := start(t, m, fmt.Sprintf("s%d", i), "sleep 30")
 		h.started(t)
 		h.detach(t)
 	}
-	waitFor(t, "s0 to exit", func() bool { info, _ := find(m, "s0"); return info.State == proto.SessionExited })
+}
 
-	if code := start(t, m, "extra", "sleep 30").errorCode(t); code != proto.ErrSessionCap {
-		t.Fatalf("code %s, want SESSION_LIMIT", code)
-	}
-	// the name of an exited session is free: a new session replaces it
+// exitAfterDetach starts session name, whose process exits only once the
+// test creates the returned file, and detaches from it first, so no viewer
+// gets the EXIT. It returns once the session has exited.
+func exitAfterDetach(t *testing.T, m *Manager, name string) {
+	t.Helper()
+	release := filepath.Join(t.TempDir(), "release")
+	h := start(t, m, name, "while [ ! -e "+release+" ]; do sleep 0.01; done; exit 0")
+	h.started(t)
+	h.detach(t)
+	assert.NilError(t, os.WriteFile(release, nil, 0o600))
+	waitFor(t, name+" to exit", func() bool { info, _ := find(m, name); return info.State == proto.SessionExited })
+}
+
+// Exited sessions whose EXIT nobody got count toward the cap.
+func TestServeRefusesANewSessionPastTheCap(t *testing.T) {
+	m := newTestManager(t)
+	exitAfterDetach(t, m, "s0")
+	fillSessions(t, m, 1)
+
+	code := start(t, m, "extra", "sleep 30").errorCode(t)
+
+	assert.Check(t, cmp.Equal(code, proto.ErrSessionCap))
+}
+
+// The name of an exited session is free: a new session replaces it, even at
+// the cap.
+func TestServeReplacesAnExitedSessionOfTheSameName(t *testing.T) {
+	m := newTestManager(t)
+	exitAfterDetach(t, m, "s0")
+	fillSessions(t, m, 1)
+
 	h := start(t, m, "s0", "echo fresh; sleep 30")
-	if st := h.started(t); !st.Created {
-		t.Fatal("the exited session was attached, not replaced")
-	}
+	st := h.started(t)
 	h.until(t, "fresh")
-	// a running session is attached, not replaced
+
+	assert.Check(t, st.Created, "the exited session was attached, not replaced")
+}
+
+func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
+	m := newTestManager(t)
+	first := start(t, m, "s1", "echo ready; sleep 30")
+	first.started(t)
+	first.until(t, "ready")
+	first.detach(t)
+
 	again := start(t, m, "s1", "echo other")
-	if st := again.started(t); st.Created {
-		t.Fatal("a running session was replaced")
-	}
+	st := again.started(t)
+
+	assert.Check(t, !st.Created, "a running session was replaced")
 }
 
 // A viewer that stops reading is dropped; the program and the session go on.
-func TestSlowViewerIsDropped(t *testing.T) {
+func TestServeDropsAViewerThatStopsReading(t *testing.T) {
 	m := newTestManager(t)
 	guest, conn := net.Pipe()
-	slow := &host{conn: conn, w: proto.NewWriter(conn), served: make(chan error, 1)}
-	go func() {
-		slow.served <- m.Serve(proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, proto.NewReader(guest), proto.NewWriter(guest))
-	}()
-	t.Cleanup(func() { conn.Close() })
+	runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
+
 	waitFor(t, "the viewer to be dropped", func() bool { info, ok := find(m, "main"); return ok && !info.Attached })
 
 	// the pump still runs: a new viewer gets live output
 	fresh := attach(t, m, "main")
 	fresh.started(t)
+	var types, want []proto.Type
 	for range 50 {
-		if f := fresh.next(t); f.Type != proto.TypeStdout {
-			t.Fatalf("got %s, want STDOUT", f.Type)
-		}
+		types = append(types, fresh.next(t).Type)
+		want = append(want, proto.TypeStdout)
 	}
-
+	assert.Check(t, cmp.DeepEqual(types, want))
 	// the slow viewer, once it reads again, finds DETACHED slow at the end
 	r := proto.NewReader(conn)
-	for {
+	var detached proto.Frame
+	for detached.Type != proto.TypeDetached {
 		f, err := r.Next()
-		if err != nil {
-			t.Fatalf("connection ended without DETACHED: %v", err)
-		}
-		if f.Type == proto.TypeDetached {
-			if reason := decode[proto.Detached](t, f).Reason; reason != proto.DetachSlow {
-				t.Fatalf("reason %q, want slow", reason)
-			}
-			break
-		}
+		assert.NilError(t, err, "the connection ended without DETACHED")
+		detached = f
 	}
+	assert.Check(t, cmp.Equal(decode[proto.Detached](t, detached).Reason, proto.DetachSlow))
 }
 
 // failingConn fails every write after STARTED and the replay, like a host
@@ -486,22 +581,18 @@ func (c *failingConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
-func TestFailedWriteEndsOnlyThatViewer(t *testing.T) {
+func TestServeEndsOnlyTheViewerWhoseWriteFails(t *testing.T) {
 	m := newTestManager(t)
 	h := start(t, m, "main", `echo ready; while read l; do echo "said $l"; done`)
 	h.started(t)
 	h.until(t, "ready")
 	h.detach(t)
-
 	guest, conn := net.Pipe()
 	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "main"}, &failingConn{Conn: guest}, conn)
 	broken.started(t)
+
 	broken.send(t, proto.TypeStdin, []byte("a\nb\nc\nd\n"))
-	select {
-	case <-broken.served:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the broken viewer stayed attached")
-	}
+	broken.waitServed(t)
 
 	fresh := attach(t, m, "main")
 	fresh.started(t)
@@ -512,29 +603,24 @@ func TestFailedWriteEndsOnlyThatViewer(t *testing.T) {
 // An EXIT that a viewer could not be sent stays for the next viewer. With
 // no echo, the EXIT is the first frame after STARTED and the replay, so the
 // one write that fails is the EXIT's.
-func TestExitWhileTheViewerFails(t *testing.T) {
+func TestServeKeepsAnExitTheViewerCouldNotBeSentForTheNextViewer(t *testing.T) {
 	m := newTestManager(t)
 	h := start(t, m, "job", `stty -echo; echo ready; read go; exit 5`)
 	h.started(t)
 	h.until(t, "ready")
 	h.detach(t)
-
 	guest, conn := net.Pipe()
 	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "job"}, &failingConn{Conn: guest}, conn)
 	broken.started(t)
 	broken.send(t, proto.TypeStdin, []byte("go\n"))
-	select {
-	case <-broken.served:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the broken viewer stayed attached")
-	}
+	broken.waitServed(t)
 	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })
 
 	later := attach(t, m, "job")
 	later.started(t)
 	f := later.last(t)
-	if f.Type != proto.TypeExit || decode[proto.Exit](t, f).Code != 5 {
-		t.Fatalf("got %s %q, want EXIT 5", f.Type, f.Payload)
-	}
+
+	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 5))
 	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
 }

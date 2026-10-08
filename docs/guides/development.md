@@ -14,7 +14,8 @@ bun run test:slow                 # a build silent past 360 s, through the Docke
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, deploy/, test/
 bun run lint:docs                 # every docs/ reference in code resolves
-(cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
+(cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
+scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
 scripts/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
@@ -229,7 +230,7 @@ Lefthook installs the hooks with `bun install`.
 | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                   |
 | `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                                                    |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `scripts/test-go.sh` (`go test -race` through gotestsum) in `agent/`; uploads the JSON results.                                       |
 | `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                             |
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                         |
 | `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                  |

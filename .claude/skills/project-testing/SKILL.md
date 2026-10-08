@@ -15,17 +15,18 @@ the rules for writing tests live in the testing skill.
 
 ## Runs
 
-| Run                     | Command                                                           | Needs                                                                                   |
-| ----------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Unit and package tests  | `bun test` at the root                                            | Bun, bash, git, jq; the gated files below skip                                          |
-| Dashboard components    | `bun run test:dashboard`                                          | Nothing beyond Bun                                                                      |
-| End to end              | `scripts/test-e2e.sh`                                             | KVM, Docker; some suites need more (below)                                              |
-| Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host` | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
-| ZFS on a real pool      | `sudo env "PATH=$PATH" scripts/test-zfs.sh`                       | Root, the zfs module, `zpool`                                                           |
-| ZFS on a host, with VMs | `scripts/zfs-host-test.sh`                                        | sudo, Docker, KVM, the zfs module                                                       |
-| Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`   | A small filesystem mounted at `<dir>`                                                   |
-| ACME issuer             | `bun run test:pebble`                                             | Docker                                                                                  |
-| Docker idle             | `bun run test:slow`                                               | Nothing beyond Bun; about 6.5 minutes                                                   |
+| Run                     | Command                                                                | Needs                                                                                   |
+| ----------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Unit and package tests  | `bun test` at the root                                                 | Bun, bash, git, jq; the gated files below skip                                          |
+| Dashboard components    | `bun run test:dashboard`                                               | Nothing beyond Bun                                                                      |
+| Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; root-only tests skip                                            |
+| End to end              | `scripts/test-e2e.sh`                                                  | KVM, Docker; some suites need more (below)                                              |
+| Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host`      | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
+| ZFS on a real pool      | `sudo env "PATH=$PATH" scripts/test-zfs.sh`                            | Root, the zfs module, `zpool`                                                           |
+| ZFS on a host, with VMs | `scripts/zfs-host-test.sh`                                             | sudo, Docker, KVM, the zfs module                                                       |
+| Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`        | A small filesystem mounted at `<dir>`                                                   |
+| ACME issuer             | `bun run test:pebble`                                                  | Docker                                                                                  |
+| Docker idle             | `bun run test:slow`                                                    | Nothing beyond Bun; about 6.5 minutes                                                   |
 
 Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
 tests need `jq`, and `release-please-config.test.ts` and `scripts/check-doc-refs.ts` run `git`.
@@ -163,6 +164,9 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
 - **`zfs`** (not required) runs `scripts/check-kvm.sh`, installs ZFS, runs `scripts/test-zfs.sh`
   with `IMP_ZFS_TEST_DIR` blank, then `scripts/zfs-host-test.sh` with `IMP_ZFS_TEST_UNIT=0` and
   `IMP_ZFS_E2E_SUITES=lifecycle,checkpoints,disks,sleep,backups,boot-templates`.
+- **`go`** runs `gofmt -l`, `go vet ./...` and `scripts/test-go.sh` in `agent/`, with
+  `GO_TEST_JSONFILE` under `runner.temp`, and uploads that JSON as `go-test-results`, whether the
+  tests pass or fail.
 - No job runs `bun run test:slow`.
 
 ## Stand-ins by boundary
