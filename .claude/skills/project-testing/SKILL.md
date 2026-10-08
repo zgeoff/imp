@@ -54,8 +54,9 @@ checkpoints, images, tokens with their secrets, sessions, secrets, imp policies,
 default row the first read keeps; `system.info` derives its counts from the imp rows), which the
 preload empties after each test with `resetMockDb`. Lists come back in impd's order: imps and tokens
 by name, checkpoints newest first. A row in the sessions collection stands for the one browser's
-session cookie, which Bun's fetch does not keep. It names the token, which each call re-reads, so a
-changed or deleted token takes effect at once. A call gets impd's 401 without a session, after its
+session cookie, which Bun's fetch does not keep. It holds the token's id, as impd's `tokenId`, and
+each call re-reads that token, so a changed token takes effect at once and a deleted one, even if a
+new token takes its name, logs nobody in. A call gets impd's 401 without a session, after its
 `expiresAt`, once its token is gone, or from another origin. Login with a token's secret replaces
 the session; logout clears it and ends every open event stream. A test logs in with
 `createDashboardSession` (`src/test-utils/create-dashboard-session.ts`). Lifecycle calls emit impd's

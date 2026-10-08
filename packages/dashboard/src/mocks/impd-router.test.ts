@@ -1008,6 +1008,19 @@ test('#imps.create makes the imp from the default image of the host', async () =
   expect(imp.image).toBe('node');
 });
 
+test('#imps.create falls back to ubuntu when the default image of the host is gone', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  await hostCollection.create({ defaultImage: 'node' });
+  await imageCollection.create({ name: 'ubuntu' });
+
+  const imp = await client.imps.create({ name: 'box' });
+
+  expect(imp.image).toBe('ubuntu');
+});
+
 test('#imps.create rejects an image the host does not have with NOT_FOUND', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
@@ -1471,6 +1484,19 @@ test('#system.info names the default image only while the host has it', async ()
   expect(info.defaults).toStrictEqual({ memoryMib: 2048, image: null });
 });
 
+test('#system.info names ubuntu as the default image when the default of the host is gone', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  await hostCollection.create({ defaultImage: 'node', defaultMemoryMib: 2048 });
+  await imageCollection.create({ name: 'ubuntu' });
+
+  const info = await client.system.info();
+
+  expect(info.defaults).toStrictEqual({ memoryMib: 2048, image: 'ubuntu' });
+});
+
 test('#system.info answers every part impd does', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
@@ -1605,6 +1631,49 @@ test('#tokens.create binds the SSH keys it is given', async () => {
       comment: 'me@laptop',
     },
   ]);
+});
+
+test('#tokens.create rejects one key given twice with CONFLICT', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  expect(
+    client.tokens.create({
+      name: 'laptop',
+      scope: 'exec',
+      sshKeys: [
+        'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8Q0IyQ2rdwp6vOtspiZQcfN8lSLLlEANfAEtg3e5yD me@laptop',
+        'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8Q0IyQ2rdwp6vOtspiZQcfN8lSLLlEANfAEtg3e5yD me@laptop',
+      ],
+    }),
+  ).rejects.toMatchObject({
+    code: 'CONFLICT',
+    message: 'the same key is given twice',
+  });
+});
+
+test('#tokens.create stores no token when one key is given twice', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  const created = client.tokens.create({
+    name: 'laptop',
+    scope: 'exec',
+    sshKeys: [
+      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8Q0IyQ2rdwp6vOtspiZQcfN8lSLLlEANfAEtg3e5yD me@laptop',
+      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8Q0IyQ2rdwp6vOtspiZQcfN8lSLLlEANfAEtg3e5yD me@laptop',
+    ],
+  });
+
+  const outcome = await created.then(
+    () => 'created',
+    () => 'refused',
+  );
+
+  expect(outcome).toBe('refused');
+  expect(tokenCollection.findFirst((query) => query.where({ name: 'laptop' }))).toBeUndefined();
 });
 
 test('#tokens.create answers a secret of the form impd makes', async () => {

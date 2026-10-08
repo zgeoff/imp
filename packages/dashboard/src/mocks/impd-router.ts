@@ -111,7 +111,8 @@ export const impdRouter = {
 
       const host = await readHost();
 
-      const image = findImage(input.image ?? host.defaultImage);
+      const image =
+        input.image === undefined ? requireDefaultImage(host.defaultImage) : findImage(input.image);
 
       if (input.name !== undefined) {
         requireFreeImpName(input.name);
@@ -406,7 +407,7 @@ export const impdRouter = {
       }
 
       const imps = input.imps ?? null;
-      const sshKeys = (input.sshKeys ?? []).map((line) => readSshKey(line));
+      const sshKeys = requireDistinctKeys((input.sshKeys ?? []).map((line) => readSshKey(line)));
       const grantable = readGrantable(input.grantable ?? [], { scope: input.scope, imps });
 
       const row = await tokenCollection.create({
@@ -477,10 +478,7 @@ async function readSystemInfo(): Promise<SystemInfo> {
   const imps = listImps();
   const running = imps.filter((imp) => imp.state === 'running');
   const sleeping = imps.filter((imp) => imp.state === 'sleeping');
-
-  const defaultImage = imageCollection.findFirst((query) =>
-    query.where({ name: host.defaultImage }),
-  );
+  const defaultImage = findDefaultImage(host.defaultImage);
 
   return {
     version: host.version,
@@ -567,6 +565,28 @@ function findImage(name: string): Image {
 
   if (image === undefined) {
     throw buildNotFoundError('image', name);
+  }
+
+  return image;
+}
+
+// impd's FALLBACK_DEFAULT_IMAGE (packages/daemon images/image-service.ts),
+// which the daemon does not export
+const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
+
+// impd's findDefaultImage (packages/daemon images/image-service.ts): the
+// configured default, or `ubuntu` when that is gone
+function findDefaultImage(configured: string): Image | undefined {
+  return [configured, FALLBACK_DEFAULT_IMAGE]
+    .map((name) => imageCollection.findFirst((query) => query.where({ name })))
+    .find((image) => image !== undefined);
+}
+
+function requireDefaultImage(configured: string): Image {
+  const image = findDefaultImage(configured);
+
+  if (image === undefined) {
+    throw buildNotFoundError('image', configured);
   }
 
   return image;
@@ -731,6 +751,22 @@ function readGrantable(
 }
 
 // impd's key entry: a parsed key that no token holds yet
+// impd's buildKeyEntries (packages/daemon auth/token-store.ts): one key
+// given twice in a list is a CONFLICT
+function requireDistinctKeys(keys: readonly SshKey[]): SshKey[] {
+  const seen = new Set<string>();
+
+  for (const key of keys) {
+    if (seen.has(key.fingerprint)) {
+      throw buildConflictError('ssh-key', key.fingerprint, 'the same key is given twice');
+    }
+
+    seen.add(key.fingerprint);
+  }
+
+  return [...keys];
+}
+
 function readSshKey(line: string): SshKey {
   const key = parsePublicKey(line);
 

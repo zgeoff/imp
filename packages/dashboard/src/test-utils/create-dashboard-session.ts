@@ -1,5 +1,5 @@
 import { sessionCollection } from '../mocks/db/session-collection';
-import { tokenCollection } from '../mocks/db/token-collection';
+import { readTokenId, tokenCollection } from '../mocks/db/token-collection';
 
 type TokenRow = Awaited<ReturnType<typeof tokenCollection.create>>;
 
@@ -12,7 +12,7 @@ interface DashboardSessionInput {
 // oxlint-disable-next-line prefer-readonly-parameter-types -- a collection record, which @msw/data hands out mutable
 export async function createDashboardSession(input: Readonly<DashboardSessionInput> = {}) {
   const token = await readToken(input.token);
-  const session = await sessionCollection.create({ token: token.name });
+  const session = await sessionCollection.create({ tokenId: readTokenId(token.secret) });
 
   return { token, session };
 }

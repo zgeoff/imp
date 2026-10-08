@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Token } from '@imp/api';
-import { tokenCollection } from './token-collection';
+import { readTokenId, tokenCollection } from './token-collection';
 
 test('it creates a default manage token for every imp with its secret', async () => {
   const token: Token & { readonly secret: string } = await tokenCollection.create({});
@@ -32,4 +32,8 @@ test('it applies overrides on top of the defaults', async () => {
     createdAt: expect.toBeValidDate(),
     secret: expect.toBeString(),
   });
+});
+
+test('#readTokenId reads the id out of a secret', () => {
+  expect(readTokenId('imp_AbCd-_12.secretpart')).toBe('AbCd-_12');
 });

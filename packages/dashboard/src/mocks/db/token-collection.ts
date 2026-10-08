@@ -25,3 +25,9 @@ const TokenRowSchema = TokenSchema.extend({
 });
 
 export const tokenCollection = new Collection({ schema: TokenRowSchema });
+
+// the token's id, which impd keys its sessions on: the `<id>` of its secret,
+// so a new token under an old name has a new one
+export function readTokenId(secret: string): string {
+  return secret.slice('imp_'.length, secret.indexOf('.'));
+}

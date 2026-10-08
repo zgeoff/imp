@@ -3,7 +3,7 @@ import { RPCHandler } from '@orpc/server/fetch';
 import { HttpResponse, http } from 'msw';
 import * as z from 'zod';
 import { sessionCollection } from './db/session-collection';
-import { tokenCollection } from './db/token-collection';
+import { readTokenId, tokenCollection } from './db/token-collection';
 import { impdLogouts } from './impd-events';
 import { impdRouter } from './impd-router';
 import type { ImpdSession } from './impd-router';
@@ -45,7 +45,7 @@ async function resolveLoginBody(json: unknown): Promise<Response> {
 
   sessionCollection.clear();
 
-  await sessionCollection.create({ token: token.name });
+  await sessionCollection.create({ tokenId: readTokenId(token.secret) });
 
   return new HttpResponse(null, { status: 204 });
 }
@@ -70,8 +70,8 @@ export function resolveLogout(context: RouteContext): Response {
 }
 
 // impd's readSessionCaller (packages/daemon auth/authenticate.ts): the
-// browser's session, from impd's own origin, before it expires, as its
-// token is now; a session whose token is gone logs nobody in
+// session, same-origin and unexpired, as its token is now, found by id, so
+// a new token under the old name does not revive it
 function readSession(request: Request): ImpdSession | null {
   const session = isSameOrigin(request) ? sessionCollection.findFirst() : undefined;
 
@@ -79,7 +79,9 @@ function readSession(request: Request): ImpdSession | null {
     return null;
   }
 
-  const token = tokenCollection.findFirst((query) => query.where({ name: session.token }));
+  const token = tokenCollection
+    .findMany()
+    .find((row) => readTokenId(row.secret) === session.tokenId);
 
   if (token === undefined) {
     return null;

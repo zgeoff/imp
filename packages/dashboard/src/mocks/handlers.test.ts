@@ -3,7 +3,7 @@ import { createImpClient } from '@zgeoff/imp-client';
 import { isUnauthorized } from '../lib/build-query-client';
 import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { sessionCollection } from './db/session-collection';
-import { tokenCollection } from './db/token-collection';
+import { readTokenId, tokenCollection } from './db/token-collection';
 import {
   IMPD_ORIGIN,
   LOGIN_URL,
@@ -30,19 +30,19 @@ test('#resolveLogin opens a session with the token of the secret', async () => {
 
   await fetch(LOGIN_URL, { method: 'POST', body: JSON.stringify({ token: 'imp_dev.secret' }) });
 
-  const sessions: { readonly token: string; readonly expiresAt: Date }[] =
+  const sessions: { readonly tokenId: string; readonly expiresAt: Date }[] =
     sessionCollection.findMany();
 
-  expect(sessions).toStrictEqual([{ token: 'dev', expiresAt: expect.toBeAfter(new Date()) }]);
+  expect(sessions).toStrictEqual([{ tokenId: 'dev', expiresAt: expect.toBeAfter(new Date()) }]);
 });
 
 test('#resolveLogin replaces the session the browser held', async () => {
   await tokenCollection.create({ name: 'dev', secret: 'imp_dev.secret' });
-  await sessionCollection.create({ token: 'old' });
+  await sessionCollection.create({ tokenId: 'old' });
 
   await fetch(LOGIN_URL, { method: 'POST', body: JSON.stringify({ token: 'imp_dev.secret' }) });
 
-  expect(sessionCollection.findMany().map((session) => session.token)).toStrictEqual(['dev']);
+  expect(sessionCollection.findMany().map((session) => session.tokenId)).toStrictEqual(['dev']);
 });
 
 test('#resolveLogin refuses a token impd does not know', async () => {
@@ -158,7 +158,10 @@ test('#resolveRpc answers a session that has expired with the 401 of impd', asyn
 
   const token = await tokenCollection.create({});
 
-  await sessionCollection.create({ token: token.name, expiresAt: new Date(Date.now() - 1000) });
+  await sessionCollection.create({
+    tokenId: readTokenId(token.secret),
+    expiresAt: new Date(Date.now() - 1000),
+  });
 
   expect(client.imps.list()).rejects.toSatisfy(isUnauthorized);
 });
@@ -210,7 +213,20 @@ test('#resolveLogout ends the event streams the dashboard holds open', async () 
 test('#resolveRpc answers a session whose token was deleted with the 401 of impd', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
-  await sessionCollection.create({ token: 'gone' });
+  await sessionCollection.create({ tokenId: 'gone' });
+
+  expect(client.imps.list()).rejects.toSatisfy(isUnauthorized);
+});
+
+test('#resolveRpc answers a session whose token was replaced under its name with the 401 of impd', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await tokenCollection.create({ name: 'dev', scope: 'read', secret: 'imp_old.secret' });
+  await sessionCollection.create({ tokenId: 'old' });
+
+  tokenCollection.delete((query) => query.where({ name: 'dev' }));
+
+  await tokenCollection.create({ name: 'dev', scope: 'manage', secret: 'imp_new.secret' });
 
   expect(client.imps.list()).rejects.toSatisfy(isUnauthorized);
 });
@@ -218,8 +234,8 @@ test('#resolveRpc answers a session whose token was deleted with the 401 of impd
 test('#resolveRpc reads the token of the session again on each request', async () => {
   const client = createImpClient({ url: IMPD_ORIGIN });
 
-  await tokenCollection.create({ name: 'dev' });
-  await sessionCollection.create({ token: 'dev' });
+  await tokenCollection.create({ name: 'dev', secret: 'imp_dev.secret' });
+  await sessionCollection.create({ tokenId: 'dev' });
 
   await tokenCollection.update((query) => query.where({ name: 'dev' }), {
     data(token) {
