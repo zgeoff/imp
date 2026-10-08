@@ -230,7 +230,7 @@ Lefthook installs the hooks with `bun install`.
 | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                   |
 | `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                                                    |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `scripts/test-go.sh` (`go test -race` through gotestsum) in `agent/`; uploads the JSON results.                                       |
 | `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                             |
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                         |
 | `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                  |

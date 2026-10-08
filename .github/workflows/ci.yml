@@ -166,8 +166,19 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # gotestsum (pinned as a tool in go.mod) runs go test -race and keeps the
+      # JSON event stream, so each run's timings can be compared later
       - name: Test
-        run: go test -race ./...
+        run: ../scripts/test-go.sh
+        env:
+          GO_TEST_JSONFILE: ${{ runner.temp }}/go-test.json
+
+      - name: Upload Go test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-results
+          path: ${{ runner.temp }}/go-test.json
 
   shellcheck:
     runs-on: ubuntu-latest
