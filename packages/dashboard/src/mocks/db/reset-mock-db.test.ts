@@ -17,14 +17,14 @@ test('it empties every collection', async () => {
 
   resetMockDb();
 
-  expect(
-    [
-      impCollection,
-      checkpointCollection,
-      imageCollection,
-      tokenCollection,
-      sessionCollection,
-      systemInfoCollection,
-    ].map((collection) => collection.count()),
-  ).toStrictEqual([0, 0, 0, 0, 0, 0]);
+  const counts = [
+    impCollection,
+    checkpointCollection,
+    imageCollection,
+    tokenCollection,
+    sessionCollection,
+    systemInfoCollection,
+  ].map((collection) => collection.count());
+
+  expect(counts).toSatisfyAll((count: number) => count === 0);
 });
