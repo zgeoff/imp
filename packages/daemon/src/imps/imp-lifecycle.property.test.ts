@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from 'bun:test';
+import { expect, onTestFinished, spyOn, test } from 'bun:test';
 import fc from 'fast-check';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -6,7 +6,7 @@ import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { StubVmError } from '../test-utils/build-stub-vmm';
 import type { VmOutcome, VmStep } from '../test-utils/build-stub-vmm';
-import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
+import { buildTestApp, createImpTest, findBrokenInvariants } from './test-imps';
 
 const NAMES = ['a', 'b', 'c', 'd'] as const;
 
@@ -96,6 +96,11 @@ test(
     // the router logs every internal error; the fake makes plenty on purpose
     const routerErrors = spyOn(console, 'error').mockImplementation(() => {});
 
+    // each case releases its own impd at its end; a failed case's goes here
+    const cases = new AsyncDisposableStack();
+
+    onTestFinished(() => cases.disposeAsync());
+
     try {
       await fc.assert(
         fc.asyncProperty(
@@ -121,7 +126,9 @@ test(
               return { name, held: holdUntil > at };
             };
 
-            const ctx = await setupImpTest({
+            const stack = cases.use(new AsyncDisposableStack());
+
+            const ctx = await createImpTest(stack, {
               env: ENV,
               onLog: (message) => {
                 const match = GOVERNOR_SLEEP.exec(message);
@@ -337,6 +344,8 @@ test(
 
             // under the budget, or no imp the governor may sleep is running
             expect(overMib <= 0 || runningUnheld.length === 0).toBeTrue();
+
+            await stack.disposeAsync();
           },
         ),
         { numRuns: 300 },
