@@ -15,6 +15,7 @@ import { server } from '@imp/test-utils/mock-server';
 import { createImpClient } from '@zgeoff/imp-client';
 import { HttpResponse, http } from 'msw';
 import { runCli } from '../test-utils/start-cli';
+import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
 // impd's real app, listening on a loopback port for the spawned CLI, and an
@@ -374,6 +375,29 @@ test('it replaces no secret on an impd from before SystemInfo.features', async (
 
   expect(result.code).toBe(1);
   expect(older.calls).toStrictEqual(['system/info']);
+});
+
+test('it replaces no secret when the feature check’s connection drops', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-old-value' });
+
+  const impd = startStubInfoFaultImpd(ctx.stack, ctx.sendRequest);
+
+  const result = await runCli({
+    args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
+    env: { IMP_URL: impd.url, IMP_TOKEN: 'root-token' },
+    stdin: 'fake-secret-value\n',
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      'imp: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()\n',
+    code: 1,
+  });
+
+  expect(impd.calls).toStrictEqual(['system/info']);
 });
 
 test('it replaces a secret on an impd with the feature', async () => {

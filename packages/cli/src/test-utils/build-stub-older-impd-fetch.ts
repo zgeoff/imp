@@ -43,13 +43,18 @@ export function buildStubOlderImpdFetch(
     const json = InfoJsonSchema.parse(body.json);
     const { features, ...rest } = json;
 
-    const kept = Object.fromEntries(
-      Object.entries(features ?? {}).filter(
-        ([key]) => options.withoutFeatures?.includes(key) !== true,
-      ),
-    );
-
-    const info = options.isWithoutFeatureList === true ? rest : { ...rest, features: kept };
+    // a reply without features stays without them: the stand-in only removes
+    const info =
+      options.isWithoutFeatureList === true || features === undefined
+        ? rest
+        : {
+            ...rest,
+            features: Object.fromEntries(
+              Object.entries(features).filter(
+                ([key]) => options.withoutFeatures?.includes(key) !== true,
+              ),
+            ),
+          };
 
     return Response.json({ ...body, json: info }, { status: response.status });
   };

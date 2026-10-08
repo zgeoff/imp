@@ -13,10 +13,11 @@ import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { createImpClient } from '@zgeoff/imp-client';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
+import { checkDockerBuildx } from '../test-utils/run-docker-build';
 import { runImageAdd, runOnHostBuild } from './run-image-op';
 
-// impd's real app, booted on stand-ins, with a running imp `box`, and an
-// in-process client of it
+// impd's real app, booted on stand-ins, and an in-process client of it that
+// records each procedure it calls
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -36,6 +37,9 @@ async function setupTest() {
     IMP_DATA_DIR: dataDir,
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
+
+    // a host build runs this machine's docker, as the stub VMM boots no builder
+    IMP_BUILD_ISOLATION: 'host',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
@@ -133,20 +137,27 @@ async function setupTest() {
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 
+  // the procedure of each call the client sends, such as `system/info`
+  const calls: string[] = [];
+
   const client = createImpClient({
     url: 'http://impd.test',
     token: 'root-token',
-    fetch: sendRequest,
+    fetch: (request) => {
+      calls.push(new URL(request.url).pathname.slice('/rpc/'.length));
+
+      return sendRequest(request);
+    },
   });
 
-  // the imp a template is made from
-  await client.imps.create({ name: 'box' });
-
-  return { client, sendRequest };
+  return { client, sendRequest, calls };
 }
 
-test('#runImageAdd makes a template from an imp through a current impd', async () => {
+test('#runImageAdd makes a template from an imp through the stream of a current impd', async () => {
   const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
+
   const image = await runImageAdd(ctx.client, { imp: 'box', name: 'tpl' }, 'imp template create');
 
   const received: unknown = image;
@@ -160,7 +171,39 @@ test('#runImageAdd makes a template from an imp through a current impd', async (
     createdAt: expect.toBeValidDate() as unknown,
     sizeBytes: expect.any(Number) as unknown,
   });
+
+  expect(ctx.calls).toStrictEqual(['imps/create', 'system/info', 'images/addStream']);
 });
+
+test.skipIf(!checkDockerBuildx())(
+  '#runOnHostBuild builds an image on the host through the stream of a current impd',
+  async () => {
+    const ctx = await setupTest();
+    const contextDir = await mkdtemp(join(tmpdir(), 'cli-image-op-ctx-'));
+
+    onTestFinished(() => rm(contextDir, { recursive: true, force: true }));
+
+    await Bun.write(join(contextDir, 'Dockerfile'), 'FROM scratch\nCOPY hello /hello\n');
+    await Bun.write(join(contextDir, 'hello'), 'hi');
+
+    const built = await runOnHostBuild(ctx.client, { contextDir, name: 'img' });
+
+    const received: unknown = built;
+
+    expect(received).toStrictEqual({
+      id: expect.any(String) as unknown,
+      name: 'img',
+      ref: 'imp/img:latest',
+      digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) as unknown,
+      source: 'oci',
+      createdAt: expect.toBeValidDate() as unknown,
+      sizeBytes: expect.any(Number) as unknown,
+    });
+
+    expect(ctx.calls).toStrictEqual(['system/info', 'images/buildStream']);
+  },
+  120_000,
+);
 
 test('#runOnHostBuild passes on a current impd’s refusal of a host build', async () => {
   const ctx = await setupTest();
@@ -177,6 +220,8 @@ test('#runOnHostBuild passes on a current impd’s refusal of a host build', asy
 
 test('#runImageAdd adds through the call that answers at the end on an impd from before imageOpStream', async () => {
   const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
 
   const older = buildStubOlderImpdFetch(ctx.sendRequest, { withoutFeatures: ['imageOpStream'] });
 
@@ -201,22 +246,47 @@ test('#runImageAdd adds through the call that answers at the end on an impd from
   expect(older.calls).toStrictEqual(['system/info', 'images/add']);
 });
 
-test('#runOnHostBuild builds through the call that answers at the end on an impd from before imageOpStream', async () => {
-  const ctx = await setupTest();
+test.skipIf(!checkDockerBuildx())(
+  '#runOnHostBuild builds through the call that answers at the end on an impd from before imageOpStream',
+  async () => {
+    const ctx = await setupTest();
+    const contextDir = await mkdtemp(join(tmpdir(), 'cli-image-op-ctx-'));
 
-  const older = buildStubOlderImpdFetch(ctx.sendRequest, { withoutFeatures: ['imageOpStream'] });
+    onTestFinished(() => rm(contextDir, { recursive: true, force: true }));
 
-  const building = runOnHostBuild(
-    createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: older.fetch }),
-    { contextDir: '/nonexistent/ctx', name: 'img' },
-  );
+    await Bun.write(join(contextDir, 'Dockerfile'), 'FROM scratch\nCOPY hello /hello\n');
+    await Bun.write(join(contextDir, 'hello'), 'hi');
 
-  expect(building).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-  expect(older.calls).toStrictEqual(['system/info', 'images/build']);
-});
+    const older = buildStubOlderImpdFetch(ctx.sendRequest, {
+      withoutFeatures: ['imageOpStream'],
+    });
+
+    const built = await runOnHostBuild(
+      createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: older.fetch }),
+      { contextDir, name: 'img' },
+    );
+
+    const received: unknown = built;
+
+    expect(received).toStrictEqual({
+      id: expect.any(String) as unknown,
+      name: 'img',
+      ref: 'imp/img:latest',
+      digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) as unknown,
+      source: 'oci',
+      createdAt: expect.toBeValidDate() as unknown,
+      sizeBytes: expect.any(Number) as unknown,
+    });
+
+    expect(older.calls).toStrictEqual(['system/info', 'images/build']);
+  },
+  120_000,
+);
 
 test('#runImageAdd rejects when impd faults by ending the stream before it answers the image', async () => {
   const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
 
   const faulty = buildStubOlderImpdFetch(ctx.sendRequest, {
     withoutEvents: { 'images/addStream': ['image'] },

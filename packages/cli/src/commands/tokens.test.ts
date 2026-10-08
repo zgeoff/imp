@@ -13,6 +13,7 @@ import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
 import { createImpClient } from '@zgeoff/imp-client';
 import { runCli } from '../test-utils/start-cli';
+import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
 // impd's real app, listening on a loopback port for the spawned CLI, and an
@@ -316,17 +317,27 @@ test('it creates no token on an impd from before SystemInfo.features', async () 
   expect(older.calls).toStrictEqual(['system/info']);
 });
 
-test('it creates no token when the feature check cannot reach impd', async () => {
+test('it creates no token when the feature check’s connection drops', async () => {
+  const ctx = await setupTest();
+
+  const impd = startStubInfoFaultImpd(ctx.stack, ctx.sendRequest);
+
   const result = await runCli({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
-    env: { IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: impd.url, IMP_TOKEN: 'root-token' },
   });
+
+  const tokens = await ctx.client.tokens.list();
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: Unable to connect. Is the computer able to access the url?\n',
+    stderr:
+      'imp: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()\n',
     code: 1,
   });
+
+  expect(impd.calls).toStrictEqual(['system/info']);
+  expect(tokens.map((token) => token.name)).not.toContain('agent');
 });
 
 test('it creates a grantable token on an impd with the feature', async () => {

@@ -1,4 +1,4 @@
-import type { ImpClient } from './create-imp-client';
+import type { SystemInfo } from '@imp/api';
 
 // impd features a call relies on (SystemInfo.features), and what an impd
 // without one is
@@ -16,11 +16,16 @@ const FEATURES = {
 
 type Feature = keyof typeof FEATURES;
 
+// only impd's answer to system.info, so any client of it passes
+interface FeatureSource {
+  readonly system: { readonly info: () => Promise<SystemInfo> };
+}
+
 // An impd drops input fields it does not know and fails on values it does
 // not know, so a call that relies on a newer one asks first, before it
 // writes anything. `outcome` says what the older impd would do instead.
 export async function requireFeature(
-  client: Pick<ImpClient, 'system'>,
+  client: FeatureSource,
   feature: Feature,
   outcome: string,
 ): Promise<void> {

@@ -43,6 +43,21 @@ test('it takes the whole features object out of system.info for a release before
   expect(body).toStrictEqual({ json: { version: '0.40.1' }, meta: [] });
 });
 
+test('it adds no features object to a system.info that had none', async () => {
+  const older = buildStubOlderImpdFetch(
+    () => Promise.resolve(Response.json({ json: { version: '0.14.0' }, meta: [] })),
+    { withoutFeatures: ['sessionLog'] },
+  );
+
+  const response = await older.fetch(
+    new Request('http://impd.test/rpc/system/info', { method: 'POST' }),
+  );
+
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({ json: { version: '0.14.0' }, meta: [] });
+});
+
 test('it sends a procedure the release lacked to a path no impd has', async () => {
   const inner = mock((request: Request) => Promise.resolve(new Response(request.url)));
   const older = buildStubOlderImpdFetch(inner, { withoutProcedures: ['moves/facts'] });
