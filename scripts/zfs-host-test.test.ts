@@ -89,9 +89,7 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8')
-    .replaceAll(/impbench\d+/g, 'impbenchPID')
-    .replaceAll(/PATH=\S+/g, 'PATH=…');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
 
   expect(result.exitCode).toBe(0);
 
@@ -99,7 +97,7 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
     'sudo zpool list impbenchPID',
     'zpool list impbenchPID',
     'docker container inspect imp-zfs',
-    `sudo env PATH=… IMP_ZFS_TEST_DIR=${work}/unit ${ctx.dir}/root/scripts/test-zfs.sh`,
+    `sudo env PATH=${ctx.path} IMP_ZFS_TEST_DIR=${work}/unit ${ctx.dir}/root/scripts/test-zfs.sh`,
     'test-zfs.sh ',
     `sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
