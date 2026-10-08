@@ -2,16 +2,15 @@ import { expect, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { buildMockImage } from '../test-utils/build-mock-image';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
+import { imageCollection } from '../mocks/db/image-collection';
+import { sessionCollection } from '../mocks/db/session-collection';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists each image with its size', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
+  await imageCollection.create({ name: 'base', sizeBytes: 512 * 1024 * 1024 });
 
-  stub.state.images.push(buildMockImage({ name: 'base', sizeBytes: 512 * 1024 * 1024 }));
-
-  const rendered = renderApp(stub, '/images');
+  const rendered = renderApp('/images');
 
   const row = await rendered.findByRole('row', { name: /base/ });
 
@@ -19,9 +18,11 @@ test('it lists each image with its size', async () => {
 });
 
 test('it adds an image from a ref', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
-  const rendered = renderApp(stub, '/images');
+
+  await sessionCollection.create({});
+
+  const rendered = renderApp('/images');
 
   const field = await rendered.findByLabelText('Image ref');
 
@@ -32,18 +33,18 @@ test('it adds an image from a ref', async () => {
 
   expect(row).toBeInTheDocument();
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'images.add', input: { ref: 'docker.io/library/node:22' } },
+  expect(imageCollection.findMany().map((image) => image.ref)).toStrictEqual([
+    'docker.io/library/node:22',
   ]);
 });
 
 test('it deletes an image after a confirm', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.images.push(buildMockImage({ name: 'base' }));
+  await sessionCollection.create({});
+  await imageCollection.create({ name: 'base' });
 
-  const rendered = renderApp(stub, '/images');
+  const rendered = renderApp('/images');
 
   const row = await rendered.findByRole('row', { name: /base/ });
 
@@ -57,5 +58,5 @@ test('it deletes an image after a confirm', async () => {
     expect(rendered.queryByRole('row', { name: /base/ })).toBeNull();
   });
 
-  expect(stub.state.calls).toStrictEqual([{ path: 'images.delete', input: { name: 'base' } }]);
+  expect(imageCollection.count()).toBe(0);
 });

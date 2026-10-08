@@ -1,33 +1,35 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { buildMockCheckpoint } from '../test-utils/build-mock-checkpoint';
+import { http } from 'msw';
+import { checkpointCollection } from '../mocks/db/checkpoint-collection';
+import { impCollection } from '../mocks/db/imp-collection';
+import { sessionCollection } from '../mocks/db/session-collection';
+import { RPC_URL } from '../mocks/handlers';
+import { server } from '../mocks/node';
 import { buildMockDiskUsage } from '../test-utils/build-mock-disk-usage';
-import { buildMockImp } from '../test-utils/build-mock-imp';
 import { buildMockImpResources } from '../test-utils/build-mock-imp-resources';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
+import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it shows the RAM and disk use of the imp', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
 
-  stub.state.imps.push(
-    buildMockImp({
-      name: 'web',
-      ramMib: 300,
-      rssMib: 340,
-      diskMib: 32_768,
-      diskUsage: buildMockDiskUsage({
-        exclusiveBytes: 1024 * 1024 * 1024,
-        sharedBytes: 512 * 1024 * 1024,
-        isPartial: false,
-        isUpperBound: false,
-      }),
+  await impCollection.create({
+    name: 'web',
+    ramMib: 300,
+    rssMib: 340,
+    diskMib: 32_768,
+    diskUsage: buildMockDiskUsage({
+      exclusiveBytes: 1024 * 1024 * 1024,
+      sharedBytes: 512 * 1024 * 1024,
+      isPartial: false,
+      isUpperBound: false,
     }),
-  );
+  });
 
-  const rendered = renderApp(stub, '/imps/web');
+  const rendered = renderApp('/imps/web');
 
   await rendered.findByRole('heading', { name: 'web' });
 
@@ -36,12 +38,11 @@ test('it shows the RAM and disk use of the imp', async () => {
 });
 
 test('it lists the checkpoints of the imp', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+  await checkpointCollection.create({ imp: 'web', label: 'before-upgrade' });
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
-  stub.state.checkpoints.set('web', [buildMockCheckpoint({ label: 'before-upgrade' })]);
-
-  const rendered = renderApp(stub, '/imps/web');
+  const rendered = renderApp('/imps/web');
 
   const row = await rendered.findByRole('row', { name: /before-upgrade/ });
 
@@ -49,12 +50,12 @@ test('it lists the checkpoints of the imp', async () => {
 });
 
 test('it takes a checkpoint with a label', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
 
-  const rendered = renderApp(stub, '/imps/web');
+  const rendered = renderApp('/imps/web');
 
   const field = await rendered.findByLabelText('Label');
 
@@ -62,19 +63,28 @@ test('it takes a checkpoint with a label', async () => {
   await user.click(rendered.getByRole('button', { name: 'Checkpoint now' }));
   await rendered.findByRole('row', { name: /v2/ });
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'checkpoints.create', input: { name: 'web', label: 'v2' } },
+  expect(checkpointCollection.findMany().map((checkpoint) => checkpoint.label)).toStrictEqual([
+    'v2',
   ]);
 });
 
 test('it restores the named checkpoint after a confirm', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
+  const received = mock<(input: unknown) => void>();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
-  stub.state.checkpoints.set('web', [buildMockCheckpoint({ id: 'cp1', label: 'before-upgrade' })]);
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+  await checkpointCollection.create({ imp: 'web', id: 'cp1', label: 'before-upgrade' });
 
-  const rendered = renderApp(stub, '/imps/web');
+  server.use(
+    http.post(`${RPC_URL}/checkpoints/restore`, async (info) => {
+      const input = await readRpcInput(info.request);
+
+      received(input);
+    }),
+  );
+
+  const rendered = renderApp('/imps/web');
 
   const row = await rendered.findByRole('row', { name: /before-upgrade/ });
 
@@ -85,20 +95,27 @@ test('it restores the named checkpoint after a confirm', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
 
   await waitFor(() => {
-    expect(stub.state.calls).toStrictEqual([
-      { path: 'checkpoints.restore', input: { name: 'web', checkpoint: 'cp1' } },
-    ]);
+    expect(received).toHaveBeenCalledExactlyOnceWith({ name: 'web', checkpoint: 'cp1' });
   });
 });
 
 test('it opens the new imp after a fork from a checkpoint', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
+  const received = mock<(input: unknown) => void>();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
-  stub.state.checkpoints.set('web', [buildMockCheckpoint({ id: 'cp1', label: 'before-upgrade' })]);
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+  await checkpointCollection.create({ imp: 'web', id: 'cp1', label: 'before-upgrade' });
 
-  const rendered = renderApp(stub, '/imps/web');
+  server.use(
+    http.post(`${RPC_URL}/imps/fork`, async (info) => {
+      const input = await readRpcInput(info.request);
+
+      received(input);
+    }),
+  );
+
+  const rendered = renderApp('/imps/web');
 
   const row = await rendered.findByRole('row', { name: /before-upgrade/ });
 
@@ -112,13 +129,17 @@ test('it opens the new imp after a fork from a checkpoint', async () => {
 
   expect(rendered.router.state.location.pathname).toBe('/imps/web2');
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'imps.fork', input: { source: 'web', name: 'web2', checkpoint: 'cp1' } },
-  ]);
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    source: 'web',
+    name: 'web2',
+    checkpoint: 'cp1',
+  });
 });
 
 test('it says so when the imp does not exist', async () => {
-  const rendered = renderApp(buildStubImpd(), '/imps/gone');
+  await sessionCollection.create({});
+
+  const rendered = renderApp('/imps/gone');
 
   const alert = await rendered.findByRole('alert');
 
@@ -126,12 +147,21 @@ test('it says so when the imp does not exist', async () => {
 });
 
 test('it goes back to the list without asking for the imp it destroyed', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
+  const answered = mock<(status: number) => void>();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  server.events.on('response:mocked', (event) => {
+    answered(event.response.status);
+  });
 
-  const rendered = renderApp(stub, '/imps/web');
+  onTestFinished(() => {
+    server.events.removeAllListeners('response:mocked');
+  });
+
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
+
+  const rendered = renderApp('/imps/web');
 
   const button = await rendered.findByRole('button', { name: 'Destroy' });
 
@@ -143,23 +173,22 @@ test('it goes back to the list without asking for the imp it destroyed', async (
   await rendered.findByRole('heading', { name: 'Imps' });
 
   expect(rendered.router.state.location.pathname).toBe('/');
-  expect(stub.state.notFound).toBe(0);
+  expect(answered).toHaveBeenCalledWith(200);
+  expect(answered).not.toHaveBeenCalledWith(404);
 });
 
 test('it shows the network use and awake time of the running imp', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
 
-  stub.state.imps.push(
-    buildMockImp({
-      name: 'web',
-      resources: buildMockImpResources({
-        awakeMs: 200 * 60_000,
-        sample: { netRxBytes: 2048, netTxBytes: 512 },
-      }),
+  await impCollection.create({
+    name: 'web',
+    resources: buildMockImpResources({
+      awakeMs: 200 * 60_000,
+      sample: { netRxBytes: 2048, netTxBytes: 512 },
     }),
-  );
+  });
 
-  const rendered = renderApp(stub, '/imps/web');
+  const rendered = renderApp('/imps/web');
 
   const network = await rendered.findByText('2.0 KiB in, 512 B out');
 
@@ -168,18 +197,17 @@ test('it shows the network use and awake time of the running imp', async () => {
 });
 
 test('it sets a CPU limit on the running imp', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.imps.push(
-    buildMockImp({
-      name: 'web',
-      cpu: { limit: null, weight: 100 },
-      resources: buildMockImpResources({ sample: { cpuPercent: 45 } }),
-    }),
-  );
+  await sessionCollection.create({});
 
-  const rendered = renderApp(stub, '/imps/web');
+  await impCollection.create({
+    name: 'web',
+    cpu: { limit: null, weight: 100 },
+    resources: buildMockImpResources({ sample: { cpuPercent: 45 } }),
+  });
+
+  const rendered = renderApp('/imps/web');
 
   const field = await rendered.findByLabelText('Limit (CPUs)');
 
@@ -190,7 +218,8 @@ test('it sets a CPU limit on the running imp', async () => {
 
   expect(cpu).toBeInTheDocument();
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'imps.update', input: { name: 'web', cpuLimit: 0.5, cpuWeight: 100 } },
-  ]);
+  expect(impCollection.findFirst((query) => query.where({ name: 'web' }))?.cpu).toStrictEqual({
+    limit: 0.5,
+    weight: 100,
+  });
 });

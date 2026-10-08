@@ -1,21 +1,23 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { buildMockImp } from '../test-utils/build-mock-imp';
+import { http } from 'msw';
+import { impCollection } from '../mocks/db/imp-collection';
+import { sessionCollection } from '../mocks/db/session-collection';
+import { systemInfoCollection } from '../mocks/db/system-info-collection';
+import { RPC_URL } from '../mocks/handlers';
+import { emitImpdEvent, impdEventListeners } from '../mocks/impd-events';
+import { server } from '../mocks/node';
 import { buildMockImpChangedEvent } from '../test-utils/build-mock-imp-changed-event';
-import { buildMockSystemInfo } from '../test-utils/build-mock-system-info';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
+import { readRpcInput } from '../test-utils/read-rpc-input';
 import { renderApp } from '../test-utils/render-app';
 
 test('it lists a running imp with its state, RAM, disk and a sleep button', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'running', ramMib: 300, diskMib: 32_768 });
 
-  stub.state.imps.push(
-    buildMockImp({ name: 'web', state: 'running', ramMib: 300, diskMib: 32_768 }),
-  );
-
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /web/ });
 
@@ -26,13 +28,15 @@ test('it lists a running imp with its state, RAM, disk and a sleep button', asyn
 });
 
 test('it lists a sleeping imp with its notes and a wake button', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
 
-  stub.state.imps.push(
-    buildMockImp({ name: 'old', state: 'sleeping', coldBootReason: 'the kernel changed' }),
-  );
+  await impCollection.create({
+    name: 'old',
+    state: 'sleeping',
+    coldBootReason: 'the kernel changed',
+  });
 
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /old/ });
 
@@ -41,13 +45,10 @@ test('it lists a sleeping imp with its notes and a wake button', async () => {
 });
 
 test('it lists a failed imp with its error and a restart button', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'bad', state: 'error', error: 'boot failed: no agent' });
 
-  stub.state.imps.push(
-    buildMockImp({ name: 'bad', state: 'error', error: 'boot failed: no agent' }),
-  );
-
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /bad/ });
 
@@ -56,11 +57,10 @@ test('it lists a failed imp with its error and a restart button', async () => {
 });
 
 test('it shows the RAM in use against the budget of the host', async () => {
-  const stub = buildStubImpd();
+  await sessionCollection.create({});
+  await systemInfoCollection.create({ ramBudgetMib: 4096, ramUsedMib: 1024 });
 
-  stub.state.info = buildMockSystemInfo({ ramBudgetMib: 4096, ramUsedMib: 1024 });
-
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const meter = await rendered.findByRole('meter', { name: 'RAM in use' });
 
@@ -69,7 +69,9 @@ test('it shows the RAM in use against the budget of the host', async () => {
 });
 
 test('it invites a first imp when there are none', async () => {
-  const rendered = renderApp(buildStubImpd());
+  await sessionCollection.create({});
+
+  const rendered = renderApp();
 
   const invite = await rendered.findByText('No imps yet. Make one with New imp.');
 
@@ -77,12 +79,12 @@ test('it invites a first imp when there are none', async () => {
 });
 
 test('it moves the row of an imp to the state its lifecycle button asks for', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.imps.push(buildMockImp({ name: 'web', state: 'running' }));
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'running' });
 
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /web/ });
 
@@ -91,16 +93,16 @@ test('it moves the row of an imp to the state its lifecycle button asks for', as
   const state = await within(row).findByText('sleeping');
 
   expect(state).toBeInTheDocument();
-  expect(stub.state.calls).toStrictEqual([{ path: 'imps.sleep', input: { name: 'web' } }]);
+  expect(impCollection.findFirst((query) => query.where({ name: 'web' }))?.state).toBe('sleeping');
 });
 
 test('it asks before destroying an imp', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
 
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /web/ });
 
@@ -109,16 +111,16 @@ test('it asks before destroying an imp', async () => {
   const dialog = await rendered.findByRole('dialog', { name: 'Destroy web?' });
 
   expect(dialog).toBeInTheDocument();
-  expect(stub.state.calls).toStrictEqual([]);
+  expect(impCollection.findMany().map((imp) => imp.name)).toStrictEqual(['web']);
 });
 
 test('it destroys an imp once the destroy is confirmed', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
 
-  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web' });
 
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /web/ });
 
@@ -132,13 +134,24 @@ test('it destroys an imp once the destroy is confirmed', async () => {
     expect(rendered.queryByRole('row', { name: /web/ })).toBeNull();
   });
 
-  expect(stub.state.calls).toStrictEqual([{ path: 'imps.destroy', input: { name: 'web' } }]);
+  expect(impCollection.count()).toBe(0);
 });
 
 test('it sends only the fields that were filled in for a new imp', async () => {
-  const stub = buildStubImpd();
   const user = userEvent.setup();
-  const rendered = renderApp(stub);
+  const received = mock<(input: unknown) => void>();
+
+  await sessionCollection.create({});
+
+  server.use(
+    http.post(`${RPC_URL}/imps/create`, async (info) => {
+      const input = await readRpcInput(info.request);
+
+      received(input);
+    }),
+  );
+
+  const rendered = renderApp();
 
   const button = await rendered.findByRole('button', { name: 'New imp' });
 
@@ -151,30 +164,30 @@ test('it sends only the fields that were filled in for a new imp', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Create' }));
   await rendered.findByRole('row', { name: /box/ });
 
-  expect(stub.state.calls).toStrictEqual([
-    { path: 'imps.create', input: { name: 'box', memoryMib: 512 } },
-  ]);
+  expect(received).toHaveBeenCalledExactlyOnceWith({ name: 'box', memoryMib: 512 });
 });
 
 test('it shows a change impd streams without waiting for the next poll', async () => {
-  const stub = buildStubImpd();
-  const imp = buildMockImp({ name: 'web', state: 'running' });
+  await sessionCollection.create({});
+  await impCollection.create({ name: 'web', state: 'running' });
 
-  stub.state.imps.push(imp);
-
-  const rendered = renderApp(stub);
+  const rendered = renderApp();
 
   const row = await rendered.findByRole('row', { name: /web/ });
 
   // impd sends its event only to streams open at the time
   await waitFor(() => {
-    expect(stub.state.openStreams).toBe(1);
+    expect(impdEventListeners.size).toBe(1);
   });
 
-  const event = buildMockImpChangedEvent({ reason: 'slept', imp: { ...imp, state: 'sleeping' } });
+  // a change made elsewhere, such as from the CLI
+  const slept = await impCollection.update((query) => query.where({ name: 'web' }), {
+    data(imp) {
+      imp.state = 'sleeping';
+    },
+  });
 
-  stub.state.imps.splice(0, 1, event.imp);
-  stub.emitEvent(event);
+  emitImpdEvent(buildMockImpChangedEvent({ reason: 'slept', imp: { ...slept } }));
 
   const state = await within(row).findByText('sleeping');
 

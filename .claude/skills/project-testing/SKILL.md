@@ -40,11 +40,20 @@ tests run from the package. Its `bunfig.toml` preloads `@zgeoff/bun-test-extende
 restores), sets the page's URL to `http://impd.test/ui/`, wraps `fetch` so a request to that origin
 carries `Sec-Fetch-Site: same-origin` as a browser's does
 (`src/test-utils/build-stub-browser-fetch.ts`), restores spies and mocks after each test, and runs
-the dashboard's own MSW server (`src/mocks/node.ts`), whose handlers answer impd's `/auth/login` and
-`/auth/logout` from the `knownTokens` `@msw/data` collection it clears. The SDK's RPC calls never
-reach MSW: `src/test-utils/build-stub-impd.ts` (`buildStubImpd`) answers them from an in-memory impd
-behind the real contract, through an oRPC handler injected as the client's `fetch`, and
-`render-app.tsx` (`renderApp`) mounts the whole app against it.
+the dashboard's own MSW server (`src/mocks/node.ts`). Its handlers (`src/mocks/handlers.ts`) answer
+impd's `/auth/login`, `/auth/logout` and `/rpc/*` at `http://impd.test`, so the real SDK's fetch
+reaches them. `/rpc/*` runs oRPC's own fetch handler over `src/mocks/impd-router.ts`, an
+`implement(impContract)` router of the procedures the dashboard calls, which passes each call
+through impd's `checkAccess` and throws impd's errors from `packages/daemon` `api-errors.ts`; a
+procedure it leaves out answers 404. The router reads and writes the `@msw/data` collections in
+`src/mocks/db/` (imps, checkpoints, images, tokens with their secrets, sessions, system info), which
+the preload empties after each test with `resetMockDb`. A row in the sessions collection stands for
+the one browser's session cookie, which Bun's fetch does not keep: without one every RPC call gets
+impd's 401, login with a token's secret creates one and logout clears it. Lifecycle calls emit
+impd's events to `events.stream`; `emitImpdEvent` sends one for a change made elsewhere, and the
+preload clears `impdEventListeners`. `src/test-utils/render-app.tsx` (`renderApp`) mounts the whole
+app with the production `createBrowserImpd`, and `read-rpc-input.ts` reads a call's input in a
+per-test MSW handler.
 
 The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
 `packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores

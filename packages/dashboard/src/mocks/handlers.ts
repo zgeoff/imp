@@ -1,25 +1,24 @@
-import { faker } from '@faker-js/faker';
-import { Collection } from '@msw/data';
+import { RPCHandler } from '@orpc/server/fetch';
 import { HttpResponse, http } from 'msw';
 import * as z from 'zod';
+import { sessionCollection } from './db/session-collection';
+import { tokenCollection } from './db/token-collection';
+import { impdRouter } from './impd-router';
 
 // the impd that serves the dashboard in the tests (test-setup.ts sets the
 // page's URL under it)
 export const IMPD_ORIGIN = 'http://impd.test';
 export const LOGIN_URL = `${IMPD_ORIGIN}/auth/login`;
 export const LOGOUT_URL = `${IMPD_ORIGIN}/auth/logout`;
+export const RPC_URL = `${IMPD_ORIGIN}/rpc`;
 
-// the API tokens impd knows, which /auth/login accepts; the preload clears it
-// after each test
-export const knownTokens = new Collection({
-  schema: z.object({ token: z.string().default(() => faker.string.alphanumeric(32)) }),
-});
-
-interface SessionRouteContext {
+interface RouteContext {
   readonly request: Request;
 }
 
 const LoginSchema = z.object({ token: z.string() });
+
+const rpc = new RPCHandler(impdRouter);
 
 // impd's isSameOrigin (packages/daemon auth/authenticate.ts): Sec-Fetch-Site
 // decides when sent, else an Origin with impd's host; neither is refused
@@ -50,21 +49,33 @@ function readJson(request: Readonly<Request>): Promise<unknown> {
   );
 }
 
-// a known token gets a session; any other body, malformed JSON included, a 401
-function resolveLoginBody(json: unknown): Response {
+// a known token's secret opens a session with that token's scope; any other
+// body, malformed JSON included, gets a 401
+async function resolveLoginBody(json: unknown): Promise<Response> {
   const body = LoginSchema.safeParse(json);
 
-  const known =
-    body.success && knownTokens.findFirst((query) => query.where({ token: body.data.token }));
+  const token = body.success
+    ? tokenCollection.findFirst((query) => query.where({ secret: body.data.token }))
+    : undefined;
 
-  if (known === false || known === undefined) {
+  if (token === undefined) {
     return HttpResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+
+  sessionCollection.clear();
+
+  await sessionCollection.create({
+    kind: 'dashboard',
+    name: token.name,
+    scope: token.scope,
+    imps: token.imps,
+    grantable: token.grantable,
+  });
 
   return new HttpResponse(null, { status: 204 });
 }
 
-export function resolveLogin(context: SessionRouteContext): Promise<Response> {
+export function resolveLogin(context: RouteContext): Promise<Response> {
   if (!isSameOrigin(context.request)) {
     return Promise.resolve(HttpResponse.json({ error: 'cross-origin' }, { status: 403 }));
   }
@@ -72,12 +83,34 @@ export function resolveLogin(context: SessionRouteContext): Promise<Response> {
   return readJson(context.request).then((json) => resolveLoginBody(json));
 }
 
-export function resolveLogout(context: SessionRouteContext): Response {
+export function resolveLogout(context: RouteContext): Response {
   if (!isSameOrigin(context.request)) {
     return HttpResponse.json({ error: 'cross-origin' }, { status: 403 });
   }
 
+  sessionCollection.clear();
+
   return new HttpResponse(null, { status: 204 });
 }
 
-export const handlers = [http.post(LOGIN_URL, resolveLogin), http.post(LOGOUT_URL, resolveLogout)];
+// impd's /rpc: the browser's session, or impd's 401 without one; oRPC's own
+// fetch handler answers through impdRouter
+async function resolveRpc(context: RouteContext): Promise<Response> {
+  const session = sessionCollection.findFirst();
+
+  if (session === undefined) {
+    return HttpResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  const handled = await rpc.handle(context.request, { prefix: '/rpc', context: { session } });
+
+  return handled.matched
+    ? handled.response
+    : HttpResponse.text('no such procedure', { status: 404 });
+}
+
+export const handlers = [
+  http.post(LOGIN_URL, resolveLogin),
+  http.post(LOGOUT_URL, resolveLogout),
+  http.all(`${RPC_URL}/*`, resolveRpc),
+];
