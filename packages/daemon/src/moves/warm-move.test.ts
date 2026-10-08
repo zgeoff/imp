@@ -91,8 +91,7 @@ function buildCommitDrop(count: number): FetchHook {
 }
 
 test('a sleeping imp moves with its memory into its slot, and wakes from it there', async () => {
-  await using ctx = await setupWarmTest();
-
+  const ctx = await setupWarmTest();
   const status = await ctx.runMove();
   const moved = await findImpByName(ctx.target.db, 'dev');
 
@@ -118,7 +117,7 @@ test('a sleeping imp moves with its memory into its slot, and wakes from it ther
 });
 
 test('an elastic imp moves warm with its max and its plugged memory, which the wake allows', async () => {
-  await using ctx = await setupWarmTest();
+  const ctx = await setupWarmTest();
 
   const sourcePaths = ctx.source.storage.resolveImpPaths(ctx.impId);
   const slept = readSnapshotMeta(sourcePaths);
@@ -151,8 +150,7 @@ test('an elastic imp moves warm with its max and its plugged memory, which the w
 // the source's; the wake's jail prepare chowns the disk and the snapshot to
 // it (docs/architecture/daemon.md#the-jailer), so they must be there by then
 test('a jailed imp moved warm wakes as its own jail uid on the target, its files in place', async () => {
-  await using ctx = await setupWarmTest({ isJailed: true });
-
+  const ctx = await setupWarmTest({ isJailed: true });
   const before = await findImpByName(ctx.source.db, 'dev');
 
   await ctx.runMove();
@@ -175,8 +173,7 @@ test('a jailed imp moved warm wakes as its own jail uid on the target, its files
 });
 
 test('a sleeping imp is refused a warm move with each fact the target lacks, and stays', async () => {
-  await using ctx = await setupWarmTest({ isShared: false });
-
+  const ctx = await setupWarmTest({ isShared: false });
   const facts = await ctx.targetApp.client.moves.facts();
 
   const refused = await readRejection(
@@ -197,7 +194,7 @@ test('a sleeping imp is refused a warm move with each fact the target lacks, and
 });
 
 test('the target checks the facts itself, and keeps the slot from a new imp', async () => {
-  await using ctx = await setupWarmTest();
+  const ctx = await setupWarmTest();
 
   const plan = await ctx.sourceApp.client.moves.prepare({
     name: 'dev',
@@ -236,7 +233,7 @@ test('the target checks the facts itself, and keeps the slot from a new imp', as
 test('a commit with the memory snapshot incomplete is refused, and the source keeps its copy', async () => {
   const state: { metaPath: string | null } = { metaPath: null };
 
-  await using ctx = await setupWarmTest({
+  const ctx = await setupWarmTest({
     hook: (request, forward) => {
       if (new URL(request.url).pathname === MOVE_PATHS.commit && state.metaPath !== null) {
         rmSync(state.metaPath, { force: true });
@@ -259,7 +256,7 @@ test('a commit with the memory snapshot incomplete is refused, and the source ke
 });
 
 test("the first wake after a warm move installs the target's broker CA once", async () => {
-  await using ctx = await setupWarmTest();
+  const ctx = await setupWarmTest();
 
   await ctx.runMove();
 
@@ -288,7 +285,7 @@ test("the first wake after a warm move installs the target's broker CA once", as
 });
 
 test('a system drive the target lacks goes along, and one whose sum is not its name is refused', async () => {
-  await using ctx = await setupWarmTest({
+  const ctx = await setupWarmTest({
     // in one process both hosts open one drive file: the target says it lacks it
     hook: async (request, forward) => {
       const response = await forward();
@@ -320,7 +317,7 @@ test('a system drive the target lacks goes along, and one whose sum is not its n
 test("a snapshot that opens a drive off the target's own path is refused, and frees the slot with no abort", async () => {
   const refusals: string[] = [];
 
-  await using ctx = await setupWarmTest({
+  const ctx = await setupWarmTest({
     // the source's abort never arrives: the refusal alone frees the slot
     hook: async (request, forward) => {
       if (request.url.endsWith(MOVE_PATHS.abort)) {
@@ -356,8 +353,7 @@ test("a snapshot that opens a drive off the target's own path is refused, and fr
 });
 
 test('a warm move whose commit was lost commits warm on resume, with a reissued ticket', async () => {
-  await using ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
-
+  const ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
   const lost = await ctx.runMove();
   const ticket = await ctx.targetApp.client.moves.reissue({ name: 'dev' });
 
@@ -378,7 +374,7 @@ test('a warm move whose commit was lost commits warm on resume, with a reissued 
 });
 
 test('a source restart with the warm move verified commits it warm', async () => {
-  await using ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
+  const ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
 
   await ctx.runMove();
   await ctx.sourceApp.moves.recover();
@@ -399,7 +395,7 @@ test('a source restart with the warm move verified commits it warm', async () =>
 });
 
 test('an abort after the receipt leaves the imp asleep on the source, and frees the slot', async () => {
-  await using ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
+  const ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
 
   await ctx.runMove();
   await ctx.sourceApp.client.moves.abort({ name: 'dev' });
@@ -420,7 +416,7 @@ test('an abort after the receipt leaves the imp asleep on the source, and frees 
 test('a warm stream cut short, with no abort, removes the memory and frees the slot', async () => {
   const clock: { advance: (ms: number) => void } = { advance: () => {} };
 
-  await using ctx = await setupWarmTest({
+  const ctx = await setupWarmTest({
     partBytes: 4096,
     hook: (request, forward) => {
       // the source goes quiet past the gap, and its abort never arrives
@@ -454,8 +450,7 @@ test('a warm stream cut short, with no abort, removes the memory and frees the s
 });
 
 test('a pending disk grow goes along, and the first wake on the target grows the guest', async () => {
-  await using ctx = await setupWarmTest();
-
+  const ctx = await setupWarmTest();
   const imp = await findImpByName(ctx.source.db, 'dev');
 
   await updateImpDisk(ctx.source.db, ctx.impId, {
@@ -476,8 +471,7 @@ test('a pending disk grow goes along, and the first wake on the target grows the
 });
 
 test("a tap with a MAC from before slot MACs, or none, refuses a warm move, and the target's slot tap goes", async () => {
-  await using refused = await setupWarmTest({ readTapMac: () => '02:aa:bb:cc:dd:ee' });
-
+  const refused = await setupWarmTest({ readTapMac: () => '02:aa:bb:cc:dd:ee' });
   const facts = await refused.targetApp.client.moves.facts();
 
   const rejection = await readRejection(
@@ -485,15 +479,14 @@ test("a tap with a MAC from before slot MACs, or none, refuses a warm move, and 
   );
 
   // a host restart took the tap: the guest may still hold the old MAC
-  await using gone = await setupWarmTest({ readTapMac: () => null });
-
+  const gone = await setupWarmTest({ readTapMac: () => null });
   const goneFacts = await gone.targetApp.client.moves.facts();
 
   const noTap = await readRejection(
     gone.sourceApp.client.moves.prepare({ name: 'dev', target: goneFacts }),
   );
 
-  await using ctx = await setupWarmTest();
+  const ctx = await setupWarmTest();
 
   await ctx.runMove();
 
@@ -504,8 +497,7 @@ test("a tap with a MAC from before slot MACs, or none, refuses a warm move, and 
 });
 
 test('an imp on a private network is refused a warm move', async () => {
-  await using ctx = await setupWarmTest();
-
+  const ctx = await setupWarmTest();
   const network = await writeNetwork(ctx.source.db, 'lab');
 
   await writeMember(ctx.source.db, network?.id ?? '', ctx.impId);
@@ -521,8 +513,7 @@ test('an imp on a private network is refused a warm move', async () => {
 });
 
 test('a warm move carries the cold boots, so the wake on the target finds its boot and adds none', async () => {
-  await using ctx = await setupWarmTest();
-
+  const ctx = await setupWarmTest();
   const before = await listColdBoots(ctx.source.db, ctx.impId);
 
   await ctx.runMove();
@@ -540,7 +531,7 @@ test('a warm move carries the cold boots, so the wake on the target finds its bo
 });
 
 test('a warm-moved imp whose memory cannot load here boots cold with the cause wake_fallback', async () => {
-  await using ctx = await setupWarmTest();
+  const ctx = await setupWarmTest();
 
   await ctx.runMove();
 
@@ -554,8 +545,7 @@ test('a warm-moved imp whose memory cannot load here boots cold with the cause w
 });
 
 test('a carried boot whose time is ahead of the target is clamped to now', async () => {
-  await using ctx = await setupWarmTest();
-
+  const ctx = await setupWarmTest();
   const [boot] = await listColdBoots(ctx.source.db, ctx.impId);
 
   await ctx.source.db

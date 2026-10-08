@@ -43,12 +43,11 @@ async function setupKsmTest(options: KsmTestOptions = {}) {
     harness,
     client,
     readMetaRamMib,
-    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
   };
 }
 
 test('without IMP_KSM, imp info reports no KSM', async () => {
-  await using ctx = await setupKsmTest();
+  const ctx = await setupKsmTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -58,7 +57,7 @@ test('without IMP_KSM, imp info reports no KSM', async () => {
 });
 
 test('with IMP_KSM, a sleep records the unshared size for the wake reserve', async () => {
-  await using ctx = await setupKsmTest({ env: { IMP_KSM: '1' } });
+  const ctx = await setupKsmTest({ env: { IMP_KSM: '1' } });
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -69,7 +68,7 @@ test('with IMP_KSM, a sleep records the unshared size for the wake reserve', asy
 });
 
 test('without IMP_KSM, a sleep records the Pss as before', async () => {
-  await using ctx = await setupKsmTest();
+  const ctx = await setupKsmTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -80,7 +79,7 @@ test('without IMP_KSM, a sleep records the Pss as before', async () => {
 });
 
 test('imp info shows the saving, the headroom and the imps KSM cannot merge', async () => {
-  await using ctx = await setupKsmTest({
+  const ctx = await setupKsmTest({
     env: { IMP_KSM: '1', IMP_KSM_HEADROOM_PERCENT: '50' },
     mergeable: false,
   });
@@ -102,7 +101,7 @@ test('imp info shows the saving, the headroom and the imps KSM cannot merge', as
 });
 
 test('a merge flag impd cannot read is logged, not counted as lost', async () => {
-  await using ctx = await setupKsmTest({ env: { IMP_KSM: '1' }, mergeable: null });
+  const ctx = await setupKsmTest({ env: { IMP_KSM: '1' }, mergeable: null });
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -118,7 +117,7 @@ function isStale(line: string): boolean {
 }
 
 test('without IMP_KSM, an adopted VM that keeps the merge flag is logged once', async () => {
-  await using ctx = await setupKsmTest({ mergeable: true });
+  const ctx = await setupKsmTest({ mergeable: true });
 
   await ctx.client.imps.create({ name: 'dev' });
 

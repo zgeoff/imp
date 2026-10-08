@@ -57,7 +57,7 @@ function buildReport(impId: string, isPartial: boolean): DiskUsageReport {
 test('a pass measures every imp with its checkpoints and keeps the result', async () => {
   const asked: Parameters<MeasureUsage>[0][] = [];
 
-  await using ctx = await setupCache((imps) => {
+  const ctx = await setupCache((imps) => {
     asked.push(imps);
 
     return Promise.resolve(buildReport(imps[0]?.impId ?? '', true));
@@ -83,7 +83,7 @@ test('passes run one at a time, and a failed one keeps the last result', async (
   const gate = Promise.withResolvers<DiskUsageReport>();
   const state = { calls: 0 };
 
-  await using ctx = await setupCache((imps) => {
+  const ctx = await setupCache((imps) => {
     state.calls += 1;
 
     if (state.calls === 1) {
@@ -110,7 +110,7 @@ test('passes run one at a time, and a failed one keeps the last result', async (
 test('an imp a cut-short pass did not reach keeps its last count', async () => {
   const state = { calls: 0 };
 
-  await using ctx = await setupCache((imps) => {
+  const ctx = await setupCache((imps) => {
     state.calls += 1;
 
     const report = buildReport(imps[0]?.impId ?? '', state.calls > 1);
@@ -131,7 +131,7 @@ test('an imp a cut-short pass did not reach keeps its last count', async () => {
 test('a count carries the time its pass started, not the time it ended', async () => {
   const clock = { ms: 1000 };
 
-  await using ctx = await setupCache(
+  const ctx = await setupCache(
     (imps) => {
       // the measure is slow: a write lands while it runs
       clock.ms = 9000;
@@ -151,7 +151,7 @@ test('a refresh asked for during a pass runs a pass of its own after it', async 
   const second = Promise.withResolvers<undefined>();
   const state = { calls: 0 };
 
-  await using ctx = await setupCache(
+  const ctx = await setupCache(
     (imps) => {
       state.calls += 1;
 
@@ -186,7 +186,7 @@ test('a refresh asked for during a pass runs a pass of its own after it', async 
 test('after stop, a refresh runs no pass', async () => {
   const state = { calls: 0 };
 
-  await using ctx = await setupCache(
+  const ctx = await setupCache(
     (imps) => {
       state.calls += 1;
 

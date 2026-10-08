@@ -83,7 +83,7 @@ function sendNoSession(socket: Socket): void {
 }
 
 test('a create, a stop and start, and a wake that falls back each record their cause', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   await ctx.client.imps.stop({ name: 'dev' });
   await ctx.client.imps.start({ name: 'dev' });
@@ -111,7 +111,7 @@ test('a create, a stop and start, and a wake that falls back each record their c
 });
 
 test('impd keeps the last 4 cold boots, newest first', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   for (let restart = 0; restart < 5; restart += 1) {
     ctx.fake.queue('wake', 'fail');
@@ -137,8 +137,7 @@ test('impd keeps the last 4 cold boots, newest first', async () => {
 });
 
 test('a restore of a running imp boots it with the cause restore; of a stopped one, its next boot', async () => {
-  await using ctx = await setupColdBootTest();
-
+  const ctx = await setupColdBootTest();
   const checkpoint = await ctx.client.checkpoints.create({ name: 'dev' });
 
   await ctx.client.checkpoints.restore({ name: 'dev', checkpoint: checkpoint.id });
@@ -157,7 +156,7 @@ test('a restore of a running imp boots it with the cause restore; of a stopped o
 });
 
 test('the boot after impd found the VM gone is a recovery, whatever path boots it', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   await ctx.stopVmUnseen();
 
@@ -176,8 +175,7 @@ test('the boot after impd found the VM gone is a recovery, whatever path boots i
 // the attach boots the stopped imp: its boot comes first, and the recovery
 // that ended the client's generation stays in the list
 test('an attach that boots a crashed imp answers NO_SESSION with its cold boots', async () => {
-  await using ctx = await setupColdBootTest();
-
+  const ctx = await setupColdBootTest();
   const agent = await startSessionAgent(ctx.paths.vsockSocket, sendNoSession);
 
   await ctx.stopVmUnseen();
@@ -200,7 +198,7 @@ test('an attach that boots a crashed imp answers NO_SESSION with its cold boots'
 });
 
 test('an attach with wake false fails with INVALID_STATE and boots nothing', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   await ctx.client.imps.stop({ name: 'dev' });
 
@@ -228,7 +226,7 @@ test('an attach with wake false fails with INVALID_STATE and boots nothing', asy
 });
 
 test('a session’s started output names the cold boots; a resume error keeps its data', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   const replies = [
     (socket: Socket) => {
@@ -293,8 +291,7 @@ test('a session’s started output names the cold boots; a resume error keeps it
 });
 
 test('a VM impd adopts with a boot it has no record of counts as unknown', async () => {
-  await using ctx = await setupColdBootTest();
-
+  const ctx = await setupColdBootTest();
   const agent = await startSessionAgent(ctx.paths.vsockSocket, () => {}, 'boot-before');
 
   const impd = ctx.restartImpd();
@@ -312,7 +309,7 @@ test('a VM impd adopts with a boot it has no record of counts as unknown', async
 // an imp that went to sleep before impd kept cold boots wakes from memory
 // into a boot it has no row for
 test('a memory wake into a boot impd has no record of counts as unknown', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
@@ -332,7 +329,7 @@ test('a memory wake into a boot impd has no record of counts as unknown', async 
 
 // a lost snapshot fails the wake that would use it, whoever finds it first
 test('a sleeping imp whose snapshot is gone boots next with the cause wake_fallback', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
@@ -349,7 +346,7 @@ test('a sleeping imp whose snapshot is gone boots next with the cause wake_fallb
 });
 
 test('a boot without a boot_id spends the pending cause, so a later boot does not inherit it', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   await ctx.stopVmUnseen();
   await ctx.client.imps.get({ name: 'dev' });
@@ -369,7 +366,7 @@ test('a boot without a boot_id spends the pending cause, so a later boot does no
 });
 
 test('two boots in the same millisecond list in the order impd recorded them', async () => {
-  await using ctx = await setupColdBootTest();
+  const ctx = await setupColdBootTest();
 
   const at = new Date();
 

@@ -82,7 +82,7 @@ async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = t
 
   const agent = buildSessionAgent(sessions, knowsKill);
 
-  const listening = await startStubAgent(
+  await startStubAgent(
     buildImpPaths(harness.config.dataDir, imp.id).vsockSocket,
     (socket, request, frames) => {
       if (frames.length === 1) {
@@ -96,16 +96,11 @@ async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = t
     ...app,
     imp,
     agent,
-    async [Symbol.asyncDispose]() {
-      listening.close();
-
-      await harness[Symbol.asyncDispose]();
-    },
   };
 }
 
 test('it lists a running imp’s sessions from its agent', async () => {
-  await using ctx = await setupSessionTest([
+  const ctx = await setupSessionTest([
     buildSession('main', { attached: true }),
     buildSession('job', { state: 'exited', exit: { code: 137, signal: 9 } }),
   ]);
@@ -149,8 +144,7 @@ test('it lists a running imp’s sessions from its agent', async () => {
 });
 
 test('the idle loop’s activity read records the sessions', async () => {
-  await using ctx = await setupSessionTest([buildSession('main')]);
-
+  const ctx = await setupSessionTest([buildSession('main')]);
   const record = await findImpByName(ctx.db, 'dev');
 
   if (record === undefined) {
@@ -165,7 +159,7 @@ test('the idle loop’s activity read records the sessions', async () => {
 });
 
 test('a sleeping imp lists the sessions it went to sleep with, without a wake', async () => {
-  await using ctx = await setupSessionTest([buildSession('main', { attached: true })]);
+  const ctx = await setupSessionTest([buildSession('main', { attached: true })]);
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
@@ -187,7 +181,7 @@ test('a sleeping imp lists the sessions it went to sleep with, without a wake', 
 });
 
 test('a stopped imp has no sessions', async () => {
-  await using ctx = await setupSessionTest([buildSession('main')]);
+  const ctx = await setupSessionTest([buildSession('main')]);
 
   await ctx.client.sessions.list({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -200,7 +194,7 @@ test('a stopped imp has no sessions', async () => {
 });
 
 test('a kill wakes a sleeping imp and ends the session', async () => {
-  await using ctx = await setupSessionTest([buildSession('main'), buildSession('other')]);
+  const ctx = await setupSessionTest([buildSession('main'), buildSession('other')]);
 
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.sessions.kill({ name: 'dev', session: 'main' });
@@ -215,24 +209,21 @@ test('a kill wakes a sleeping imp and ends the session', async () => {
 });
 
 test('a kill of no such session is NOT_FOUND', async () => {
-  await using ctx = await setupSessionTest([]);
-
+  const ctx = await setupSessionTest([]);
   const rejection = await readRejection(ctx.client.sessions.kill({ name: 'dev', session: 'main' }));
 
   expect(rejection).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'session', name: 'main' } });
 });
 
 test('a kill on an agent from before sessions is AGENT_OUTDATED', async () => {
-  await using ctx = await setupSessionTest([], false);
-
+  const ctx = await setupSessionTest([], false);
   const rejection = await readRejection(ctx.client.sessions.kill({ name: 'dev', session: 'main' }));
 
   expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED', status: 409 });
 });
 
 test('a list of an unknown imp is NOT_FOUND', async () => {
-  await using ctx = await setupSessionTest([]);
-
+  const ctx = await setupSessionTest([]);
   const rejection = await readRejection(ctx.client.sessions.list({ name: 'nope' }));
 
   expect(rejection).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'imp', name: 'nope' } });
@@ -241,7 +232,7 @@ test('a list of an unknown imp is NOT_FOUND', async () => {
 test('a session from an agent with offsets lists its generation and its end as last seen', async () => {
   const generation = 'b'.repeat(32);
 
-  await using ctx = await setupSessionTest([
+  const ctx = await setupSessionTest([
     buildSession('main', {
       execution_generation: generation,
       boot_id: '22222222-2222-4222-8222-222222222222',

@@ -37,8 +37,7 @@ async function setupDiskTest() {
 }
 
 test('a new disk takes the size asked for, and never less than its image', async () => {
-  await using ctx = await setupDiskTest();
-
+  const ctx = await setupDiskTest();
   const sized = await ctx.client.imps.create({ name: 'sized', diskMib: 2 * GIB_MIB });
 
   expect(sized.diskMib).toBe(2 * GIB_MIB);
@@ -70,7 +69,7 @@ test('a new disk takes the size asked for, and never less than its image', async
 });
 
 test('a resize grows a stopped disk for its next boot, and never shrinks one', async () => {
-  await using ctx = await setupDiskTest();
+  const ctx = await setupDiskTest();
 
   await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -95,8 +94,7 @@ test('a resize grows a stopped disk for its next boot, and never shrinks one', a
 });
 
 test('a running guest grows at once; a failed grow is retried at the next wake', async () => {
-  await using ctx = await setupDiskTest();
-
+  const ctx = await setupDiskTest();
   const imp = await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
 
   const disk = buildImpPaths(ctx.dataDir, imp.id).disk;
@@ -141,7 +139,7 @@ test('a running guest grows at once; a failed grow is retried at the next wake',
 });
 
 test('a sleeping guest grows when it wakes, and a cold boot needs no grow call', async () => {
-  await using ctx = await setupDiskTest();
+  const ctx = await setupDiskTest();
 
   await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -174,7 +172,7 @@ test('a sleeping guest grows when it wakes, and a cold boot needs no grow call',
 });
 
 test('a checkpoint keeps its disk size, and a restore or a fork takes it', async () => {
-  await using ctx = await setupDiskTest();
+  const ctx = await setupDiskTest();
 
   await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
 
@@ -202,7 +200,7 @@ test('a checkpoint keeps its disk size, and a restore or a fork takes it', async
 });
 
 test('past the reserve, creates and resizes are refused, a sleep keeps its VM, a wake goes on', async () => {
-  await using ctx = await setupDiskTest();
+  const ctx = await setupDiskTest();
 
   await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB, memoryMib: 1024 });
   await ctx.client.imps.create({ name: 'idle', diskMib: 2 * GIB_MIB });

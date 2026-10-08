@@ -1,23 +1,19 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStubTree } from './create-stub-tree';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const root = await mkdtemp(join(tmpdir(), 'imp-stub-tree-'));
 
-  stack.defer(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { root, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { root };
 }
 
 test('it writes each file under the root with its directories', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'a.txt': 'a', 'deep/er/b.txt': 'b' });
 
@@ -29,7 +25,7 @@ test('it writes each file under the root with its directories', async () => {
 });
 
 test('it writes an empty file for empty text', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { empty: '' });
 

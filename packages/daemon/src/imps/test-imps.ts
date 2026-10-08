@@ -1,3 +1,4 @@
+import { onTestFinished } from 'bun:test';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -188,12 +189,31 @@ export interface ImpTestOptions {
   readonly readKsmHostStats?: () => KsmHostStats | null;
 }
 
-// A shim over createImpd's parts, without its start steps, until each test
-// file has its own setupTest. `restartImpd` starts a new impd on the same
-// database, data dir and VMs; given an identity, as an upgrade would.
+// A shim over createImpd's parts, released at the test's end. `restartImpd`
+// starts a new impd on the same database, data dir and VMs; given an
+// identity, as an upgrade would.
 export async function setupImpTest(options: ImpTestOptions = {}) {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
 
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, options);
+
+  return {
+    ...harness,
+
+    // transitional: in-flight area branches still hold the harness with
+    // `await using`; the GEO-135 PR that deletes this shim removes it
+    [Symbol.asyncDispose]: () => stack.disposeAsync(),
+  };
+}
+
+// The same harness outside a test, as the client's smoke impd runs it: each
+// release goes into `stack`, which the caller disposes.
+export async function createImpTest(
+  stack: Readonly<AsyncDisposableStack>,
+  options: ImpTestOptions = {},
+) {
   const dataDir = options.dataDir ?? mkdtempSync(`${tmpdir()}/impd-test-`);
 
   if (options.dataDir === undefined) {
@@ -425,8 +445,6 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     return createImage(db, { name, ref: `${name}:latest`, digest: `sha256:${name}`, sizeBytes: 6 });
   };
 
-  const owned = stack.move();
-
   return {
     config,
     db,
@@ -466,7 +484,6 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     createSystemDrive,
     readIdentity: () => host.identity,
     createTestImage,
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 

@@ -73,7 +73,7 @@ function startMcp(env: Readonly<Record<string, string>>, args: readonly string[]
 test(
   'imp mcp speaks MCP over stdio: initialize, tools/list, tools/call and errors',
   async () => {
-    await using impd = await setupImpdTest();
+    const impd = await setupImpdTest();
 
     const mcp = startMcp({ IMP_URL: impd.url, IMP_TOKEN: impd.token }, ['--prefix', 'agent-']);
 
@@ -151,7 +151,7 @@ test(
 test(
   'when the client goes away, a command still running in the guest is stopped',
   async () => {
-    await using impd = await setupImpdTest();
+    const impd = await setupImpdTest();
 
     await impd.client.imps.create({ name: 'box', image: 'ubuntu' });
 

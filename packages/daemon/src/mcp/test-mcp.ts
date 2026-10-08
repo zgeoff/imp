@@ -1,10 +1,11 @@
+import { onTestFinished } from 'bun:test';
 import type { Scope } from '@imp/api';
 import { createImpGuard, createMcpServer } from '@imp/mcp';
 import type { GuardOptions } from '@imp/mcp';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import type { AppDeps } from '../build-app';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
+import { TEST_TOKEN, buildTestApp, createImpTest } from '../imps/test-imps';
 import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
 
 // a JSON-RPC response as the tests read it
@@ -35,13 +36,33 @@ interface ImpdTestOptions {
 }
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
-// an image, and a client for it
+// an image, and a client for it; the test's end releases it
 export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
 
-  const setup = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
+  onTestFinished(() => stack.disposeAsync());
 
-  const harness = stack.use(setup);
+  const impd = await createImpdTest(stack, options);
+
+  return {
+    ...impd,
+
+    // transitional: in-flight area branches still hold the harness with
+    // `await using`; the GEO-135 PR that deletes this shim removes it
+    [Symbol.asyncDispose]: () => stack.disposeAsync(),
+  };
+}
+
+// setupImpdTest's impd, its releases in `stack`: deferred first, the
+// harness's run last
+async function createImpdTest(
+  stack: Readonly<AsyncDisposableStack>,
+  options: Readonly<ImpdTestOptions>,
+) {
+  const harness = await createImpTest(stack, {
+    ...(options.env !== undefined && { env: options.env }),
+  });
+
   const guest = buildStubExecGuest({ oldAgent: options.oldAgent ?? false });
 
   // the fake guest runs no agent, but the imp wakes or boots as for a real one
@@ -70,8 +91,6 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
 
   await harness.createTestImage('ubuntu');
 
-  const owned = stack.move();
-
   return {
     ...harness,
     guest,
@@ -81,7 +100,6 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
     peers: built.peers,
     url,
     token: TEST_TOKEN,
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
@@ -97,15 +115,17 @@ interface McpTestOptions {
 }
 
 // an impd as setupImpdTest makes it, and an MCP server in process over its
-// client, as stdio runs it; `sent` holds every message it wrote, parsed
+// client, as stdio runs it; `sent` holds every message it wrote, parsed. The
+// test's end releases it.
 export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
 
-  const setup = await setupImpdTest({
+  onTestFinished(() => stack.disposeAsync());
+
+  const impd = await createImpdTest(stack, {
     ...(options.oldAgent !== undefined && { oldAgent: options.oldAgent }),
   });
 
-  const impd = stack.use(setup);
   const sent: unknown[] = [];
   const server = createMcpServer({ version: '1.2.3', progressIntervalMs: 50, killGraceMs: 50 });
 
@@ -156,14 +176,15 @@ export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
     return ToolResultSchema.parse(response?.result);
   };
 
-  const owned = stack.move();
-
   return {
     ...impd,
     mcp,
     sent,
     sendRequest,
     runTool,
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
+
+    // transitional: in-flight area branches still hold the harness with
+    // `await using`; the GEO-135 PR that deletes this shim removes it
+    [Symbol.asyncDispose]: () => stack.disposeAsync(),
   };
 }

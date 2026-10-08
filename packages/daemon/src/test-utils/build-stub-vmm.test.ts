@@ -10,23 +10,20 @@ import { TemplateRestoreError } from '../vmm/template-vm';
 import { STUB_AGENT_VERSION, StubVmError, buildStubBootId, buildStubVmm } from './build-stub-vmm';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const dir = await mkdtemp(join(tmpdir(), 'stub-vmm-'));
 
-  stack.defer(() => rm(dir, { recursive: true, force: true }));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   // every runner call takes an imp's paths; the fake writes snapshots there
   const paths = buildImpPaths(dir, 'imp-1');
   const fake = buildStubVmm();
   const runner = fake.startGeneration();
-  const owned = stack.move();
 
-  return { dir, paths, fake, runner, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { dir, paths, fake, runner };
 }
 
 test('#STUB_AGENT_VERSION is the agent version a boot reports by default', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const vm = await ctx.runner.startVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -67,7 +64,7 @@ test('#buildStubBootId builds different ids for different pids', () => {
 });
 
 test('#buildStubVmm starts a running VM with a boot id from its pid on a boot', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const vm = await ctx.runner.startVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -101,7 +98,7 @@ test('#buildStubVmm starts a running VM with a boot id from its pid on a boot', 
 });
 
 test('#buildStubVmm reports the agent version a test sets on a boot', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.agent.version = '0.5.0';
 
@@ -126,7 +123,7 @@ test('#buildStubVmm reports the agent version a test sets on a boot', async () =
 });
 
 test('#buildStubVmm rejects a failed boot and leaves no VM', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('boot', 'fail');
 
@@ -155,7 +152,7 @@ test('#buildStubVmm rejects a failed boot and leaves no VM', async () => {
 });
 
 test('#buildStubVmm rejects a failed boot with a fake error', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('boot', 'fail');
 
@@ -180,7 +177,7 @@ test('#buildStubVmm rejects a failed boot with a fake error', async () => {
 });
 
 test('#buildStubVmm returns the pid of a VM that is already gone when a boot dies', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('boot', 'die');
 
@@ -207,7 +204,7 @@ test('#buildStubVmm returns the pid of a VM that is already gone when a boot die
 });
 
 test('#buildStubVmm reports the identity reset result on a boot that asks for one', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.setIdentityReset('failed');
 
@@ -232,7 +229,7 @@ test('#buildStubVmm reports the identity reset result on a boot that asks for on
 });
 
 test('#buildStubVmm reports an ok identity reset by default', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const vm = await ctx.runner.startVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -255,7 +252,7 @@ test('#buildStubVmm reports an ok identity reset by default', async () => {
 });
 
 test('#buildStubVmm reports an absent identity reset for an agent that leaves it out', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.setIdentityReset(undefined);
 
@@ -287,7 +284,7 @@ test('#buildStubVmm reports an absent identity reset for an agent that leaves it
 });
 
 test('#buildStubVmm leaves the boot id out once guests stop reporting one', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.setGuestBootId(false);
 
@@ -312,7 +309,7 @@ test('#buildStubVmm leaves the boot id out once guests stop reporting one', asyn
 });
 
 test('#buildStubVmm keeps the boot id of the socket last boot on a wake', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const booted = await ctx.runner.startVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -351,7 +348,7 @@ test('#buildStubVmm keeps the boot id of the socket last boot on a wake', async 
 });
 
 test('#buildStubVmm starts a running VM and marks its snapshot used on a wake', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const vm = await ctx.runner.wakeVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -367,7 +364,7 @@ test('#buildStubVmm starts a running VM and marks its snapshot used on a wake', 
 });
 
 test('#buildStubVmm marks the snapshot used and leaves no VM when a wake fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('wake', 'fail');
 
@@ -387,7 +384,7 @@ test('#buildStubVmm marks the snapshot used and leaves no VM when a wake fails',
 });
 
 test('#buildStubVmm returns the pid of a VM that is already gone when a wake dies', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('wake', 'die');
 
@@ -403,7 +400,7 @@ test('#buildStubVmm returns the pid of a VM that is already gone when a wake die
 });
 
 test('#buildStubVmm records the jail user and the snapshot files present when a wake begins', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   mkdirSync(ctx.paths.snapshotDir, { recursive: true });
   writeFileSync(ctx.paths.disk, 'disk');
@@ -423,7 +420,7 @@ test('#buildStubVmm records the jail user and the snapshot files present when a 
 });
 
 test('#buildStubVmm pauses the VM while its snapshot is taken', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
   const seen: { state: string | undefined; isAlive: boolean }[] = [];
@@ -440,7 +437,7 @@ test('#buildStubVmm pauses the VM while its snapshot is taken', async () => {
 });
 
 test('#buildStubVmm writes the snapshot by rename and frees the VM on a sleep', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const vm = await ctx.runner.wakeVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -462,7 +459,7 @@ test('#buildStubVmm writes the snapshot by rename and frees the VM on a sleep', 
 });
 
 test('#buildStubVmm writes the snapshot into the target a sleep names', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
   const target = buildSnapshotPaths(join(ctx.dir, 'watchdog'));
@@ -474,7 +471,7 @@ test('#buildStubVmm writes the snapshot into the target a sleep names', async ()
 });
 
 test('#buildStubVmm resumes the VM and writes no snapshot when a sleep fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -488,7 +485,7 @@ test('#buildStubVmm resumes the VM and writes no snapshot when a sleep fails', a
 });
 
 test('#buildStubVmm rejects a failed sleep with a fake error', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -501,7 +498,7 @@ test('#buildStubVmm rejects a failed sleep with a fake error', async () => {
 });
 
 test('#buildStubVmm kills the VM and writes no snapshot when a sleep dies', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -514,7 +511,7 @@ test('#buildStubVmm kills the VM and writes no snapshot when a sleep dies', asyn
 });
 
 test('#buildStubVmm records a stop and frees the VM', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -527,7 +524,7 @@ test('#buildStubVmm records a stop and frees the VM', async () => {
 test.each(['fail', 'die'] as const)(
   '#buildStubVmm keeps the VM alive when a stop takes outcome %s',
   async (outcome) => {
-    await using ctx = await setupTest();
+    const ctx = await setupTest();
 
     const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -541,7 +538,7 @@ test.each(['fail', 'die'] as const)(
 );
 
 test('#buildStubVmm rejects a failed stop as a VM that survived SIGKILL', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -554,7 +551,7 @@ test('#buildStubVmm rejects a failed stop as a VM that survived SIGKILL', async 
 });
 
 test('#buildStubVmm stops a VM that already exited even when the stop fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('stop', 'fail');
 
@@ -564,7 +561,7 @@ test('#buildStubVmm stops a VM that already exited even when the stop fails', as
 });
 
 test('#buildStubVmm records a grow of the disk', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.runner.growDrive(ctx.paths, 4_294_967_296);
 
@@ -572,7 +569,7 @@ test('#buildStubVmm records a grow of the disk', async () => {
 });
 
 test('#buildStubVmm rejects a failed grow with a fake error', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('grow', 'fail');
 
@@ -583,7 +580,7 @@ test('#buildStubVmm rejects a failed grow with a fake error', async () => {
 });
 
 test('#buildStubVmm rejects a grow that dies as an agent from before grow', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('grow', 'die');
 
@@ -594,15 +591,14 @@ test('#buildStubVmm rejects a grow that dies as an agent from before grow', asyn
 });
 
 test('#buildStubVmm reports the agent ready by default', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const isReady = await ctx.runner.isAgentReady(ctx.paths);
 
   expect(isReady).toBeTrue();
 });
 
 test('#buildStubVmm reports the agent not ready when the step fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('agentReady', 'fail');
 
@@ -612,7 +608,7 @@ test('#buildStubVmm reports the agent not ready when the step fails', async () =
 });
 
 test('#buildStubVmm finishes a wake with the agent version and the socket boot id', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const booted = await ctx.runner.startVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -641,7 +637,7 @@ test('#buildStubVmm finishes a wake with the agent version and the socket boot i
 });
 
 test('#buildStubVmm rejects finishing a wake when the agent step fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('agentReady', 'fail');
 
@@ -652,7 +648,7 @@ test('#buildStubVmm rejects finishing a wake when the agent step fails', async (
 });
 
 test('#buildStubVmm reports the guest uptime a test sets', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.setGuestUptime(1500);
 
@@ -662,15 +658,14 @@ test('#buildStubVmm reports the guest uptime a test sets', async () => {
 });
 
 test('#buildStubVmm reports a guest old enough to sleep by default', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const uptimeMs = await ctx.runner.readGuestUptimeMs(ctx.paths);
 
   expect(uptimeMs).toBe(60_000);
 });
 
 test('#buildStubVmm reports the state of the VM serving the socket', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.spawnOrphan({ paths: ctx.paths, state: 'Paused' });
 
@@ -680,7 +675,7 @@ test('#buildStubVmm reports the state of the VM serving the socket', async () =>
 });
 
 test('#buildStubVmm answers the state from the newest live VM on the socket', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.spawnOrphan({ paths: ctx.paths, state: 'Paused' });
   ctx.fake.spawnOrphan({ paths: ctx.paths, state: 'Running' });
@@ -691,15 +686,14 @@ test('#buildStubVmm answers the state from the newest live VM on the socket', as
 });
 
 test('#buildStubVmm reports no state when no VM serves the socket', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const state = await ctx.runner.readVmState(ctx.paths);
 
   expect(state).toBeNull();
 });
 
 test('#buildStubVmm reports no state when the state step fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.spawnOrphan({ paths: ctx.paths });
   ctx.fake.queue('vmState', 'fail');
@@ -710,7 +704,7 @@ test('#buildStubVmm reports no state when the state step fails', async () => {
 });
 
 test('#buildStubVmm resumes the paused VM serving the socket', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths, state: 'Paused' });
 
@@ -720,7 +714,7 @@ test('#buildStubVmm resumes the paused VM serving the socket', async () => {
 });
 
 test('#buildStubVmm takes queued outcomes in order then succeeds', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('agentReady', 'fail', 'ok');
   ctx.fake.queue('agentReady', 'fail');
@@ -736,7 +730,7 @@ test('#buildStubVmm takes queued outcomes in order then succeeds', async () => {
 });
 
 test('#buildStubVmm succeeds after the queues are cleared', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('agentReady', 'fail');
   ctx.fake.clearQueues();
@@ -747,7 +741,7 @@ test('#buildStubVmm succeeds after the queues are cleared', async () => {
 });
 
 test('#buildStubVmm keeps a held call pending once it reaches the hold', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const hold = ctx.fake.hold('agentReady');
 
@@ -763,7 +757,7 @@ test('#buildStubVmm keeps a held call pending once it reaches the hold', async (
 });
 
 test('#buildStubVmm lets a held call through on release', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const hold = ctx.fake.hold('agentReady');
   const call = ctx.runner.isAgentReady(ctx.paths);
@@ -776,7 +770,7 @@ test('#buildStubVmm lets a held call through on release', async () => {
 });
 
 test('#buildStubVmm stops holding a step after release', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.hold('agentReady').release();
 
@@ -786,7 +780,7 @@ test('#buildStubVmm stops holding a step after release', async () => {
 });
 
 test('#buildStubVmm keeps a hung call pending until the hangs are released', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('agentReady', 'hang');
 
@@ -804,7 +798,7 @@ test('#buildStubVmm keeps a hung call pending until the hangs are released', asy
 });
 
 test('#buildStubVmm lets a hung call succeed when the hangs are released', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const paced = Promise.withResolvers<void>();
 
@@ -826,7 +820,7 @@ test('#buildStubVmm lets a hung call succeed when the hangs are released', async
 });
 
 test('#buildStubVmm hangs a later call again after the hangs are released', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.releaseHangs();
   ctx.fake.queue('agentReady', 'hang');
@@ -845,7 +839,7 @@ test('#buildStubVmm hangs a later call again after the hangs are released', asyn
 });
 
 test('#buildStubVmm never settles a call of a runner whose impd was replaced', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const next = ctx.fake.startGeneration();
   const call = ctx.runner.isAgentReady(ctx.paths);
@@ -858,7 +852,7 @@ test('#buildStubVmm never settles a call of a runner whose impd was replaced', a
 });
 
 test('#buildStubVmm never settles an in-flight call once its impd is replaced', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const hold = ctx.fake.hold('agentReady');
   const call = ctx.runner.isAgentReady(ctx.paths);
@@ -877,7 +871,7 @@ test('#buildStubVmm never settles an in-flight call once its impd is replaced', 
 });
 
 test('#buildStubVmm throws on a liveness check by a runner whose impd was replaced', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -890,7 +884,7 @@ test('#buildStubVmm throws on a liveness check by a runner whose impd was replac
 });
 
 test('#buildStubVmm shares live VMs with the runner of the next impd', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
   const next = ctx.fake.startGeneration();
@@ -899,8 +893,7 @@ test('#buildStubVmm shares live VMs with the runner of the next impd', async () 
 });
 
 test('#buildStubVmm reports a guest no test set up as 512 MiB with nothing plugged', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const memory = await ctx.runner.readGuestMemory(ctx.paths);
 
   expect(memory).toStrictEqual({
@@ -912,7 +905,7 @@ test('#buildStubVmm reports a guest no test set up as 512 MiB with nothing plugg
 });
 
 test('#buildStubVmm plugs the memory a request asks for', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await ctx.runner.requestPluggedMib(ctx.paths, 256);
 
@@ -933,7 +926,7 @@ test.each([
 ])(
   '#buildStubVmm unplugs a request for %d MiB to %d MiB above a 128 MiB floor',
   async (requestedMib, pluggedMib) => {
-    await using ctx = await setupTest();
+    const ctx = await setupTest();
 
     ctx.fake.guestMemory.set(ctx.paths.dir, {
       baseMib: 512,
@@ -956,7 +949,7 @@ test.each([
 );
 
 test('#buildStubVmm never plugs memory up to the unplug floor', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.guestMemory.set(ctx.paths.dir, {
     baseMib: 512,
@@ -972,7 +965,7 @@ test('#buildStubVmm never plugs memory up to the unplug floor', async () => {
 });
 
 test('#buildStubVmm spawns an orphan that serves the imp socket with a pid file', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths, owner: { uid: 30_001, cgroup: null } });
 
@@ -985,7 +978,7 @@ test('#buildStubVmm spawns an orphan that serves the imp socket with a pid file'
 });
 
 test('#buildStubVmm spawns an orphan without a pid file when its start died first', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths, pidFile: false });
 
@@ -994,7 +987,7 @@ test('#buildStubVmm spawns an orphan without a pid file when its start died firs
 });
 
 test('#buildStubVmm spawns a live process that serves no socket without paths', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan();
 
@@ -1004,7 +997,7 @@ test('#buildStubVmm spawns a live process that serves no socket without paths', 
 });
 
 test('#buildStubVmm reports the owner a test sets for a VM', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: ctx.paths });
 
@@ -1014,7 +1007,7 @@ test('#buildStubVmm reports the owner a test sets for a VM', async () => {
 });
 
 test('#buildStubVmm reports impd itself as the owner of an unknown pid', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const owner = ctx.runner.readVmOwner(4242);
 
@@ -1022,7 +1015,7 @@ test('#buildStubVmm reports impd itself as the owner of an unknown pid', async (
 });
 
 test('#buildStubVmm lists only the live VMs', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const stopped = ctx.fake.spawnOrphan({ paths: ctx.paths });
   const other = buildImpPaths(ctx.dir, 'imp-2');
@@ -1036,8 +1029,7 @@ test('#buildStubVmm lists only the live VMs', async () => {
 });
 
 test('#buildStubVmm records a jail sweep that finds no orphan jails', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const removed = await ctx.runner.removeOrphanJails(new Set(['imp-1']));
 
   expect(removed).toStrictEqual([]);
@@ -1045,7 +1037,7 @@ test('#buildStubVmm records a jail sweep that finds no orphan jails', async () =
 });
 
 test('#buildStubVmm writes the snapshot files on a template build', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const snapshot = buildSnapshotPaths(join(ctx.dir, 'templates', 'shape-1'));
 
@@ -1082,7 +1074,7 @@ test('#buildStubVmm writes the snapshot files on a template build', async () => 
 });
 
 test('#buildStubVmm rejects a failed template build with a fake error', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const snapshot = buildSnapshotPaths(join(ctx.dir, 'templates', 'shape-1'));
 
@@ -1119,7 +1111,7 @@ test('#buildStubVmm rejects a failed template build with a fake error', async ()
 });
 
 test('#buildStubVmm writes no snapshot when a template build fails', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const snapshot = buildSnapshotPaths(join(ctx.dir, 'templates', 'shape-1'));
 
@@ -1158,7 +1150,7 @@ test('#buildStubVmm writes no snapshot when a template build fails', async () =>
 });
 
 test('#buildStubVmm starts a running VM and records the claim on a template restore', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const plan = {
     firecrackerBin: '/usr/bin/firecracker',
@@ -1205,7 +1197,7 @@ test('#buildStubVmm starts a running VM and records the claim on a template rest
 });
 
 test('#buildStubVmm reports the identity reset on a template restore whose claim asks for one', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const vm = await ctx.runner.loadTemplateVm({
     firecrackerBin: '/usr/bin/firecracker',
@@ -1237,7 +1229,7 @@ test('#buildStubVmm reports the identity reset on a template restore whose claim
 });
 
 test('#buildStubVmm rejects a failed template restore as the template fault', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('restore', 'fail');
 
@@ -1276,7 +1268,7 @@ test('#buildStubVmm rejects a failed template restore as the template fault', as
 });
 
 test('#buildStubVmm rejects a disk failure on a template restore as the imp fault', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const disk = Promise.withResolvers<number>();
 
@@ -1313,7 +1305,7 @@ test('#buildStubVmm rejects a disk failure on a template restore as the imp faul
 });
 
 test('#buildStubVmm ends the VM when the disk fails on a template restore', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const disk = Promise.withResolvers<number>();
 
@@ -1351,7 +1343,7 @@ test('#buildStubVmm ends the VM when the disk fails on a template restore', asyn
 });
 
 test('#buildStubVmm rejects a failed claim on a template restore as the imp fault', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('claim', 'fail');
 
@@ -1386,7 +1378,7 @@ test('#buildStubVmm rejects a failed claim on a template restore as the imp faul
 });
 
 test('#buildStubVmm ends the VM and records no restore when the claim fails on a template restore', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.fake.queue('claim', 'fail');
 

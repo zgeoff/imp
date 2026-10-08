@@ -1,25 +1,18 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSourcedFunction } from './test-utils/run-sourced-function';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-lib-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
@@ -83,8 +76,7 @@ test('#IMP_HOST_IMAGE defaults to the tag of the checkout lib.sh is in', () => {
 });
 
 test('#IMP_HOST_IMAGE defaults to the same tag for a checkout reached through a symlink', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const link = join(ctx.dir, 'linked-checkout');
 
   symlinkSync(realpathSync(new URL('..', import.meta.url).pathname), link);

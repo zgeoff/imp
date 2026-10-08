@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 test('a backup leaves out image builders', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('base');
   await ctx.imps.createImp({ name: 'dev', image: 'base' });

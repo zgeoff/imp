@@ -98,7 +98,7 @@ function buildDashboardClient(app: DashboardApp, expiresAt: number) {
 }
 
 test('a stream sends the snapshot, then each change with its reason', async () => {
-  await using ctx = await setupEventTest();
+  const ctx = await setupEventTest();
 
   await ctx.client.imps.create({ name: 'old' });
 
@@ -132,7 +132,7 @@ test('a stream sends the snapshot, then each change with its reason', async () =
 });
 
 test('a slept event counts the work before its durationMs in prepareMs', async () => {
-  await using ctx = await setupEventTest({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
+  const ctx = await setupEventTest({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -153,7 +153,7 @@ test('a slept event counts the work before its durationMs in prepareMs', async (
 });
 
 test('a liveness repair and a restarted impd adopting a VM each send an event', async () => {
-  await using ctx = await setupEventTest();
+  const ctx = await setupEventTest();
 
   await ctx.client.imps.create({ name: 'dead' });
   await ctx.client.imps.create({ name: 'alive' });
@@ -181,7 +181,7 @@ test('a liveness repair and a restarted impd adopting a VM each send an event', 
 });
 
 test('a secret value reaches no event and no audit row', async () => {
-  await using ctx = await setupEventTest();
+  const ctx = await setupEventTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -209,8 +209,7 @@ test('a secret value reaches no event and no audit row', async () => {
 });
 
 test('a dashboard stream ends at the session expiry and at any logout', async () => {
-  await using ctx = await setupEventTest();
-
+  const ctx = await setupEventTest();
   const expiring = await readEvents(buildDashboardClient(ctx.app, ctx.now() + 100));
 
   await expiring.ended;
@@ -266,8 +265,7 @@ async function isOpen(stream: Readonly<{ ended: Promise<void> }>): Promise<boole
 }
 
 test('an event that fails the schema is dropped and the stream goes on', async () => {
-  await using ctx = await setupEventTest();
-
+  const ctx = await setupEventTest();
   const stream = await readEvents(ctx.client);
 
   ctx.imps.events.publish(buildDecision('boot template'));
@@ -289,7 +287,7 @@ test('an event that fails the schema is dropped and the stream goes on', async (
 });
 
 test('a snapshot imp that fails the schema is dropped and the stream goes on', async () => {
-  await using ctx = await setupEventTest();
+  const ctx = await setupEventTest();
 
   await ctx.client.imps.create({ name: 'bad' });
   await ctx.client.imps.create({ name: 'good' });

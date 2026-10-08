@@ -54,10 +54,8 @@ test('it stores the write script stdin at the path when stdin closes', async () 
 
   const events = await Array.fromAsync(stream.events());
 
-  expect({ events, stored: guest.files.get('/work/out.txt') }).toStrictEqual({
-    events: [{ type: 'exit', code: 0, signal: 0 }],
-    stored: new TextEncoder().encode('hello world'),
-  });
+  expect(events).toStrictEqual([{ type: 'exit', code: 0, signal: 0 }]);
+  expect(guest.files.get('/work/out.txt')).toStrictEqual(new TextEncoder().encode('hello world'));
 });
 
 test('it stores nothing before the write script stdin closes', async () => {
@@ -86,18 +84,17 @@ test('it fails a write under /readonly/ with the read-only file system error', a
 
   const events = await Array.fromAsync(stream.events());
 
-  expect({ events, keys: [...guest.files.keys()] }).toStrictEqual({
-    events: [
-      {
-        type: 'stderr',
-        data: new TextEncoder().encode(
-          "mkdir: can't create directory '/readonly': Read-only file system\n",
-        ),
-      },
-      { type: 'exit', code: 1, signal: 0 },
-    ],
-    keys: [],
-  });
+  expect(events).toStrictEqual([
+    {
+      type: 'stderr',
+      data: new TextEncoder().encode(
+        "mkdir: can't create directory '/readonly': Read-only file system\n",
+      ),
+    },
+    { type: 'exit', code: 1, signal: 0 },
+  ]);
+
+  expect([...guest.files.keys()]).toStrictEqual([]);
 });
 
 test('it prints the text of a shell echo and exits 0', async () => {
@@ -198,13 +195,12 @@ test('it prints waited and exits 0 once the wait for N ms ends', async () => {
 
   const events = await Array.fromAsync(stream.events());
 
-  expect({ waits, events }).toStrictEqual({
-    waits: [15_000],
-    events: [
-      { type: 'stdout', data: new TextEncoder().encode('waited\n') },
-      { type: 'exit', code: 0, signal: 0 },
-    ],
-  });
+  expect(waits).toStrictEqual([15_000]);
+
+  expect(events).toStrictEqual([
+    { type: 'stdout', data: new TextEncoder().encode('waited\n') },
+    { type: 'exit', code: 0, signal: 0 },
+  ]);
 });
 
 test('it emits nothing for wait while the wait runs', async () => {

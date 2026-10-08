@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { chmod, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,19 +13,15 @@ import { createStubTree } from './test-utils/create-stub-tree';
 import { parseTarEntries } from './test-utils/parse-tar-entries';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const root = await mkdtemp(join(tmpdir(), 'imp-local-path-'));
 
-  stack.defer(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { root, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { root };
 }
 
 test('#listLocalEntries lists the path and everything under it, parents first, named from its base', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'top/b.sh': 'run', 'top/a/c.txt': 'c' });
   await chmod(join(ctx.root, 'top/b.sh'), 0o755);
@@ -83,7 +79,7 @@ test('#listLocalEntries lists the path and everything under it, parents first, n
 });
 
 test('#listLocalEntries lists a FIFO as an other entry', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await mkdir(join(ctx.root, 'top'));
   await $`mkfifo ${join(ctx.root, 'top/pipe')}`;
@@ -123,7 +119,7 @@ test('#countFileBytes sums the sizes of the files and nothing else', () => {
 });
 
 test('#countTarBytes counts the length of the tar writeLocalEntries makes', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const top = join(ctx.root, 'top');
 
@@ -156,7 +152,7 @@ test('#countTarBytes counts the length of the tar writeLocalEntries makes', asyn
 });
 
 test('#writeLocalEntries writes a tar of the directories, files and symlinks', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'top/a.txt': 'alpha' });
   await symlink('a.txt', join(ctx.root, 'top/link'));
@@ -193,7 +189,7 @@ test('#writeLocalEntries writes a tar of the directories, files and symlinks', a
 });
 
 test('#writeLocalEntries reports the bytes of each file to progress as it packs them', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'top/a.txt': 'alpha', 'top/b.txt': 'be' });
 
@@ -216,7 +212,7 @@ test('#writeLocalEntries reports the bytes of each file to progress as it packs 
 });
 
 test('#writeLocalEntries warns about and leaves out an entry that is not a file, directory or symlink', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'top/a.txt': 'alpha' });
   await $`mkfifo ${join(ctx.root, 'top/pipe')}`;

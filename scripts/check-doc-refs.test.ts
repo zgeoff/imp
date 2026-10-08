@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,21 +6,14 @@ import { buildAnchor, checkFile, readAnchors } from './check-doc-refs';
 import { buildStubDocRepo } from './test-utils/build-stub-doc-repo';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-doc-refs-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
@@ -185,7 +178,7 @@ test('#checkFile fails a blob URL into this repo whose file does not exist', () 
 });
 
 test('#check-doc-refs fails the run when git cannot list the tracked files', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const result = Bun.spawnSync(['bun', new URL('check-doc-refs.ts', import.meta.url).pathname], {
     cwd: ctx.dir,

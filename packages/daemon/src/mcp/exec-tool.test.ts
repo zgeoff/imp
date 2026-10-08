@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { setupMcpTest } from './test-mcp';
 
 test('imp_exec runs a command line through /bin/sh -c and returns its output', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -33,7 +33,7 @@ test('imp_exec runs a command line through /bin/sh -c and returns its output', a
 });
 
 test('imp_exec runs argv as it is, with stdin, and a non-zero exit is not a tool error', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -53,7 +53,7 @@ test('imp_exec runs argv as it is, with stdin, and a non-zero exit is not a tool
 });
 
 test('imp_exec passes a requirement to impd, and refuses an unknown one', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -73,8 +73,7 @@ test('imp_exec passes a requirement to impd, and refuses an unknown one', async 
 });
 
 test('imp_exec needs exactly one of command and argv', async () => {
-  await using ctx = await setupMcpTest();
-
+  const ctx = await setupMcpTest();
   const neither = await ctx.runTool('imp_exec', { name: 'dev' });
   const both = await ctx.runTool('imp_exec', { name: 'dev', command: 'x', argv: ['x'] });
 
@@ -84,7 +83,7 @@ test('imp_exec needs exactly one of command and argv', async () => {
 });
 
 test('imp_exec has no exec in the agent: an outer field is refused, and nothing runs', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -95,7 +94,7 @@ test('imp_exec has no exec in the agent: an outer field is refused, and nothing 
 });
 
 test('imp_exec keeps the head and the tail of a large output and counts what it dropped', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -118,7 +117,7 @@ test('imp_exec keeps the head and the tail of a large output and counts what it 
 });
 
 test('a timeout sends SIGTERM to the command and reports timedOut', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -144,7 +143,7 @@ test('a timeout sends SIGTERM to the command and reports timedOut', async () => 
 // before protocol 0.8.0 the rest of the group outlives the stop until the
 // imp restarts (docs/guides/operations.md#upgrade)
 test('on an agent from before the group kill, a stop opens no second exec', async () => {
-  await using ctx = await setupMcpTest({ oldAgent: true });
+  const ctx = await setupMcpTest({ oldAgent: true });
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -159,7 +158,7 @@ test('on an agent from before the group kill, a stop opens no second exec', asyn
 });
 
 test('a command that ignores SIGTERM gets SIGKILL after the grace', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -177,7 +176,7 @@ test('a command that ignores SIGTERM gets SIGKILL after the grace', async () => 
 });
 
 test('a cancelled exec stops the command and gets no response', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -204,7 +203,7 @@ test('a cancelled exec stops the command and gets no response', async () => {
 });
 
 test('close stops every call in flight, as when the client goes away', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -224,7 +223,7 @@ test('close stops every call in flight, as when the client goes away', async () 
 });
 
 test('a call with a progress token gets progress notifications while it runs', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -251,7 +250,7 @@ test('a call with a progress token gets progress notifications while it runs', a
 });
 
 test('an exec on a stopped imp boots it first', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = await setupMcpTest();
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.client.imps.stop({ name: 'dev' });

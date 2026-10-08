@@ -33,8 +33,7 @@ async function setup(status: RecordsStatus | null) {
 }
 
 test('an expose whose record write fails says so, and still makes the imp public', async () => {
-  await using ctx = await setup({ isOk: false, error: 'Cloudflare 403', at: 0 });
-
+  const ctx = await setup({ isOk: false, error: 'Cloudflare 403', at: 0 });
   const result = await ctx.exposure.expose({ name: 'web', auth: 'token' });
 
   expect(result.warning).toBe(
@@ -46,8 +45,7 @@ test('an expose whose record write fails says so, and still makes the imp public
 });
 
 test('an expose and an unexpose each update the records at once', async () => {
-  await using ctx = await setup({ isOk: true, error: null, at: 0 });
-
+  const ctx = await setup({ isOk: true, error: null, at: 0 });
   const result = await ctx.exposure.expose({ name: 'web', auth: 'none' });
   const imp = await ctx.exposure.unexpose('web');
 

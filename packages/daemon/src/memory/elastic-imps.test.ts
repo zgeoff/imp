@@ -28,7 +28,7 @@ async function setupElasticTest(env: Readonly<Record<string, string>> = {}, cgro
 }
 
 test('a max above 4 × memory, or below it, is refused at create', async () => {
-  await using ctx = await setupElasticTest();
+  const ctx = await setupElasticTest();
 
   const tooBig = await ctx.client.imps
     .create({ name: 'big', memoryMib: 256, maxMemoryMib: 1025 })
@@ -55,7 +55,7 @@ test('a max above 4 × memory, or below it, is refused at create', async () => {
 });
 
 test('an imp whose max is larger than the whole RAM budget never boots', async () => {
-  await using ctx = await setupElasticTest({ IMP_RAM_BUDGET_MIB: '1024' });
+  const ctx = await setupElasticTest({ IMP_RAM_BUDGET_MIB: '1024' });
 
   // its memory fits, but the guest could grow past the budget
   const refused = await ctx.client.imps
@@ -67,8 +67,7 @@ test('an imp whose max is larger than the whole RAM budget never boots', async (
 });
 
 test('a sleep unplugs what the guest can spare, and the wake allows what it kept', async () => {
-  await using ctx = await setupElasticTest();
-
+  const ctx = await setupElasticTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -97,8 +96,7 @@ test('a sleep unplugs what the guest can spare, and the wake allows what it kept
 });
 
 test('a sleep during a plug records what the plug asked for, so the wake allows it', async () => {
-  await using ctx = await setupElasticTest();
-
+  const ctx = await setupElasticTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -124,7 +122,7 @@ test('a sleep during a plug records what the plug asked for, so the wake allows 
 });
 
 test('an imp that does not grow sleeps without asking its guest', async () => {
-  await using ctx = await setupElasticTest();
+  const ctx = await setupElasticTest();
 
   await ctx.client.imps.create({ name: 'plain', memoryMib: 256 });
 
@@ -167,7 +165,7 @@ function setupCgroupRoot() {
 test("memory.max follows the guest: its memory at boot, raised by a grow, the plug's size at wake", async () => {
   using root = setupCgroupRoot();
 
-  await using ctx = await setupElasticTest({}, root.cgroups);
+  const ctx = await setupElasticTest({}, root.cgroups);
 
   // an agent that moves its container's limit with the guest
   ctx.fake.agent.version = '0.17.0';
@@ -208,8 +206,7 @@ test("memory.max follows the guest: its memory at boot, raised by a grow, the pl
 test('after a restart, adopt allows what the guest holds before a sleep can set up its cgroup', async () => {
   using root = setupCgroupRoot();
 
-  await using ctx = await setupElasticTest({}, root.cgroups);
-
+  const ctx = await setupElasticTest({}, root.cgroups);
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -238,7 +235,7 @@ test('after a restart, adopt allows what the guest holds before a sleep can set 
 });
 
 test('an elastic imp whose agent predates elastic memory is not grown, and the log says why', async () => {
-  await using ctx = await setupElasticTest();
+  const ctx = await setupElasticTest();
 
   await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
 

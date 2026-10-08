@@ -3,20 +3,21 @@ import { createImage, listImages } from '../db/images';
 import { listImps } from '../db/imps';
 import { createTestDatabase } from './create-test-database';
 
-test('it opens a migrated database that holds no rows', async () => {
-  await using testDatabase = await createTestDatabase();
+test('it opens a migrated database that holds no images', async () => {
+  const testDatabase = await createTestDatabase();
 
-  const tables = {
-    images: await listImages(testDatabase.db),
-    imps: await listImps(testDatabase.db),
-  };
+  expect(listImages(testDatabase.db)).resolves.toStrictEqual([]);
+});
 
-  expect(tables).toStrictEqual({ images: [], imps: [] });
+test('it opens a migrated database that holds no imps', async () => {
+  const testDatabase = await createTestDatabase();
+
+  expect(listImps(testDatabase.db)).resolves.toStrictEqual([]);
 });
 
 test('it opens a fresh database on each call', async () => {
-  await using first = await createTestDatabase();
-  await using second = await createTestDatabase();
+  const first = await createTestDatabase();
+  const second = await createTestDatabase();
 
   await createImage(first.db, {
     name: 'dev',
@@ -30,10 +31,18 @@ test('it opens a fresh database on each call', async () => {
   expect(images).toStrictEqual([]);
 });
 
-test('it closes the database on dispose', async () => {
+test('it closes the database on release', async () => {
   const testDatabase = await createTestDatabase();
 
   await testDatabase[Symbol.asyncDispose]();
 
   expect(listImages(testDatabase.db)).rejects.toThrow();
+});
+
+test('it resolves a second release as a no-op', async () => {
+  const testDatabase = await createTestDatabase();
+
+  await testDatabase[Symbol.asyncDispose]();
+
+  await expect(testDatabase[Symbol.asyncDispose]()).toResolve();
 });

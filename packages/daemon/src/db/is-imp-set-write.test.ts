@@ -5,7 +5,7 @@ import { createImp } from './imps';
 import { isImpSetWrite } from './is-imp-set-write';
 
 test('a create, a destroy and a stop resync the proxy and the grants; a sleep does not', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {

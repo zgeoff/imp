@@ -54,8 +54,7 @@ async function setupTest() {
 }
 
 test('the hold is the latest end of the live leases, and no end beats every end', async () => {
-  await using ctx = await setupTest();
-
+  const ctx = await setupTest();
   const first = await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
   const later = new Date(AT + 120_000);
@@ -87,7 +86,7 @@ test('the hold is the latest end of the live leases, and no end beats every end'
 });
 
 test('a write moves the end and keeps when the lease was made', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -107,7 +106,7 @@ test('a write moves the end and keeps when the lease was made', async () => {
 });
 
 test('a lease past its end is gone from the list, and a later write prunes it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -132,7 +131,7 @@ test('a lease past its end is gone from the list, and a later write prunes it', 
 });
 
 test('two owners each remove only their own lease', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 
@@ -163,7 +162,7 @@ test('two owners each remove only their own lease', async () => {
 });
 
 test('a forced clear takes only the leases made through leases.*', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   for (const lease of [
     ctx.buildLease({}),
@@ -198,7 +197,7 @@ test('a forced clear takes only the leases made through leases.*', async () => {
 });
 
 test('a destroy takes the leases with the imp', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
 

@@ -41,7 +41,7 @@ async function setupCrashTest() {
 }
 
 test('impd killed after a sleep renamed its files, before meta.json, leaves the imp stopped', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -77,7 +77,7 @@ test('impd killed after a sleep renamed its files, before meta.json, leaves the 
 });
 
 test('a good wake drops meta.json, so a VM that dies later does not count as asleep', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -93,7 +93,7 @@ test('a good wake drops meta.json, so a VM that dies later does not count as asl
 });
 
 test('a VM a cut sleep left paused is resumed, and the half-written files go', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -129,7 +129,7 @@ test('a VM a cut sleep left paused is resumed, and the half-written files go', a
 });
 
 test('a VM a cut wake left running is adopted with its memory', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -151,7 +151,7 @@ test('a VM a cut wake left running is adopted with its memory', async () => {
 });
 
 test('a VM a cut wake left before its load is killed, and the snapshot stays', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -175,7 +175,7 @@ test('a VM a cut wake left before its load is killed, and the snapshot stays', a
 });
 
 test('a VM a cut wake left whose agent does not answer is killed, and the imp boots cold', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -200,7 +200,7 @@ test('a VM a cut wake left whose agent does not answer is killed, and the imp bo
 });
 
 test('a VM a cut wake left with another agent than the snapshot recorded is killed', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -227,7 +227,7 @@ test('a VM a cut wake left with another agent than the snapshot recorded is kill
 });
 
 test('a second VM on a running imp socket is killed, and the one on the record stays', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -248,7 +248,7 @@ test('a second VM on a running imp socket is killed, and the one on the record s
 });
 
 test('a start cut before its pid file leaves a VM only /proc shows, and it is killed', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -267,7 +267,7 @@ test('a start cut before its pid file leaves a VM only /proc shows, and it is ki
 });
 
 test('a VM on the socket of an imp with no record is killed', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   const pid = ctx.fake.spawnOrphan({ paths: buildImpPaths(ctx.dataDir, 'gone') });
 
@@ -282,7 +282,7 @@ test('a VM on the socket of an imp with no record is killed', async () => {
 });
 
 test('a wake cut during its load, with no VM left, leaves the imp stopped, never on the old snapshot', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -312,7 +312,7 @@ test('a wake cut during its load, with no VM left, leaves the imp stopped, never
 });
 
 test('a wake cut during its load whose VM runs on is adopted, and its record goes', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -344,7 +344,7 @@ function buildForgedOwner(attacker: Readonly<{ id: string; jailUid: number | nul
 }
 
 test('a VM forged on a sleeping imp socket from another jail is ignored, and the snapshot stays', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'evil' });
   await ctx.client.imps.create({ name: 'dev' });
@@ -373,7 +373,7 @@ test('a VM forged on a sleeping imp socket from another jail is ignored, and the
 });
 
 test('a VM forged on a running imp socket from another jail is not killed as its orphan', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'evil' });
   await ctx.client.imps.create({ name: 'dev' });
@@ -400,7 +400,7 @@ test('a VM forged on a running imp socket from another jail is not killed as its
 });
 
 test('a jailed VM a cut wake left is adopted by its own uid, or by its own cgroup', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.create({ name: 'box' });
@@ -439,7 +439,7 @@ test('a jailed VM a cut wake left is adopted by its own uid, or by its own cgrou
 });
 
 test('a VM forged on the socket of an imp with no record is not killed; one in its cgroup is', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'evil' });
 
@@ -461,7 +461,7 @@ test('a VM forged on the socket of an imp with no record is not killed; one in i
 });
 
 test('a recycled pid whose argv another jail forged is a lost VM, never re-adopted into the cgroup', async () => {
-  await using ctx = await setupCrashTest();
+  const ctx = await setupCrashTest();
 
   await ctx.client.imps.create({ name: 'evil' });
   await ctx.client.imps.create({ name: 'dev' });
@@ -507,7 +507,7 @@ test('the orphan jails go before the orphan cgroups, so a cut-short build leaves
     readCpuStat: () => null,
   };
 
-  await using ctx = await setupImpTest({ cgroups });
+  const ctx = await setupImpTest({ cgroups });
 
   holder.sweeps = ctx.fake.sweeps;
 

@@ -6,7 +6,7 @@ import { API_AUDIT_ROWS, listApiCalls, writeApiCall } from './api-audit';
 const INSERT_BATCH = 5000;
 
 test('the log keeps the newest rows up to its cap, and one imp’s on request', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   const rows = Array.from({ length: API_AUDIT_ROWS }, (_, index) => ({
     at: index,
@@ -64,7 +64,7 @@ test('the log keeps the newest rows up to its cap, and one imp’s on request', 
 });
 
 test('with imp patterns, it lists only calls that named a matching imp', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   for (const impName of ['dev-a', 'dev-b', 'prod', null]) {
     await writeApiCall(ctx.db, {
@@ -87,7 +87,7 @@ test('with imp patterns, it lists only calls that named a matching imp', async (
 });
 
 test("an image add's row keeps the reference its pull resolved", async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   const pulled = `docker.io/library/busybox@sha256:${'b'.repeat(64)}`;
 

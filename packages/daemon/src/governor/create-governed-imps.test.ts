@@ -11,7 +11,7 @@ test(
   'the governor skips a victim whose lock another boot holds instead of waiting for it',
   async () => {
     // two awake imps of 300 MiB; making room for 600 MiB needs both asleep
-    await using ctx = await setupImpTest({
+    const ctx = await setupImpTest({
       env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
     });
 
@@ -71,7 +71,7 @@ async function readStates(ctx: Readonly<Pick<ImpTest, 'db'>>): Promise<Record<st
 
 test('a rejected admit stops sleeping imps once a sleep fails', async () => {
   // 900 MiB awake + 900 reserved: 800 missing, so the pick is a, b and c
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { IMP_RAM_BUDGET_MIB: '1000', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
@@ -93,7 +93,7 @@ test('a rejected admit stops sleeping imps once a sleep fails', async () => {
 });
 
 test('a rejected admit stops sleeping imps once the lock of a victim is taken', async () => {
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { IMP_RAM_BUDGET_MIB: '1000', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
@@ -138,7 +138,7 @@ test('a rejected admit stops sleeping imps once the lock of a victim is taken', 
 
 test('an admit picks again past a failed sleep and fits when the rest is enough', async () => {
   // 1200 MiB awake + 900 reserved: 800 missing; without b, c and d cover it
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     env: { IMP_RAM_BUDGET_MIB: '1300', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 

@@ -124,10 +124,8 @@ test('it records an adoption but makes no cgroup on a host without a cpu control
 
   stub.cgroups.adopt('imp-a', 4242, { limit: null, weight: 100 }, 1024);
 
-  expect({ calls: stub.calls, groups: stub.listGroups() }).toStrictEqual({
-    calls: ['adopt imp-a 4242'],
-    groups: [],
-  });
+  expect(stub.calls).toStrictEqual(['adopt imp-a 4242']);
+  expect(stub.listGroups()).toStrictEqual([]);
 });
 
 test('it removes the cgroup of every imp not in the set and returns their ids', () => {

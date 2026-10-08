@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,27 +6,19 @@ import { createStubBin } from './test-utils/create-stub-bin';
 import { runSourcedFunction } from './test-utils/run-sourced-function';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-dev-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('it stops before it asks docker anything when there is no machine id', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', 'exit 1');
 
   const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'prune'], {
@@ -46,7 +38,7 @@ test('it stops before it asks docker anything when there is no machine id', () =
 });
 
 test('it removes the own tag of a gone checkout on this machine, then the leftovers', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
@@ -95,7 +87,7 @@ esac`,
 });
 
 test("it never removes a live checkout's image, another machine's, or an unmarked one", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 
@@ -149,7 +141,7 @@ esac`,
 });
 
 test('it keeps a gone checkout image it cannot remove, and says why', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const lib = new URL('lib.sh', import.meta.url).pathname;
 

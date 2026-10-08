@@ -1,3 +1,4 @@
+import { onTestFinished } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
@@ -14,7 +15,7 @@ export type StubAgentHandler = (
 
 // A unix socket at `path`, where Firecracker would put the guest's vsock,
 // that answers the CONNECT handshake and hands each decoded frame to
-// `agent`. `received` holds every frame of every connection.
+// `agent`. `received` holds every frame; it closes at the test's end.
 export async function startStubAgent(path: string, agent: StubAgentHandler) {
   const received: AgentFrame[] = [];
 
@@ -66,13 +67,24 @@ export async function startStubAgent(path: string, agent: StubAgentHandler) {
     server.listen(path, resolve);
   });
 
+  const listening = { isOpen: true };
+
+  // a second close does nothing
+  const stopServer = (): void => {
+    if (listening.isOpen) {
+      listening.isOpen = false;
+
+      server.close();
+    }
+  };
+
+  onTestFinished(stopServer);
+
   return {
     received,
     get reads(): number {
       return counts.reads;
     },
-    close: () => {
-      server.close();
-    },
+    close: stopServer,
   };
 }

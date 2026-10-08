@@ -3,7 +3,7 @@ import type {
   ExecEvent,
   ExecStream,
 } from '@imp/daemon/src/agent-client/exec-stream';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
+import { TEST_TOKEN, buildTestApp, createImpTest } from '@imp/daemon/src/imps/test-imps';
 import type { Server } from 'bun';
 
 // impd's own app with a fake agent and one imp, `smoke`, for smoke.ts.
@@ -11,7 +11,10 @@ import type { Server } from 'bun';
 // until killed; prefixedUrl serves impd only under /impd/.
 const PREFIX = '/impd';
 
-const harness = await setupImpTest();
+// the harness's releases, run on SIGTERM
+const stack = new AsyncDisposableStack();
+
+const harness = await createImpTest(stack);
 
 const built = buildTestApp(harness, harness, TEST_TOKEN, {
   openExec: (_name, request) => Promise.resolve(buildFakeStream(request)),
@@ -42,7 +45,7 @@ console.log(
 async function stopServers(): Promise<void> {
   await proxy.stop(true);
   await app.stop();
-  await harness[Symbol.asyncDispose]();
+  await stack.disposeAsync();
 
   process.exit(0);
 }

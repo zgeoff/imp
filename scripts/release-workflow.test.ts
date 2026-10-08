@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,11 +10,9 @@ import { parseReleaseWorkflow } from './test-utils/parse-release-workflow';
 // never move (RELEASING.md). The Plan step's tests run its shell as Actions does (bash -eo
 // pipefail), with a stub docker and gh on PATH and a checked-out tree in a scratch directory.
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-release-workflow-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -23,15 +21,10 @@ function setupTest() {
   mkdirSync(join(dir, 'tree', 'host'));
   writeFileSync(join(dir, 'outputs'), '');
 
-  const owned = stack.move();
-
   return {
     dir,
     tree: join(dir, 'tree'),
     outputs: join(dir, 'outputs'),
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
@@ -94,7 +87,7 @@ test('it plans before any build, and builds, checks, pushes and attests only on 
 });
 
 test('it pushes a tag the registry does not have', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
@@ -126,7 +119,7 @@ test('it pushes a tag the registry does not have', () => {
 });
 
 test('it leaves an attested existing tag alone, with a notice', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
@@ -168,7 +161,7 @@ test('it leaves an attested existing tag alone, with a notice', () => {
 });
 
 test('it fails the job on an existing tag without an attestation, and plans nothing', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
@@ -206,7 +199,7 @@ test('it fails the job on an existing tag without an attestation, and plans noth
 });
 
 test('it fails the job on an existing tag whose digest is not a sha256', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
@@ -243,7 +236,7 @@ test.each([
   ['a denied request', 'ERROR: failed to authorize: 403 Forbidden'],
   ['a missing blob', 'ERROR: blob sha256:abc not found'],
 ])('it fails the job, planning nothing, on %s from the registry', (_reason, error) => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
@@ -279,7 +272,7 @@ test.each([
 });
 
 test('it skips a release from before imp-base without asking the registry', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
     readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),

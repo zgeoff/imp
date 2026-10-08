@@ -36,8 +36,7 @@ async function setupEgressMove(hook?: FetchHook) {
 }
 
 test('a public imp is refused a target that predates the policy, before any byte goes', async () => {
-  await using ctx = await setupEgressMove(removeKeepsPublic);
-
+  const ctx = await setupEgressMove(removeKeepsPublic);
   const status = await ctx.runMove('dev', true);
   const imp = await findImpByName(ctx.source.db, 'dev');
   const landed = await findImpByName(ctx.target.db, 'dev');
@@ -49,8 +48,7 @@ test('a public imp is refused a target that predates the policy, before any byte
 });
 
 test('a public imp lands public on a target that knows the policy', async () => {
-  await using ctx = await setupEgressMove();
-
+  const ctx = await setupEgressMove();
   const status = await ctx.runMove('dev', true);
   const policy = await ctx.target.egress.readPolicy('dev');
 

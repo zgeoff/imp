@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { chmod, lstat, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,19 +6,15 @@ import { MissingDockerfileError, listContextEntries } from './pack-build-context
 import { createStubTree } from './test-utils/create-stub-tree';
 
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
-
   const root = await mkdtemp(join(tmpdir(), 'imp-context-'));
 
-  stack.defer(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { root, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { root };
 }
 
 test('it leaves out what .dockerignore matches, with docker’s rules', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, {
     Dockerfile: 'FROM scratch',
@@ -48,7 +44,7 @@ test('it leaves out what .dockerignore matches, with docker’s rules', async ()
 });
 
 test('it keeps the Dockerfile when the ignore file matches it', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, {
     'docker/Dockerfile': 'FROM scratch',
@@ -62,7 +58,7 @@ test('it keeps the Dockerfile when the ignore file matches it', async () => {
 });
 
 test('it applies <Dockerfile>.dockerignore in place of .dockerignore', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, {
     'web.Dockerfile': 'FROM scratch',
@@ -83,7 +79,7 @@ test('it applies <Dockerfile>.dockerignore in place of .dockerignore', async () 
 });
 
 test('it leaves out .dockerignore as an ordinary file under <Dockerfile>.dockerignore', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, {
     'web.Dockerfile': 'FROM scratch',
@@ -99,7 +95,7 @@ test('it leaves out .dockerignore as an ordinary file under <Dockerfile>.dockeri
 });
 
 test('it lists a symlink as a link and a file with its exec bits', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { Dockerfile: 'FROM scratch', 'run.sh': '#!/bin/sh\n' });
   await chmod(join(ctx.root, 'run.sh'), 0o755);
@@ -141,7 +137,7 @@ test('it lists a symlink as a link and a file with its exec bits', async () => {
 });
 
 test('it rejects a context with no Dockerfile', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { 'app.js': '' });
 
@@ -152,7 +148,7 @@ test('it rejects a context with no Dockerfile', async () => {
 });
 
 test('it lists a lowercase dockerfile in place of a missing Dockerfile, with its own ignore file', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, {
     dockerfile: 'FROM scratch',
@@ -167,7 +163,7 @@ test('it lists a lowercase dockerfile in place of a missing Dockerfile, with its
 });
 
 test('it lists a lowercase dockerfile in place of a missing ./Dockerfile', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { dockerfile: 'FROM scratch', 'app.js': '' });
 
@@ -177,7 +173,7 @@ test('it lists a lowercase dockerfile in place of a missing ./Dockerfile', async
 });
 
 test('it applies dockerfile.dockerignore for a lowercase dockerfile in place of a missing ./Dockerfile', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, {
     dockerfile: 'FROM scratch',
@@ -198,7 +194,7 @@ test('it applies dockerfile.dockerignore for a lowercase dockerfile in place of 
 });
 
 test('it lists both Dockerfile and dockerfile when the context has both', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   await createStubTree(ctx.root, { Dockerfile: 'FROM scratch', dockerfile: 'FROM scratch' });
 

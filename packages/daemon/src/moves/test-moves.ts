@@ -128,10 +128,6 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
     commits,
     runMove,
     waitForMove,
-    async [Symbol.asyncDispose]() {
-      await source[Symbol.asyncDispose]();
-      await target[Symbol.asyncDispose]();
-    },
   };
 }
 

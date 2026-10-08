@@ -158,8 +158,7 @@ async function setupHttpTest(withTailnet = false) {
 }
 
 test('a token limited to agent-* creates, names and runs commands in its own imps only', async () => {
-  await using ctx = await setupHttpTest();
-
+  const ctx = await setupHttpTest();
   const secret = await ctx.createToken('agent', 'manage', ['agent-*']);
   const agent = await ctx.openClient(secret);
   const created = await agent.runTool('imp_create', { image: 'ubuntu' });
@@ -188,7 +187,7 @@ test('a token limited to agent-* creates, names and runs commands in its own imp
 });
 
 test('a read token sees only the read tools, and impd refuses the rest', async () => {
-  await using ctx = await setupHttpTest();
+  const ctx = await setupHttpTest();
 
   await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
 
@@ -219,7 +218,7 @@ test('a read token sees only the read tools, and impd refuses the rest', async (
 });
 
 test('a token that may grant secrets forks nothing through MCP either', async () => {
-  await using ctx = await setupHttpTest();
+  const ctx = await setupHttpTest();
 
   await ctx.rootClient.imps.create({ name: 'agent-a', image: 'ubuntu' });
   await ctx.rootClient.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126' });
@@ -243,8 +242,7 @@ test('a token that may grant secrets forks nothing through MCP either', async ()
 });
 
 test('a nameless create needs one prefix pattern, else a clear refusal', async () => {
-  await using ctx = await setupHttpTest();
-
+  const ctx = await setupHttpTest();
   const secret = await ctx.createToken('two', 'manage', ['a-*', 'b-*']);
   const two = await ctx.openClient(secret);
   const refused = await two.runTool('imp_create', { image: 'ubuntu' });
@@ -257,8 +255,7 @@ test('a nameless create needs one prefix pattern, else a clear refusal', async (
 });
 
 test('a session answers only the caller that opened it', async () => {
-  await using ctx = await setupHttpTest();
-
+  const ctx = await setupHttpTest();
   const firstSecret = await ctx.createToken('first', 'read');
   const first = await ctx.openClient(firstSecret);
   const secondSecret = await ctx.createToken('second', 'read');
@@ -276,7 +273,7 @@ test('a session answers only the caller that opened it', async () => {
 });
 
 test('removing the token ends its session and the command it runs', async () => {
-  await using ctx = await setupHttpTest();
+  const ctx = await setupHttpTest();
 
   await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
 
@@ -306,7 +303,7 @@ test('removing the token ends its session and the command it runs', async () => 
 });
 
 test('a tailnet identity needs no token, and its rule limits it', async () => {
-  await using ctx = await setupHttpTest(true);
+  const ctx = await setupHttpTest(true);
 
   await ctx.rootClient.imps.create({ name: 'dev-a', image: 'ubuntu' });
   await ctx.rootClient.imps.create({ name: 'prod', image: 'ubuntu' });
@@ -347,7 +344,7 @@ test('a tailnet identity needs no token, and its rule limits it', async () => {
 });
 
 test('a page on another origin is refused, Sec-Fetch-Site first, as the dashboard does', async () => {
-  await using ctx = await setupHttpTest();
+  const ctx = await setupHttpTest();
 
   const page = startHttpClient(ctx.url, { authorization: `Bearer ${ctx.token}` });
   const ping = { jsonrpc: '2.0', id: 0, method: 'ping' };
@@ -376,7 +373,7 @@ test('a page on another origin is refused, Sec-Fetch-Site first, as the dashboar
 const LONG_CALL_MS = 15_000;
 
 test('a 15 s call answers through the wake proxy, as JSON and as SSE', async () => {
-  await using ctx = await setupHttpTest();
+  const ctx = await setupHttpTest();
 
   await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
 

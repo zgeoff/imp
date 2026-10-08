@@ -74,8 +74,7 @@ async function setupCpuTest() {
 }
 
 test('a new imp boots with its limit and weight, and a fork keeps them', async () => {
-  await using ctx = await setupCpuTest();
-
+  const ctx = await setupCpuTest();
   const created = await ctx.client.imps.create({ name: 'dev', cpuLimit: 1.5, cpuWeight: 200 });
   const forked = await ctx.client.imps.fork({ source: 'dev', name: 'copy' });
 
@@ -85,7 +84,7 @@ test('a new imp boots with its limit and weight, and a fork keeps them', async (
 });
 
 test('a running imp takes a new limit at once; a sleeping one at its wake', async () => {
-  await using ctx = await setupCpuTest();
+  const ctx = await setupCpuTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -109,7 +108,7 @@ test('a running imp takes a new limit at once; a sleeping one at its wake', asyn
 });
 
 test('update sets the HTTP port and leaves the CPU settings as they were', async () => {
-  await using ctx = await setupCpuTest();
+  const ctx = await setupCpuTest();
 
   await ctx.client.imps.create({ name: 'dev', cpuLimit: 1.5 });
 
@@ -122,7 +121,7 @@ test('update sets the HTTP port and leaves the CPU settings as they were', async
 });
 
 test('the vCPU count changes only while stopped, and limits stay within the host', async () => {
-  await using ctx = await setupCpuTest();
+  const ctx = await setupCpuTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -154,7 +153,7 @@ test('the vCPU count changes only while stopped, and limits stay within the host
 });
 
 test('wakes and awake time count, and a liveness repair after a crash closes the span', async () => {
-  await using ctx = await setupCpuTest();
+  const ctx = await setupCpuTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -194,7 +193,7 @@ test('wakes and awake time count, and a liveness repair after a crash closes the
 });
 
 test('a span cannot end before it starts, and a cold boot for a wake counts as a wake', async () => {
-  await using ctx = await setupCpuTest();
+  const ctx = await setupCpuTest();
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -227,7 +226,7 @@ test('a running imp shows the sampler cache: RAM, then CPU after a second pass',
   const recording = buildRecordingCgroups();
 
   // a frozen clock: the 5 s between the passes is exactly 5 s
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     cgroups: { ...recording.cgroups, readCpuStat: () => ({ ...stat }) },
     frozenClockMs: Date.parse('2026-10-02T12:00:00Z'),
   });
@@ -258,7 +257,7 @@ test('a running imp shows the sampler cache: RAM, then CPU after a second pass',
 });
 
 test('a jailed VM does not start without its cgroup, and says why', async () => {
-  await using ctx = await setupImpTest({ env: { IMP_JAILER: 'true' } });
+  const ctx = await setupImpTest({ env: { IMP_JAILER: 'true' } });
 
   await ctx.createTestImage('ubuntu');
 
@@ -274,7 +273,7 @@ test('a jailed VM does not start without its cgroup, and says why', async () => 
 test('a jailed wake without its cgroup leaves the imp asleep, with its memory', async () => {
   const switched = buildSwitchedCgroups();
 
-  await using ctx = await setupImpTest({ cgroups: switched.cgroups, env: { IMP_JAILER: 'true' } });
+  const ctx = await setupImpTest({ cgroups: switched.cgroups, env: { IMP_JAILER: 'true' } });
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });

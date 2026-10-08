@@ -34,7 +34,7 @@ function buildHeldClone(held: string, gate: Promise<void>, reached: () => void) 
 }
 
 test('a GC keeps an imp no row names until asked for orphans, and a dry run only lists it', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
 
@@ -79,7 +79,7 @@ test('a GC keeps an imp no row names until asked for orphans, and a dry run only
 });
 
 test('start, the hourly pass and imp gc keep every orphan of a lost database, logged once', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   const logs: string[] = [];
 
@@ -203,7 +203,7 @@ test('a GC waits for a checkpoint whose clone exists before its row', async () =
   const gate = Promise.withResolvers<void>();
   const reached = Promise.withResolvers<void>();
 
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     cloneDisk: buildHeldClone('/checkpoints/', gate.promise, reached.resolve),
   });
 
@@ -240,7 +240,7 @@ test('a GC with orphans waits for an imp whose disk exists before its row', asyn
   const gate = Promise.withResolvers<void>();
   const reached = Promise.withResolvers<void>();
 
-  await using ctx = await setupImpTest({
+  const ctx = await setupImpTest({
     cloneDisk: buildHeldClone('/disk.ext4', gate.promise, reached.resolve),
   });
 
@@ -268,7 +268,7 @@ test('a GC with orphans waits for an imp whose disk exists before its row', asyn
 });
 
 test('a GC with orphans waits for a destroy that holds the gate', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
 
@@ -303,7 +303,7 @@ test('a GC with orphans waits for a destroy that holds the gate', async () => {
 // come only to a caller that asks with `secretFiles`: an older client does not
 // know kind `secrets`. Only `removeSecretFiles` with `orphans` deletes them.
 test('a GC lists the secret values kept aside when asked, and removes them only when told to', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   const app = buildTestApp(ctx, ctx);
   const files = createSecretFiles(ctx.dataDir);

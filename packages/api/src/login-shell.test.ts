@@ -1,31 +1,23 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CONSOLE_SHELL, buildConsoleShell } from './login-shell';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-login-shell-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('#buildConsoleShell runs the current user’s shell from the passwd file as a login shell', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const shell = join(ctx.dir, 'user-shell');
 
   writeFileSync(shell, '#!/bin/sh\necho "user-shell $*"\n', { mode: 0o755 });
@@ -47,8 +39,7 @@ test('#buildConsoleShell runs the current user’s shell from the passwd file as
 });
 
 test('#buildConsoleShell skips the passwd entries of other users', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const other = join(ctx.dir, 'other-shell');
   const shell = join(ctx.dir, 'user-shell');
 
@@ -73,8 +64,7 @@ test('#buildConsoleShell skips the passwd entries of other users', () => {
 });
 
 test('#buildConsoleShell falls back to the first executable fallback when the user’s shell is missing', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const fallback = join(ctx.dir, 'fallback-shell');
 
   writeFileSync(fallback, '#!/bin/sh\necho "fallback-shell $*"\n', { mode: 0o755 });
@@ -97,8 +87,7 @@ test('#buildConsoleShell falls back to the first executable fallback when the us
 });
 
 test('#buildConsoleShell falls back when the passwd file has no entry for the user', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const fallback = join(ctx.dir, 'fallback-shell');
 
   writeFileSync(fallback, '#!/bin/sh\necho "fallback-shell $*"\n', { mode: 0o755 });
@@ -113,8 +102,7 @@ test('#buildConsoleShell falls back when the passwd file has no entry for the us
 });
 
 test('#buildConsoleShell passes on the exit code of the login shell', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const shell = join(ctx.dir, 'user-shell');
 
   writeFileSync(shell, '#!/bin/sh\nexit 3\n', { mode: 0o755 });

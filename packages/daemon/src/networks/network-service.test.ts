@@ -26,7 +26,7 @@ async function setupNetwork(runNft?: (script: string) => Promise<void>) {
 const LAB = 'elements = { "imp1" . 10.66.0.6, "imp0" . 10.66.0.2 }';
 
 test('the imps on a network are in its set, and a second join changes nothing', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   expect(ctx.nftScripts.at(-1)).toContain(LAB);
 
@@ -38,8 +38,7 @@ test('the imps on a network are in its set, and a second join changes nothing', 
 });
 
 test("a leave takes the imp out of the set and drops the pair's flows", async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const left = await ctx.client.networks.leave({ network: 'lab', name: 'db' });
 
   expect(left.imps).toEqual(['web']);
@@ -53,7 +52,7 @@ test("a leave takes the imp out of the set and drops the pair's flows", async ()
 });
 
 test('a pair that still shares another network keeps its flows', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.client.networks.create({ name: 'ops' });
   await ctx.client.networks.join({ network: 'ops', name: 'web' });
@@ -69,8 +68,7 @@ test('a pair that still shares another network keeps its flows', async () => {
 });
 
 test('a create on a network that does not exist leaves no imp', async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const error = await readRejection(ctx.client.imps.create({ name: 'api', networks: ['nope'] }));
   const imps = await listImps(ctx.db);
 
@@ -79,8 +77,7 @@ test('a create on a network that does not exist leaves no imp', async () => {
 });
 
 test('a token limited to some imps cannot put one on a network', async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const created = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
 
   const limited = buildTestApp(ctx, ctx, created.secret).client;
@@ -103,7 +100,7 @@ test('a token limited to some imps cannot put one on a network', async () => {
 test('a table nft refuses puts the membership back', async () => {
   const state = { refuse: false };
 
-  await using ctx = await setupNetwork(() => {
+  const ctx = await setupNetwork(() => {
     const result = state.refuse ? Promise.reject(new Error('nft exited 1')) : Promise.resolve();
 
     return result;
@@ -120,7 +117,7 @@ test('a table nft refuses puts the membership back', async () => {
 });
 
 test("a destroyed imp leaves its networks' sets before its row goes", async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.client.imps.destroy({ name: 'db' });
 
@@ -131,7 +128,7 @@ test("a destroyed imp leaves its networks' sets before its row goes", async () =
 });
 
 test('a fork is on no network: a join is a choice made for each imp', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.client.imps.fork({ source: 'web', name: 'copy' });
 
@@ -141,7 +138,7 @@ test('a fork is on no network: a join is a choice made for each imp', async () =
 });
 
 test('a join that puts a box imp next to an open one warns, from either side', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'box', allow: [] } });
   await ctx.client.networks.leave({ network: 'lab', name: 'db' });
@@ -162,7 +159,7 @@ test('a join that puts a box imp next to an open one warns, from either side', a
 });
 
 test('a public imp next to a box or none one warns, from either side; next to an open one it is warned', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   await ctx.client.imps.setPolicy({ name: 'web', policy: { mode: 'public', allow: [] } });
 
@@ -189,7 +186,7 @@ test('a public imp next to a box or none one warns, from either side; next to an
 test('a net rm that nft refuses puts back every member, the latest join included', async () => {
   const state = { refuse: false };
 
-  await using ctx = await setupNetwork(() => {
+  const ctx = await setupNetwork(() => {
     const result = state.refuse ? Promise.reject(new Error('nft exited 1')) : Promise.resolve();
 
     return result;
@@ -208,7 +205,7 @@ test('a net rm that nft refuses puts back every member, the latest join included
 });
 
 test('a restore makes its missing networks, and removes them again when it fails', async () => {
-  await using ctx = await setupNetwork();
+  const ctx = await setupNetwork();
 
   const networks = createNetworkService({ db: ctx.db, egress: ctx.egress, imps: ctx.imps });
 
@@ -225,8 +222,7 @@ test('a restore makes its missing networks, and removes them again when it fails
 });
 
 test("a policy change that mixes a network gets the same warning, for each of the imp's networks", async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const before = await ctx.client.networks.warnings({ name: 'db' });
 
   await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'none', allow: [] } });
@@ -244,8 +240,7 @@ test("a policy change that mixes a network gets the same warning, for each of th
 });
 
 test('an imp a move marked cannot join a network', async () => {
-  await using ctx = await setupNetwork();
-
+  const ctx = await setupNetwork();
   const imp = await findImpByName(ctx.db, 'web');
 
   await updateImpMove(ctx.db, imp?.id ?? '', 'sending');

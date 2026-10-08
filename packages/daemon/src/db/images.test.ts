@@ -4,7 +4,7 @@ import { createImage, findImageById, findImageByName, listImages, removeImage } 
 import { createImp } from './imps';
 
 test('it creates, finds and lists images by name', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   await createImage(ctx.db, {
     name: 'base',
@@ -30,7 +30,7 @@ test('it creates, finds and lists images by name', async () => {
 });
 
 test('it rejects a duplicate image name', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   await createImage(ctx.db, {
     name: 'base',
@@ -48,7 +48,7 @@ test('it rejects a duplicate image name', async () => {
 });
 
 test('it refuses to remove an image an imp still uses', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {
@@ -74,7 +74,7 @@ test('it refuses to remove an image an imp still uses', async () => {
 });
 
 test('it removes an unused image once', async () => {
-  await using ctx = await createTestDatabase();
+  const ctx = await createTestDatabase();
 
   // the image every imp row here refers to
   const image = await createImage(ctx.db, {

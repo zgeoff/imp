@@ -121,7 +121,7 @@ test(
               return { name, held: holdUntil > at };
             };
 
-            await using ctx = await setupImpTest({
+            const ctx = await setupImpTest({
               env: ENV,
               onLog: (message) => {
                 const match = GOVERNOR_SLEEP.exec(message);

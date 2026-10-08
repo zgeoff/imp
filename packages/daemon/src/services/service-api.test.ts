@@ -197,7 +197,7 @@ async function setupServiceTest(knowsServices = true) {
   const agent = buildServiceAgent(knowsServices);
   const paths = buildImpPaths(harness.config.dataDir, imp.id);
 
-  const listening = await startStubAgent(paths.vsockSocket, (socket, request, frames) => {
+  await startStubAgent(paths.vsockSocket, (socket, request, frames) => {
     if (frames.length === 1) {
       agent.handleRequest(socket, AgentRequestSchema.parse(decodeJsonPayload(request)));
     }
@@ -220,11 +220,6 @@ async function setupServiceTest(knowsServices = true) {
     imp,
     agent,
     execClient,
-    async [Symbol.asyncDispose]() {
-      listening.close();
-
-      await harness[Symbol.asyncDispose]();
-    },
   };
 }
 
@@ -253,7 +248,7 @@ function formatEvent(event: Readonly<ServiceLog>): string {
 }
 
 test('an added service lists with its command, its source, and only its env keys', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({
     name: 'dev',
@@ -301,7 +296,7 @@ test('an added service lists with its command, its source, and only its env keys
 });
 
 test('an add of a service that exists is CONFLICT unless it replaces', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   const service = { name: 'web', argv: ['httpd'] };
 
@@ -320,7 +315,7 @@ test('an add of a service that exists is CONFLICT unless it replaces', async () 
 });
 
 test('the agent’s refusals come back as the API’s errors', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   const bad = await readRejection(
     ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['bad'] } }),
@@ -338,7 +333,7 @@ test('the agent’s refusals come back as the API’s errors', async () => {
 });
 
 test('a name that is not a plain lowercase file name is refused before the agent', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   const names = ['../x', 'a_b', 'a.b', 'Web', `a${'b'.repeat(63)}`];
 
@@ -359,7 +354,7 @@ test('a name that is not a plain lowercase file name is refused before the agent
 });
 
 test('with the exec scope, a service runs as the image user and root ones stay put', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   const asRoot = await readRejection(
     ctx.execClient.services.add({
@@ -405,7 +400,7 @@ test('with the exec scope, a service runs as the image user and root ones stay p
 });
 
 test('an agent from before the services API is AGENT_OUTDATED, and still lists', async () => {
-  await using ctx = await setupServiceTest(false);
+  const ctx = await setupServiceTest(false);
 
   ctx.agent.services.push({ name: 'dockerd', state: 'running', pid: 212, restarts: 0 });
 
@@ -425,7 +420,7 @@ test('an agent from before the services API is AGENT_OUTDATED, and still lists',
 });
 
 test('logs sends one service’s log, 100 lines by default', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
@@ -450,7 +445,7 @@ test('logs sends one service’s log, 100 lines by default', async () => {
 });
 
 test('every service’s log shares 10 000 lines', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
   await ctx.client.services.add({ name: 'dev', service: { name: 'db', argv: ['postgres'] } });
@@ -467,7 +462,7 @@ test('every service’s log shares 10 000 lines', async () => {
 });
 
 test('a follow of every service merges them, and closes each when the reader stops', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
   await ctx.client.services.add({ name: 'dev', service: { name: 'db', argv: ['postgres'] } });
@@ -493,7 +488,7 @@ test('a follow of every service merges them, and closes each when the reader sto
 });
 
 test('a follow waits out a sleep without a wake, and goes on from its cursor', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
@@ -547,7 +542,7 @@ test('a follow waits out a sleep without a wake, and goes on from its cursor', a
 });
 
 test('a follow of a sleeping imp does not wake it', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -568,7 +563,7 @@ test('a follow of a sleeping imp does not wake it', async () => {
 });
 
 test('a list of a sleeping imp is the one its sleep recorded, and wakes nothing', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -591,7 +586,7 @@ test('a list of a sleeping imp is the one its sleep recorded, and wakes nothing'
 });
 
 test('a sleep the agent gave no list to lists none, and says it recorded none', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
@@ -605,7 +600,7 @@ test('a sleep the agent gave no list to lists none, and says it recorded none', 
 });
 
 test('a follow keeps a character split across a sleep whole', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
@@ -645,7 +640,7 @@ test('a follow keeps a character split across a sleep whole', async () => {
 });
 
 test('a follow goes on soon after a wake whose event a listener delays', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
@@ -685,7 +680,7 @@ test('a follow goes on soon after a wake whose event a listener delays', async (
 });
 
 test('a follow ends with the error when its log keeps failing to open', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
@@ -716,7 +711,7 @@ test('a follow ends with the error when its log keeps failing to open', async ()
 }, 10_000);
 
 test('an impd restart ends a follow with restarting', async () => {
-  await using ctx = await setupServiceTest();
+  const ctx = await setupServiceTest();
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 

@@ -4,7 +4,7 @@ import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { setupImpTest, writeTestSnapshot } from './test-imps';
 
 test('a VM that died after its sleep wrote the snapshot is asleep, not stopped', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
 
@@ -26,7 +26,7 @@ test('a VM that died after its sleep wrote the snapshot is asleep, not stopped',
 });
 
 test('a dead VM with a snapshot from an earlier sleep is stopped', async () => {
-  await using ctx = await setupImpTest();
+  const ctx = await setupImpTest();
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });
@@ -57,7 +57,7 @@ test('a VM that its memory limit killed is stopped, and says so', async () => {
     readCpuStat: () => null,
   };
 
-  await using ctx = await setupImpTest({ cgroups });
+  const ctx = await setupImpTest({ cgroups });
 
   await ctx.createTestImage('ubuntu');
   await ctx.imps.createImp({ name: 'dev' });

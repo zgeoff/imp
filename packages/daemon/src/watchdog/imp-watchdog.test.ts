@@ -47,7 +47,7 @@ async function setupWatchdogTest(action: string) {
 }
 
 test('report: the imp says since when its agent is silent, and keeps running', async () => {
-  await using ctx = await setupWatchdogTest('report');
+  const ctx = await setupWatchdogTest('report');
 
   await ctx.runSilence();
 
@@ -59,7 +59,7 @@ test('report: the imp says since when its agent is silent, and keeps running', a
 });
 
 test('restart: the VM is killed and the imp boots cold, saying why', async () => {
-  await using ctx = await setupWatchdogTest('restart');
+  const ctx = await setupWatchdogTest('restart');
 
   await ctx.runSilence();
 
@@ -78,7 +78,7 @@ test('restart: the VM is killed and the imp boots cold, saying why', async () =>
 });
 
 test('snapshot: the memory goes to the owner-only watchdog slot, then a cold boot', async () => {
-  await using ctx = await setupWatchdogTest('snapshot');
+  const ctx = await setupWatchdogTest('snapshot');
 
   await ctx.runSilence();
 
@@ -99,7 +99,7 @@ test('snapshot: the memory goes to the owner-only watchdog slot, then a cold boo
 });
 
 test('snapshot: without disk room the imp still boots cold, with no slot', async () => {
-  await using ctx = await setupWatchdogTest('snapshot');
+  const ctx = await setupWatchdogTest('snapshot');
 
   // below the 5 GiB reserve
   ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
@@ -114,7 +114,7 @@ test('snapshot: without disk room the imp still boots cold, with no slot', async
 });
 
 test('restart: an agent that answers again under the lock keeps its VM', async () => {
-  await using ctx = await setupWatchdogTest('restart');
+  const ctx = await setupWatchdogTest('restart');
 
   await ctx.runSilence('ok');
 
@@ -126,7 +126,7 @@ test('restart: an agent that answers again under the lock keeps its VM', async (
 });
 
 test('restart: a VM that a sleep and a wake replaced during the ping is left alone', async () => {
-  await using ctx = await setupWatchdogTest('restart');
+  const ctx = await setupWatchdogTest('restart');
 
   // the watchdog saw an older pid than the record holds now
   await ctx.runSilence('fail', (ctx.created.pid ?? 0) + 1000);

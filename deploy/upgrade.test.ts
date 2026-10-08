@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   existsSync,
   mkdirSync,
@@ -20,29 +20,22 @@ import { createStubBin } from '../scripts/test-utils/create-stub-bin';
 // calls log holds every docker and systemctl call in order. The child gets only what
 // upgrade.sh needs, never this process's tokens.
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-upgrade-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
   // upgrade.sh restarts the units through systemctl
   createStubBin(dir, 'systemctl');
 
-  const owned = stack.move();
-
   return {
     dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
   };
 }
 
 test('it installs the unprivileged host unit before the restart, on an upgrade from the privileged host', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -89,7 +82,7 @@ test('it installs the unprivileged host unit before the restart, on an upgrade f
 });
 
 test('it installs both units, then restarts the proxy before imp-host, on an upgrade from the socket host', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   // a #75 unit: unprivileged, with the host's docker.sock
   const docker = createStubBin(
@@ -143,7 +136,7 @@ test('it installs both units, then restarts the proxy before imp-host, on an upg
 });
 
 test('it tells how to roll back by restarting both units, on an upgrade between proxy hosts', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -181,7 +174,7 @@ test('it tells how to roll back by restarting both units, on an upgrade between 
 });
 
 test('it refuses a rollback past the socket proxy before anything changes', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -227,7 +220,7 @@ test('it refuses a rollback past the socket proxy before anything changes', () =
 });
 
 test("it starts imp-host alone, with a NOTE, under a compose file that gives imp-host the host's socket", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -280,7 +273,7 @@ test("it starts imp-host alone, with a NOTE, under a compose file that gives imp
 });
 
 test('it starts the proxy service with imp-host under a compose file that has it', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -334,7 +327,7 @@ test('it starts the proxy service with imp-host under a compose file that has it
 });
 
 test('it refuses a rollback past the unprivileged host before anything changes', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -380,7 +373,7 @@ test('it refuses a rollback past the unprivileged host before anything changes',
 });
 
 test('it keeps the compose file, and says it still runs privileged, on an upgrade to the unprivileged host', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -436,7 +429,7 @@ test('it keeps the compose file, and says it still runs privileged, on an upgrad
 });
 
 test('it stops before any imp sleeps when the image cannot give its unit', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -485,7 +478,7 @@ test('it stops before any imp sleeps when the image cannot give its unit', () =>
 });
 
 test('it stops before the restart when a unit cannot be installed', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -533,8 +526,7 @@ test('it stops before the restart when a unit cannot be installed', () => {
 });
 
 test('it moves to its own release when no image is named', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -575,8 +567,7 @@ test('it moves to its own release when no image is named', () => {
 });
 
 test("it moves to the env file's pin over its own release", () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -628,8 +619,7 @@ test("it moves to the env file's pin over its own release", () => {
 });
 
 test('it comments out the old template line, which is no pin, with a .bak of the file', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -695,8 +685,7 @@ test('it comments out the old template line, which is no pin, with a .bak of the
 });
 
 test('it refuses an image from the environment that the units would not run, before any imp sleeps', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -756,7 +745,7 @@ test('it refuses an image from the environment that the units would not run, bef
 });
 
 test('it writes the image to the .env beside the compose file, with a .bak', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -829,7 +818,7 @@ test('it writes the image to the .env beside the compose file, with a .bak', () 
 });
 
 test('it writes a .env that names the image beside a compose file without one', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -880,8 +869,7 @@ test('it writes a .env that names the image beside a compose file without one', 
 });
 
 test('it refuses the image of a drop-in for imp-host alone, as the proxy unit would run another', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -930,8 +918,7 @@ test('it refuses the image of a drop-in for imp-host alone, as the proxy unit wo
 });
 
 test("it counts a drop-in's image as its unit's own, for imp-host and the proxy alike", () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -985,8 +972,7 @@ test("it counts a drop-in's image as its unit's own, for imp-host and the proxy 
 });
 
 test('it reads the unit image from a quoted Environment= line that sets several variables', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -1029,8 +1015,7 @@ test('it reads the unit image from a quoted Environment= line that sets several 
 });
 
 test('it takes the release-please marker lines out of the units it installs', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -1071,8 +1056,7 @@ test('it takes the release-please marker lines out of the units it installs', ()
 });
 
 test('it migrates the old template line with a CR and blanks around it', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -1122,8 +1106,7 @@ test('it migrates the old template line with a CR and blanks around it', () => {
 });
 
 test('it migrates a quoted old template line too', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -1173,7 +1156,7 @@ test('it migrates a quoted old template line too', () => {
 });
 
 test('it keeps the pin in the compose .env and moves to that image', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1228,8 +1211,7 @@ test('it keeps the pin in the compose .env and moves to that image', () => {
 });
 
 test('it still writes the image lines and units, without a restart, on a systemd host that runs the image already', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -1294,7 +1276,7 @@ test('it still writes the image lines and units, without a restart, on a systemd
 });
 
 test('it still writes the compose .env, without compose up, on a compose host that runs the image already', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1348,7 +1330,7 @@ test('it still writes the compose .env, without compose up, on a compose host th
 });
 
 test('it refuses an env file that sets IMP_HOST_IMAGE empty before anything changes', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1396,8 +1378,7 @@ test('it refuses an env file that sets IMP_HOST_IMAGE empty before anything chan
 });
 
 test('it refuses a host that runs the image already when its units would run another', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const release = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
 
@@ -1456,7 +1437,7 @@ test('it refuses a host that runs the image already when its units would run ano
 });
 
 test("it reads the compose .env's image through docker compose config, with the shell's unset", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1518,7 +1499,7 @@ test("it reads the compose .env's image through docker compose config, with the 
 });
 
 test('it leaves a trailing comment out of the compose .env image without compose config', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1571,7 +1552,7 @@ test('it leaves a trailing comment out of the compose .env image without compose
 });
 
 test('it refuses a compose .env image built from other variables, before any pull, without compose config', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1626,7 +1607,7 @@ test('it refuses a compose .env image built from other variables, before any pul
 });
 
 test("it gives compose config the Docker socket's group when the environment has no IMP_DOCKER_GID", () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1678,7 +1659,7 @@ test("it gives compose config the Docker socket's group when the environment has
 });
 
 test('it never prints the environment that compose config reads', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1728,7 +1709,7 @@ test('it never prints the environment that compose config reads', () => {
 });
 
 test('it never prints what a failing compose config prints, and reads the .env itself', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1780,7 +1761,7 @@ test('it never prints what a failing compose config prints, and reads the .env i
 });
 
 test('it refuses --compose without a file, with its usage', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const result = Bun.spawnSync(
     ['bash', new URL('upgrade.sh', import.meta.url).pathname, '--compose'],
@@ -1800,8 +1781,7 @@ test('it refuses --compose without a file, with its usage', () => {
 });
 
 test('it refuses to run on a host without jq', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker');
 
   createStubBin(ctx.dir, 'curl');
@@ -1825,8 +1805,7 @@ test('it refuses to run on a host without jq', () => {
 });
 
 test('it refuses a host with no imp-host container, before any pull', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', 'exit 1');
 
   const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
@@ -1850,7 +1829,7 @@ test('it refuses a host with no imp-host container, before any pull', () => {
 });
 
 test('it sleeps each awake imp before the restart', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1901,7 +1880,7 @@ test('it sleeps each awake imp before the restart', () => {
 });
 
 test('it stops before anything restarts when an imp does not sleep', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1948,7 +1927,7 @@ test('it stops before anything restarts when an imp does not sleep', () => {
 });
 
 test('it fails the upgrade when impd is not ready in time after the restart', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -1991,8 +1970,7 @@ test('it fails the upgrade when impd is not ready in time after the restart', ()
 });
 
 test('it stops before anything restarts when it cannot rewrite the env file', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const version = z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version;
 
@@ -2048,7 +2026,7 @@ test('it stops before anything restarts when it cannot rewrite the env file', ()
 });
 
 test('it warns, and still upgrades, when imp info fails', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -2089,7 +2067,7 @@ test('it warns, and still upgrades, when imp info fails', () => {
 });
 
 test('it warns, and still upgrades, when it cannot read imp info', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -2130,7 +2108,7 @@ test('it warns, and still upgrades, when it cannot read imp info', () => {
 });
 
 test('it says when impd does not count cold boots', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -2171,7 +2149,7 @@ test('it says when impd does not count cold boots', () => {
 });
 
 test('it reports the cold boots and the outdated parts that impd counts', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,
@@ -2212,7 +2190,7 @@ test('it reports the cold boots and the outdated parts that impd counts', () => 
 });
 
 test('it reports no outdated parts when impd counts none', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   const docker = createStubBin(
     ctx.dir,

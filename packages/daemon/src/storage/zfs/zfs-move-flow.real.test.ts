@@ -116,8 +116,7 @@ async function setupPoolMove(options: Readonly<{ isShared?: boolean }> = {}) {
 test.skipIf(!isReal)(
   'a stopped imp moves cold between two ZFS impds with its checkpoint and its disk',
   async () => {
-    await using ctx = await setupPoolMove();
-
+    const ctx = await setupPoolMove();
     const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
     await ctx.sourceApp.client.imps.stop({ name: 'dev' });
@@ -163,7 +162,7 @@ test.skipIf(!isReal)(
   async () => {
     // two impds in one process differ in their data dirs: both report the
     // target's facts, as two hosts with the same IMP_DATA_DIR would
-    await using ctx = await setupPoolMove({ isShared: true });
+    const ctx = await setupPoolMove({ isShared: true });
 
     // slot 0 goes to another imp, so the target's lowest free slot is not dev's
     await ctx.sourceApp.client.imps.create({ name: 'first', image: 'ubuntu' });
