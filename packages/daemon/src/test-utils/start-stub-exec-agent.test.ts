@@ -2,11 +2,16 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
-import { openExecStream, openTapStream } from '../agent-client/exec-stream';
+import { openAgentConnection } from '../agent-client/agent-connection';
+import { openExecStream } from '../agent-client/exec-stream';
+import { FRAME_TYPES, decodeJsonPayload } from '../agent-client/frame-codec';
 import { buildStubExecGuest } from './build-stub-exec-guest';
 import { startStubExecAgent } from './start-stub-exec-agent';
 
+// a temp dir for the agent's socket, and `stack`, whose releases (the
+// agent's and the streams') run before the dir goes
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -16,7 +21,7 @@ async function setupTest() {
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  return { stack, dir };
+  return { dir, stack };
 }
 
 test('it runs an exec on the guest and sends its output and exit as frames', async () => {
@@ -45,6 +50,70 @@ test('it runs an exec on the guest and sends its output and exit as frames', asy
     { type: 'stdout', data: new TextEncoder().encode('hi\n') },
     { type: 'exit', code: 0, signal: 0 },
   ]);
+});
+
+test('it sends the guest’s stderr as frames', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), buildStubExecGuest());
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stream = await openExecStream(join(ctx.dir, 'v.sock'), {
+    argv: ['/bin/sh', '-c', 'fail'],
+    tty: false,
+  });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  const events = await Array.fromAsync(stream.events());
+
+  expect(events).toStrictEqual([
+    { type: 'stdout', data: new TextEncoder().encode('partial') },
+    { type: 'stderr', data: new TextEncoder().encode('boom') },
+    { type: 'exit', code: 3, signal: 0 },
+  ]);
+});
+
+test('it sends a detach of the guest’s command as a frame', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+  const detached = { type: 'detached' as const, reason: 'the session went on' };
+
+  // the guest's stream, ended by a detach where its command would run on
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), {
+    openExec: async (name, request) => {
+      const stream = await guest.openExec(name, request);
+
+      return {
+        ...stream,
+        events: async function* events() {
+          yield await Promise.resolve(detached);
+        },
+      };
+    },
+  });
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stream = await openExecStream(join(ctx.dir, 'v.sock'), {
+    argv: ['/bin/sh', '-c', 'sleepy'],
+    tty: false,
+  });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  const events = await Array.fromAsync(stream.events());
+
+  expect(events).toStrictEqual([{ type: 'detached', reason: 'the session went on' }]);
 });
 
 test('it hands the guest the request as impd sent it', async () => {
@@ -94,6 +163,188 @@ test('it reports the guest’s group kill in STARTED', async () => {
   });
 
   expect(stream.groupKill).toBeTrue();
+});
+
+test('it hands the guest the user, session and terminal size impd sent', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const connection = await openAgentConnection(join(ctx.dir, 'v.sock'));
+
+  ctx.stack.defer(() => {
+    connection.close();
+  });
+
+  connection.sendJson(FRAME_TYPES.request, {
+    op: 'exec',
+    argv: ['/bin/sh', '-c', 'echo hi'],
+    tty: true,
+    cols: 120,
+    rows: 40,
+    user: 'dev',
+    session: 'work',
+  });
+
+  await connection.next();
+
+  expect(guest.requests).toStrictEqual([
+    {
+      argv: ['/bin/sh', '-c', 'echo hi'],
+      tty: true,
+      cols: 120,
+      rows: 40,
+      user: 'dev',
+      session: 'work',
+    },
+  ]);
+});
+
+test('it echoes the asked kill grace in STARTED, capped at a minute', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), buildStubExecGuest());
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const connection = await openAgentConnection(join(ctx.dir, 'v.sock'));
+
+  ctx.stack.defer(() => {
+    connection.close();
+  });
+
+  connection.sendJson(FRAME_TYPES.request, {
+    op: 'exec',
+    argv: ['/bin/sh', '-c', 'sleepy'],
+    tty: false,
+    kill_grace_ms: 120_000,
+  });
+
+  const started = await connection.next();
+
+  invariant(started);
+
+  expect(decodeJsonPayload(started)).toStrictEqual({ pid: 42, kill_grace_ms: 60_000 });
+});
+
+test('it echoes the asked kill grace in STARTED as it was under a minute', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), buildStubExecGuest());
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const connection = await openAgentConnection(join(ctx.dir, 'v.sock'));
+
+  ctx.stack.defer(() => {
+    connection.close();
+  });
+
+  connection.sendJson(FRAME_TYPES.request, {
+    op: 'exec',
+    argv: ['/bin/sh', '-c', 'sleepy'],
+    tty: false,
+    kill_grace_ms: 50,
+  });
+
+  const started = await connection.next();
+
+  invariant(started);
+
+  expect(decodeJsonPayload(started)).toStrictEqual({ pid: 42, kill_grace_ms: 50 });
+});
+
+test('it leaves the kill grace out of STARTED for an exec with a terminal', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), buildStubExecGuest());
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const connection = await openAgentConnection(join(ctx.dir, 'v.sock'));
+
+  ctx.stack.defer(() => {
+    connection.close();
+  });
+
+  connection.sendJson(FRAME_TYPES.request, {
+    op: 'exec',
+    argv: ['/bin/sh', '-c', 'sleepy'],
+    tty: true,
+    kill_grace_ms: 50,
+  });
+
+  const started = await connection.next();
+
+  invariant(started);
+
+  expect(decodeJsonPayload(started)).toStrictEqual({ pid: 42 });
+});
+
+test('it leaves the kill grace out of STARTED for a guest from before the group kill', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startStubExecAgent(
+    join(ctx.dir, 'v.sock'),
+    buildStubExecGuest({ oldAgent: true }),
+  );
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stream = await openExecStream(join(ctx.dir, 'v.sock'), {
+    argv: ['/bin/sh', '-c', 'sleepy'],
+    tty: false,
+    killGraceMs: 50,
+  });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  expect(stream.groupKill).toBeFalse();
+});
+
+test('it names the guest’s session in STARTED', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  // the guest's stream, as a session's that this exec created
+  const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), {
+    openExec: async (name, request) => {
+      const stream = await guest.openExec(name, request);
+
+      return { ...stream, session: 'work', created: true };
+    },
+  });
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const stream = await openExecStream(join(ctx.dir, 'v.sock'), {
+    argv: ['/bin/sh', '-c', 'sleepy'],
+    tty: true,
+    session: 'work',
+  });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  expect(stream.session).toBe('work');
+  expect(stream.created).toBeTrue();
 });
 
 test('it passes a signal to the guest’s command', async () => {
@@ -171,11 +422,13 @@ test('it closes the guest’s stream when impd drops the connection', async () =
   stream.close();
 
   await waitFor(() => {
-    expect(guest.closed).toStrictEqual(['sleepy']);
+    invariant(guest.closed[0]);
   });
+
+  expect(guest.closed).toStrictEqual(['sleepy']);
 });
 
-test('it refuses an op other than exec', async () => {
+test('it refuses an op other than exec with UNKNOWN_OP', async () => {
   const ctx = await setupTest();
   const agent = await startStubExecAgent(join(ctx.dir, 'v.sock'), buildStubExecGuest());
 
@@ -183,8 +436,21 @@ test('it refuses an op other than exec', async () => {
     agent.close();
   });
 
-  // the agent's UNKNOWN_OP reaches impd as an agent too old for the op
-  expect(openTapStream(join(ctx.dir, 'v.sock'), 'web')).rejects.toMatchObject({
-    code: 'AGENT_OUTDATED',
+  const connection = await openAgentConnection(join(ctx.dir, 'v.sock'));
+
+  ctx.stack.defer(() => {
+    connection.close();
+  });
+
+  connection.sendJson(FRAME_TYPES.request, { op: 'session.tap', session: 'web' });
+
+  const response = await connection.next();
+
+  invariant(response);
+
+  expect(response.type).toBe(FRAME_TYPES.response);
+
+  expect(decodeJsonPayload(response)).toStrictEqual({
+    error: { code: 'UNKNOWN_OP', message: 'unknown op session.tap' },
   });
 });
