@@ -2,20 +2,24 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
+import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildQueryGate } from './build-query-gate';
 import { buildStubCpuCgroups } from './build-stub-cpu-cgroups';
+import { buildStubExecGuest } from './build-stub-exec-guest';
 import { buildStubVmm } from './build-stub-vmm';
 import { findFreePorts } from './find-free-ports';
-import { tryExecSocket, tryTunnelSocket } from './try-impd-sockets';
+import { startStubExecAgent } from './start-stub-exec-agent';
+import { buildImpdSocketUrl, tryExecSocket, tryTunnelSocket } from './try-impd-sockets';
 
 // impd's real app on a loopback port, as the clients reach it, and a root
 // client for the scenario; an armed `gate` holds impd's next read of the
@@ -147,7 +151,7 @@ async function setupTest() {
   const port = String(server.server?.port);
   const client = createImpClient({ url: `http://127.0.0.1:${port}`, token: 'root-token' });
 
-  return { gate, db, port, client };
+  return { gate, db, dataDir, port, client, stack };
 }
 
 test('#tryExecSocket sends a start for the name and returns the first message', async () => {
@@ -270,4 +274,38 @@ test('#tryTunnelSocket returns closed when the server closes without a message',
   const reply = await trying;
 
   expect(reply).toBe('closed');
+});
+
+test('#tryExecSocket starts true without a terminal', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await tryExecSocket(ctx.port, '', 'dev', { authorization: 'Bearer root-token' });
+
+  expect(guest.requests).toStrictEqual([{ argv: ['true'], tty: false }]);
+});
+
+test('#buildImpdSocketUrl opens /exec on the loopback port with the query', () => {
+  expect(buildImpdSocketUrl('7070', '/exec', 'ticket=abc')).toBe(
+    'ws://127.0.0.1:7070/exec?ticket=abc',
+  );
+});
+
+test('#buildImpdSocketUrl opens /tunnel on the loopback port with the query', () => {
+  expect(buildImpdSocketUrl('7070', '/tunnel', 'ticket=abc')).toBe(
+    'ws://127.0.0.1:7070/tunnel?ticket=abc',
+  );
 });

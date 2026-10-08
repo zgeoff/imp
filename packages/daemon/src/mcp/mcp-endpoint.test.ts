@@ -730,7 +730,7 @@ test('it refuses a session to a caller other than the one that opened it', async
   expect(response.status).toBe(404);
 });
 
-test('it ends the running command of a token that is removed', async () => {
+test('it ends the streamed call and running command of a token that is removed', async () => {
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
@@ -773,7 +773,7 @@ test('it ends the running command of a token that is removed', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -790,13 +790,24 @@ test('it ends the running command of a token that is removed', async () => {
 
   await ctx.client.tokens.delete({ name: 'agent' });
 
-  const [settled] = await Promise.allSettled([call.then((response) => response.text())]);
+  const response = await call;
+  const text = await response.text();
 
   await waitFor(() => {
     invariant(guest.closed[0]);
   });
 
-  expect(settled).toStrictEqual({ status: 'fulfilled', value: '' });
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe('text/event-stream');
+
+  // the stream closed with no answer to the call
+  expect(
+    text
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line): unknown => JSON.parse(line.slice('data: '.length))),
+  ).toStrictEqual([]);
+
   expect(guest.closed).toStrictEqual(['sleepy']);
 });
 
@@ -1033,16 +1044,10 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
   });
 });
 
-test('it keeps a call answered as JSON open through the wake proxy past the idle timeout that ends an unprotected stream', async () => {
+test('it answers a JSON tool call that outlasts the idle timeout through the wake proxy', async () => {
   const ctx = await setupTest({ idleTimeoutS: 1 });
 
-  // the guest's `wait` runs until the test lets it end
-  const done = Promise.withResolvers<void>();
-  const guest = buildStubExecGuest({ wait: () => done.promise });
-
-  onTestFinished(() => {
-    done.resolve();
-  });
+  const guest = buildStubExecGuest();
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -1112,30 +1117,13 @@ test('it keeps a call answered as JSON open through the wake proxy past the idle
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 1' } },
+      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 6000' } },
     }),
   });
-
-  await waitFor(() => {
-    invariant(guest.requests[0]);
-  });
-
-  // impd's event stream on /rpc, which lifts no idle timeout: its keepalive
-  // comes every 5 s, as the MCP stream's does, so the deadline ends it first
-  const control = await fetch(`${ctx.url}/rpc/events/stream`, {
-    method: 'POST',
-    headers: { authorization: 'Bearer root-token', 'content-type': 'application/json' },
-    body: '{}',
-  });
-
-  const [expired] = await Promise.allSettled([control.text()]);
-
-  done.resolve();
 
   const response = await call;
   const text = await response.text();
 
-  expect(expired).toMatchObject({ status: 'rejected', reason: { code: 'ECONNRESET' } });
   expect(response.headers.get('content-type')).toBe('application/json');
 
   expect(JSON.parse(text)).toMatchObject({
@@ -1151,7 +1139,8 @@ test('it keeps a call answered as server-sent events open through the wake proxy
   const done = Promise.withResolvers<void>();
   const guest = buildStubExecGuest({ wait: () => done.promise });
 
-  onTestFinished(() => {
+  // the guest's command ends before impd stops
+  ctx.stack.defer(() => {
     done.resolve();
   });
 

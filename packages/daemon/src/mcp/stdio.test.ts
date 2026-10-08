@@ -18,12 +18,9 @@ import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
 
-// the CLI's `imp mcp`, which each test runs as a client runs it
-const MAIN = join(import.meta.dir, '..', '..', '..', 'cli', 'src', 'main.ts');
-
 // impd's real app on a loopback port, where the `imp mcp` subprocess reaches
-// it, a root client for the scenario, and `stack`, whose releases run before
-// impd stops
+// it, the CLI's entry the tests run it from, a root client for the scenario,
+// and `stack`, whose releases run before impd stops
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -148,6 +145,7 @@ async function setupTest() {
     db,
     dataDir,
     url,
+    main: join(import.meta.dir, '..', '..', '..', 'cli', 'src', 'main.ts'),
     client: createImpClient({ url, token: 'root-token' }),
     stack,
   };
@@ -156,15 +154,17 @@ async function setupTest() {
 test('it answers initialize over stdio, and nothing for a notification', async () => {
   const ctx = await setupTest();
 
-  const proc = Bun.spawn(['bun', MAIN, 'mcp', '--prefix', 'agent-'], {
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
     env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  ctx.stack.defer(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const stdout = new Response(proc.stdout).text();
@@ -207,15 +207,17 @@ test('it answers initialize over stdio, and nothing for a notification', async (
 test('it lists its tools over stdio', async () => {
   const ctx = await setupTest();
 
-  const proc = Bun.spawn(['bun', MAIN, 'mcp', '--prefix', 'agent-'], {
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
     env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  ctx.stack.defer(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const stdout = new Response(proc.stdout).text();
@@ -241,15 +243,17 @@ test('it lists its tools over stdio', async () => {
 test('it answers an unknown method over stdio with method not found', async () => {
   const ctx = await setupTest();
 
-  const proc = Bun.spawn(['bun', MAIN, 'mcp', '--prefix', 'agent-'], {
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
     env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  ctx.stack.defer(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const stdout = new Response(proc.stdout).text();
@@ -274,15 +278,17 @@ test('it answers an unknown method over stdio with method not found', async () =
 test('it creates an imp through impd over stdio', async () => {
   const ctx = await setupTest();
 
-  const proc = Bun.spawn(['bun', MAIN, 'mcp', '--prefix', 'agent-'], {
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
     env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  ctx.stack.defer(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const stdout = { text: '' };
@@ -341,15 +347,17 @@ test('it runs a command in the guest over stdio', async () => {
     agent.close();
   });
 
-  const proc = Bun.spawn(['bun', MAIN, 'mcp', '--prefix', 'agent-'], {
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
     env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  ctx.stack.defer(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const stdout = { text: '' };
@@ -404,15 +412,17 @@ test('it stops a command still running in the guest when the client goes away', 
     agent.close();
   });
 
-  const proc = Bun.spawn(['bun', MAIN, 'mcp', '--allow', 'box'], {
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--allow', 'box'], {
     env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  ctx.stack.defer(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const stdout = new Response(proc.stdout).text();
@@ -446,15 +456,19 @@ test('it stops a command still running in the guest when the client goes away', 
 });
 
 test('it exits 2 without a guard and says how to choose one', async () => {
-  const proc = Bun.spawn(['bun', MAIN, 'mcp'], {
+  const ctx = await setupTest();
+
+  const proc = Bun.spawn(['bun', ctx.main, 'mcp'], {
     env: { ...process.env, IMP_URL: 'http://127.0.0.1:1' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  onTestFinished(() => {
+  ctx.stack.defer(async () => {
     proc.kill();
+
+    await proc.exited;
   });
 
   const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);

@@ -410,9 +410,11 @@ and keepalive timers of `createMcpServer` and `createHttpTransport` take a `repe
 pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks only when
 the test says so.
 
-An exec through impd's real app reaches the guest through `test-utils/start-stub-exec-agent.ts`
-(`startStubExecAgent`) on the imp's vsock path, which runs each command on `buildStubExecGuest`.
-`imp mcp` runs as a subprocess against impd's app on a loopback port.
+In `mcp/mcp-endpoint.test.ts` and `mcp/stdio.test.ts`, an exec through impd's real app reaches the
+guest through `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path,
+which runs each command on `buildStubExecGuest`. The other `mcp/*.test.ts` files still reach it
+through `test-mcp.ts`'s `openExec` override. `imp mcp` runs as a subprocess against impd's app on a
+loopback port.
 
 impd's API listens with `buildApiListenOptions(config, idleTimeoutS)` (`api-listen-options.ts`),
 whose idle timeout defaults to Elysia's 30 seconds. `mcp/mcp-endpoint.test.ts` listens with 1
