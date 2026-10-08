@@ -401,9 +401,12 @@ binary (`packages/cli/src/test-utils/start-cli.ts`) against its app on a loopbac
 puts an older release in front of the real app: it drops named feature flags or the whole features
 object from `system.info`, sends a procedure the release lacked to impd's own not-found, drops named
 events of a stream, and records each procedure it forwards. `start-stub-silent-host.ts` takes
-requests and never answers. The CLI's warm-move test uses
-`createMoveHosts(stack, { isShared: true })`, because two impds in one process cannot share the data
-dir a warm move needs.
+requests and never answers. `start-stub-prefix-proxy.ts` serves the real app under a path prefix,
+HTTP and WebSocket, as a proxy in front of impd does. `build-stub-exec-peer.ts` is an in-memory
+`/exec` socket that sends the literal frames a test scripts, for the protocol faults impd never
+sends; `exec-client.ts` takes it through `io.connect` and `cp/open-tool-exec.ts` through `connect`.
+The CLI's warm-move test uses `createMoveHosts(stack, { isShared: true })`, because two impds in one
+process cannot share the data dir a warm move needs.
 
 Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
 `host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
