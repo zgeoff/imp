@@ -1158,9 +1158,8 @@ test('a next generation whose log cannot be made leaves its tap free for the nex
     return ctx.calls.length === 2;
   });
 
-  await Bun.sleep(20);
+  await waitFor('the switched tap to close', () => switched.state.closed);
 
-  expect(switched.state.closed).toBe(true);
   expect(findLog(ctx, GEN_B)).toBeUndefined();
 
   // the next look taps the generation again, and its log is made
@@ -1171,7 +1170,10 @@ test('a next generation whose log cannot be made leaves its tap free for the nex
   ctx.answers.push(retried);
   ctx.logs.observe(ctx.imp, [buildSession(GEN_B)]);
 
-  await Bun.sleep(20);
+  await waitFor(
+    'the retried tap and its log',
+    () => ctx.calls.length === 3 && findLog(ctx, GEN_B) !== undefined,
+  );
 
   expect(ctx.calls).toHaveLength(3);
   expect(findLog(ctx, GEN_B)).toMatchObject({ state: 'live' });
