@@ -37,10 +37,22 @@ func startHost(t *testing.T, serve func(r *proto.Reader, w *proto.Writer) error)
 	t.Cleanup(func() { hostEnd.Close() })
 	assert.NilError(t, hostEnd.SetDeadline(time.Now().Add(5*time.Second)))
 	h := &host{conn: hostEnd, r: proto.NewReader(hostEnd), w: proto.NewWriter(hostEnd), served: make(chan error, 1)}
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		h.served <- serve(proto.NewReader(guestEnd), proto.NewWriter(guestEnd))
 		guestEnd.Close()
 	}()
+	// registered after the close above, so it runs first: the close ends
+	// Serve, and the test does not end before it returns
+	t.Cleanup(func() {
+		hostEnd.Close()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("Serve did not return after the host closed")
+		}
+	})
 	return h
 }
 

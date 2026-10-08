@@ -2,10 +2,12 @@ package dial
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,10 +32,22 @@ func startServe(t *testing.T, req proto.Request) *host {
 	t.Cleanup(func() { hostEnd.Close() })
 	assert.NilError(t, hostEnd.SetDeadline(time.Now().Add(5*time.Second)))
 	h := &host{conn: hostEnd, r: proto.NewReader(hostEnd), w: proto.NewWriter(hostEnd), served: make(chan error, 1)}
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		h.served <- testDialer("").Serve(req, proto.NewReader(guestEnd), proto.NewWriter(guestEnd))
 		guestEnd.Close()
 	}()
+	// registered after the close above, so it runs first: the close ends
+	// Serve, and the test does not end before it returns
+	t.Cleanup(func() {
+		hostEnd.Close()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("Serve did not return after the host closed")
+		}
+	})
 	return h
 }
 
@@ -132,10 +146,15 @@ func TestServeRelaysWithAHalfCloseBothWays(t *testing.T) {
 
 func TestServeFailsTheDialToARefusedPort(t *testing.T) {
 	t.Parallel()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// A socket bound but never listening holds its port, so no other
+	// listener can take it, and a connect to it is refused.
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
 	assert.NilError(t, err)
-	address := l.Addr().String()
-	assert.NilError(t, l.Close())
+	t.Cleanup(func() { syscall.Close(fd) })
+	assert.NilError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}))
+	sa, err := syscall.Getsockname(fd)
+	assert.NilError(t, err)
+	address := fmt.Sprintf("127.0.0.1:%d", sa.(*syscall.SockaddrInet4).Port)
 
 	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "tcp", Address: address})
 
