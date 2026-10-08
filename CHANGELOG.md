@@ -2,10 +2,11 @@
 
 ## [0.40.4](https://github.com/zgeoff/imp/compare/v0.40.3...v0.40.4) (2026-10-08)
 
-
 ### Bug Fixes
 
-* **geo-135:** report a refused resolver reply instead of ending impd ([#274](https://github.com/zgeoff/imp/issues/274)) ([afc2a45](https://github.com/zgeoff/imp/commit/afc2a45563f2288d56204aa07f246b71e22c7270))
+- **geo-135:** report a refused resolver reply instead of ending impd
+  ([#274](https://github.com/zgeoff/imp/issues/274))
+  ([afc2a45](https://github.com/zgeoff/imp/commit/afc2a45563f2288d56204aa07f246b71e22c7270))
 
 ## [0.40.3](https://github.com/zgeoff/imp/compare/v0.40.2...v0.40.3) (2026-10-08)
 
