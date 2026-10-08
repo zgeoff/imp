@@ -1,331 +1,714 @@
-import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ImageOpEvent } from '@imp/api';
+import type { ImpContract } from '@imp/api';
+import { updateEnv } from '@imp/test-utils/update-env';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import type { ImpdDeps } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
-import type { ImageService } from './image-service';
+import { openDatabase } from '../db/open-database';
+import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { runChecked } from '../process/run-command';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
 
-type ImageOverrides = Partial<Pick<ImageService, 'addImage' | 'buildImage'>>;
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// impd in-process, with these in place of the image service's own
-async function setupTest(
-  overrides: ImageOverrides = {},
-  env: Readonly<Record<string, string>> = {},
-) {
-  const harness = await setupImpTest({ env });
+  onTestFinished(() => stack.disposeAsync());
 
-  const images = { ...harness.images, ...overrides };
+  const dataDir = await mkdtemp(join(tmpdir(), 'image-op-route-'));
 
-  const buildApp = (token: string) =>
-    buildTestApp({ ...harness, images }, harness, token, {}, null, {}, 10);
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  const root = buildApp(TEST_TOKEN);
+  const db = await openDatabase(':memory:');
 
-  // every audit row of the procedure, oldest first, once there are `count`
-  const readOutcomes = async (procedure: string, count: number) => {
-    const deadline = Date.now() + 5000;
+  stack.defer(() => db.destroy());
 
-    for (;;) {
-      const rows = await listApiCalls(harness.db, null, 100, null);
+  // the engine a host build sends its context to
+  const engine = startStubDockerEngine({ dir: dataDir });
 
-      const calls = rows.filter((row) => row.procedure === procedure).toReversed();
+  stack.defer(() => engine.stop());
 
-      if (calls.length >= count || Date.now() > deadline) {
-        return calls.map((row) => ({ outcome: row.outcome, imp: row.imp ?? null }));
-      }
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one; adds
+  // and builds run on the host's engine, the stubs
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_BUILD_ISOLATION: 'host',
+    DOCKER_HOST: engine.dockerHost,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
 
-      await Bun.sleep(5);
-    }
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const deps: ImpdDeps = {
+    db,
+
+    // the bearer the test's client sends
+    rootToken: 'root-token',
+
+    // a sparse copy for a reflink: the temp dir is not XFS, and an imp's
+    // disk is sparse
+    storage: createXfsBackend({
+      dataDir,
+      cloneFile: async (source, target) => {
+        await runChecked(['cp', '--sparse=always', source, target]);
+      },
+    }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   };
 
-  const makeImage = (name: string) =>
-    createImage(harness.db, { name, ref: `imp/${name}:latest`, digest: 'sha256:x', sizeBytes: 1 });
+  const impd = await createImpd(config, deps);
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // the root bearer's client, against impd's own app
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: (request) => impd.api.app.handle(request),
+    }),
+  );
 
   return {
-    harness,
-    client: root.client,
-    buildApp,
-    readOutcomes,
-    makeImage,
-    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
+    db,
+    dataDir,
+    engine,
+    impd,
+    client,
   };
 }
 
-async function collectEvents(
-  events: Readonly<AsyncIterable<ImageOpEvent>>,
-): Promise<ImageOpEvent[]> {
-  const seen: ImageOpEvent[] = [];
+test('it streams the phases of an add, then the image', async () => {
+  const ctx = await setupTest();
 
-  for await (const event of events) {
-    seen.push(event);
-  }
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
-  return seen;
-}
-
-// a call to its end, failed or not: an aborted one fails
-async function waitForEnd(call: Promise<unknown>): Promise<void> {
-  try {
-    await call;
-  } catch {}
-}
-
-function readPhases(events: readonly ImageOpEvent[]): string[] {
-  const phases = events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []));
-
-  return phases.filter((phase, index) => phases[index - 1] !== phase);
-}
-
-test('images.addStream yields its phases, then the image, and audits the outcome as it ends', async () => {
-  await using ctx = await setupTest({
-    addImage: async (ref, name, options) => {
-      await Bun.sleep(30);
-
-      options?.setPhase?.('unpack');
-
-      await Bun.sleep(30);
-
-      return ctx.makeImage(name ?? ref);
-    },
+  // the image is not on the host: the add pulls it, then unpacks its export
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1.37'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}`, Config: { Cmd: ['sh'] }, Size: 2 }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar: Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout,
   });
+
+  updateEnv('PATH', docker.path);
 
   const stream = await ctx.client.images.addStream({ ref: 'busybox:1.37', name: 'box' });
-  const events = await collectEvents(stream);
+  const events = await Array.fromAsync(stream);
 
-  expect(readPhases(events)).toEqual(['pull', 'unpack']);
-  expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'box' } });
-  expect(events.at(-1)).toHaveProperty('image.createdAt', expect.any(Date));
+  const phases = events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []));
 
-  const outcomes = await ctx.readOutcomes('images.addStream', 1);
+  expect(phases.filter((phase, index) => phases[index - 1] !== phase)).toStrictEqual([
+    'pull',
+    'unpack',
+  ]);
 
-  expect(outcomes).toEqual([{ outcome: 'ok', imp: null }]);
+  expect(events.at(-1)).toMatchObject({
+    type: 'image',
+    image: { name: 'box', createdAt: expect.any(Date) as unknown },
+  });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test("a streamed add's audit row keeps the reference its pull resolved", async () => {
-  const pulled = `busybox@sha256:${'b'.repeat(64)}`;
+test('it audits a streamed add as ok once it ends', async () => {
+  const ctx = await setupTest();
 
-  await using ctx = await setupTest({
-    addImage: (ref, name, options) => {
-      options?.onResolved?.(pulled);
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
-      return ctx.makeImage(name ?? ref);
-    },
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1.37'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}`, Config: {}, Size: 2 }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar: Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout,
   });
+
+  updateEnv('PATH', docker.path);
+
+  const stream = await ctx.client.images.addStream({ ref: 'busybox:1.37', name: 'box' });
+
+  await Array.fromAsync(stream);
+
+  const calls = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const adds = rows.filter((row) => row.procedure === 'images.addStream');
+
+    expect(adds).not.toBeEmpty();
+
+    return adds;
+  });
+
+  expect(calls.map((row) => [row.outcome, row.imp ?? null])).toStrictEqual([['ok', null]]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test("it keeps the reference a streamed add's pull resolved in its audit row", async () => {
+  const ctx = await setupTest();
+
+  const pulled = `busybox@sha256:${'d'.repeat(64)}`;
+
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}`, Config: {}, Size: 2, RepoDigests: [pulled] }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar: Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout,
+  });
+
+  updateEnv('PATH', docker.path);
 
   const stream = await ctx.client.images.addStream({ ref: 'busybox', name: 'box' });
 
-  await collectEvents(stream);
+  await Array.fromAsync(stream);
 
-  await ctx.readOutcomes('images.addStream', 1);
+  const details = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
 
-  const rows = await listApiCalls(ctx.harness.db, null, 10, null);
+    const adds = rows.filter((row) => row.procedure === 'images.addStream');
 
-  const adds = rows.filter((row) => row.procedure === 'images.addStream');
+    expect(adds).not.toBeEmpty();
 
-  expect(adds.map((row) => row.detail)).toEqual([pulled]);
-});
-
-test('a template streams its copy and is audited with its imp', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.harness.createTestImage('base');
-  await ctx.client.imps.create({ name: 'source' });
-
-  const stream = await ctx.client.images.addStream({ imp: 'source', name: 'tpl' });
-  const events = await collectEvents(stream);
-
-  expect(readPhases(events)).toEqual(['copy']);
-  expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'tpl', source: 'imp' } });
-
-  const outcomes = await ctx.readOutcomes('images.addStream', 1);
-
-  expect(outcomes).toEqual([{ outcome: 'ok', imp: 'source' }]);
-});
-
-test('a failed add throws its error through the stream and is audited with its code', async () => {
-  await using ctx = await setupTest({
-    addImage: () => Promise.reject(new Error('pull denied')),
+    return adds.map((row) => row.detail);
   });
 
-  const thrown = await ctx.client.images
-    .addStream({ ref: 'busybox:1.37' })
-    .then(collectEvents)
-    .catch((error: unknown) => error);
-
-  // a failure that is not an ORPCError keeps its message out of the answer,
-  // as for images.add
-  expect(thrown).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
-
-  const outcomes = await ctx.readOutcomes('images.addStream', 1);
-
-  expect(outcomes).toEqual([{ outcome: 'INTERNAL_SERVER_ERROR', imp: null }]);
+  expect(details).toStrictEqual([pulled]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a refused stream call is audited, as any refused call', async () => {
-  await using ctx = await setupTest();
+test('it streams the copy of a template and audits it with its imp', async () => {
+  const ctx = await setupTest();
 
-  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  const reader = ctx.buildApp(made.secret).client;
+  await createImage(ctx.db, {
+    name: 'base',
+    ref: 'base:latest',
+    digest: 'sha256:base',
+    sizeBytes: 6,
+  });
 
-  const refusals = await Promise.all([
-    reader.images.addStream({ ref: 'busybox:1.37' }).catch((error: unknown) => error),
-    reader.images
-      .buildStream({ contextDir: '/srv/ctx', name: 'web' })
-      .catch((error: unknown) => error),
+  await ctx.client.imps.create({ name: 'source', image: 'base' });
+
+  const stream = await ctx.client.images.addStream({ imp: 'source', name: 'tpl' });
+  const events = await Array.fromAsync(stream);
+
+  const calls = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const adds = rows.filter((row) => row.procedure === 'images.addStream');
+
+    expect(adds).not.toBeEmpty();
+
+    return adds;
+  });
+
+  expect([
+    ...new Set(events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []))),
+  ]).toStrictEqual(['copy']);
+
+  expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'tpl', source: 'imp' } });
+  expect(calls.map((row) => [row.outcome, row.imp ?? null])).toStrictEqual([['ok', 'source']]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it throws a failed add through the stream with a code that keeps its message out', async () => {
+  const ctx = await setupTest();
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1.37'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}` }],
+        isOnHost: false,
+        pull: { stderr: 'pull access denied' },
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const stream = await ctx.client.images.addStream({ ref: 'busybox:1.37' });
+
+  const adding = Array.fromAsync(stream);
+
+  await adding.catch(() => {});
+
+  expect(adding).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  expect(adding).rejects.not.toThrow('pull access denied');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it audits a failed streamed add with its code', async () => {
+  const ctx = await setupTest();
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1.37'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}` }],
+        isOnHost: false,
+        pull: { stderr: 'pull access denied' },
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const stream = await ctx.client.images.addStream({ ref: 'busybox:1.37' });
+
+  expect(Array.fromAsync(stream)).rejects.toThrow();
+
+  const calls = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const adds = rows.filter((row) => row.procedure === 'images.addStream');
+
+    expect(adds).not.toBeEmpty();
+
+    return adds;
+  });
+
+  expect(calls.map((row) => [row.outcome, row.imp ?? null])).toStrictEqual([
+    ['INTERNAL_SERVER_ERROR', null],
   ]);
 
-  expect(refusals).toMatchObject([{ code: 'FORBIDDEN' }, { code: 'FORBIDDEN' }]);
-
-  const outcomes = [
-    ...(await ctx.readOutcomes('images.addStream', 1)),
-    ...(await ctx.readOutcomes('images.buildStream', 1)),
-  ];
-
-  expect(outcomes.map((row) => row.outcome)).toEqual(['FORBIDDEN', 'FORBIDDEN']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('images.buildStream packs, then builds; a client that goes stops the build', async () => {
-  const stopped = Promise.withResolvers<void>();
+test('it refuses a streamed add to a read token and audits the refusal', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
 
-  await using ctx = await setupTest({
-    buildImage: async (_contextDir, _name, _dockerfile, options) => {
-      await Bun.sleep(20);
+  const reader: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => ctx.impd.api.app.handle(request),
+    }),
+  );
 
-      options?.setPhase?.('build');
-      const signal = options?.signal;
+  const adding = reader.images.addStream({ ref: 'busybox:1.37' });
 
-      if (signal === undefined) {
-        throw new Error('no signal');
-      }
+  expect(adding).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
-      await new Promise((resolve) => {
-        signal.addEventListener('abort', resolve);
-      });
+  const calls = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
 
-      stopped.resolve();
-      throw signal.reason;
-    },
+    const adds = rows.filter((row) => row.procedure === 'images.addStream');
+
+    expect(adds).not.toBeEmpty();
+
+    return adds;
+  });
+
+  expect(calls.map((row) => row.outcome)).toStrictEqual(['FORBIDDEN']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a streamed build to a read token and audits the refusal', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+
+  const reader: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => ctx.impd.api.app.handle(request),
+    }),
+  );
+
+  const building = reader.images.buildStream({ contextDir: '/srv/ctx', name: 'web' });
+
+  expect(building).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+  const calls = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const builds = rows.filter((row) => row.procedure === 'images.buildStream');
+
+    expect(builds).not.toBeEmpty();
+
+    return builds;
+  });
+
+  expect(calls.map((row) => row.outcome)).toStrictEqual(['FORBIDDEN']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it streams the pack, then the build, of a build from a directory', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+
+  await mkdir(contextDir);
+  await writeFile(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
+
+  // the Dockerfile frontend is on the host already
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine holds the build until its client goes
+  ctx.engine.setAnswer(async (request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    await new Promise((resolve) => {
+      request.signal.addEventListener('abort', resolve);
+    });
+
+    return new Response(null, { status: 499 });
   });
 
   const client = new AbortController();
 
   const events = await ctx.client.images.buildStream(
-    { contextDir: '/srv/ctx', name: 'web' },
+    { contextDir, name: 'web' },
     { signal: client.signal },
   );
 
-  const seen: string[] = [];
-
-  for await (const event of events) {
-    if (event.type === 'progress') {
-      seen.push(event.phase);
-
-      if (event.phase === 'build') {
-        break;
-      }
-    }
-  }
+  const first = await events.next();
+  const second = await events.next();
 
   client.abort();
 
-  await stopped.promise;
-
-  expect(seen[0]).toBe('pack');
-  expect(seen.at(-1)).toBe('build');
-
-  const outcomes = await ctx.readOutcomes('images.buildStream', 1);
-
-  expect(outcomes).toHaveLength(1);
-  expect(outcomes[0]?.outcome).not.toBe('ok');
-});
-
-test('a client that goes stops the pull of an add on the host', async () => {
-  await using ctx = await setupTest({}, { IMP_BUILD_ISOLATION: 'host' });
-
-  // a docker whose inspect finds nothing and whose pull hangs until killed
-  const bin = join(ctx.harness.config.dataDir, 'fake-bin');
-  const log = join(ctx.harness.config.dataDir, 'docker.log');
-
-  mkdirSync(bin, { recursive: true });
-
-  writeFileSync(
-    join(bin, 'docker'),
-    ['#!/bin/sh', `echo "$1" >>'${log}'`, '[ "$1" = pull ] && exec sleep 30', 'exit 1'].join('\n'),
-    { mode: 0o755 },
-  );
-
-  const savedPath = process.env['PATH'];
-
-  process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
-
-  try {
-    const client = new AbortController();
-
-    const events = await ctx.client.images.addStream(
-      { ref: 'registry.test/big:1' },
-      { signal: client.signal },
-    );
-
-    await events.next();
-
-    while (!existsSync(log) || !readFileSync(log, 'utf8').includes('pull')) {
-      await Bun.sleep(5);
-    }
-
-    const startedAt = Date.now();
-
-    client.abort();
-
-    const outcomes = await ctx.readOutcomes('images.addStream', 1);
-
-    expect(outcomes).toHaveLength(1);
-    expect(outcomes[0]?.outcome).not.toBe('ok');
-    expect(Date.now() - startedAt).toBeLessThan(5000);
-  } finally {
-    process.env['PATH'] = savedPath;
-  }
-});
-
-test('a client that goes from images.build or images.add stops its work, as a stream does', async () => {
-  const started = { build: Promise.withResolvers<void>(), add: Promise.withResolvers<void>() };
-  const stopped = { build: Promise.withResolvers<void>(), add: Promise.withResolvers<void>() };
-
-  // work that runs until its signal aborts
-  const runUntilAborted = async (kind: 'build' | 'add', signal: AbortSignal | undefined) => {
-    started[kind].resolve();
-
-    await new Promise((resolve) => {
-      signal?.addEventListener('abort', resolve);
-    });
-
-    stopped[kind].resolve();
-    throw new Error('stopped');
-  };
-
-  await using ctx = await setupTest({
-    buildImage: (_contextDir, _name, _dockerfile, options) =>
-      runUntilAborted('build', options?.signal),
-    addImage: (_ref, _name, options) => runUntilAborted('add', options?.signal),
+  expect(first.value).toStrictEqual({
+    type: 'progress',
+    phase: 'pack',
+    elapsedMs: expect.any(Number) as unknown,
   });
 
-  const builder = new AbortController();
-  const adder = new AbortController();
+  expect(second.value).toStrictEqual({
+    type: 'progress',
+    phase: 'build',
+    elapsedMs: expect.any(Number) as unknown,
+  });
 
-  const building = waitForEnd(
-    ctx.client.images.build({ contextDir: '/srv/ctx', name: 'web' }, { signal: builder.signal }),
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it stops the engine build of a streamed build whose client goes, and audits it', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+
+  await mkdir(contextDir);
+  await writeFile(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const build = { started: false, stopped: false };
+
+  ctx.engine.setAnswer(async (request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    build.started = true;
+
+    await new Promise((resolve) => {
+      request.signal.addEventListener('abort', resolve);
+    });
+
+    build.stopped = true;
+
+    return new Response(null, { status: 499 });
+  });
+
+  const client = new AbortController();
+
+  const events = await ctx.client.images.buildStream(
+    { contextDir, name: 'web' },
+    { signal: client.signal },
   );
 
-  const adding = waitForEnd(
-    ctx.client.images.add({ ref: 'busybox:1.37', name: 'box' }, { signal: adder.signal }),
+  await events.next();
+
+  await waitFor(() => {
+    expect(build.started).toBeTrue();
+  });
+
+  client.abort();
+
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const builds = rows.filter((row) => row.procedure === 'images.buildStream');
+
+    expect(builds).not.toBeEmpty();
+    expect(build.stopped).toBeTrue();
+
+    return builds.map((row) => row.outcome);
+  });
+
+  expect(outcomes).toStrictEqual(['INTERNAL_SERVER_ERROR']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it kills the host pull of a streamed add whose client goes, and audits it', async () => {
+  const ctx = await setupTest();
+
+  // the image is not on the host, and its pull hangs until it is killed
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['registry.test/big:1'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}` }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const client = new AbortController();
+
+  const events = await ctx.client.images.addStream(
+    { ref: 'registry.test/big:1' },
+    { signal: client.signal },
   );
 
-  await Promise.all([started.build.promise, started.add.promise]);
+  await events.next();
 
-  builder.abort();
-  adder.abort();
+  await waitFor(() => {
+    expect(docker.readCalls()).toContain('pull --quiet registry.test/big:1');
+  });
 
-  await Promise.all([stopped.build.promise, stopped.add.promise, building, adding]);
+  client.abort();
+
+  // the pull sleeps 30 s: only its kill writes the row within the wait
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const adds = rows.filter((row) => row.procedure === 'images.addStream');
+
+    expect(adds).not.toBeEmpty();
+
+    return adds.map((row) => row.outcome);
+  });
+
+  expect(outcomes).toStrictEqual(['INTERNAL_SERVER_ERROR']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it stops the engine build of a plain build whose client goes', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+
+  await mkdir(contextDir);
+  await writeFile(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const build = { started: false, stopped: false };
+
+  ctx.engine.setAnswer(async (request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    build.started = true;
+
+    await new Promise((resolve) => {
+      request.signal.addEventListener('abort', resolve);
+    });
+
+    build.stopped = true;
+
+    return new Response(null, { status: 499 });
+  });
+
+  const client = new AbortController();
+
+  const building = ctx.client.images.build({ contextDir, name: 'web' }, { signal: client.signal });
+
+  await waitFor(() => {
+    expect(build.started).toBeTrue();
+  });
+
+  client.abort();
+
+  expect(building).rejects.toThrow();
+
+  const stopped = await waitFor(() => {
+    expect(build.stopped).toBeTrue();
+
+    return build.stopped;
+  });
+
+  expect(stopped).toBeTrue();
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it kills the host pull of a plain add whose client goes, and audits it', async () => {
+  const ctx = await setupTest();
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1.37'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}` }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const client = new AbortController();
+
+  const adding = ctx.client.images.add(
+    { ref: 'busybox:1.37', name: 'box' },
+    { signal: client.signal },
+  );
+
+  await waitFor(() => {
+    expect(docker.readCalls()).toContain('pull --quiet busybox:1.37');
+  });
+
+  client.abort();
+
+  expect(adding).rejects.toThrow();
+
+  // the pull sleeps 30 s: only its kill writes the row within the wait
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const adds = rows.filter((row) => row.procedure === 'images.add');
+
+    expect(adds).not.toBeEmpty();
+
+    return adds.map((row) => row.outcome);
+  });
+
+  expect(outcomes).toStrictEqual(['INTERNAL_SERVER_ERROR']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });

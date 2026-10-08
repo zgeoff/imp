@@ -14,6 +14,9 @@ export interface StubAnswer {
 
   // after its output, no exit: the exec stays open until impd closes it
   readonly stall?: boolean;
+
+  // after its output, the agent's connection drops: no exit ever comes
+  readonly isDropped?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -49,6 +52,10 @@ async function* readFakeEvents(
 
   if (answered.stderr !== undefined) {
     yield { type: 'stderr', data: encoder.encode(answered.stderr) };
+  }
+
+  if (answered.isDropped === true) {
+    return;
   }
 
   if (answered.stall === true) {

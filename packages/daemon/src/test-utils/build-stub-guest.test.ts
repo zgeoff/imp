@@ -50,6 +50,15 @@ test('it exits with the code of the answer', async () => {
   expect(events).toStrictEqual([{ type: 'exit', code: 3, signal: 0 }]);
 });
 
+test('it ends a dropped exec after its output with no exit', async () => {
+  const guest = buildStubGuest(() => ({ stdout: 'partial', isDropped: true }));
+
+  const stream = await guest.open({ argv: ['docker', 'version'], tty: false });
+  const events = await Array.fromAsync(stream.events());
+
+  expect(events).toStrictEqual([{ type: 'stdout', data: new TextEncoder().encode('partial') }]);
+});
+
 test('it keeps a stalled exec open after its output', async () => {
   const guest = buildStubGuest((run) => ({ stdout: 'up', stall: run.argv[0] === 'serve' }));
 

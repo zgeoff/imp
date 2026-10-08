@@ -1,4 +1,6 @@
 import type { Image, ImageBuildPhase, ImageOpEvent } from '@imp/api';
+import { runOnInterval } from './build-event-stream';
+import type { Repeat } from './build-event-stream';
 
 export interface ImageOpStreamOptions {
   readonly firstPhase: ImageBuildPhase;
@@ -12,6 +14,9 @@ export interface ImageOpStreamOptions {
 
   // writes the audit row: null for the image, else what was thrown
   readonly record: (failure: unknown) => void;
+
+  // the keepalive's timer; runOnInterval by default
+  readonly repeat?: Repeat;
 }
 
 type Outcome =
@@ -49,15 +54,19 @@ export async function* runImageOp(
   };
 
   const outcome = runToOutcome();
+  const repeat = options.repeat ?? runOnInterval;
 
   for (;;) {
     yield { type: 'progress', phase: state.phase, elapsedMs: options.now() - startedAt };
     const tick = Promise.withResolvers<null>();
-    const timer = setTimeout(tick.resolve, options.keepaliveMs, null);
+
+    const stopTimer = repeat(options.keepaliveMs, () => {
+      tick.resolve(null);
+    });
 
     const ended = await Promise.race([outcome, tick.promise, state.changed.promise]);
 
-    clearTimeout(timer);
+    stopTimer();
 
     if (ended !== null && ended !== undefined) {
       if (!ended.ok) {

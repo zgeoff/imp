@@ -1,69 +1,67 @@
-import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readErrorMessage } from '../read-error-message';
-import { readRejection } from '../read-rejection';
-import type { HostIdentity } from '../sleep/vm-identity';
+import { invariant } from '@imp/test-utils/invariant';
+import { createDiskBudget } from '../storage/disk-budget';
 import type { TemplateBuildPlan } from '../vmm/template-vm';
 import { buildTemplateKey, createBootTemplates } from './boot-templates';
 import type { BootTemplateDeps } from './boot-templates';
 
-const SHAPE = { vcpus: 1, memoryMib: 512 };
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// the stand-in disk every template's snapshot names
-const PLACEHOLDER = 'placeholder.ext4';
+  onTestFinished(() => stack.disposeAsync());
 
-function buildIdentity(dataDir: string, drive: string): HostIdentity {
-  return {
-    firecrackerVersion: 'v1.17.0',
-    snapshotVersion: 'v12.0.0',
-    hostKernel: 'test',
-    guestKernel: 'k',
-    systemDrive: drive,
-    systemDrivePath: join(dataDir, 'system', 'drives', drive),
-    cpuModel: 'Test CPU',
-    cpuFlags: 'test-flags',
-  };
-}
+  const dataDir = await mkdtemp(join(tmpdir(), 'boot-templates-'));
 
-// a store over a fresh data dir whose builds write two small files; `gate`
-// holds each build until the test resolves it
-function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-templates-`);
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
   const builds: TemplateBuildPlan[] = [];
   const admitted: string[] = [];
   const logs: string[] = [];
-  const roomAsked: number[] = [];
 
-  // the disk room each build ran in, at the time it ran
-  const roomHeld = { bytes: 0, atBuild: [] as number[] };
-  const gate = { promise: Promise.resolve() };
-
-  // `fail` makes every build fail until a test sets it back
-  const failing = { isFailing: false };
-  const clock = { ms: 1_000_000 };
-
-  // what the build asked of the taps and cgroups, and whether it gets one
+  // the taps and cgroups each build asked for, in order
   const cgroupCalls: string[] = [];
-  const cgroupState = { isUp: true };
+
+  // the disk room held while each build ran
+  const pendingAtBuild: number[] = [];
+
+  // a frozen clock, far from the wall clock, that moves only with advance
+  const clock = { ms: Date.UTC(2026, 0, 1) };
+
+  // the host's free space, so a build never meets this machine's disk
+  const diskBudget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }) },
+    reserveBytes: null,
+    log: () => {},
+  });
 
   const deps: BootTemplateDeps = {
     dataDir,
-    identity: buildIdentity(dataDir, 'd1'),
+    identity: {
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: 'k',
+      systemDrive: 'd1',
+      systemDrivePath: join(dataDir, 'system', 'drives', 'd1'),
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+    },
     firecrackerBin: 'firecracker',
     kernelPath: 'vmlinux',
     minGuestUptimeMs: 1500,
     bootReservePercent: 50,
+
+    // the template VM: it writes the snapshot's two files
     buildVm: async (plan) => {
       builds.push(plan);
-      roomHeld.atBuild.push(roomHeld.bytes);
 
-      await gate.promise;
+      const status = await diskBudget.readStatus();
 
-      if (failing.isFailing) {
-        throw new Error('no agent');
-      }
+      pendingAtBuild.push(status.pendingBytes);
 
       mkdirSync(plan.snapshotDir, { recursive: true });
       writeFileSync(plan.vmstate, 'vmstate');
@@ -82,9 +80,11 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
       setup: (impId, _cpu, memoryMib) => {
         cgroupCalls.push(`setup ${impId} ${String(memoryMib)}`);
 
-        return cgroupState.isUp
-          ? { procsPath: `/cg/${impId}/cgroup.procs`, liftLimit: () => {}, applyLimit: () => {} }
-          : null;
+        return {
+          procsPath: `/cg/${impId}/cgroup.procs`,
+          liftLimit: () => {},
+          applyLimit: () => {},
+        };
       },
       remove: (impId) => {
         cgroupCalls.push(`remove ${impId}`);
@@ -104,391 +104,794 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
         admitted.push(`release ${id}`);
       },
     },
-    diskBudget: {
-      withRoom: async (bytes, task) => {
-        roomAsked.push(bytes);
-
-        roomHeld.bytes += bytes;
-
-        try {
-          return await task();
-        } finally {
-          roomHeld.bytes -= bytes;
-        }
-      },
-    },
+    diskBudget,
     now: () => clock.ms,
     log: (message) => {
       logs.push(message);
     },
-    ...overrides,
   };
 
   return {
     dataDir,
     deps,
+    diskBudget,
     builds,
     admitted,
     logs,
-    roomAsked,
-    roomHeld,
-    gate,
-    failing,
-    clock,
     cgroupCalls,
-    cgroupState,
-    store: createBootTemplates(deps),
-    [Symbol.dispose]() {
-      rmSync(dataDir, { recursive: true, force: true });
+    pendingAtBuild,
+    advance: (ms: number) => {
+      clock.ms += ms;
     },
   };
 }
 
-test('the key changes with each thing a restore inherits, and not with the drive path', () => {
-  const identity = buildIdentity('/data', 'd1');
-  const key = buildTemplateKey(identity, SHAPE);
+test('#buildTemplateKey changes with each thing a restore inherits', () => {
+  const identity = {
+    firecrackerVersion: 'v1.17.0',
+    snapshotVersion: 'v12.0.0',
+    hostKernel: 'test',
+    guestKernel: 'k',
+    systemDrive: 'd1',
+    systemDrivePath: '/data/system/drives/d1',
+    cpuModel: 'Test CPU',
+    cpuFlags: 'test-flags',
+  };
 
-  const changed = [
-    buildTemplateKey({ ...identity, guestKernel: 'k2' }, SHAPE),
-    buildTemplateKey({ ...identity, systemDrive: 'd2' }, SHAPE),
-    buildTemplateKey({ ...identity, firecrackerVersion: 'v1.18.0' }, SHAPE),
-    buildTemplateKey({ ...identity, snapshotVersion: 'v13.0.0' }, SHAPE),
-    buildTemplateKey({ ...identity, hostKernel: 'other' }, SHAPE),
-    buildTemplateKey({ ...identity, cpuModel: 'Other CPU' }, SHAPE),
-    buildTemplateKey({ ...identity, cpuFlags: 'other-flags' }, SHAPE),
-    buildTemplateKey(identity, { ...SHAPE, vcpus: 2 }),
-    buildTemplateKey(identity, { ...SHAPE, memoryMib: 1024 }),
+  const shape = { vcpus: 1, memoryMib: 512 };
+
+  const keys = [
+    buildTemplateKey(identity, shape),
+    buildTemplateKey({ ...identity, guestKernel: 'k2' }, shape),
+    buildTemplateKey({ ...identity, systemDrive: 'd2' }, shape),
+    buildTemplateKey({ ...identity, firecrackerVersion: 'v1.18.0' }, shape),
+    buildTemplateKey({ ...identity, snapshotVersion: 'v13.0.0' }, shape),
+    buildTemplateKey({ ...identity, hostKernel: 'other' }, shape),
+    buildTemplateKey({ ...identity, cpuModel: 'Other CPU' }, shape),
+    buildTemplateKey({ ...identity, cpuFlags: 'other-flags' }, shape),
+    buildTemplateKey(identity, { ...shape, vcpus: 2 }),
+    buildTemplateKey(identity, { ...shape, memoryMib: 1024 }),
   ];
 
-  expect(new Set([key, ...changed]).size).toBe(changed.length + 1);
-  expect(buildTemplateKey({ ...identity, systemDrivePath: '/elsewhere' }, SHAPE)).toBe(key);
+  expect(new Set(keys).size).toBe(keys.length);
 });
 
-test('a shape builds on its second miss; misses of one key share the build', async () => {
-  using ctx = setupStore();
+test('#buildTemplateKey keeps the key when only the drive path changes', () => {
+  const identity = {
+    firecrackerVersion: 'v1.17.0',
+    snapshotVersion: 'v12.0.0',
+    hostKernel: 'test',
+    guestKernel: 'k',
+    systemDrive: 'd1',
+    systemDrivePath: '/data/system/drives/d1',
+    cpuModel: 'Test CPU',
+    cpuFlags: 'test-flags',
+  };
 
-  const held = Promise.withResolvers<void>();
+  const shape = { vcpus: 1, memoryMib: 512 };
 
-  ctx.gate.promise = held.promise;
+  expect(buildTemplateKey({ ...identity, systemDrivePath: '/elsewhere' }, shape)).toBe(
+    buildTemplateKey(identity, shape),
+  );
+});
 
-  expect(ctx.store.find(SHAPE)).toBeNull();
-  expect(ctx.builds).toHaveLength(0);
-  expect(ctx.store.find(SHAPE)).toBeNull();
-  expect(ctx.store.find(SHAPE)).toBeNull();
+test('#find answers null and starts no build on the first miss of a shape', async () => {
+  const ctx = await setupTest();
 
-  const building = ctx.store.buildTemplate(SHAPE);
+  const store = createBootTemplates(ctx.deps);
+  const found = store.find({ vcpus: 1, memoryMib: 512 });
 
-  held.resolve();
+  await store.stop();
 
-  const files = await building;
+  expect(found).toBeNull();
+  expect(ctx.builds).toStrictEqual([]);
+});
 
-  const key = buildTemplateKey(ctx.deps.identity, SHAPE);
+test('#find starts one build on the second miss of a shape, shared by the misses after it', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  store.find({ vcpus: 1, memoryMib: 512 });
+  store.find({ vcpus: 1, memoryMib: 512 });
+  store.find({ vcpus: 1, memoryMib: 512 });
+
+  await store.stop();
 
   expect(ctx.builds).toHaveLength(1);
-  expect(ctx.store.find(SHAPE)).toEqual(files);
-  expect(files.key).toBe(key);
+});
 
-  // free RAM only, and room on the disk for the whole memory
-  expect(ctx.admitted).toEqual([
-    `template-${key.slice(0, 12)} 256 false`,
-    `release template-${key.slice(0, 12)}`,
+test('#find answers the template a build made', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(store.find({ vcpus: 1, memoryMib: 512 })).toStrictEqual(files);
+});
+
+test('#buildTemplate names the template by its key', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(files.key).toBe(buildTemplateKey(ctx.deps.identity, { vcpus: 1, memoryMib: 512 }));
+});
+
+test('#buildTemplate takes free RAM only, for half its memory, and gives it back', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(ctx.admitted).toStrictEqual([
+    `template-${files.key.slice(0, 12)} 256 false`,
+    `release template-${files.key.slice(0, 12)}`,
   ]);
-
-  // held through the build, and given back after it
-  expect(ctx.roomAsked).toEqual([512 * 1024 * 1024]);
-  expect(ctx.roomHeld).toEqual({ bytes: 0, atBuild: [512 * 1024 * 1024] });
-
-  // the build's work directory is gone; only the template and the placeholder stay
-  expect(readdirSync(join(ctx.dataDir, 'templates')).toSorted()).toEqual([key, PLACEHOLDER]);
 });
 
-test('every build names the same placeholder disk, which the snapshot records', async () => {
-  using ctx = setupStore();
+test('#buildTemplate holds disk room for its whole memory through the build only', async () => {
+  const ctx = await setupTest();
 
-  await ctx.store.buildTemplate(SHAPE);
-  await ctx.store.buildTemplate({ ...SHAPE, memoryMib: 1024 });
+  const store = createBootTemplates(ctx.deps);
 
-  const placeholders = new Set(ctx.builds.map((plan) => plan.placeholderPath));
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect([...placeholders]).toEqual([join(ctx.dataDir, 'templates', 'placeholder.ext4')]);
+  const after = await ctx.diskBudget.readStatus();
 
-  const parked = ctx.builds.map((plan) => plan.bootArgs.includes('imp.template=1'));
-
-  expect(parked).toEqual([true, true]);
-  expect(ctx.builds[0]?.bootArgs).not.toContain('imp.ip');
+  expect(ctx.pendingAtBuild).toStrictEqual([512 * 1024 ** 2]);
+  expect(after.pendingBytes).toBe(0);
 });
 
-test('a jailed build runs as the build uid, owns its tap, and has a cgroup sized to it', async () => {
-  using ctx = setupStore({ jail: { uid: 899_999, gid: 899_999 } });
+test('#buildTemplate leaves only the template and the placeholder disk', async () => {
+  const ctx = await setupTest();
 
-  const files = await ctx.store.buildTemplate(SHAPE);
+  const store = createBootTemplates(ctx.deps);
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(readdirSync(join(ctx.dataDir, 'templates'))).toIncludeSameMembers([
+    'placeholder.ext4',
+    files.key,
+  ]);
+});
+
+test('#buildTemplate names the same placeholder disk in every build', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+  await store.buildTemplate({ vcpus: 1, memoryMib: 1024 });
+
+  expect(ctx.builds.map((plan) => plan.placeholderPath)).toStrictEqual([
+    join(ctx.dataDir, 'templates', 'placeholder.ext4'),
+    join(ctx.dataDir, 'templates', 'placeholder.ext4'),
+  ]);
+});
+
+test('#buildTemplate boots a parked agent with no imp address', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   const [plan] = ctx.builds;
+
+  invariant(plan);
+
+  const args = plan.bootArgs.split(' ');
+
+  expect(args).toContain('imp.template=1');
+  expect(args.filter((arg) => arg.startsWith('imp.ip'))).toStrictEqual([]);
+});
+
+test('#buildTemplate runs a jailed build as the build uid in a cgroup of its own', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({ ...ctx.deps, jail: { uid: 899_999, gid: 899_999 } });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  const [plan] = ctx.builds;
+
+  invariant(plan);
 
   expect(plan).toMatchObject({
     jailId: 'tpl-build',
     jail: { uid: 899_999, gid: 899_999 },
     cgroup: { procsPath: '/cg/tpl-build/cgroup.procs' },
+    workDir: expect.stringContaining(join(ctx.dataDir, 'templates', '.build-')) as unknown,
+    paths: { runDir: join(plan.workDir, 'run') },
   });
+});
 
-  expect(plan?.workDir).toContain('.build-');
-  expect(plan?.paths.runDir).toBe(join(plan?.workDir ?? '', 'run'));
+test('#buildTemplate gives a jailed build its tap and a cgroup sized to it, removed after', async () => {
+  const ctx = await setupTest();
 
-  expect(ctx.cgroupCalls).toEqual([
+  const store = createBootTemplates({ ...ctx.deps, jail: { uid: 899_999, gid: 899_999 } });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(ctx.cgroupCalls).toStrictEqual([
     'tap imp-tpl 899999',
     'setup tpl-build 512',
     'remove tpl-build',
   ]);
+});
 
-  // a restore reopens the drive the snapshot booted, and the placeholder
+// a restore reopens the drive the snapshot booted, and the placeholder
+test('#buildTemplate returns the drive and the placeholder a restore reopens', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
   expect(files).toMatchObject({
     systemDrivePath: ctx.deps.identity.systemDrivePath,
-    placeholderPath: join(ctx.dataDir, 'templates', PLACEHOLDER),
+    placeholderPath: join(ctx.dataDir, 'templates', 'placeholder.ext4'),
   });
 });
 
-test('a jailed build without its cgroup fails before any VM starts', async () => {
-  using ctx = setupStore({ jail: { uid: 899_999, gid: 899_999 } });
+test('#buildTemplate refuses a jailed build without its cgroup before any VM starts', async () => {
+  const ctx = await setupTest();
 
-  ctx.cgroupState.isUp = false;
+  const store = createBootTemplates({
+    ...ctx.deps,
+    jail: { uid: 899_999, gid: 899_999 },
+    cgroups: { setup: () => null, remove: () => Promise.resolve() },
+  });
 
-  const refusal = await readRejection(ctx.store.buildTemplate(SHAPE));
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(readErrorMessage(refusal)).toContain('needs its own cgroup');
-  expect(ctx.builds).toEqual([]);
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'a jailed template build needs its own cgroup, and it has none',
+  );
+
+  expect(ctx.builds).toStrictEqual([]);
 });
 
-test('a failing build backs off, and its third failure turns the key off', async () => {
-  using ctx = setupStore();
+test('#buildTemplate leaves no template behind a failed build', async () => {
+  const ctx = await setupTest();
 
-  ctx.failing.isFailing = true;
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: () => Promise.reject(new Error('no agent')),
+  });
 
-  // each round: misses past the threshold, then the build they started
-  const runTwoMisses = async () => {
-    ctx.store.find(SHAPE);
-    ctx.store.find(SHAPE);
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-    await ctx.store.stop();
-  };
+  await building.catch(() => {});
 
-  await runTwoMisses();
+  expect(building).rejects.toThrowWithMessage(Error, 'no agent');
+  expect(readdirSync(join(ctx.dataDir, 'templates'))).toStrictEqual(['placeholder.ext4']);
+});
+
+test('#find starts no build while a failed build backs off', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: (plan) => {
+      ctx.builds.push(plan);
+
+      return Promise.reject(new Error('no agent'));
+    },
+  });
+
+  store.find({ vcpus: 1, memoryMib: 512 });
+  store.find({ vcpus: 1, memoryMib: 512 });
+
+  await store.stop();
+
+  store.find({ vcpus: 1, memoryMib: 512 });
+  store.find({ vcpus: 1, memoryMib: 512 });
+
+  await store.stop();
 
   expect(ctx.builds).toHaveLength(1);
-  expect(readdirSync(join(ctx.dataDir, 'templates'))).toEqual([PLACEHOLDER]);
+});
 
-  // within the backoff, misses start nothing, and nor does a direct build
-  await runTwoMisses();
+test('#buildTemplate refuses a shape while its failed build backs off', async () => {
+  const ctx = await setupTest();
 
-  expect(ctx.builds).toHaveLength(1);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: () => Promise.reject(new Error('no agent')),
+  });
 
-  const heldOff = await ctx.store.buildTemplate(SHAPE).catch((error: unknown) => error);
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
 
-  expect(String(heldOff)).toContain('back off');
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  ctx.clock.ms += 60_000;
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'boot template builds of this shape back off; try again later',
+  );
+});
 
-  await runTwoMisses();
+test('#find builds again once the backoff after a failed build has passed', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: (plan) => {
+      ctx.builds.push(plan);
+
+      return Promise.reject(new Error('no agent'));
+    },
+  });
+
+  store.find({ vcpus: 1, memoryMib: 512 });
+  store.find({ vcpus: 1, memoryMib: 512 });
+
+  await store.stop();
+
+  ctx.advance(60_000);
+  store.find({ vcpus: 1, memoryMib: 512 });
+
+  await store.stop();
 
   expect(ctx.builds).toHaveLength(2);
-
-  ctx.clock.ms += 120_000;
-
-  await runTwoMisses();
-
-  expect(ctx.builds).toHaveLength(3);
-  expect(ctx.logs.at(-1)).toContain('off until impd restarts');
-
-  // off: no build, however long it waits
-  ctx.failing.isFailing = false;
-  ctx.clock.ms += 3_600_000;
-
-  await runTwoMisses();
-
-  expect(ctx.builds).toHaveLength(3);
-
-  const turnedOff = await ctx.store.buildTemplate(SHAPE).catch((error: unknown) => error);
-
-  expect(String(turnedOff)).toContain('off until impd restarts');
 });
 
-test('a build the RAM or the disk turns away backs off, but never counts as a failure', async () => {
-  const refusal = { by: 'ram' };
+test('#buildTemplate turns a key off at its third failed build', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: () => Promise.reject(new Error('no agent')),
+  });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(60_000);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(120_000);
+
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  await building.catch(() => {});
+
+  expect(building).rejects.toThrowWithMessage(Error, 'no agent');
+  expect(ctx.logs.at(-1)).toInclude('build failed (off until impd restarts): no agent');
+});
+
+test('#buildTemplate refuses a key that is off however long it waits', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: () => Promise.reject(new Error('no agent')),
+  });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(60_000);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(120_000);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(3_600_000);
+
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'boot templates of this shape are off until impd restarts',
+  );
+});
+
+test('#find starts no build for a key that is off', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    buildVm: (plan) => {
+      ctx.builds.push(plan);
+
+      return Promise.reject(new Error('no agent'));
+    },
+  });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(60_000);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(120_000);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
+
+  ctx.advance(3_600_000);
+  store.find({ vcpus: 1, memoryMib: 512 });
+  store.find({ vcpus: 1, memoryMib: 512 });
+
+  await store.stop();
+
+  expect(ctx.builds).toHaveLength(3);
+});
+
+test('#buildTemplate refuses a build the RAM turns away with the admission error', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    admission: { admit: () => Promise.reject(new Error('no room: ram')), release: () => {} },
+  });
+
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(building).rejects.toThrowWithMessage(Error, 'no room: ram');
+});
+
+test('#buildTemplate refuses a build the disk has no room for', async () => {
+  const ctx = await setupTest();
+
+  // a disk of 1 GiB holds no 512 MiB build past its reserve
+  const store = createBootTemplates({
+    ...ctx.deps,
+    diskBudget: createDiskBudget({
+      storage: { readUsage: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 3 }) },
+      reserveBytes: null,
+      log: () => {},
+    }),
+  });
+
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(building).rejects.toThrow('not enough free disk');
+});
+
+test('#buildTemplate backs off a minute after a refused build', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    admission: { admit: () => Promise.reject(new Error('no room: ram')), release: () => {} },
+  });
+
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  await building.catch(() => {});
+
+  expect(building).rejects.toThrowWithMessage(Error, 'no room: ram');
+  expect(ctx.logs.at(-1)).toInclude('build refused (next try in 60s): no room: ram');
+});
+
+test('#buildTemplate gives back the admission of a refused build and leaves no work directory', async () => {
+  const ctx = await setupTest();
+
   const released: string[] = [];
 
-  const readRoom = (by: string) =>
-    refusal.by === by ? Promise.reject(new Error(`no room: ${by}`)) : Promise.resolve();
-
-  using refused = setupStore({
+  const store = createBootTemplates({
+    ...ctx.deps,
     admission: {
-      admit: () => readRoom('ram'),
+      admit: () => Promise.reject(new Error('no room: ram')),
       release: (id) => {
         released.push(id);
       },
     },
-    diskBudget: {
-      withRoom: async (_bytes, task) => {
-        await readRoom('disk');
+  });
 
-        return task();
-      },
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  await building.catch(() => {});
+
+  expect(building).rejects.toThrowWithMessage(Error, 'no room: ram');
+  expect(released).toHaveLength(1);
+  expect(existsSync(join(ctx.dataDir, 'templates'))).toBeFalse();
+});
+
+test('#buildTemplate counts no refused build as a failure', async () => {
+  const ctx = await setupTest();
+
+  const room = { isRefused: true };
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    admission: {
+      admit: () => (room.isRefused ? Promise.reject(new Error('no room: ram')) : Promise.resolve()),
+      release: () => {},
     },
   });
 
-  for (const by of ['ram', 'disk', 'ram', 'disk']) {
-    refusal.by = by;
+  for (let count = 0; count < 4; count += 1) {
+    await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
 
-    const rejection = await refused.store.buildTemplate(SHAPE).catch((error: unknown) => error);
-
-    expect(String(rejection)).toContain(`no room: ${by}`);
-
-    refused.clock.ms += 60_000;
+    ctx.advance(60_000);
   }
 
-  expect(refused.logs.at(-1)).toContain('build refused (next try in 60s): no room: disk');
-  expect(refused.builds).toHaveLength(0);
+  room.isRefused = false;
 
-  // the admission goes back each time, and no work directory stays
-  expect(released).toHaveLength(4);
-  expect(existsSync(join(refused.dataDir, 'templates'))).toBe(false);
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  // four refusals, and the key still builds once there is room
-  refusal.by = 'none';
-
-  await refused.store.buildTemplate(SHAPE);
-
-  expect(refused.store.find(SHAPE)).not.toBeNull();
+  expect(existsSync(files.memFile)).toBeTrue();
 });
 
-test('a restore that fails in the template removes it; one that fails in the imp keeps it', async () => {
-  using ctx = setupStore();
+test('#reportFailure keeps a template whose restore failed in the imp', async () => {
+  const ctx = await setupTest();
 
-  const files = await ctx.store.buildTemplate(SHAPE);
+  const store = createBootTemplates(ctx.deps);
 
-  ctx.store.reportFailure(files, false);
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(existsSync(files.memFile)).toBe(true);
+  store.reportFailure(files, false);
 
-  ctx.store.reportFailure(files, true);
-
-  expect(existsSync(files.memFile)).toBe(false);
+  expect(existsSync(files.memFile)).toBeTrue();
 });
 
-test('a failure report for an older build leaves the rebuilt template', async () => {
-  using ctx = setupStore();
+test('#reportFailure removes a template whose restore failed in the template', async () => {
+  const ctx = await setupTest();
 
-  const first = await ctx.store.buildTemplate(SHAPE);
+  const store = createBootTemplates(ctx.deps);
 
-  ctx.store.reportFailure(first, true);
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  const rebuilt = await ctx.store.buildTemplate(SHAPE);
+  store.reportFailure(files, true);
 
-  ctx.store.reportFailure(first, true);
-
-  expect(rebuilt.buildId).not.toBe(first.buildId);
-  expect(existsSync(rebuilt.memFile)).toBe(true);
+  expect(existsSync(files.memFile)).toBeFalse();
 });
 
-test('three template faults in a row turn a key off; an imp fault does not count, a good restore resets', async () => {
-  using ctx = setupStore();
+test('#reportFailure for an older build leaves the rebuilt template', async () => {
+  const ctx = await setupTest();
 
-  const runTemplateFault = async () => {
-    const files = await ctx.store.buildTemplate(SHAPE);
+  const store = createBootTemplates(ctx.deps);
 
-    ctx.store.reportFailure(files, true);
-  };
+  const first = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  await runTemplateFault();
-  await runTemplateFault();
+  store.reportFailure(first, true);
 
-  const files = await ctx.store.buildTemplate(SHAPE);
+  const rebuilt = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  ctx.store.reportRestored(files);
+  store.reportFailure(first, true);
 
-  // an image that never pings fails in the imp, every time
-  for (let count = 0; count < 5; count += 1) {
-    ctx.store.reportFailure(files, false);
+  expect(existsSync(rebuilt.memFile)).toBeTrue();
+});
+
+test('#reportFailure turns a key off at its third template fault in a row', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  for (let count = 0; count < 2; count += 1) {
+    const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+    store.reportFailure(files, true);
   }
 
-  ctx.store.reportFailure(files, true);
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  await runTemplateFault();
+  store.reportFailure(files, true);
 
-  expect(ctx.store.find(SHAPE)).toBeNull();
-  expect(ctx.logs.at(-1)).not.toContain('off until impd restarts');
-
-  await runTemplateFault();
-
-  expect(ctx.logs.at(-1)).toContain('off until impd restarts: 3 restores failed');
-
-  const offAfterFaults = await ctx.store.buildTemplate(SHAPE).catch((error: unknown) => error);
-
-  expect(String(offAfterFaults)).toContain('off until impd restarts');
+  expect(ctx.logs.at(-1)).toInclude('off until impd restarts: 3 restores failed');
 });
 
-test('a template evicted before its restore failed counts no failure', async () => {
-  using ctx = setupStore();
+test('#buildTemplate refuses a key its restore faults turned off', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
 
   for (let count = 0; count < 3; count += 1) {
-    const files = await ctx.store.buildTemplate(SHAPE);
+    const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+    store.reportFailure(files, true);
+  }
+
+  const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'boot templates of this shape are off until impd restarts',
+  );
+});
+
+// an image that never pings fails in the imp, every time
+test('#reportFailure counts no fault in the imp toward turning the key off', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  for (let count = 0; count < 2; count += 1) {
+    const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+    store.reportFailure(files, true);
+  }
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  for (let count = 0; count < 5; count += 1) {
+    store.reportFailure(files, false);
+  }
+
+  expect(store.find({ vcpus: 1, memoryMib: 512 })).toStrictEqual(files);
+});
+
+test('#reportRestored starts the count of template faults again', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  for (let count = 0; count < 2; count += 1) {
+    const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+    store.reportFailure(files, true);
+  }
+
+  const restored = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  store.reportRestored(restored);
+  store.reportFailure(restored, true);
+
+  const rebuilt = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  store.reportFailure(rebuilt, true);
+
+  expect(ctx.logs.join('\n')).not.toInclude('restores failed');
+});
+
+test('#reportFailure counts no failure for a template evicted before it', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  for (let count = 0; count < 3; count += 1) {
+    const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
     rmSync(join(ctx.dataDir, 'templates', files.key), { recursive: true });
 
-    ctx.store.reportFailure(files, true);
+    store.reportFailure(files, true);
   }
 
-  const rebuilt = await ctx.store.buildTemplate(SHAPE);
+  const rebuilt = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(ctx.store.find(SHAPE)).toEqual(rebuilt);
-  expect(ctx.logs.join('\n')).not.toContain('restores failed');
+  expect(store.find({ vcpus: 1, memoryMib: 512 })).toStrictEqual(rebuilt);
 });
 
-test('past four templates, the least recently used goes', async () => {
-  using ctx = setupStore();
+test('#buildTemplate removes the least recently used template past four', async () => {
+  const ctx = await setupTest();
 
-  const shapes = [256, 512, 768, 1024].map((memoryMib) => ({ vcpus: 1, memoryMib }));
+  const store = createBootTemplates(ctx.deps);
 
-  for (const shape of shapes) {
-    await ctx.store.buildTemplate(shape);
+  for (const memoryMib of [256, 512, 768, 1024]) {
+    await store.buildTemplate({ vcpus: 1, memoryMib });
 
-    ctx.clock.ms += 1000;
+    ctx.advance(1000);
   }
 
   // the first is used again; the second is now the oldest
-  ctx.store.find(shapes[0] ?? SHAPE);
+  store.find({ vcpus: 1, memoryMib: 256 });
+  ctx.advance(1000);
 
-  ctx.clock.ms += 1000;
+  await store.buildTemplate({ vcpus: 2, memoryMib: 256 });
 
-  await ctx.store.buildTemplate({ vcpus: 2, memoryMib: 256 });
-
-  const kept = shapes.map((shape) => ctx.store.find(shape) !== null);
-
-  expect(kept).toEqual([true, false, true, true]);
+  expect(store.find({ vcpus: 1, memoryMib: 512 })).toBeNull();
+  expect(store.find({ vcpus: 1, memoryMib: 256 })).not.toBeNull();
+  expect(store.find({ vcpus: 1, memoryMib: 768 })).not.toBeNull();
+  expect(store.find({ vcpus: 1, memoryMib: 1024 })).not.toBeNull();
 });
 
-test('removeStale drops templates of another host and what cut-short builds left', async () => {
-  using ctx = setupStore();
+test('#removeStale removes the templates of another host identity', async () => {
+  const ctx = await setupTest();
 
-  const current = await ctx.store.buildTemplate(SHAPE);
+  const store = createBootTemplates(ctx.deps);
 
   // a template the host built before its system drive changed
-  const old = createBootTemplates({ ...ctx.deps, identity: buildIdentity(ctx.dataDir, 'd0') });
+  const old = createBootTemplates({
+    ...ctx.deps,
+    identity: {
+      ...ctx.deps.identity,
+      systemDrive: 'd0',
+      systemDrivePath: join(ctx.dataDir, 'system', 'drives', 'd0'),
+    },
+  });
 
-  const stale = await old.buildTemplate(SHAPE);
+  const stale = await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(store.removeStale()).toStrictEqual([stale.key]);
+});
+
+test('#removeStale removes what a cut-short build left', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   mkdirSync(join(ctx.dataDir, 'templates', '.build-cut-short'));
 
-  expect(ctx.store.listDrivePaths().toSorted()).toEqual(
-    [
-      ctx.deps.identity.systemDrivePath,
-      buildIdentity(ctx.dataDir, 'd0').systemDrivePath,
-    ].toSorted(),
-  );
+  store.removeStale();
 
-  expect(ctx.store.removeStale()).toEqual([stale.key]);
+  expect(existsSync(join(ctx.dataDir, 'templates', '.build-cut-short'))).toBeFalse();
+});
 
-  expect(readdirSync(join(ctx.dataDir, 'templates')).toSorted()).toEqual(
-    [current.key, PLACEHOLDER].toSorted(),
-  );
+test('#removeStale never removes a current template or the placeholder disk', async () => {
+  const ctx = await setupTest();
 
-  expect(ctx.store.listDrivePaths()).toEqual([ctx.deps.identity.systemDrivePath]);
+  const store = createBootTemplates(ctx.deps);
+
+  const current = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  const old = createBootTemplates({
+    ...ctx.deps,
+    identity: {
+      ...ctx.deps.identity,
+      systemDrive: 'd0',
+      systemDrivePath: join(ctx.dataDir, 'system', 'drives', 'd0'),
+    },
+  });
+
+  await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  store.removeStale();
+
+  expect(readdirSync(join(ctx.dataDir, 'templates'))).toIncludeSameMembers([
+    'placeholder.ext4',
+    current.key,
+  ]);
+});
+
+test('#removeStale answers no keys before any template exists', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  expect(store.removeStale()).toStrictEqual([]);
+});
+
+test('#listDrivePaths lists the system drive of every template', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+  const oldDrive = join(ctx.dataDir, 'system', 'drives', 'd0');
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  const old = createBootTemplates({
+    ...ctx.deps,
+    identity: { ...ctx.deps.identity, systemDrive: 'd0', systemDrivePath: oldDrive },
+  });
+
+  await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(store.listDrivePaths()).toIncludeSameMembers([
+    ctx.deps.identity.systemDrivePath,
+    oldDrive,
+  ]);
+});
+
+test('#listDrivePaths drops the drive of a stale template once it is removed', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates(ctx.deps);
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  const old = createBootTemplates({
+    ...ctx.deps,
+    identity: {
+      ...ctx.deps.identity,
+      systemDrive: 'd0',
+      systemDrivePath: join(ctx.dataDir, 'system', 'drives', 'd0'),
+    },
+  });
+
+  await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  store.removeStale();
+
+  expect(store.listDrivePaths()).toStrictEqual([ctx.deps.identity.systemDrivePath]);
 });

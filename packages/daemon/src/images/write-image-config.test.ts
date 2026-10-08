@@ -1,109 +1,143 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeImageConfig } from './write-image-config';
 
-const CONFIG = '{"env":["A=1"]}';
-let base = '';
-let root = '';
-let outside = '';
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), 'imp-image-config-'));
-  root = join(base, 'root');
-  outside = join(base, 'outside');
+  onTestFinished(() => stack.disposeAsync());
 
+  const base = await mkdtemp(join(tmpdir(), 'imp-image-config-'));
+
+  stack.defer(() => rm(base, { recursive: true, force: true }));
+
+  const root = join(base, 'root');
+  const outside = join(base, 'outside');
+
+  // the unpacked tree, and a directory beside it a link could reach
   mkdirSync(root);
   mkdirSync(outside);
-  writeFileSync(join(outside, 'token'), 'secret');
-});
 
-afterEach(() => {
-  rmSync(base, { recursive: true, force: true });
-});
-
-function readConfig(): string {
-  return readFileSync(join(root, 'etc', 'imp', 'image.json'), 'utf8');
+  return { root, outside };
 }
 
-// what writeImageConfig threw, or null
-function readWriteFailure(): unknown {
-  try {
-    writeImageConfig(root, CONFIG);
-  } catch (error) {
-    return error;
-  }
+test('it makes etc/imp and the file in a tree that has neither', async () => {
+  const ctx = await setupTest();
 
-  return null;
-}
+  writeImageConfig(ctx.root, '{"env":["A=1"]}');
 
-test('it makes etc/imp and the file in a tree that has neither', () => {
-  writeImageConfig(root, CONFIG);
-
-  expect(readConfig()).toBe(CONFIG);
+  expect(readFileSync(join(ctx.root, 'etc', 'imp', 'image.json'), 'utf8')).toBe('{"env":["A=1"]}');
 });
 
-test("it replaces the image's own image.json", () => {
-  mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
-  writeFileSync(join(root, 'etc', 'imp', 'image.json'), '{"old":true}');
-  writeImageConfig(root, CONFIG);
+test("it replaces the image's own image.json", async () => {
+  const ctx = await setupTest();
 
-  expect(readConfig()).toBe(CONFIG);
+  mkdirSync(join(ctx.root, 'etc', 'imp'), { recursive: true });
+  writeFileSync(join(ctx.root, 'etc', 'imp', 'image.json'), '{"old":true}');
+  writeImageConfig(ctx.root, '{"env":["A=1"]}');
+
+  expect(readFileSync(join(ctx.root, 'etc', 'imp', 'image.json'), 'utf8')).toBe('{"env":["A=1"]}');
 });
 
-test('an image.json that links out of the tree is replaced, and its target is left alone', () => {
-  mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
-  symlinkSync(join(outside, 'token'), join(root, 'etc', 'imp', 'image.json'));
-  writeImageConfig(root, CONFIG);
+test('it replaces an image.json that links out of the tree with a file', async () => {
+  const ctx = await setupTest();
 
-  expect(lstatSync(join(root, 'etc', 'imp', 'image.json')).isFile()).toBe(true);
-  expect(readConfig()).toBe(CONFIG);
-  expect(readFileSync(join(outside, 'token'), 'utf8')).toBe('secret');
+  mkdirSync(join(ctx.root, 'etc', 'imp'), { recursive: true });
+  writeFileSync(join(ctx.outside, 'token'), 'secret');
+  symlinkSync(join(ctx.outside, 'token'), join(ctx.root, 'etc', 'imp', 'image.json'));
+  writeImageConfig(ctx.root, '{"env":["A=1"]}');
+
+  expect(lstatSync(join(ctx.root, 'etc', 'imp', 'image.json')).isFile()).toBeTrue();
 });
 
-test('an image.json that links to a missing file out of the tree creates nothing there', () => {
-  mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
-  symlinkSync(join(outside, 'new'), join(root, 'etc', 'imp', 'image.json'));
-  writeImageConfig(root, CONFIG);
+test('it never writes the target of an image.json that links out of the tree', async () => {
+  const ctx = await setupTest();
 
-  expect(readConfig()).toBe(CONFIG);
-  expect(existsSync(join(outside, 'new'))).toBe(false);
+  mkdirSync(join(ctx.root, 'etc', 'imp'), { recursive: true });
+  writeFileSync(join(ctx.outside, 'token'), 'secret');
+  symlinkSync(join(ctx.outside, 'token'), join(ctx.root, 'etc', 'imp', 'image.json'));
+  writeImageConfig(ctx.root, '{"env":["A=1"]}');
+
+  expect(readFileSync(join(ctx.outside, 'token'), 'utf8')).toBe('secret');
 });
 
-test('an etc that links out of the tree refuses the image and writes nothing there', () => {
-  symlinkSync(outside, join(root, 'etc'));
+test('it creates nothing out of the tree for an image.json linking to a missing file', async () => {
+  const ctx = await setupTest();
 
-  const failure = readWriteFailure();
+  mkdirSync(join(ctx.root, 'etc', 'imp'), { recursive: true });
+  symlinkSync(join(ctx.outside, 'new'), join(ctx.root, 'etc', 'imp', 'image.json'));
+  writeImageConfig(ctx.root, '{"env":["A=1"]}');
 
-  expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-  expect(String(failure)).toContain("the image's /etc is a symlink");
-  expect(existsSync(join(outside, 'imp'))).toBe(false);
+  expect(existsSync(join(ctx.outside, 'new'))).toBeFalse();
 });
 
-test('an etc/imp that links out of the tree, by a relative path, refuses the image', () => {
-  mkdirSync(join(root, 'etc'));
-  symlinkSync('../../outside', join(root, 'etc', 'imp'));
+test('it refuses an image whose etc links out of the tree', async () => {
+  const ctx = await setupTest();
 
-  const failure = readWriteFailure();
+  symlinkSync(ctx.outside, join(ctx.root, 'etc'));
 
-  expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-  expect(String(failure)).toContain("the image's /etc/imp is a symlink");
-  expect(existsSync(join(outside, 'image.json'))).toBe(false);
-  expect(readFileSync(join(outside, 'token'), 'utf8')).toBe('secret');
+  expect(() => {
+    writeImageConfig(ctx.root, '{"env":["A=1"]}');
+  }).toThrow(
+    expect.objectContaining({
+      code: 'BAD_REQUEST',
+      message:
+        "the image's /etc is a symlink; impd writes /etc/imp/image.json there, so it must be a directory",
+    }),
+  );
 });
 
-test('an etc that is a file refuses the image', () => {
-  writeFileSync(join(root, 'etc'), '');
+test('it writes nothing out of the tree when etc links out of it', async () => {
+  const ctx = await setupTest();
 
-  expect(String(readWriteFailure())).toContain("the image's /etc is not a directory");
+  symlinkSync(ctx.outside, join(ctx.root, 'etc'));
+
+  expect(() => {
+    writeImageConfig(ctx.root, '{"env":["A=1"]}');
+  }).toThrow();
+
+  expect(existsSync(join(ctx.outside, 'imp'))).toBeFalse();
+});
+
+test('it refuses an image whose etc/imp links out of the tree by a relative path', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.root, 'etc'));
+  symlinkSync('../../outside', join(ctx.root, 'etc', 'imp'));
+
+  expect(() => {
+    writeImageConfig(ctx.root, '{"env":["A=1"]}');
+  }).toThrow(
+    expect.objectContaining({
+      code: 'BAD_REQUEST',
+      message:
+        "the image's /etc/imp is a symlink; impd writes /etc/imp/image.json there, so it must be a directory",
+    }),
+  );
+});
+
+test('it refuses an image whose etc is a file', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.root, 'etc'), '');
+
+  expect(() => {
+    writeImageConfig(ctx.root, '{"env":["A=1"]}');
+  }).toThrow(
+    expect.objectContaining({
+      code: 'BAD_REQUEST',
+      message:
+        "the image's /etc is not a directory; impd writes /etc/imp/image.json there, so it must be a directory",
+    }),
+  );
 });

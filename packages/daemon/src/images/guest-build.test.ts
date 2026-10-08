@@ -1,344 +1,801 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { buildStubGuest } from '../test-utils/build-stub-guest';
-import type { StubAnswer, StubRun } from '../test-utils/build-stub-guest';
+import {
+  STUB_BUILDER_CONTAINER,
+  buildStubImageBuilder,
+} from '../test-utils/build-stub-image-builder';
 import { DockerBuildError } from './docker-build';
-import { runGuestBuild, writeGuestTree } from './guest-build';
-import type { ExportLimits } from './guest-build';
-import { GuestOutputError, createGuestExec } from './guest-exec';
+import { loadGuestImage, runGuestBuild, writeGuestTree } from './guest-build';
+import { createGuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
+import { PIN_INSPECT_FORMAT } from './image-pin';
 
-let dir = '';
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'imp-guest-build-'));
-});
+  onTestFinished(() => stack.disposeAsync());
 
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
+  const dir = await mkdtemp(join(tmpdir(), 'imp-guest-build-'));
 
-const CONTAINER_ID = 'c'.repeat(64);
-const CONFIG = '{"Cmd":["sh"],"Env":["A=1"]}';
-const CHUNK_BYTES = 64 * 1024;
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-// a tar of a tree with one file, as docker export streams it, in chunks
-function buildExport(content: string): Uint8Array[] {
-  const tree = join(dir, `tree-${Bun.randomUUIDv7()}`);
-
-  mkdirSync(join(tree, 'etc'), { recursive: true });
-  writeFileSync(join(tree, 'etc', 'hello'), content);
-
-  const tar = Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout;
-  const chunks: Uint8Array[] = [];
-
-  for (let at = 0; at < tar.byteLength; at += CHUNK_BYTES) {
-    chunks.push(tar.subarray(at, at + CHUNK_BYTES));
-  }
-
-  return chunks;
-}
-
-// a builder whose engine has built imp-build:latest, and exports `exported`
-function createExportAnswer(exported: readonly Uint8Array[]) {
-  return (run: StubRun): StubAnswer => {
-    const command = run.argv.slice(1, 3).join(' ');
-
-    if (command === 'image inspect') {
-      return { stdout: `${CONFIG}\n` };
-    }
-
-    if (command === `create imp-build:latest`) {
-      return { stdout: `${CONTAINER_ID}\n` };
-    }
-
-    if (command === `export ${CONTAINER_ID}`) {
-      return { stdout: exported };
-    }
-
-    return { code: 1, stderr: `unexpected: ${run.argv.join(' ')}` };
-  };
-}
-
-test('the export unpacks into root, and its digest is of the config and the stream', async () => {
-  const exported = buildExport('hi\n'.repeat(100_000));
-  const guest = buildStubGuest(createExportAnswer(exported));
   const root = join(dir, 'root');
 
+  // where writeGuestTree unpacks the export
   mkdirSync(root);
 
-  const image = await writeGuestTree(
-    createGuestExec(guest.open),
-    root,
+  return { dir, root };
+}
+
+test('#writeGuestTree unpacks the builder export into the root', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree', 'etc'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'tree', 'etc', 'hello'), 'hi\n'.repeat(100_000));
+
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  await writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
     { maxBytes: 1024 ** 3, maxFiles: 100 },
     new AbortController().signal,
   );
 
-  const hash = new Bun.CryptoHasher('sha256');
-  const length = new Uint8Array(8);
+  expect(readFileSync(join(ctx.root, 'etc', 'hello'), 'utf8')).toBe('hi\n'.repeat(100_000));
+});
 
-  new DataView(length.buffer).setBigUint64(0, BigInt(CONFIG.length));
+test('#writeGuestTree gives the image config the builder inspected', async () => {
+  const ctx = await setupTest();
 
-  hash.update('imp build image v1\n');
-  hash.update(length);
-  hash.update(CONFIG);
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'hello'), 'hi\n');
 
-  for (const chunk of exported) {
-    hash.update(chunk);
-  }
-
-  expect(image).toEqual({
-    digest: `imp-build-${hash.digest('hex')}`,
-    config: { Cmd: ['sh'], Env: ['A=1'] },
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    config: '{"Cmd":["sh"],"Env":["A=1"]}\n',
   });
 
-  expect(readFileSync(join(root, 'etc', 'hello'), 'utf8')).toBe('hi\n'.repeat(100_000));
-
-  expect(guest.runs.map((run) => run.argv.join(' '))).toEqual([
-    'docker image inspect --format {{json .Config}} imp-build:latest',
-    'docker create imp-build:latest /bin/true',
-    `docker export ${CONTAINER_ID}`,
-  ]);
-});
-
-test('an export past the cap stops at the cap, and its exec is ended', async () => {
-  const exported = buildExport('x'.repeat(4 * CHUNK_BYTES));
-  const guest = buildStubGuest(createExportAnswer(exported));
-  const root = join(dir, 'root');
-
-  mkdirSync(root);
-
-  const failure = await writeGuestTree(
-    createGuestExec(guest.open),
-    root,
-    { maxBytes: 2 * CHUNK_BYTES, maxFiles: 100 },
+  const image = await writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024 ** 3, maxFiles: 100 },
     new AbortController().signal,
-  ).catch((error: unknown) => error);
-
-  expect(failure).toBeInstanceOf(ImageLimitError);
-  expect(String(failure)).toContain('(IMP_BUILD_IMAGE_MAX_MIB)');
-  expect(guest.runs.at(-1)?.closed).toBe(true);
-});
-
-test('an export of more entries than the file cap is refused as tar counts them', async () => {
-  const tree = join(dir, 'many');
-
-  mkdirSync(tree);
-
-  for (let n = 0; n < 50; n += 1) {
-    writeFileSync(join(tree, `f${String(n)}`), '');
-  }
-
-  const exported = [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout];
-  const guest = buildStubGuest(createExportAnswer(exported));
-  const root = join(dir, 'root');
-
-  mkdirSync(root);
-
-  const failure = await writeGuestTree(
-    createGuestExec(guest.open),
-    root,
-    { maxBytes: 1024 ** 3, maxFiles: 10 },
-    new AbortController().signal,
-  ).catch((error: unknown) => error);
-
-  expect(failure).toBeInstanceOf(ImageLimitError);
-  expect(String(failure)).toContain('is over 10 files (IMP_BUILD_IMAGE_MAX_FILES)');
-});
-
-// the export of a tree, refused under a 1 MiB cap its archive is well inside
-async function readMiBRefusal(tree: string, tarArgs: readonly string[]): Promise<unknown> {
-  const exported = [Bun.spawnSync(['tar', ...tarArgs, '-C', tree, '-c', '.']).stdout];
-  const guest = buildStubGuest(createExportAnswer(exported));
-  const root = join(dir, 'root');
-
-  expect(exported[0]?.byteLength).toBeLessThan(1024 ** 2 / 2);
-
-  mkdirSync(root);
-
-  try {
-    await writeGuestTree(
-      createGuestExec(guest.open),
-      root,
-      { maxBytes: 1024 ** 2, maxFiles: 1000 },
-      new AbortController().signal,
-    );
-  } catch (error) {
-    return error;
-  }
-
-  return undefined;
-}
-
-test('a sparse file counts at its full size against the cap', async () => {
-  const tree = join(dir, 'sparse');
-
-  mkdirSync(tree);
-
-  Bun.spawnSync(['truncate', '-s', '16M', join(tree, 'holes')]);
-
-  const failure = await readMiBRefusal(tree, ['-S']);
-
-  expect(failure).toBeInstanceOf(ImageLimitError);
-  expect(String(failure)).toContain('is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)');
-});
-
-test('small files count a block each against the cap', async () => {
-  const tree = join(dir, 'small');
-
-  mkdirSync(tree);
-
-  for (let n = 0; n < 300; n += 1) {
-    writeFileSync(join(tree, `f${String(n)}`), 'x');
-  }
-
-  const failure = await readMiBRefusal(tree, []);
-
-  expect(failure).toBeInstanceOf(ImageLimitError);
-  expect(String(failure)).toContain('is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)');
-});
-
-// an archive of one file under 80 directories that are not in it, which tar
-// makes as it unpacks
-function buildDeepExport(): Uint8Array[] {
-  const tree = join(dir, 'deep');
-  const parents = Array.from({ length: 80 }, (_, n) => `d${String(n)}`).join('/');
-
-  mkdirSync(join(tree, parents), { recursive: true });
-  writeFileSync(join(tree, parents, 'f'), 'x');
-
-  return [Bun.spawnSync(['tar', '-C', tree, '--no-recursion', '-c', `${parents}/f`]).stdout];
-}
-
-// how writeGuestTree ends for `exported`; a stalled export stays open
-async function readExportEnd(
-  exported: readonly Uint8Array[],
-  limits: Readonly<ExportLimits>,
-  stall = false,
-): Promise<{ failure: unknown; closed: boolean | undefined }> {
-  const answer = createExportAnswer(exported);
-
-  const guest = buildStubGuest((run) => {
-    const answered = answer(run);
-
-    return stall && run.argv[1] === 'export' ? { ...answered, stall } : answered;
-  });
-
-  const root = join(dir, `root-${Bun.randomUUIDv7()}`);
-
-  mkdirSync(root);
-
-  try {
-    await writeGuestTree(createGuestExec(guest.open), root, limits, new AbortController().signal);
-  } catch (error) {
-    return { failure: error, closed: guest.runs.at(-1)?.closed };
-  }
-
-  return { failure: undefined, closed: guest.runs.at(-1)?.closed };
-}
-
-test('the directories tar makes for a member count as entries, and as blocks', async () => {
-  const files = await readExportEnd(buildDeepExport(), { maxBytes: 1024 ** 3, maxFiles: 1 });
-  const bytes = await readExportEnd(buildDeepExport(), { maxBytes: 64 * 1024, maxFiles: 1000 });
-
-  expect(String(files.failure)).toContain('is over 1 files (IMP_BUILD_IMAGE_MAX_FILES)');
-  expect(bytes.failure).toBeInstanceOf(ImageLimitError);
-  expect(String(bytes.failure)).toContain('(IMP_BUILD_IMAGE_MAX_MIB)');
-});
-
-test('a limit ends an export that stalls, and so does one that sends nothing', async () => {
-  const limited = await readExportEnd(
-    buildDeepExport(),
-    { maxBytes: 1024 ** 3, maxFiles: 1 },
-    true,
   );
 
-  const silent = await readExportEnd([], { maxBytes: 1024 ** 3, maxFiles: 1000, idleMs: 50 }, true);
-
-  expect(String(limited.failure)).toContain('is over 1 files');
-  expect(limited.closed).toBe(true);
-  expect(String(silent.failure)).toContain('docker export in the builder sent nothing in 0.05 s');
-  expect(silent.closed).toBe(true);
+  expect(image.config).toStrictEqual({ Cmd: ['sh'], Env: ['A=1'] });
 });
 
-test("a builder's config that is not one JSON object is refused", async () => {
-  const guest = buildStubGuest(() => ({ stdout: '["not", "a", "config"]\n' }));
+test('#writeGuestTree gives a build digest of 64 hex characters', async () => {
+  const ctx = await setupTest();
 
-  const failure = await writeGuestTree(
-    createGuestExec(guest.open),
-    dir,
-    { maxBytes: 1024, maxFiles: 100 },
-    new AbortController().signal,
-  ).catch((error: unknown) => error);
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'hello'), 'hi\n');
 
-  expect(String(failure)).toContain('expected record');
-  expect(guest.runs).toHaveLength(1);
-});
-
-test('the build reads its context from stdin, and a failed one returns its log, capped', async () => {
-  const contextPath = join(dir, 'context.tar');
-  const stdins: string[] = [];
-
-  writeFileSync(contextPath, 'the context');
-
-  const guest = buildStubGuest(async (run) => {
-    const stdin = await run.readStdin();
-
-    stdins.push(new TextDecoder().decode(stdin));
-
-    return { code: 1, stderr: `${'early '.repeat(2000)}\n#5 ERROR: process "/bin/sh -c false"` };
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  const failure = await runGuestBuild(createGuestExec(guest.open), {
-    tarPath: contextPath,
-    dockerfile: 'sub/Dockerfile',
-    signal: new AbortController().signal,
-  }).catch((error: unknown) => error);
+  const image = await writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024 ** 3, maxFiles: 100 },
+    new AbortController().signal,
+  );
 
-  expect(failure).toBeInstanceOf(DockerBuildError);
+  expect(image.digest).toMatch(/^imp-build-[0-9a-f]{64}$/v);
+});
 
-  const message = failure instanceof Error ? failure.message : '';
+test('#writeGuestTree gives the same digest for the same config and export', async () => {
+  const ctx = await setupTest();
 
-  expect(message).toStartWith('docker build failed:\n');
-  expect(message.endsWith('#5 ERROR: process "/bin/sh -c false"')).toBe(true);
-  expect(message.length).toBeLessThanOrEqual('docker build failed:\n'.length + 8000);
-  expect(stdins).toEqual(['the context']);
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'hello'), 'hi\n');
+  mkdirSync(join(ctx.dir, 'again'));
 
-  expect(guest.runs[0]?.argv).toEqual([
-    'docker',
-    'build',
-    '--progress=plain',
-    '--build-arg',
-    `BUILDKIT_SYNTAX=${DOCKERFILE_FRONTEND}`,
-    '--tag',
-    'imp-build:latest',
-    '--file',
-    'sub/Dockerfile',
-    '-',
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const limits = { maxBytes: 1024 ** 3, maxFiles: 100 };
+
+  const signal = new AbortController().signal;
+
+  const first = await writeGuestTree(createGuestExec(builder.guest.open), ctx.root, limits, signal);
+
+  const second = await writeGuestTree(
+    createGuestExec(builder.guest.open),
+    join(ctx.dir, 'again'),
+    limits,
+    signal,
+  );
+
+  expect(second.digest).toBe(first.digest);
+});
+
+test('#writeGuestTree gives another digest for another config of the same export', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'hello'), 'hi\n');
+  mkdirSync(join(ctx.dir, 'again'));
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout;
+
+  const shell = buildStubImageBuilder({
+    exported: [tar],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    config: '{"Cmd":["sh"]}\n',
+  });
+
+  const bash = buildStubImageBuilder({
+    exported: [tar],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    config: '{"Cmd":["bash"]}\n',
+  });
+
+  const limits = { maxBytes: 1024 ** 3, maxFiles: 100 };
+
+  const signal = new AbortController().signal;
+
+  const first = await writeGuestTree(createGuestExec(shell.guest.open), ctx.root, limits, signal);
+
+  const second = await writeGuestTree(
+    createGuestExec(bash.guest.open),
+    join(ctx.dir, 'again'),
+    limits,
+    signal,
+  );
+
+  expect(second.digest).not.toBe(first.digest);
+});
+
+test('#writeGuestTree gives another digest for another export of the same config', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'hello'), 'hi\n');
+  mkdirSync(join(ctx.dir, 'other'));
+  writeFileSync(join(ctx.dir, 'other', 'hello'), 'bye\n');
+  mkdirSync(join(ctx.dir, 'again'));
+
+  const hello = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const bye = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'other'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const limits = { maxBytes: 1024 ** 3, maxFiles: 100 };
+
+  const signal = new AbortController().signal;
+
+  const first = await writeGuestTree(createGuestExec(hello.guest.open), ctx.root, limits, signal);
+
+  const second = await writeGuestTree(
+    createGuestExec(bye.guest.open),
+    join(ctx.dir, 'again'),
+    limits,
+    signal,
+  );
+
+  expect(second.digest).not.toBe(first.digest);
+});
+
+test('#writeGuestTree inspects, creates and exports the built image in the builder', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  await writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024 ** 3, maxFiles: 100 },
+    new AbortController().signal,
+  );
+
+  expect(builder.guest.runs.map((run) => run.argv.join(' '))).toStrictEqual([
+    'docker image inspect --format {{json .Config}} imp-build:latest',
+    'docker create imp-build:latest /bin/true',
+    `docker export ${STUB_BUILDER_CONTAINER}`,
   ]);
 });
 
-test('a step that writes past what impd keeps is refused, and one that hangs is killed', async () => {
-  const big = buildStubGuest(() => ({
-    stdout: ['x'.repeat(1024 ** 2), 'y'].map((text) => new TextEncoder().encode(text)),
+test('#writeGuestTree holds disk ahead of the export in 256 MiB steps', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'hello'), 'hi\n');
+
+  const holds: number[] = [];
+
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  await writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024 ** 3, maxFiles: 100 },
+    new AbortController().signal,
+    (totalBytes) => {
+      holds.push(totalBytes);
+
+      return Promise.resolve();
+    },
+  );
+
+  expect(holds).toStrictEqual([256 * 1024 ** 2]);
+});
+
+test('#writeGuestTree refuses an export past the byte cap', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'big'), 'x'.repeat(4 * 64 * 1024));
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout;
+
+  const builder = buildStubImageBuilder({
+    exported: Array.from({ length: Math.ceil(tar.byteLength / 65_536) }, (_, index) =>
+      tar.subarray(index * 65_536, (index + 1) * 65_536),
+    ),
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 2 * 65_536, maxFiles: 100 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 0 MiB (IMP_BUILD_IMAGE_MAX_MIB)",
+  );
+});
+
+test('#writeGuestTree ends the export exec at the byte cap', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'tree', 'big'), 'x'.repeat(4 * 64 * 1024));
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout;
+
+  const builder = buildStubImageBuilder({
+    exported: Array.from({ length: Math.ceil(tar.byteLength / 65_536) }, (_, index) =>
+      tar.subarray(index * 65_536, (index + 1) * 65_536),
+    ),
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const writing = writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 2 * 65_536, maxFiles: 100 },
+    new AbortController().signal,
+  );
+
+  expect(writing).rejects.toBeInstanceOf(ImageLimitError);
+  expect(builder.guest.runs.at(-1)?.closed).toBeTrue();
+});
+
+test('#writeGuestTree refuses an export of more entries than the file cap', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+
+  await Promise.all(
+    Array.from({ length: 50 }, (_, index) =>
+      Bun.write(join(ctx.dir, 'tree', `f${String(index)}`), ''),
+    ),
+  );
+
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024 ** 3, maxFiles: 10 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 10 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
+});
+
+test('#writeGuestTree counts a sparse file at its full size against the cap', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+
+  Bun.spawnSync(['truncate', '-s', '16M', join(ctx.dir, 'tree', 'holes')]);
+
+  // an archive well inside the cap, of a file that is not
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-S', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024 ** 2, maxFiles: 1000 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)",
+  );
+});
+
+test('#writeGuestTree counts a block for each small file against the cap', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+
+  await Promise.all(
+    Array.from({ length: 300 }, (_, index) =>
+      Bun.write(join(ctx.dir, 'tree', `f${String(index)}`), 'x'),
+    ),
+  );
+
+  // an archive well inside the cap, of files whose blocks are not
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', join(ctx.dir, 'tree'), '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024 ** 2, maxFiles: 1000 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)",
+  );
+});
+
+// one file under 80 directories the archive does not hold, which tar makes
+test('#writeGuestTree counts the directories tar makes for a member as entries', async () => {
+  const ctx = await setupTest();
+
+  const parents = Array.from({ length: 80 }, (_, index) => `d${String(index)}`).join('/');
+
+  mkdirSync(join(ctx.dir, 'deep', parents), { recursive: true });
+  writeFileSync(join(ctx.dir, 'deep', parents, 'f'), 'x');
+
+  const builder = buildStubImageBuilder({
+    exported: [
+      Bun.spawnSync(['tar', '-C', join(ctx.dir, 'deep'), '--no-recursion', '-c', `${parents}/f`])
+        .stdout,
+    ],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024 ** 3, maxFiles: 1 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 1 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
+});
+
+test('#writeGuestTree counts the directories tar makes for a member as blocks', async () => {
+  const ctx = await setupTest();
+
+  const parents = Array.from({ length: 80 }, (_, index) => `d${String(index)}`).join('/');
+
+  mkdirSync(join(ctx.dir, 'deep', parents), { recursive: true });
+  writeFileSync(join(ctx.dir, 'deep', parents, 'f'), 'x');
+
+  const builder = buildStubImageBuilder({
+    exported: [
+      Bun.spawnSync(['tar', '-C', join(ctx.dir, 'deep'), '--no-recursion', '-c', `${parents}/f`])
+        .stdout,
+    ],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 64 * 1024, maxFiles: 1000 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 0 MiB (IMP_BUILD_IMAGE_MAX_MIB)",
+  );
+});
+
+test('#writeGuestTree ends an export that stalls past a limit', async () => {
+  const ctx = await setupTest();
+
+  const parents = Array.from({ length: 80 }, (_, index) => `d${String(index)}`).join('/');
+
+  mkdirSync(join(ctx.dir, 'deep', parents), { recursive: true });
+  writeFileSync(join(ctx.dir, 'deep', parents, 'f'), 'x');
+
+  const builder = buildStubImageBuilder({
+    exported: [
+      Bun.spawnSync(['tar', '-C', join(ctx.dir, 'deep'), '--no-recursion', '-c', `${parents}/f`])
+        .stdout,
+    ],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    isExportStalled: true,
+  });
+
+  const writing = writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024 ** 3, maxFiles: 1 },
+    new AbortController().signal,
+  );
+
+  expect(writing).rejects.toThrowWithMessage(
+    ImageLimitError,
+    "the built image's filesystem is over 1 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
+
+  expect(builder.guest.runs.at(-1)?.closed).toBeTrue();
+});
+
+test('#writeGuestTree ends an export that sends nothing for its idle limit', async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    isExportStalled: true,
+  });
+
+  const writing = writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024 ** 3, maxFiles: 1000, idleMs: 50 },
+    new AbortController().signal,
+  );
+
+  expect(writing).rejects.toThrowWithMessage(
+    Error,
+    'docker export in the builder sent nothing in 0.05 s',
+  );
+
+  expect(builder.guest.runs.at(-1)?.closed).toBeTrue();
+});
+
+test("#writeGuestTree refuses a builder's config that is not one JSON object", async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    config: '["not", "a", "config"]\n',
+  });
+
+  const writing = writeGuestTree(
+    createGuestExec(builder.guest.open),
+    ctx.root,
+    { maxBytes: 1024, maxFiles: 100 },
+    new AbortController().signal,
+  );
+
+  expect(writing).rejects.toThrowWithMessage(Error, /expected record/v);
+  expect(builder.guest.runs).toHaveLength(1);
+});
+
+test('#writeGuestTree fails when the inspect in the builder exits non-zero', async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    failures: { config: 'No such image: imp-build:latest' },
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024, maxFiles: 100 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(
+    Error,
+    'docker image inspect in the builder: No such image: imp-build:latest',
+  );
+});
+
+test('#writeGuestTree fails when the create in the builder exits non-zero', async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    failures: { create: 'no space left on device' },
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024, maxFiles: 100 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(Error, 'docker create in the builder: no space left on device');
+});
+
+test('#writeGuestTree fails when the export in the builder exits non-zero', async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    failures: { export: 'container gone' },
+  });
+
+  expect(
+    writeGuestTree(
+      createGuestExec(builder.guest.open),
+      ctx.root,
+      { maxBytes: 1024 ** 3, maxFiles: 100 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrowWithMessage(Error, 'docker export in the builder: container gone');
+});
+
+test('#runGuestBuild sends the context to the build as its stdin', async () => {
+  const ctx = await setupTest();
+
+  const stdin = Promise.withResolvers<string>();
+
+  const guest = buildStubGuest(async (run) => {
+    const bytes = await run.readStdin();
+
+    stdin.resolve(new TextDecoder().decode(bytes));
+
+    return {};
+  });
+
+  writeFileSync(join(ctx.dir, 'context.tar'), 'the context');
+
+  await runGuestBuild(createGuestExec(guest.open), {
+    tarPath: join(ctx.dir, 'context.tar'),
+    dockerfile: 'sub/Dockerfile',
+    signal: new AbortController().signal,
+  });
+
+  expect(stdin.promise).resolves.toBe('the context');
+});
+
+test('#runGuestBuild builds with the pinned frontend, the builder tag and the Dockerfile', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubGuest(() => ({}));
+
+  writeFileSync(join(ctx.dir, 'context.tar'), 'the context');
+
+  await runGuestBuild(createGuestExec(guest.open), {
+    tarPath: join(ctx.dir, 'context.tar'),
+    dockerfile: 'sub/Dockerfile',
+    signal: new AbortController().signal,
+  });
+
+  expect(guest.runs.map((run) => run.argv)).toStrictEqual([
+    [
+      'docker',
+      'build',
+      '--progress=plain',
+      '--build-arg',
+      `BUILDKIT_SYNTAX=${DOCKERFILE_FRONTEND}`,
+      '--tag',
+      'imp-build:latest',
+      '--file',
+      'sub/Dockerfile',
+      '-',
+    ],
+  ]);
+});
+
+test('#runGuestBuild fails a build with the last 8000 characters of its log', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubGuest(() => ({
+    code: 1,
+    stderr: `${'early '.repeat(2000)}\n#5 ERROR: process "/bin/sh -c false"`,
   }));
 
-  const tooBig = await createGuestExec(big.open)(['cat'], {
+  writeFileSync(join(ctx.dir, 'context.tar'), 'the context');
+
+  expect(
+    runGuestBuild(createGuestExec(guest.open), {
+      tarPath: join(ctx.dir, 'context.tar'),
+      dockerfile: 'Dockerfile',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrowWithMessage(
+    DockerBuildError,
+    /^docker build failed:\n[a-z ]{7963}\n#5 ERROR: process "\/bin\/sh -c false"$/v,
+  );
+});
+
+test('#loadGuestImage pulls the ref for the platform, tags it and gives its registry digest', async () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const digest = await loadGuestImage(createGuestExec(builder.guest.open), {
+    ref: 'busybox:1.37',
+    platform: 'linux/amd64',
     signal: new AbortController().signal,
-  }).catch((error: unknown) => error);
+  });
 
-  expect(tooBig).toBeInstanceOf(GuestOutputError);
+  expect(digest).toBe(`busybox@sha256:${'b'.repeat(64)}`);
 
-  const hanging = buildStubGuest(() => new Promise<StubAnswer>(() => {}));
+  expect(builder.guest.runs.map((run) => run.argv.join(' '))).toStrictEqual([
+    'docker pull --quiet --platform linux/amd64 busybox:1.37',
+    `docker image inspect --format ${PIN_INSPECT_FORMAT} busybox:1.37`,
+    'docker tag busybox:1.37 imp-build:latest',
+  ]);
+});
 
-  const timedOut = await createGuestExec(hanging.open)(['sleep', 'inf'], {
-    signal: new AbortController().signal,
-    timeoutMs: 20,
-  }).catch((error: unknown) => error);
+test('#loadGuestImage refuses a ref whose pull in the builder fails as BAD_REQUEST', () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onPull: () => ({ code: 1, stderr: 'manifest unknown\n' }),
+  });
 
-  expect(String(timedOut)).toContain('sleep inf: no exit in 20 ms');
-  expect(hanging.runs[0]).toMatchObject({ signals: [9], closed: true });
+  expect(
+    loadGuestImage(createGuestExec(builder.guest.open), {
+      ref: 'busybox:9',
+      platform: 'linux/amd64',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'the pull of busybox:9 in the builder failed: manifest unknown',
+  });
+});
+
+test("#loadGuestImage refuses a ref the registry denies to the builder's engine", () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onPull: () => ({
+      code: 1,
+      stderr:
+        'Error response from daemon: pull access denied for private/x, repository does not exist or may require docker login\n',
+    }),
+  });
+
+  expect(
+    loadGuestImage(createGuestExec(builder.guest.open), {
+      ref: 'private/x:1',
+      platform: 'linux/amd64',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message:
+      'the pull of private/x:1 in the builder failed: Error response from daemon: pull access denied for private/x, repository does not exist or may require docker login',
+  });
+});
+
+// imp-docker-proxy's 403, as the docker CLI prints an engine refusal
+test('#loadGuestImage refuses a ref whose pull imp-docker-proxy refuses in the builder', () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onPull: () => ({
+      code: 1,
+      stderr:
+        "Error response from daemon: imp-docker-proxy: registry localhost:5320 is the host's own\n",
+    }),
+  });
+
+  expect(
+    loadGuestImage(createGuestExec(builder.guest.open), {
+      ref: 'localhost:5320/x:1',
+      platform: 'linux/amd64',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message:
+      "the pull of localhost:5320/x:1 in the builder failed: Error response from daemon: imp-docker-proxy: registry localhost:5320 is the host's own",
+  });
+});
+
+test('#loadGuestImage fails when the inspect after the pull exits non-zero', () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    failures: { pin: 'No such image: busybox:1.37' },
+  });
+
+  expect(
+    loadGuestImage(createGuestExec(builder.guest.open), {
+      ref: 'busybox:1.37',
+      platform: 'linux/amd64',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrowWithMessage(
+    Error,
+    'docker image inspect busybox:1.37 in the builder: No such image: busybox:1.37',
+  );
+});
+
+test('#loadGuestImage refuses an image the builder pulled for another platform', () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    architecture: 'aarch64',
+  });
+
+  expect(
+    loadGuestImage(createGuestExec(builder.guest.open), {
+      ref: 'busybox:1.37',
+      platform: 'linux/amd64',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'busybox:1.37 pulled for linux/arm64, not linux/amd64',
+  });
+});
+
+test('#loadGuestImage fails when the tag in the builder exits non-zero', () => {
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    failures: { tag: 'no space left on device' },
+  });
+
+  expect(
+    loadGuestImage(createGuestExec(builder.guest.open), {
+      ref: 'busybox:1.37',
+      platform: 'linux/amd64',
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrowWithMessage(Error, 'docker tag in the builder: no space left on device');
 });

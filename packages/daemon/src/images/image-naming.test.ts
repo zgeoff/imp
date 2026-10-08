@@ -1,23 +1,41 @@
 import { expect, test } from 'bun:test';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
-test('it derives a name from the last repository segment', () => {
-  expect(deriveImageName('ubuntu:24.04')).toBe('ubuntu');
-  expect(deriveImageName('ghcr.io/acme/web-app:1.2')).toBe('web-app');
-  expect(deriveImageName('localhost:5000/My_Image@sha256:abcd')).toBe('my-image');
-  expect(deriveImageName('imp/base')).toBe('base');
+test.each([
+  ['ubuntu:24.04', 'ubuntu'],
+  ['ghcr.io/acme/web-app:1.2', 'web-app'],
+  ['localhost:5000/My_Image@sha256:abcd', 'my-image'],
+  ['imp/base', 'base'],
+])('#deriveImageName derives the name of %s from its last repository segment', (ref, name) => {
+  expect(deriveImageName(ref)).toBe(name);
 });
 
-test('it rejects a ref with no usable name', () => {
-  expect(() => deriveImageName('_:1')).toThrow('pass a name');
-  expect(() => deriveImageName('123')).toThrow('pass a name');
-});
+test.each([['_:1'], ['123']])(
+  '#deriveImageName refuses to derive a name from %s, which has none',
+  (ref) => {
+    expect(() => deriveImageName(ref)).toThrowWithMessage(
+      Error,
+      `cannot derive an image name from ${ref}; pass a name`,
+    );
+  },
+);
 
-test('it maps the OCI config to the agent image config', () => {
+test('#buildImageRuntimeConfig maps the OCI config to the agent image config', () => {
   expect(
     buildImageRuntimeConfig({ Env: ['PATH=/bin'], WorkingDir: '/app', User: 'node', Cmd: ['x'] }),
-  ).toEqual({ env: ['PATH=/bin'], workdir: '/app', user: 'node' });
+  ).toStrictEqual({ env: ['PATH=/bin'], workdir: '/app', user: 'node' });
+});
 
-  expect(buildImageRuntimeConfig(null)).toEqual({ env: [], workdir: '', user: '' });
-  expect(buildImageRuntimeConfig({ Env: null })).toEqual({ env: [], workdir: '', user: '' });
+test('#buildImageRuntimeConfig maps a missing OCI config to an empty agent image config', () => {
+  expect(buildImageRuntimeConfig(null)).toStrictEqual({ env: [], workdir: '', user: '' });
+});
+
+test('#buildImageRuntimeConfig maps a null Env to no environment', () => {
+  expect(buildImageRuntimeConfig({ Env: null })).toStrictEqual({ env: [], workdir: '', user: '' });
+});
+
+test('#buildImageRuntimeConfig refuses an OCI config whose Env is not a list of strings', () => {
+  const building = Promise.try(() => buildImageRuntimeConfig({ Env: 'A=1' }));
+
+  expect(building).rejects.toMatchObject({ issues: [{ path: ['Env'], code: 'invalid_type' }] });
 });

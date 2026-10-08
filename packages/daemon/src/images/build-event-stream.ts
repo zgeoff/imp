@@ -6,9 +6,23 @@ import type { ImageBuildEvent, ImageBuildPhase } from '@imp/api';
 // the headers, its bodyTimeout between two chunks).
 export const BUILD_KEEPALIVE_MS = 15_000;
 
+// runs tick every ms until the returned stop is called
+export type Repeat = (ms: number, tick: () => void) => () => void;
+
+export function runOnInterval(ms: number, tick: () => void): () => void {
+  const timer = setInterval(tick, ms);
+
+  return () => {
+    clearInterval(timer);
+  };
+}
+
 export interface BuildEventStreamDeps {
   readonly keepaliveMs: number;
   readonly now: () => number;
+
+  // the keepalive's timer; runOnInterval by default
+  readonly repeat?: Repeat;
 }
 
 // The build's answer, at once: progress lines, then the event `run` ends
@@ -29,16 +43,18 @@ export function createBuildEventStream(
   const encoder = new TextEncoder();
 
   const startedAt = deps.now();
+  const repeat = deps.repeat ?? runOnInterval;
 
-  const state: { phase: ImageBuildPhase; open: boolean; timer?: Timer } = {
+  const state: { phase: ImageBuildPhase; open: boolean; stopKeepalive: () => void } = {
     phase: 'upload',
     open: true,
+    stopKeepalive: () => {},
   };
 
   const stop = (): void => {
     state.open = false;
 
-    clearInterval(state.timer);
+    state.stopKeepalive();
   };
 
   const body = new ReadableStream<Uint8Array>({
@@ -64,11 +80,11 @@ export function createBuildEventStream(
       // Bun sends the headers with the first chunk
       sendProgress();
 
-      state.timer = setInterval(sendProgress, deps.keepaliveMs);
+      state.stopKeepalive = repeat(deps.keepaliveMs, sendProgress);
 
       // nobody reads the progress of a build that stops for its client
       signal.addEventListener('abort', () => {
-        clearInterval(state.timer);
+        state.stopKeepalive();
       });
 
       const setPhase = (phase: ImageBuildPhase): void => {

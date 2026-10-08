@@ -1,252 +1,536 @@
-import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { loadConfig } from '../config';
+import { createImage } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { checkBuildQuery } from '../docker-proxy/rules';
+import { buildImagePaths } from '../storage/data-layout';
+import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { createImageService, normalizeDockerfilePath } from './image-service';
-import { planRootfs, planRootfsOverhead } from './rootfs-plan';
+import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { createImageService, normalizeDockerfilePath, parseDuCount } from './image-service';
 
-// These all fail before any docker command runs, so no docker is needed.
-test('it refuses refs and build contexts that docker could read as flags', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  try {
-    const db = await openDatabase(':memory:');
+  onTestFinished(() => stack.disposeAsync());
 
-    const images = createImageService({
-      config: loadConfig({ IMP_DATA_DIR: dataDir }),
-      db,
-      storage: createXfsBackend({ dataDir }),
-      storageGate: createStorageGate(),
-      diskBudget: {
-        withRoom: (_bytes, task) => task(),
-        withGrowingRoom: (task) => task(() => Promise.resolve()),
-      },
-      readBuilders: () => null,
-      log: () => {},
-    });
+  const dataDir = await mkdtemp(join(tmpdir(), 'image-service-'));
 
-    for (const ref of ['--help', '-v/:/host', 'ubuntu --privileged', '']) {
-      const failure = await images.addImage(ref, 'x').catch((error: unknown) => error);
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-      expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-      expect(String(failure)).toContain('invalid image reference');
-    }
+  const db = await openDatabase(':memory:');
 
-    const buildFailure = await images
-      .buildImage('--file=/etc/passwd', 'x')
-      .catch((error: unknown) => error);
+  stack.defer(() => db.destroy());
 
-    expect(buildFailure).toMatchObject({ code: 'BAD_REQUEST' });
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-});
-
-// #173: the docker CLI prints the proxy's message after its own line for a
-// create; impd answers BAD_REQUEST with that message, and nothing else of
-// the CLI's output reaches the client
-test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the create', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
-  const bin = join(dataDir, 'fake-bin');
-  const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
-  const stderr = `Unable to find image 'localhost:5320/x:1' locally\nError response from daemon: ${refusal}`;
-  const inspect = JSON.stringify([{ Id: `sha256:${'c'.repeat(64)}`, Config: {}, Size: 1 }]);
-
-  mkdirSync(bin);
-  writeFileSync(join(dataDir, 'stderr'), stderr);
-
-  // names the proxy refuses (impd refuses a literal localhost itself): impd
-  // pulls registry.example/pulled, and creates from registry.example/local
-  writeFileSync(
-    join(bin, 'docker'),
-    [
-      '#!/bin/sh',
-      'for last; do :; done',
-      'case "$1 $last" in',
-      `  "image registry.example/local:1") echo '${inspect}' ;;`,
-      `  "pull "*|"create "*) cat '${join(dataDir, 'stderr')}' >&2; exit 1 ;;`,
-      '  *) exit 1 ;;',
-      'esac',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
-
-  try {
-    const images = createImageService({
-      config: loadConfig({ IMP_DATA_DIR: dataDir, IMP_BUILD_ISOLATION: 'host' }),
-      db: await openDatabase(':memory:'),
-      storage: createXfsBackend({ dataDir }),
-      storageGate: createStorageGate(),
-      diskBudget: {
-        withRoom: (_bytes, task) => task(),
-        withGrowingRoom: (task) => task(() => Promise.resolve()),
-      },
-      readBuilders: () => null,
-      log: () => {},
-
-      // the fake docker first, for these calls only
-      dockerEnv: { PATH: `${bin}:${process.env['PATH'] ?? ''}` },
-    });
-
-    for (const ref of ['registry.example/pulled:1', 'registry.example/local:1']) {
-      const failure = await images.addImage(ref, 'x').catch((error: unknown) => error);
-
-      expect(failure).toMatchObject({ code: 'BAD_REQUEST', message: refusal });
-    }
-
-    // a create that fails leaves no work directory behind
-    const imagesDir = join(dataDir, 'images');
-    const left = existsSync(imagesDir) ? readdirSync(imagesDir) : [];
-
-    expect(left.filter((entry) => entry.startsWith('.build-'))).toEqual([]);
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-});
-
-test('it refuses a build context that is not on the impd host', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
-
-  try {
-    const db = await openDatabase(':memory:');
-
-    const images = createImageService({
-      config: loadConfig({ IMP_DATA_DIR: dataDir }),
-      db,
-      storage: createXfsBackend({ dataDir }),
-      storageGate: createStorageGate(),
-      diskBudget: {
-        withRoom: (_bytes, task) => task(),
-        withGrowingRoom: (task) => task(() => Promise.resolve()),
-      },
-      readBuilders: () => null,
-      log: () => {},
-    });
-
-    const failure = await images
-      .buildImage(`${dataDir}/no-such-dir`, 'x')
-      .catch((error: unknown) => error);
-
-    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-    expect(String(failure)).toContain('does not exist on the impd host');
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-});
-
-test('a rootfs is its tree plus room to spare, in whole GiB, at least 4 GiB', () => {
-  const GIB = 1024 ** 3;
-
-  expect(planRootfs({ bytes: 300 * 1024 ** 2, inodes: 20_000 })).toEqual({
-    bytes: 4 * GIB,
-    inodes: null,
+  // the host's free space, so a build never meets this machine's disk
+  const diskBudget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }) },
+    reserveBytes: null,
+    log: () => {},
   });
 
-  expect(planRootfs({ bytes: 5 * GIB, inodes: 90_000 })).toEqual({ bytes: 8 * GIB, inodes: null });
+  return {
+    dataDir,
+    db,
+    storage: createXfsBackend({ dataDir }),
+    diskBudget,
+  };
+}
 
-  // node_modules: many small files need more inodes than 16 KiB each gives
-  expect(planRootfs({ bytes: GIB, inodes: 400_000 })).toEqual({ bytes: 4 * GIB, inodes: 800_000 });
-});
-
-// mkfs.ext4's journal is 64 MiB below 16 GiB, then 1/128 of the filesystem
-test("a build holds the rootfs's own blocks: at least 128 MiB, else 1/64 of the rootfs", () => {
-  const GIB = 1024 ** 3;
-
-  expect(planRootfsOverhead(0)).toBe(128 * 1024 ** 2);
-
-  // the default image cap, 8 GiB, plans a 12 GiB rootfs
-  expect(planRootfsOverhead(8 * GIB)).toBe(192 * 1024 ** 2);
-  expect(planRootfsOverhead(100 * GIB)).toBe((122 * GIB) / 64);
-});
-
-test('a build context on the impd host with no Dockerfile is the client’s mistake', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
-
-  try {
-    const db = await openDatabase(':memory:');
+test.each(['--help', '-v/:/host', 'ubuntu --privileged', ''])(
+  '#addImage refuses %p, which docker could read as a flag',
+  async (ref) => {
+    const ctx = await setupTest();
 
     const images = createImageService({
-      config: loadConfig({ IMP_DATA_DIR: dataDir }),
-      db,
-      storage: createXfsBackend({ dataDir }),
+      config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+      db: ctx.db,
+      storage: ctx.storage,
       storageGate: createStorageGate(),
-      diskBudget: {
-        withRoom: (_bytes, task) => task(),
-        withGrowingRoom: (task) => task(() => Promise.resolve()),
-      },
+      diskBudget: ctx.diskBudget,
       readBuilders: () => null,
       log: () => {},
     });
 
-    const failure = await images.buildImage(dataDir, 'x').catch((error: unknown) => error);
+    const adding = images.addImage(ref, 'x');
 
-    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-    expect(String(failure)).toContain('there is no Dockerfile');
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-});
-
-test('a build context on the impd host over IMP_BUILD_CONTEXT_MAX_MIB is refused before it is sent', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
-
-  try {
-    const db = await openDatabase(':memory:');
-
-    const images = createImageService({
-      config: loadConfig({ IMP_DATA_DIR: dataDir, IMP_BUILD_CONTEXT_MAX_MIB: '1' }),
-      db,
-      storage: createXfsBackend({ dataDir }),
-      storageGate: createStorageGate(),
-      diskBudget: {
-        withRoom: (_bytes, task) => task(),
-        withGrowingRoom: (task) => task(() => Promise.resolve()),
-      },
-      readBuilders: () => null,
-      log: () => {},
+    expect(adding).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: `invalid image reference ${JSON.stringify(ref)}`,
     });
+  },
+);
 
-    writeFileSync(`${dataDir}/Dockerfile`, 'FROM scratch\n');
-    writeFileSync(`${dataDir}/big`, new Uint8Array(2 * 1024 ** 2));
+test('#buildImage refuses a context path that docker could read as a flag', async () => {
+  const ctx = await setupTest();
 
-    const failure = await images.buildImage(dataDir, 'x').catch((error: unknown) => error);
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
 
-    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-    expect(String(failure)).toContain('over the limit of 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)');
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
+  const building = images.buildImage('--file=/etc/passwd', 'x');
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'build context "--file=/etc/passwd" is not an absolute path',
+  });
 });
 
-test('a Dockerfile path is sent in one spelling, the one the proxy lets through', () => {
-  for (const [given, normalized] of [
-    [undefined, 'Dockerfile'],
-    ['./Dockerfile', 'Dockerfile'],
-    ['sub//./web.Dockerfile', 'sub/web.Dockerfile'],
-    ['a/../Dockerfile', 'Dockerfile'],
-  ] as const) {
-    const path = normalizeDockerfilePath(given);
+// #173: the docker CLI prints the proxy's message after its own line; impd
+// answers BAD_REQUEST with that message and nothing else of the output
+test('#addImage answers a proxy refusal of the pull as BAD_REQUEST with its message alone', async () => {
+  const ctx = await setupTest();
 
-    const query = new Map([
-      ['t', ['imp/x:latest']],
-      ['version', ['2']],
-      ['buildargs', [JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })]],
-      ['dockerfile', [path]],
-    ]);
+  const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
 
-    expect(path).toBe(normalized);
-    expect(checkBuildQuery(query)).toEqual({ isOk: true });
-  }
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['registry.example/pulled:1'],
+        inspects: [{ Id: `sha256:${'c'.repeat(64)}` }],
+        isOnHost: false,
+        pull: { stderr: `Error response from daemon: ${refusal}` },
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'host' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const adding = images.addImage('registry.example/pulled:1', 'x');
+
+  expect(adding).rejects.toMatchObject({ code: 'BAD_REQUEST', message: refusal });
 });
 
-test('a Dockerfile path that leaves the context, or names it, is refused', () => {
-  for (const path of ['../Dockerfile', 'a/../../Dockerfile', '/etc/passwd', '.', 'sub/']) {
+test('#addImage answers a proxy refusal of the create as BAD_REQUEST with its message alone', async () => {
+  const ctx = await setupTest();
+
+  const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['registry.example/local:1'],
+        inspects: [{ Id: `sha256:${'c'.repeat(64)}`, Config: {}, Size: 1 }],
+      },
+    ],
+    create: {
+      stderr: `Unable to find image 'localhost:5320/x:1' locally\nError response from daemon: ${refusal}`,
+    },
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'host' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const adding = images.addImage('registry.example/local:1', 'x');
+
+  expect(adding).rejects.toMatchObject({ code: 'BAD_REQUEST', message: refusal });
+});
+
+test('#addImage leaves no work directory behind when the create fails', async () => {
+  const ctx = await setupTest();
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['registry.example/local:1'],
+        inspects: [{ Id: `sha256:${'c'.repeat(64)}`, Config: {}, Size: 1 }],
+      },
+    ],
+    create: { stderr: 'no space left on device' },
+  });
+
+  updateEnv('PATH', docker.path);
+  mkdirSync(join(ctx.dataDir, 'images'));
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'host' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const adding = images.addImage('registry.example/local:1', 'x');
+
+  await adding.catch(() => {});
+
+  expect(adding).rejects.toThrow('no space left on device');
+  expect(readdirSync(join(ctx.dataDir, 'images'))).toStrictEqual([]);
+});
+
+test('#addImage answers SERVICE_UNAVAILABLE while the builders are not up', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'imp' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const adding = images.addImage('busybox:1.37', 'x');
+
+  expect(adding).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+    message: 'impd is starting; try again',
+  });
+});
+
+test('#buildImageFromContext answers SERVICE_UNAVAILABLE while the builders are not up', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+  const tarPath = join(ctx.dataDir, 'context.tar');
+
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
+
+  Bun.spawnSync(['tar', '-C', contextDir, '-cf', tarPath, 'Dockerfile']);
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'imp' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImageFromContext(tarPath, 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+    message: 'impd is starting; try again',
+  });
+});
+
+test('#buildImage refuses a context that is not on the impd host', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImage(join(ctx.dataDir, 'no-such-dir'), 'x');
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('does not exist on the impd host') as unknown,
+  });
+});
+
+test('#buildImage refuses a context on the impd host with no Dockerfile', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImage(ctx.dataDir, 'x');
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('there is no Dockerfile') as unknown,
+  });
+});
+
+test('#buildImage refuses a context over IMP_BUILD_CONTEXT_MAX_MIB before it is sent', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
+  writeFileSync(join(contextDir, 'big'), new Uint8Array(2 * 1024 ** 2));
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_CONTEXT_MAX_MIB: '1' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImage(contextDir, 'x');
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining(
+      'over the limit of 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)',
+    ) as unknown,
+  });
+});
+
+test('#buildImage refuses a Dockerfile image that is not an image reference', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+  const docker = buildStubDockerCli({ dir: ctx.dataDir });
+
+  updateEnv('PATH', docker.path);
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM a..b\n');
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'host' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImage(contextDir, 'x');
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'FROM "a..b" is not an image reference',
+  });
+});
+
+// a registry digest with words after it would add words to the FROM line,
+// which the pinned copy's round trip refuses
+test('#buildImage answers BAD_REQUEST when the pinned Dockerfile does not parse back', async () => {
+  const ctx = await setupTest();
+
+  const contextDir = join(ctx.dataDir, 'context');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`busybox@sha256:${'a'.repeat(64)} AS evil`],
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM busybox:1\n');
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_ISOLATION: 'host' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImage(contextDir, 'x');
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'the Dockerfile: impd could not pin the images this Dockerfile names',
+  });
+});
+
+test('#resolveImage answers NOT_FOUND for a name no image has', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const resolving = images.resolveImage('missing');
+
+  expect(resolving).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    message: 'image missing not found',
+  });
+});
+
+test('#resolveImage answers NOT_FOUND naming the default image when neither default image exists', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_DEFAULT_IMAGE: 'tools' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const resolving = images.resolveImage();
+
+  expect(resolving).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'image tools not found' });
+});
+
+test('#removeImage answers NOT_FOUND for a name no image has', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const removing = images.removeImage('missing');
+
+  expect(removing).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'image missing not found' });
+});
+
+test('#removeImage keeps the rootfs while another image uses its digest', async () => {
+  const ctx = await setupTest();
+
+  const digest = `sha256:${'d'.repeat(64)}`;
+  const rootfs = buildImagePaths(ctx.dataDir, digest).rootfs;
+
+  await Bun.write(rootfs, 'rootfs');
+
+  await createImage(ctx.db, { name: 'web', ref: 'web:1', digest, sizeBytes: 6 });
+  await createImage(ctx.db, { name: 'web-copy', ref: 'web:1', digest, sizeBytes: 6 });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  await images.removeImage('web');
+
+  expect(existsSync(rootfs)).toBeTrue();
+});
+
+test('#removeImage removes the rootfs once no image uses its digest', async () => {
+  const ctx = await setupTest();
+
+  const digest = `sha256:${'d'.repeat(64)}`;
+  const rootfs = buildImagePaths(ctx.dataDir, digest).rootfs;
+
+  await Bun.write(rootfs, 'rootfs');
+
+  await createImage(ctx.db, { name: 'web', ref: 'web:1', digest, sizeBytes: 6 });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  await images.removeImage('web');
+
+  expect(existsSync(rootfs)).toBeFalse();
+});
+
+test('#parseDuCount reads the count du prints before its path', () => {
+  expect(parseDuCount('4096\t/data/root\n')).toBe(4096);
+});
+
+test('#parseDuCount refuses du output that does not start with a count', () => {
+  expect(() => parseDuCount('du: cannot access')).toThrowWithMessage(
+    TypeError,
+    'du printed du: cannot access',
+  );
+});
+
+test.each([
+  [undefined, 'Dockerfile'],
+  ['./Dockerfile', 'Dockerfile'],
+  ['sub//./web.Dockerfile', 'sub/web.Dockerfile'],
+  ['a/../Dockerfile', 'Dockerfile'],
+])('#normalizeDockerfilePath writes %p as %p, a path the proxy lets through', (given, expected) => {
+  const path = normalizeDockerfilePath(given);
+
+  const query = new Map([
+    ['t', ['imp/x:latest']],
+    ['version', ['2']],
+    ['buildargs', [JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })]],
+    ['dockerfile', [path]],
+  ]);
+
+  expect(path).toBe(expected);
+  expect(checkBuildQuery(query)).toStrictEqual({ isOk: true });
+});
+
+test.each(['../Dockerfile', 'a/../../Dockerfile', '/etc/passwd', '.', 'sub/'])(
+  '#normalizeDockerfilePath refuses %p, which leaves the context or names it',
+  (path) => {
     expect(() => normalizeDockerfilePath(path)).toThrow('not a file inside the build context');
-  }
-});
+  },
+);

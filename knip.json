@@ -19,9 +19,10 @@
       "project": ["src/**/*.ts"]
     },
     "packages/daemon": {
-      // imp-docker-proxy, which host/Dockerfile compiles beside impd, and the
-      // suites only their own scripts run (test:pebble, test:slow)
-      "entry": ["src/docker-proxy/main.ts", "src/**/*.pebble.ts", "src/**/*.slow.ts"],
+      // imp-docker-proxy, which host/Dockerfile compiles beside impd, the
+      // suites only their own scripts run (test:pebble), and the scripts a
+      // test runs in a child Bun
+      "entry": ["src/docker-proxy/main.ts", "src/**/*.pebble.ts", "src/test-utils/run-*.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/dashboard": {
