@@ -173,7 +173,7 @@ func TestRemoveStopsTheServiceAndDeletesItsFile(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Len(s.List(), 0))
 	assert.Check(t, !exists(fsroot.Host, filepath.Join(s.dir, "web.json")), "the file is left")
-	assert.Check(t, cmp.ErrorIs(syscallKill(st.Pid), syscall.ESRCH), "pid %d still runs", st.Pid)
+	assert.Check(t, cmp.ErrorIs(syscall.Kill(st.Pid, 0), syscall.ESRCH), "pid %d still runs", st.Pid)
 }
 
 func TestRemoveReportsNoServiceForOneAlreadyRemoved(t *testing.T) {

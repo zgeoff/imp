@@ -6,50 +6,46 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
-func syscallKill(pid int) error {
-	return syscall.Kill(pid, 0)
-}
-
-func TestFindLastLines(t *testing.T) {
-	tests := []struct {
+func TestFindLastLinesFindsTheStartOfTheLastNLines(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
 		body  string
 		n     int
 		want  string
 		found int
 	}{
-		{"a\nb\nc\n", 2, "b\nc\n", 2},
-		{"a\nb\nc", 2, "b\nc", 2},
-		{"a\nb\nc\n", 5, "a\nb\nc\n", 3},
-		{"a\nb\nc\n", 0, "", 0},
-		{"", 3, "", 0},
-		{"\n", 1, "\n", 1},
-		{"a\n\n\nb\n", 2, "\nb\n", 2},
-		// lines across the block size
-		{strings.Repeat("x", tailBlock+10) + "\n" + "y\n", 1, "y\n", 1},
-		{"z\n" + strings.Repeat("x", 2*tailBlock) + "\n", 1, strings.Repeat("x", 2*tailBlock) + "\n", 1},
-	}
-	dir := t.TempDir()
-	for i, tt := range tests {
-		path := filepath.Join(dir, "log")
-		if err := os.WriteFile(path, []byte(tt.body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		start, found := findLastLines(f, int64(len(tt.body)), tt.n)
-		f.Close()
-		if got := tt.body[start:]; got != tt.want || found != tt.found {
-			t.Errorf("case %d: got %q (%d lines), want %q (%d)", i, shorten(got), found, shorten(tt.want), tt.found)
-		}
+		{name: "fewer than the file holds", body: "a\nb\nc\n", n: 2, want: "b\nc\n", found: 2},
+		{name: "no final newline", body: "a\nb\nc", n: 2, want: "b\nc", found: 2},
+		{name: "more than the file holds", body: "a\nb\nc\n", n: 5, want: "a\nb\nc\n", found: 3},
+		{name: "none", body: "a\nb\nc\n", n: 0, want: "", found: 0},
+		{name: "an empty file", body: "", n: 3, want: "", found: 0},
+		{name: "one empty line", body: "\n", n: 1, want: "\n", found: 1},
+		{name: "empty lines", body: "a\n\n\nb\n", n: 2, want: "\nb\n", found: 2},
+		{name: "a line longer than a block before the last", body: strings.Repeat("x", tailBlock+10) + "\n" + "y\n", n: 1, want: "y\n", found: 1},
+		{name: "a last line longer than two blocks", body: "z\n" + strings.Repeat("x", 2*tailBlock) + "\n", n: 1, want: strings.Repeat("x", 2*tailBlock) + "\n", found: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "log")
+			assert.NilError(t, os.WriteFile(path, []byte(tc.body), 0o644))
+			f, err := os.Open(path)
+			assert.NilError(t, err)
+			t.Cleanup(func() { f.Close() })
+
+			start, found := findLastLines(f, int64(len(tc.body)), tc.n)
+
+			assert.Check(t, tc.body[start:] == tc.want, "got %q, want %q", shorten(tc.body[start:]), shorten(tc.want))
+			assert.Check(t, cmp.Equal(found, tc.found))
+		})
 	}
 }
 
@@ -71,6 +67,13 @@ func startLogs(t *testing.T, s *Supervisor, name string, lines int, follow bool,
 	t.Helper()
 	pr, pw := io.Pipe()
 	ls := &logStream{frames: make(chan proto.Frame, 1024), done: make(chan struct{}), result: make(chan error, 1)}
+	t.Cleanup(func() {
+		select {
+		case <-ls.done:
+		default:
+			close(ls.done)
+		}
+	})
 	go func() {
 		r := proto.NewReader(pr)
 		for {
@@ -87,13 +90,6 @@ func startLogs(t *testing.T, s *Supervisor, name string, lines int, follow bool,
 		ls.result <- err
 		pw.Close()
 	}()
-	t.Cleanup(func() {
-		select {
-		case <-ls.done:
-		default:
-			close(ls.done)
-		}
-	})
 	return ls
 }
 
@@ -102,9 +98,7 @@ func (ls *logStream) waitResponse(t *testing.T) {
 	t.Helper()
 	select {
 	case f := <-ls.frames:
-		if f.Type != proto.TypeResponse {
-			t.Fatalf("first frame %s, want RESPONSE", f.Type)
-		}
+		assert.Equal(t, f.Type, proto.TypeResponse, "first frame %q", f.Payload)
 	case <-time.After(5 * time.Second):
 		t.Fatal("no RESPONSE")
 	}
@@ -117,9 +111,7 @@ func (ls *logStream) readUntil(t *testing.T, text *string, want string) {
 	for !strings.HasSuffix(*text, want) {
 		select {
 		case f, ok := <-ls.frames:
-			if !ok {
-				t.Fatalf("the stream ended at %q, want %q", *text, want)
-			}
+			assert.Assert(t, ok, "the stream ended at %q, want %q", *text, want)
 			if f.Type == proto.TypeStdout {
 				*text += string(f.Payload)
 			}
@@ -137,13 +129,11 @@ func (ls *logStream) readUntil(t *testing.T, text *string, want string) {
 func appendTo(t *testing.T, path, text string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(text); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
+	t.Cleanup(func() { f.Close() })
+	_, err = f.WriteString(text)
+	assert.NilError(t, err)
+	assert.NilError(t, f.Close())
 }
 
 func TestLogsSendsTheTailAcrossTheRotatedLog(t *testing.T) {
@@ -161,98 +151,96 @@ func TestLogsSendsTheTailAcrossTheRotatedLog(t *testing.T) {
 			text += string(f.Payload)
 		}
 	}
-	if err := <-ls.result; err != nil {
-		t.Fatal(err)
-	}
-	if text != "2\n3\n4\n5\n" {
-		t.Fatalf("text = %q", text)
-	}
-	if types[0] != proto.TypeResponse || types[len(types)-1] != proto.TypeStdoutEOF {
-		t.Fatalf("frames %v: want RESPONSE first and STDOUT_EOF last", types)
+	err := <-ls.result
+
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(text, "2\n3\n4\n5\n"))
+	assert.Assert(t, len(types) > 0, "no frames")
+	assert.Check(t, cmp.Equal(types[0], proto.TypeResponse), "frames %v", types)
+	assert.Check(t, cmp.Equal(types[len(types)-1], proto.TypeStdoutEOF), "frames %v", types)
+}
+
+func TestLogsRefusesABadRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		service string
+		lines   int
+		code    string
+	}{
+		{name: "no such service", service: "nope", lines: 10, code: proto.ErrNoService},
+		{name: "a path for a name", service: "../etc/passwd", lines: 10, code: proto.ErrNoService},
+		{name: "negative lines", service: "web", lines: -1, code: proto.ErrBadRequest},
+		{name: "too many lines", service: "web", lines: MaxLogLines + 1, code: proto.ErrBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newManagedSupervisor(t)
+
+			err := s.Logs(tc.service, LogRequest{Lines: tc.lines}, proto.NewWriter(io.Discard), nil)
+
+			requireCode(t, err, tc.code)
+		})
 	}
 }
 
-func TestLogsOfNoServiceIsRefused(t *testing.T) {
-	s := newManagedSupervisor(t)
-	discard := proto.NewWriter(io.Discard)
-	requireCode(t, s.Logs("nope", LogRequest{Lines: 10}, discard, nil), proto.ErrNoService)
-	requireCode(t, s.Logs("../etc/passwd", LogRequest{Lines: 10}, discard, nil), proto.ErrNoService)
-	requireCode(t, s.Logs("web", LogRequest{Lines: -1}, discard, nil), proto.ErrBadRequest)
-}
+// The follow polls on a ticker, which runs on the bubble's fake clock.
+func TestLogsFollowsTheLogThroughATruncateAndARename(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newManagedSupervisor(t)
+		path := filepath.Join(s.logDir, "web.log")
+		appendTo(t, path, "old\n")
+		ls := startLogs(t, s, "web", 0, true, nil)
+		ls.waitResponse(t)
+		text := ""
 
-func TestLogsFollowsThroughBothRotations(t *testing.T) {
-	s := newManagedSupervisor(t)
-	s.Start(Def{Name: "web", Argv: []string{"sleep", "30"}, Restart: "always"})
-	path := filepath.Join(s.logDir, "web.log")
-	waitRunning(t, s, "web", 0)
-	appendTo(t, path, "old\n")
+		appendTo(t, path, "a\n")
+		ls.readUntil(t, &text, "a\n")
+		// copytruncate by another tool: the file shrinks in place, and grows
+		// back to less than the follow has read, so the follow sees the shrink
+		// whenever it next looks
+		assert.NilError(t, os.Truncate(path, 0))
+		appendTo(t, path, "b\n")
+		ls.readUntil(t, &text, "b\n")
+		// rename, as a service start rotates: the rest of the old file comes
+		// before the new one
+		appendTo(t, path, "c\n")
+		assert.NilError(t, os.Rename(path, path+".1"))
+		appendTo(t, path, "d\n")
+		ls.readUntil(t, &text, "d\n")
+		close(ls.done)
+		err := <-ls.result
 
-	ls := startLogs(t, s, "web", 0, true, nil)
-	ls.waitResponse(t)
-	text := ""
-	appendTo(t, path, "a\n")
-	ls.readUntil(t, &text, "a\n")
-
-	// copytruncate: the file shrinks in place
-	if err := os.Truncate(path, 0); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(2 * followEvery)
-	appendTo(t, path, "b\n")
-	ls.readUntil(t, &text, "b\n")
-
-	// rename, as a service start rotates: the rest of the old file comes
-	// before the new one
-	appendTo(t, path, "c\n")
-	if err := os.Rename(path, path+".1"); err != nil {
-		t.Fatal(err)
-	}
-	appendTo(t, path, "d\n")
-	ls.readUntil(t, &text, "d\n")
-
-	if text != "a\nb\nc\nd\n" {
-		t.Fatalf("text = %q", text)
-	}
-	close(ls.done)
-	if err := <-ls.result; err != nil {
-		t.Fatal(err)
-	}
+		assert.Check(t, cmp.Equal(text, "a\nb\nc\nd\n"))
+		assert.Check(t, err, "Logs")
+	})
 }
 
 func TestLogsFollowsTheRotatorsCopytruncate(t *testing.T) {
-	s := newManagedSupervisor(t)
-	s.Start(Def{Name: "web", Argv: []string{"sleep", "30"}, Restart: "always"})
-	path := filepath.Join(s.logDir, "web.log")
-	waitRunning(t, s, "web", 0)
-	writeLog(t, path, maxLogSize+1, "old\n")
+	synctest.Test(t, func(t *testing.T) {
+		s := newManagedSupervisor(t)
+		path := filepath.Join(s.logDir, "web.log")
+		writeLog(t, path, maxLogSize+1, "old\n")
+		ls := startLogs(t, s, "web", 0, true, nil)
+		ls.waitResponse(t)
 
-	ls := startLogs(t, s, "web", 0, true, nil)
-	ls.waitResponse(t)
-	// a line the follow has not read yet goes only into the copy, and the
-	// file grows back past the follow's offset before the follow looks
-	appendTo(t, path, "between\n")
-	if err := s.copyTruncateLog(path); err != nil {
-		t.Fatal(err)
-	}
-	const regrown = maxLogSize + 20
-	if err := os.Truncate(path, regrown); err != nil {
-		t.Fatal(err)
-	}
-	appendTo(t, path, "after\n")
+		// a line the follow has not read yet goes only into the copy, and the
+		// file grows back past the follow's offset before the follow looks
+		appendTo(t, path, "between\n")
+		assert.NilError(t, s.copyTruncateLog(path))
+		const regrown = maxLogSize + 20
+		assert.NilError(t, os.Truncate(path, regrown))
+		appendTo(t, path, "after\n")
+		text := ""
+		ls.readUntil(t, &text, "after\n")
 
-	text := ""
-	ls.readUntil(t, &text, "after\n")
-	if !strings.HasPrefix(text, "between\n") || len(text) != len("between\n")+regrown+len("after\n") {
-		t.Fatalf("got %d bytes starting %q; want between, then the whole new file", len(text), shorten(text))
-	}
+		assert.Check(t, cmp.Equal(len(text), len("between\n")+regrown+len("after\n")))
+		assert.Check(t, strings.HasPrefix(text, "between\n"), "the text starts %q, want between, then the whole new file", shorten(text))
+	})
 }
 
 func inodeOfPath(t *testing.T, path string) uint64 {
 	t.Helper()
 	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	return inodeOf(fi)
 }
 
@@ -266,14 +254,10 @@ func collect(t *testing.T, ls *logStream) (string, proto.LogCursor) {
 		case proto.TypeStdout:
 			text += string(f.Payload)
 		case proto.TypeCursor:
-			if err := json.Unmarshal(f.Payload, &last); err != nil {
-				t.Fatal(err)
-			}
+			assert.NilError(t, json.Unmarshal(f.Payload, &last))
 		}
 	}
-	if err := <-ls.result; err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, <-ls.result)
 	return text, last
 }
 
@@ -283,44 +267,61 @@ func TestLogsSendsACursorAfterEachChunk(t *testing.T) {
 	appendTo(t, path, "1\n2\n3\n")
 
 	text, last := collect(t, startLogs(t, s, "web", 10, false, nil))
-	want := proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 6}
-	if text != "1\n2\n3\n" || last != want {
-		t.Fatalf("text %q, cursor %+v; want cursor %+v", text, last, want)
-	}
+
+	assert.Check(t, cmp.Equal(text, "1\n2\n3\n"))
+	assert.Check(t, cmp.Equal(last, proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 6}))
 }
 
-func TestLogsResumeFromACursorWithNoLineTwice(t *testing.T) {
+func TestLogsResumesFromACursorInTheSameFileWithNoLineTwice(t *testing.T) {
 	s := newManagedSupervisor(t)
 	path := filepath.Join(s.logDir, "web.log")
 	appendTo(t, path, "1\n2\n")
 	ino := inodeOfPath(t, path)
-
 	// more lines while the stream was away
 	appendTo(t, path, "3\n")
+
 	text, _ := collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: ino, Offset: 4}))
-	if text != "3\n" {
-		t.Fatalf("same file: %q", text)
-	}
 
-	// a start rotated the file to .1, with a line after the cursor in it
-	if err := os.Rename(path, path+".1"); err != nil {
-		t.Fatal(err)
-	}
+	assert.Check(t, cmp.Equal(text, "3\n"))
+}
+
+// A start rotated the file to .1, with a line after the cursor in it.
+func TestLogsResumesFromACursorInTheRotatedFile(t *testing.T) {
+	s := newManagedSupervisor(t)
+	path := filepath.Join(s.logDir, "web.log")
+	appendTo(t, path, "1\n2\n")
+	ino := inodeOfPath(t, path)
+	appendTo(t, path, "3\n")
+	assert.NilError(t, os.Rename(path, path+".1"))
 	appendTo(t, path, "4\n")
+
 	text, last := collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: ino, Offset: 4}))
-	if text != "3\n4\n" || last.Inode != inodeOfPath(t, path) || last.Offset != 2 {
-		t.Fatalf("after a rename: %q, cursor %+v", text, last)
-	}
 
-	// a cursor in neither file: the current one goes whole
-	text, _ = collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: ino + 1000, Offset: 1}))
-	if text != "4\n" {
-		t.Fatalf("lost cursor: %q", text)
-	}
+	assert.Check(t, cmp.Equal(text, "3\n4\n"))
+	assert.Check(t, cmp.Equal(last, proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 2}))
+}
 
-	// past the end of a file that shrank: from 0
-	text, _ = collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 50}))
-	if text != "4\n" {
-		t.Fatalf("truncated: %q", text)
-	}
+// A cursor in neither file: the current one goes whole.
+func TestLogsSendsTheWholeCurrentFileForACursorInNeitherFile(t *testing.T) {
+	s := newManagedSupervisor(t)
+	path := filepath.Join(s.logDir, "web.log")
+	appendTo(t, path, "1\n2\n3\n")
+	ino := inodeOfPath(t, path)
+	assert.NilError(t, os.Rename(path, path+".1"))
+	appendTo(t, path, "4\n")
+
+	text, _ := collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: ino + 1000, Offset: 1}))
+
+	assert.Check(t, cmp.Equal(text, "4\n"))
+}
+
+// A cursor past the end of a file that shrank: from 0.
+func TestLogsSendsTheFileFromTheStartForACursorPastItsEnd(t *testing.T) {
+	s := newManagedSupervisor(t)
+	path := filepath.Join(s.logDir, "web.log")
+	appendTo(t, path, "4\n")
+
+	text, _ := collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 50}))
+
+	assert.Check(t, cmp.Equal(text, "4\n"))
 }
