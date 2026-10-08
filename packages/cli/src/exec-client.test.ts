@@ -139,8 +139,11 @@ async function setupTest() {
 
   const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
 
+  // a test may stop impd's listener itself; this stop is the fallback
   stack.defer(async () => {
-    await app.stop(true);
+    if (app.server !== null) {
+      await app.stop(true);
+    }
   });
 
   const port = app.server?.port;
@@ -602,10 +605,7 @@ test('it exits 255 and names the address when nothing listens there', async () =
   );
 
   expect(code).toBe(255);
-
-  expect(errors as unknown).toStrictEqual([
-    expect.stringMatching(/^imp: cannot reach impd at http:\/\/127\.0\.0\.1:\d+ \(/u) as unknown,
-  ]);
+  expect(errors).toStrictEqual([`imp: cannot reach impd at ${url} (the connection failed)`]);
 });
 
 test('it keeps the IMP_URL path prefix of an impd behind a proxy', async () => {
@@ -680,7 +680,10 @@ test('it exits 255 and names the failure when an output write fails other than b
   expect(ctx.errors).toStrictEqual(['imp: write ENOSPC']);
 });
 
-test('it exits 255 and says the connection was lost once the window to attach again is over, when impd faults by detaching each attach before it starts', async () => {
+// on the exec peer: real impd sends detached only after started, and every
+// started reopens the window to attach again; only impd's protocol fault of a
+// detached before started ends a session as lost once that window is over
+test('it exits 255 and says the connection was lost once the window to attach again is over, after impd sends a detached before started', async () => {
   const peer = buildStubExecPeer((link, message) => {
     if (message.type === 'start') {
       link.send({ type: 'started', pid: 7, session: 'main', created: true });
@@ -1351,16 +1354,15 @@ test('it exits 254 without attaching again when another client takes the session
   ]);
 });
 
-test('it doubles the pause before each try, up to 8 s, when impd faults by closing every attach', async () => {
-  const peer = buildStubExecPeer((link, message) => {
-    if (message.type === 'start') {
-      link.send({ type: 'started', pid: 7, session: 'main', created: true });
-      link.send({ type: 'detached', reason: 'lost' });
-    }
+test('it doubles the pause before each try, up to 8 s, while impd stays down under a session', async () => {
+  const ctx = await setupTest();
 
-    // the imp does not come back
-    if (message.type === 'attach') {
-      link.close(1011, 'no agent');
+  // an agent whose session runs on until impd goes away
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
     }
   });
 
@@ -1368,7 +1370,7 @@ test('it doubles the pause before each try, up to 8 s, when impd faults by closi
   const clock = { nowMs: Date.UTC(2026, 0, 1) };
   const pauses: number[] = [];
 
-  await runExec(
+  const exiting = runExec(
     {
       host: null,
       name: 'box',
@@ -1377,11 +1379,8 @@ test('it doubles the pause before each try, up to 8 s, when impd faults by closi
       session: { name: 'main', attachOnly: false, detachKey: 0x1d },
     },
     {
-      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      ...ctx.io,
       stdin: terminal.stdin,
-      writeOutput: () => {},
-      printError: () => {},
-      connect: peer.connect,
       isAttachedElsewhere: () => Promise.resolve(false),
       reattachWindowMs: 20_000,
       now: () => clock.nowMs,
@@ -1395,19 +1394,28 @@ test('it doubles the pause before each try, up to 8 s, when impd faults by closi
     },
   );
 
+  // the session started: the terminal went raw
+  await waitFor(() => {
+    expect(terminal.modes).toStrictEqual([true]);
+  });
+
+  await ctx.impd.api.app.stop(true);
+
+  await exiting;
+
   expect(pauses).toStrictEqual([1000, 2000, 4000, 8000, 8000]);
+  expect(agent.received).toHaveLength(1);
 });
 
-test('it fails with the last reason once the window to attach again is over, when impd faults by closing every attach', async () => {
-  const peer = buildStubExecPeer((link, message) => {
-    if (message.type === 'start') {
-      link.send({ type: 'started', pid: 7, session: 'main', created: true });
-      link.send({ type: 'detached', reason: 'lost' });
-    }
+test('it fails with the last reason once the window to attach again is over, while impd stays down under a session', async () => {
+  const ctx = await setupTest();
 
-    // the imp does not come back
-    if (message.type === 'attach') {
-      link.close(1011, 'no agent');
+  // an agent whose session runs on until impd goes away
+  const agent = await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, { pid: 7, session: 'main', created: true }),
+      );
     }
   });
 
@@ -1415,7 +1423,7 @@ test('it fails with the last reason once the window to attach again is over, whe
   const clock = { nowMs: Date.UTC(2026, 0, 1) };
   const errors: string[] = [];
 
-  const code = await runExec(
+  const exiting = runExec(
     {
       host: null,
       name: 'box',
@@ -1424,13 +1432,11 @@ test('it fails with the last reason once the window to attach again is over, whe
       session: { name: 'main', attachOnly: false, detachKey: 0x1d },
     },
     {
-      env: { IMP_URL: 'http://impd.test', IMP_TOKEN: 'root-token' },
+      ...ctx.io,
       stdin: terminal.stdin,
-      writeOutput: () => {},
       printError: (line) => {
         errors.push(line);
       },
-      connect: peer.connect,
       isAttachedElsewhere: () => Promise.resolve(false),
       reattachWindowMs: 1500,
       now: () => clock.nowMs,
@@ -1442,9 +1448,18 @@ test('it fails with the last reason once the window to attach again is over, whe
     },
   );
 
+  // the session started: the terminal went raw
+  await waitFor(() => {
+    expect(terminal.modes).toStrictEqual([true]);
+  });
+
+  await ctx.impd.api.app.stop(true);
+
+  const code = await exiting;
+
   expect(code).toBe(255);
-  expect(peer.received.map((message) => message.type)).toStrictEqual(['start', 'attach', 'attach']);
-  expect(errors).toStrictEqual(['imp: exec connection closed (no agent)']);
+  expect(agent.received).toHaveLength(1);
+  expect(errors).toStrictEqual([`imp: cannot reach impd at ${ctx.url} (the connection failed)`]);
 });
 
 test('it sends the detach key as input to a plain exec and never attaches it again', async () => {

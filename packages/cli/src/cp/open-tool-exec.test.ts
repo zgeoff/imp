@@ -6,6 +6,7 @@ import { EXEC_MAX_STDIN_FRAME_BYTES, EXEC_STDIN_WINDOW_BYTES } from '@imp/api';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
+  encodeFrame,
   encodeJsonFrame,
 } from '@imp/daemon/src/agent-client/frame-codec';
 import { loadConfig } from '@imp/daemon/src/config';
@@ -265,6 +266,8 @@ test('it rejects with impd’s code and message when impd refuses the exec', asy
   );
 });
 
+// on the exec peer: a real impd withholds stdin acks only while the agent's
+// socket is backed up, and how many bytes that takes is not fixed
 test('it holds stdin at the window when impd withholds its acks', async () => {
   const peer = buildStubExecPeer((link, message) => {
     if (message.type === 'start') {
@@ -302,50 +305,8 @@ test('it holds stdin at the window when impd withholds its acks', async () => {
   ).toSatisfyAll((bytes: number) => bytes <= EXEC_MAX_STDIN_FRAME_BYTES);
 });
 
-test('it sends the rest of stdin once impd acks the window', async () => {
-  const link = { ack: (bytes: number): void => void bytes };
-
-  const peer = buildStubExecPeer((peerLink, message) => {
-    if (message.type === 'start') {
-      peerLink.send({ type: 'started', pid: 9 });
-
-      link.ack = (bytes) => {
-        peerLink.send({ type: 'stdin_ack', bytes });
-      };
-    }
-  });
-
-  const exec = await openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
-    name: 'box',
-    tool: 'tar',
-    args: ['extract', '/srv/proj'],
-    onStdout: () => Promise.resolve(),
-    onStderr: () => {},
-    connect: peer.connect,
-  });
-
-  onTestFinished(exec.close);
-
-  const writing = exec.writeStdin(
-    new Uint8Array(EXEC_STDIN_WINDOW_BYTES + 2 * EXEC_MAX_STDIN_FRAME_BYTES),
-  );
-
-  await waitFor(() => {
-    expect(
-      peer.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
-    ).toBe(EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES);
-  });
-
-  link.ack(EXEC_STDIN_WINDOW_BYTES);
-
-  await writing;
-
-  expect(
-    peer.received.reduce((total, message) => total + ('bytes' in message ? message.bytes : 0), 0),
-  ).toBe(EXEC_STDIN_WINDOW_BYTES + 2 * EXEC_MAX_STDIN_FRAME_BYTES);
-});
-
+// on the exec peer: the frames impd forwards in one write, and so the acks
+// in flight, depend on the socket's timing
 test('it holds its stdout ack while the caller is still writing the output', async () => {
   const peer = buildStubExecPeer((link, message) => {
     if (message.type === 'start') {
@@ -386,46 +347,51 @@ test('it holds its stdout ack while the caller is still writing the output', asy
   ]);
 });
 
-test('it acks stdout to impd once the caller wrote it', async () => {
-  const peer = buildStubExecPeer((link, message) => {
-    if (message.type === 'start') {
-      link.send({ type: 'started', pid: 9 });
-      link.sendFrame(1, 'x'.repeat(300));
-      link.sendFrame(1, 'y'.repeat(200));
+test('it acks a tool’s stdout to impd so a download past the window completes', async () => {
+  const ctx = await setupTest();
+
+  const identity = readVmIdentity(ctx.paths);
+
+  invariant(identity);
+
+  // an agent with imp cp
+  writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.18.0' });
+
+  // three 512 KiB frames: past impd's 1 MiB window, so the exit reaches the
+  // client only after its acks reached impd
+  const frame = new Uint8Array(512 * 1024).fill(7);
+
+  await startStubAgent(ctx.paths.vsockSocket, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, frame));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, frame));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, frame));
+      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
     }
   });
 
-  const seen: number[] = [];
-  const writing = Promise.withResolvers<void>();
+  const chunks: Uint8Array[] = [];
 
   const exec = await openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    config: ctx.config,
     name: 'box',
     tool: 'tar',
-    args: ['create', 'x'],
-    onStdout: async (data) => {
-      seen.push(data.byteLength);
+    args: ['create', '/srv/proj'],
+    onStdout: (data) => {
+      chunks.push(new Uint8Array(data));
 
-      await writing.promise;
+      return Promise.resolve();
     },
     onStderr: () => {},
-    connect: peer.connect,
   });
 
-  onTestFinished(exec.close);
+  exec.endStdin();
 
-  await waitFor(() => {
-    expect(seen).toHaveLength(2);
-  });
+  const code = await exec.waitExit();
 
-  writing.resolve();
-
-  await waitFor(() => {
-    expect(peer.received.slice(1)).toStrictEqual([
-      { type: 'stdout_ack', bytes: 300 },
-      { type: 'stdout_ack', bytes: 200 },
-    ]);
-  });
+  expect(code).toBe(0);
+  expect(Buffer.concat(chunks)).toStrictEqual(Buffer.alloc(3 * 512 * 1024, 7));
 });
 
 test('it rejects and closes the socket when impd faults with a message the protocol does not know', async () => {
@@ -469,30 +435,37 @@ test('it rejects and names impd when impd faults by closing the connection unans
   );
 });
 
-test('it rejects with impd’s code and message when impd ends the exec with an error after the start', async () => {
-  const peer = buildStubExecPeer((link, message) => {
-    if (message.type === 'start') {
-      link.send({ type: 'started', pid: 9 });
-    }
+test('it rejects with impd’s message when the imp’s agent drops the exec after the start', async () => {
+  const ctx = await setupTest();
 
-    if (message.type === 'stdin_eof') {
-      link.send({ type: 'error', code: 'AGENT_GONE', message: 'the agent went away' });
+  const identity = readVmIdentity(ctx.paths);
+
+  invariant(identity);
+
+  // an agent with imp cp
+  writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.18.0' });
+
+  await startStubAgent(ctx.paths.vsockSocket, (socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
+      socket.end();
     }
   });
 
   const exec = await openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    config: ctx.config,
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
     onStdout: () => Promise.resolve(),
     onStderr: () => {},
-    connect: peer.connect,
   });
-
-  onTestFinished(exec.close);
 
   exec.endStdin();
 
-  expect(exec.waitExit()).rejects.toThrowWithMessage(Error, 'AGENT_GONE: the agent went away');
+  expect(exec.waitExit()).rejects.toThrowWithMessage(
+    Error,
+    'error: the agent connection closed before the process exited',
+  );
 });

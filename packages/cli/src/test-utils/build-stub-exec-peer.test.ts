@@ -99,3 +99,15 @@ test('it resolves closed once the client closes its socket', async () => {
 
   await expect(peer.closed).toResolve();
 });
+
+test('it keeps handing the peer what the client sends after the socket closed', () => {
+  const onMessage = mock<StubExecHandler>();
+  const peer = buildStubExecPeer(onMessage);
+  const socket = peer.connect('ws://impd.test/exec');
+
+  socket.close();
+  socket.send(JSON.stringify({ type: 'stdin_eof' }));
+
+  expect(peer.received).toStrictEqual([{ type: 'stdin_eof' }]);
+  expect(onMessage).toHaveBeenCalledExactlyOnceWith(expect.any(Object), { type: 'stdin_eof' });
+});

@@ -13,9 +13,10 @@ interface StubPrefixProxyOptions {
   readonly prefix: string;
 }
 
-// close codes a peer may send; the rest only report what happened
+// close codes a peer may send in a close frame; 1004, 1005, 1006 and 1015
+// only report what happened (RFC 6455 7.4.1)
 function isSendableCloseCode(code: number): boolean {
-  return code === 1000 || (code >= 3000 && code <= 4999) || (code >= 1001 && code <= 1014);
+  return (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || code >= 3000;
 }
 
 // A loopback reverse proxy that serves `target` under `prefix`, as one in
@@ -91,9 +92,14 @@ export function startStubPrefixProxy(
           ws.send(data);
         });
 
+        // a close frame passes on as it came; an upstream that dropped its
+        // connection (1006) gets the client's connection dropped, as a real
+        // proxy does
         upstream.addEventListener('close', (event) => {
           if (isSendableCloseCode(event.code)) {
             ws.close(event.code, event.reason);
+          } else if (event.code === 1006) {
+            ws.terminate();
           } else {
             ws.close();
           }

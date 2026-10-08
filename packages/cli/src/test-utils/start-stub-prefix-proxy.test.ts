@@ -171,6 +171,46 @@ test('it closes the client’s WebSocket with the target’s code and reason', a
   expect(event.reason).toBe('agent gone');
 });
 
+test('it drops the client’s connection when the target’s connection drops', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const target = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request, server) =>
+      server.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 }),
+    websocket: {
+      open: (ws) => {
+        ws.terminate();
+      },
+      message: () => {},
+    },
+  });
+
+  stack.defer(async () => {
+    await target.stop(true);
+  });
+
+  const proxy = startStubPrefixProxy(stack, {
+    target: `http://127.0.0.1:${String(target.port)}`,
+    prefix: '/imp',
+  });
+
+  const ws = new WebSocket(`${proxy.url.replace('http', 'ws')}/exec`);
+
+  const closing = Promise.withResolvers<CloseEvent>();
+
+  ws.addEventListener('close', (event) => {
+    closing.resolve(event);
+  });
+
+  const event = await closing.promise;
+
+  expect(event.code).toBe(1006);
+});
+
 test('it stops listening once the stack is released', async () => {
   const stack = new AsyncDisposableStack();
 
