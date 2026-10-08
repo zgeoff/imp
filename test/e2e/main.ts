@@ -8,12 +8,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { Subprocess } from 'bun';
 import * as z from 'zod';
 import { findBootFallbacks } from './lib/boot-fallbacks';
 import { config } from './lib/config';
 import { createMissingImages } from './lib/fixtures';
-import { listImageNames, readInfo, runImp } from './lib/imp-cli';
+import { createInstanceClient, listImageNames, readInfo, runImp } from './lib/imp-cli';
 import { removeImpsWithPrefix } from './lib/imps';
 import {
   LIB_SCRIPT,
@@ -34,17 +33,20 @@ import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
 import { checkPrivileges } from './lib/privileges';
+import { resetBaseline } from './lib/reset-baseline';
+import { runSuite } from './lib/run-suite';
 import type { FixtureImage } from './lib/suites';
-import { SUITES, buildSuiteArgv } from './lib/suites';
+import { FAST_GROUPS, SUITES, buildSuiteArgv } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
-  scripts/test-e2e.sh [--only SUITES] [--clean | --reuse] [--keep]
+  scripts/test-e2e.sh [--only SUITES | --group N] [--clean | --reuse] [--keep]
 
   --only    comma-separated suites or sets (default: acceptance)
             suites: ${SUITES.map((suite) => suite.name).join(' ')}
             sets:   acceptance (all, tailscale required), fast (the CI subset)
+  --group   one of the fast set's ${String(FAST_GROUPS.length)} CI groups, 1 to ${String(FAST_GROUPS.length)}
   --clean   full reset first: tailnet logout, remove the dev container, wipe
             its data dir (XFS file, db, images, imps, checkpoints), and the
             moves suites' second host and its data dir
@@ -75,8 +77,9 @@ interface Section {
 const MetricSchema = z.record(z.string(), z.unknown());
 let interrupted = false;
 
-// the suite process running now, so a signal can stop it
-let running: Subprocess | null = null;
+// the pid of the suite process running now, which leads its group, so a
+// signal can stop it
+let running: number | null = null;
 
 // as scripts/dev.sh resolves it: a relative IMP_DEV_DATA is relative to the
 // caller's directory
@@ -229,8 +232,8 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     );
   }
 
-  // leftovers of an aborted --keep run would skew RAM numbers
-  await removeImpsWithPrefix(PREFIX);
+  // leftovers of an aborted or --keep run would skew RAM numbers
+  await resetSuites(SUITES.map((suite) => suite.prefix));
 
   if (args.suites.includes('scale')) {
     checkScaleHeadroom();
@@ -259,47 +262,74 @@ function stopRun(signal: NodeJS.Signals): void {
   interrupted = true;
 
   if (running !== null) {
-    process.kill(-running.pid, signal);
+    process.kill(-running, signal);
   }
 }
 
-async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
+// Every imp, network, secret, token, OAuth client and image the suites named
+// with these prefixes goes; the fixture images stay.
+async function resetSuites(prefixes: readonly string[]): Promise<void> {
+  await resetBaseline({
+    client: await createInstanceClient(),
+    prefixes,
+    dataDir: resolveDataPath(),
+  });
+}
+
+// A suite that failed may have left impd rebooted onto its own settings, or
+// down: the next suite gets the run's settings again before the reset. A
+// stopped run runs no next suite, so it only resets.
+async function resetAfter(exitCode: number, prefixes: readonly string[]): Promise<void> {
+  if (exitCode !== 0 && !interrupted) {
+    await runDevScript('reboot');
+  }
+
+  await resetSuites(prefixes);
+}
+
+// scale leaves its imps for restart to re-adopt; restart's reset takes them
+let carried: readonly string[] = [];
+
+async function runOneSuite(name: string, args: HarnessArgs): Promise<boolean> {
   const started = new Date();
 
-  const proc = Bun.spawn([...buildSuiteArgv(process.execPath, name)], {
+  const suite = SUITES.find((candidate) => candidate.name === name);
+  const prefix = suite?.prefix ?? `${PREFIX}${name}-`;
+  const isKeptForRestart = name === 'scale' && args.suites.includes('restart');
+  const prefixes = [prefix, ...carried];
+
+  carried = isKeptForRestart ? [prefix] : [];
+
+  const outcome = await runSuite({
+    argv: buildSuiteArgv(process.execPath, name),
     cwd: REPO_ROOT,
-    detached: true,
-    stdout: 'inherit',
-    stderr: 'inherit',
     env: {
       ...process.env,
-      E2E_SUITES: args.suites.join(','),
       E2E_KEEP: args.keep ? '1' : '0',
       E2E_ACCEPTANCE: args.acceptance ? '1' : '0',
       E2E_METRICS_FILE: METRICS_FILE,
     },
+    onStart: (pid) => {
+      running = pid;
+    },
+    reset: args.keep || isKeptForRestart ? null : (exitCode) => resetAfter(exitCode, prefixes),
   });
-
-  running = proc;
-
-  const exitCode = await proc.exited;
 
   running = null;
 
-  if (exitCode !== 0 && !interrupted) {
+  if (outcome.exitCode !== 0 && !interrupted) {
     const tail = await readImpdLogTail(40);
 
     console.log(`== impd log tail\n${tail}`);
   }
 
-  const isClean = await checkNoBootFallbacks(name, started);
-
-  // --bail skips the suite's afterAll; scale's imps stay for restart
-  if (exitCode !== 0 && !args.keep && !(name === 'scale' && args.suites.includes('restart'))) {
-    await removeSuiteImps(name);
+  if (outcome.resetError !== null) {
+    console.error(`    the ${name} suite left the baseline dirty: ${outcome.resetError}`);
   }
 
-  return exitCode === 0 && isClean;
+  const isClean = await checkNoBootFallbacks(name, started);
+
+  return outcome.exitCode === 0 && outcome.resetError === null && isClean;
 }
 
 // chaos kills firecracker on purpose, so a restore there may fall back
@@ -330,18 +360,6 @@ async function checkNoBootFallbacks(name: string, since: Readonly<Date>): Promis
   console.log(`== ${name}: a boot template ${verdict}\n${fallbacks.join('\n')}`);
 
   return isAllowed;
-}
-
-async function removeSuiteImps(name: string): Promise<void> {
-  const suite = SUITES.find((candidate) => candidate.name === name);
-
-  try {
-    await removeImpsWithPrefix(suite?.prefix ?? `${PREFIX}${name}-`);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-
-    console.error(`    could not remove the ${name} suite's imps: ${reason}`);
-  }
 }
 
 async function runTimed(
@@ -508,7 +526,7 @@ async function main(): Promise<number> {
 
       const index = SUITES.findIndex((suite) => suite.name === name) + 1;
 
-      const section = await runTimed(index, name, () => runSuite(name, args));
+      const section = await runTimed(index, name, () => runOneSuite(name, args));
 
       sections.push(section);
     }

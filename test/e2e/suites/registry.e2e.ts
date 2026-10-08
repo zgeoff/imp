@@ -3,6 +3,8 @@ import { lookup } from 'node:dns/promises';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
+import { createRegistryTrust } from '../lib/create-registry-trust';
+import type { RegistryTrust } from '../lib/create-registry-trust';
 import { runImp, tryImp } from '../lib/imp-cli';
 import { REPO_ROOT, runChecked, runCommand, runDevScript } from '../lib/instance';
 import { writeRegistryIndex } from '../lib/registry-index';
@@ -56,9 +58,8 @@ const certs = join(buildDir, 'certs');
 // the registry's host and port, once it runs
 let registry = '';
 
-function buildCertsDir(): string {
-  return join('/etc/docker/certs.d', registry);
-}
+// the engine's trust of the registry's certificate, once made
+let trust: RegistryTrust | null = null;
 
 beforeAll(async () => {
   if (!REGISTRY_READY) {
@@ -131,15 +132,7 @@ beforeAll(async () => {
   registry = `${REGISTRY_NAME}:${port}`;
 
   // the engine reads it on each request: no restart
-  await runChecked(['sudo', '--non-interactive', 'mkdir', '--parents', buildCertsDir()]);
-
-  await runChecked([
-    'sudo',
-    '--non-interactive',
-    'cp',
-    join(certs, 'cert.pem'),
-    join(buildCertsDir(), 'ca.crt'),
-  ]);
+  trust = await createRegistryTrust({ registry, certPath: join(certs, 'cert.pem') });
 }, 600_000);
 
 afterAll(async () => {
@@ -147,9 +140,7 @@ afterAll(async () => {
 
   await runCommand(['docker', 'rm', '--force', '--volumes', CONTAINER]);
 
-  if (registry !== '') {
-    await runCommand(['sudo', '--non-interactive', 'rm', '-rf', buildCertsDir()]);
-  }
+  await trust?.remove();
 
   for (const name of [mutable, multi, copied]) {
     await tryImp(['image', 'rm', name]);

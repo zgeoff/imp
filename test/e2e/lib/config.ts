@@ -36,9 +36,6 @@ export const config = {
 
   keep: process.env['E2E_KEEP'] === '1',
 
-  // the suites in this run, so scale can leave its imps for restart
-  runSuites: (process.env['E2E_SUITES'] ?? '').split(',').filter((suite) => suite !== ''),
-
   // the full definition of done: tailscale fails instead of skipping
   acceptance: process.env['E2E_ACCEPTANCE'] === '1',
 

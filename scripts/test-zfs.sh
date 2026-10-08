@@ -9,7 +9,15 @@
 # CI job runs it on a GitHub runner; on a host, scripts/zfs-host-test.sh does.
 #
 # Env: IMP_ZFS_TEST_DIR (default a new temp dir) holds the pool file and
-#      the mount point. IMP_ZFS_TEST_GIB (default 4) sizes the pool file.
+#      the mount point; it may exist, but not its pool.img or mnt.
+#      IMP_ZFS_TEST_GIB (default 4) sizes the pool file.
+#      IMP_ZFS_MODULE_VERSION_FILE (default /sys/module/zfs/version) is
+#      where the loaded module's version is read, for the script's tests.
+#
+# The run owns only what it creates: it refuses a pool name that is taken,
+# or a pool.img or mnt already in the work dir, before it touches anything,
+# and its cleanup releases only what it made, so a failed step never takes
+# another run's pool, file or mount.
 set -euo pipefail
 
 fail() {
@@ -17,46 +25,83 @@ fail() {
   exit 1
 }
 
+module_version=${IMP_ZFS_MODULE_VERSION_FILE:-/sys/module/zfs/version}
+
 [ "$(id -u)" = 0 ] || fail "run as root: sudo env \"PATH=\$PATH\" $0"
-[ -r /sys/module/zfs/version ] || fail "the zfs kernel module is not loaded (modprobe zfs)"
+[ -r "$module_version" ] || fail "the zfs kernel module is not loaded (modprobe zfs)"
 command -v zpool >/dev/null || fail "zpool is missing; install zfsutils-linux"
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-made_work=
-if [ -n "${IMP_ZFS_TEST_DIR:-}" ]; then
-  work=$IMP_ZFS_TEST_DIR
-else
-  work=$(mktemp -d)
-  made_work=1
-fi
 gib=${IMP_ZFS_TEST_GIB:-4}
 pool=imptest$$
-mnt=$work/mnt
+work=${IMP_ZFS_TEST_DIR:-}
 
-echo "test-zfs: zfs $(cat /sys/module/zfs/version) (module), $(zfs version | head -1) (userland)"
+# a generated name is not ownership: refuse one that is already in use, and
+# a work dir that already holds a pool file or a mount point
+if zpool list "$pool" >/dev/null 2>&1; then
+  fail "a pool named $pool already exists; refusing to touch it"
+fi
+if [ -n "$work" ]; then
+  if [ -e "$work/pool.img" ] || [ -L "$work/pool.img" ]; then
+    fail "$work/pool.img already exists; refusing to touch it"
+  fi
+  if [ -e "$work/mnt" ] || [ -L "$work/mnt" ]; then
+    fail "$work/mnt already exists; refusing to touch it"
+  fi
+fi
 
-# Everything under $mnt is unmounted before the pool goes: the tests mount
-# datasets there, and a test that fails can leave them. A pool that will not
-# go keeps its file, so it can still be imported and destroyed by hand.
+echo "test-zfs: zfs $(cat "$module_version") (module), $(zfs version | head -1) (userland)"
+
+# what this run made, so cleanup releases that and nothing else
+made_work=
+made_mnt=
+made_img=
+made_pool=
+
+# In reverse order. Everything under $mnt is unmounted before the pool goes:
+# the tests mount datasets there, and a test that fails can leave them. A
+# pool that will not go keeps its file, so it can still be imported and
+# destroyed by hand.
 cleanup() {
-  umount -R "$mnt" 2>/dev/null || true
-  if zpool list "$pool" >/dev/null 2>&1 && ! zpool destroy -f "$pool"; then
+  if [ -n "$made_mnt" ]; then
+    umount -R "$mnt" 2>/dev/null || true
+  fi
+  if [ -n "$made_pool" ] && ! zpool destroy -f "$pool"; then
     echo "test-zfs: could not destroy $pool; its file stays at $work/pool.img" >&2
     return
   fi
-  rm -f "$work/pool.img"
-  rmdir "$mnt" 2>/dev/null || true
+  if [ -n "$made_img" ]; then
+    rm -f "$work/pool.img"
+  fi
+  if [ -n "$made_mnt" ]; then
+    rmdir "$mnt" 2>/dev/null || true
+  fi
   if [ -n "$made_work" ]; then
     rmdir "$work" 2>/dev/null || true
   fi
 }
+
+if [ -z "$work" ]; then
+  work=$(mktemp -d)
+  made_work=1
+elif [ ! -d "$work" ]; then
+  mkdir "$work"
+  made_work=1
+fi
+mnt=$work/mnt
 trap cleanup EXIT
 
-mkdir -p "$mnt"
+# mkdir without -p and a noclobber create fail on an existing path, so a
+# path that appeared since the checks above is refused, never taken over
+mkdir "$mnt"
+made_mnt=1
+(set -o noclobber && : >"$work/pool.img")
+made_img=1
 truncate -s "${gib}G" "$work/pool.img"
 # the properties deploy/bootstrap.sh gives the imp root dataset
 zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$work/pool.img"
+made_pool=1
 zfs create -o mountpoint=legacy "$pool/imp"
 mount -t zfs "$pool/imp" "$mnt"
 

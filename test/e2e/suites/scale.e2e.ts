@@ -21,7 +21,7 @@ import {
   runShellInImp,
   tryImp,
 } from '../lib/imp-cli';
-import { registerImp, removeImps, waitForExec } from '../lib/imps';
+import { removeImps, waitForExec } from '../lib/imps';
 import { runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { startSleepWatch } from '../lib/sleep-events';
@@ -30,9 +30,6 @@ import { writeMetric } from '../lib/write-metric';
 
 const prefix = setupSuite('scale');
 const TINY = resolveImageName('e2e-tiny');
-
-// restart re-adopts a full house when it runs after this suite
-const leaveForRestart = config.runSuites.includes('restart');
 
 // long enough that only the governor sleeps imps during the suite
 const SCALE_IDLE_TIMEOUT_S = 600;
@@ -186,10 +183,6 @@ function buildName(index: number): string {
 
 // creates one scale imp and fills its tmpfs; returns the `imp new` time
 async function createFilledImp(name: string): Promise<number> {
-  if (!leaveForRestart) {
-    registerImp(name);
-  }
-
   const started = Date.now();
 
   await runImp('new', name, '--image', TINY, '--memory', String(config.scaleMemoryMib));
@@ -241,8 +234,6 @@ async function assertBootReserveRefused(): Promise<void> {
     const tight = `${prefix}tight`;
 
     expect(memory).toBeLessThanOrEqual(config.ramBudgetMib);
-
-    registerImp(tight);
 
     const rejected = await tryImp(['new', tight, '--image', TINY, '--memory', String(memory)]);
 
@@ -386,8 +377,6 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
     // an imp that cannot fit even after sleeping everything else
     const huge = `${prefix}huge`;
     const memory = String(config.ramBudgetMib + 1024);
-
-    registerImp(huge);
 
     const rejected = await tryImp(['new', huge, '--image', TINY, '--memory', memory]);
     const leftBehind = await findImp(huge);

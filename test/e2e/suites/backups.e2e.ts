@@ -16,7 +16,6 @@ import {
   createImp,
   holdImp,
   readGuestFile,
-  registerImp,
   removeImpsWithPrefix,
   waitForExec,
   writeGuestFile,
@@ -238,8 +237,6 @@ test('the next run of unchanged disks adds next to nothing', async () => {
 });
 
 test('a restore brings the imp back stopped, then its checkpoint restores too', async () => {
-  registerImp(copy);
-
   const started = Date.now();
 
   await runImp('backup', 'restore', source, '--as', copy);
@@ -313,8 +310,6 @@ test('a point that survived forget and prune restores; a forgotten one is gone',
   // every run so far fell in one hour: forget keeps only the newest
   expect(status.points.at(-1)?.imps).toContain(idle);
 
-  registerImp(`${prefix}idle2`);
-
   await runImp('backup', 'restore', idle, '--as', `${prefix}idle2`);
 
   const survivorState = await readState(`${prefix}idle2`);
@@ -368,8 +363,6 @@ test('a stale lock in the repository does not block a restore', async () => {
 
   expect(lock.stdout).toContain('"exclusive": true');
 
-  registerImp(`${prefix}idle3`);
-
   await runImp('backup', 'restore', idle, '--as', `${prefix}idle3`);
 
   const unlockedState = await readState(`${prefix}idle3`);
@@ -422,10 +415,6 @@ test('restore --all brings back every imp of a point, and one boots with its dat
   const others = await listImps();
 
   const merge = others.length === 0 ? [] : ['--merge'];
-
-  for (const name of point?.imps ?? []) {
-    registerImp(name);
-  }
 
   const result = await tryImp([
     'backup',

@@ -1,8 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { REPO_ROOT } from './instance';
-import type { HostConfig, ProxyConfig } from './privileges';
 import {
   findPrivilegeDrift,
   findProxyDrift,
@@ -11,169 +9,493 @@ import {
   readExpectedProxy,
 } from './privileges';
 
-const seccompJson = readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.seccomp.json'), 'utf8');
+test('#findPrivilegeDrift passes a container run with the deploy privileges', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBeNull();
+});
 
-const expected = readExpectedPrivileges(
-  readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.args.json'), 'utf8'),
-  seccompJson,
-);
+test('#findPrivilegeDrift passes a probed device and the dev instance’s loop device', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [
+          { PathOnHost: '/dev/kvm' },
+          { PathOnHost: '/dev/net/tun' },
+          { PathOnHost: '/dev/zfs' },
+          { PathOnHost: '/dev/loop-control' },
+        ],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBeNull();
+});
 
-// what docker inspect shows for a container run with the deploy's privileges
-const deployed: HostConfig = {
-  Privileged: false,
-  CapAdd: [...expected.caps],
-  CapDrop: ['ALL'],
+test('#findPrivilegeDrift flags a container run --privileged', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: true,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('it runs --privileged');
+});
 
-  // inline and compact, as docker inspect shows it
-  SecurityOpt: [...expected.securityOpts, `seccomp=${JSON.stringify(JSON.parse(seccompJson))}`],
-  Devices: expected.devices.map((path) => ({ PathOnHost: path })),
-};
+test('#findPrivilegeDrift flags a container that keeps the default capability set', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: null,
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('it keeps the default capabilities (no --cap-drop ALL)');
+});
 
-describe('findPrivilegeDrift', () => {
-  test('passes the deploy privileges, with a probed and a dev device', () => {
-    expect(findPrivilegeDrift(deployed, expected)).toBeNull();
+test('#findPrivilegeDrift flags a missing capability', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('it adds CAP_SYS_ADMIN, not CAP_KILL CAP_SYS_ADMIN');
+});
 
-    expect(
-      findPrivilegeDrift(
-        {
-          ...deployed,
-          Devices: [
-            ...(deployed.Devices ?? []),
-            { PathOnHost: '/dev/zfs' },
-            { PathOnHost: '/dev/loop-control' },
-          ],
-        },
-        expected,
-      ),
-    ).toBeNull();
+test('#findPrivilegeDrift flags AppArmor confinement', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('its security options are , not apparmor=unconfined');
+});
+
+test('#findPrivilegeDrift flags another seccomp profile', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('its seccomp profile is not deploy/imp-host.seccomp.json');
+});
+
+test('#findPrivilegeDrift flags a container with no seccomp profile', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined'],
+        Devices: [{ PathOnHost: '/dev/kvm' }, { PathOnHost: '/dev/net/tun' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('it has 0 seccomp options, not 1');
+});
+
+test('#findPrivilegeDrift flags a missing device', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [{ PathOnHost: '/dev/kvm' }],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('its devices lack /dev/net/tun and add none');
+});
+
+test('#findPrivilegeDrift flags a host device the deploy does not give', () => {
+  expect(
+    findPrivilegeDrift(
+      {
+        Privileged: false,
+        CapAdd: ['CAP_SYS_ADMIN', 'CAP_KILL'],
+        CapDrop: ['ALL'],
+        SecurityOpt: ['apparmor=unconfined', 'seccomp={"defaultAction":"SCMP_ACT_ERRNO"}'],
+        Devices: [
+          { PathOnHost: '/dev/kvm' },
+          { PathOnHost: '/dev/net/tun' },
+          { PathOnHost: '/dev/sda' },
+        ],
+      },
+      {
+        caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+        securityOpts: ['apparmor=unconfined'],
+        seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+        devices: ['/dev/kvm', '/dev/net/tun'],
+        optionalDevices: ['/dev/zfs', '/dev/loop-control'],
+      },
+    ),
+  ).toBe('its devices lack none and add /dev/sda');
+});
+
+test('#readExpectedPrivileges reads the capabilities, options and devices of the deploy arguments', () => {
+  const argsJson = JSON.stringify({
+    privileges: [
+      ['--init', '--cap-drop', 'ALL'],
+      ['--cap-add', 'SYS_ADMIN', '--cap-add', 'KILL'],
+      ['--security-opt', 'apparmor=unconfined'],
+      ['--security-opt', 'seccomp=/etc/imp/imp-host.seccomp.json'],
+      ['--device', '/dev/net/tun', '--device', '/dev/kvm'],
+    ],
+    probed: [{ path: '/dev/zfs', args: ['--device', '/dev/zfs'] }],
   });
 
-  test('flags --privileged', () => {
-    expect(findPrivilegeDrift({ ...deployed, Privileged: true }, expected)).toContain(
-      '--privileged',
-    );
-  });
-
-  test('flags the default capability set', () => {
-    expect(findPrivilegeDrift({ ...deployed, CapDrop: null }, expected)).toContain(
-      '--cap-drop ALL',
-    );
-  });
-
-  test('flags a missing capability', () => {
-    expect(
-      findPrivilegeDrift(
-        { ...deployed, CapAdd: expected.caps.filter((cap) => cap !== 'CAP_KILL') },
-        expected,
-      ),
-    ).toContain('not');
-  });
-
-  test('flags AppArmor confinement', () => {
-    expect(
-      findPrivilegeDrift(
-        {
-          ...deployed,
-          SecurityOpt: (deployed.SecurityOpt ?? []).filter((opt) => !opt.startsWith('apparmor')),
-        },
-        expected,
-      ),
-    ).toContain('security options');
-  });
-
-  test('flags another seccomp profile, or none', () => {
-    const others = expected.securityOpts;
-
-    expect(
-      findPrivilegeDrift(
-        { ...deployed, SecurityOpt: [...others, 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}'] },
-        expected,
-      ),
-    ).toContain('seccomp profile');
-
-    expect(findPrivilegeDrift({ ...deployed, SecurityOpt: [...others] }, expected)).toContain(
-      '0 seccomp',
-    );
-  });
-
-  test('flags a missing device and a host device it should not have', () => {
-    expect(
-      findPrivilegeDrift({ ...deployed, Devices: [{ PathOnHost: '/dev/kvm' }] }, expected),
-    ).toContain('lack /dev/net/tun');
-
-    expect(
-      findPrivilegeDrift(
-        { ...deployed, Devices: [...(deployed.Devices ?? []), { PathOnHost: '/dev/sda' }] },
-        expected,
-      ),
-    ).toContain('add /dev/sda');
+  expect(readExpectedPrivileges(argsJson, '{"defaultAction":"SCMP_ACT_ERRNO"}')).toStrictEqual({
+    caps: ['CAP_KILL', 'CAP_SYS_ADMIN'],
+    securityOpts: ['apparmor=unconfined'],
+    seccomp: { defaultAction: 'SCMP_ACT_ERRNO' },
+    devices: ['/dev/kvm', '/dev/net/tun'],
+    optionalDevices: ['/dev/zfs', '/dev/loop-control'],
   });
 });
 
-test('readExpectedPrivileges reads the deploy privileges', () => {
-  expect(expected.caps).toContain('CAP_SYS_ADMIN');
-  expect(expected.caps).not.toContain('CAP_SYS_MODULE');
-  expect(expected.securityOpts).toEqual(['apparmor=unconfined']);
-  expect(expected.devices).toEqual(['/dev/kvm', '/dev/net/tun']);
-  expect(expected.optionalDevices).toContain('/dev/zfs');
-});
+test('#readExpectedPrivileges reads deploy/imp-host.args.json without the module-loading capability', () => {
+  const deploy = join(import.meta.dir, '..', '..', '..', 'deploy');
 
-describe('findSocketDrift', () => {
-  test('passes the proxy socket directory, and flags the host socket', () => {
-    expect(
-      findSocketDrift([{ Source: '/run/imp-docker', Destination: '/run/imp-docker' }]),
-    ).toBeNull();
-
-    expect(
-      findSocketDrift([{ Source: '/var/run/docker.sock', Destination: '/var/run/docker.sock' }]),
-    ).toContain('mounts /var/run/docker.sock');
-
-    for (const dir of ['/var/run', '/run', '/var', '/']) {
-      expect(findSocketDrift([{ Source: dir, Destination: '/host' }])).toContain(`mounts ${dir}`);
-    }
-  });
-});
-
-describe('findProxyDrift', () => {
-  // what docker inspect shows for the proxy as deploy/imp-host.args.json runs it
-  const proxy: ProxyConfig = {
-    user: '65534:65534',
-    host: {
-      Privileged: false,
-      CapAdd: null,
-      CapDrop: ['ALL'],
-      SecurityOpt: ['no-new-privileges'],
-      Devices: [],
-      ReadonlyRootfs: true,
-      NetworkMode: 'none',
-    },
-  };
-
-  const deployProxy = readExpectedProxy(
-    readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.args.json'), 'utf8'),
+  const expected = readExpectedPrivileges(
+    readFileSync(join(deploy, 'imp-host.args.json'), 'utf8'),
+    readFileSync(join(deploy, 'imp-host.seccomp.json'), 'utf8'),
   );
 
-  test('passes the proxy as deploy/imp-host.args.json runs it', () => {
-    expect(findProxyDrift(proxy, deployProxy)).toBeNull();
+  expect(expected.caps).toIncludeAllMembers(['CAP_SYS_ADMIN', 'CAP_NET_ADMIN', 'CAP_KILL']);
+  expect(expected.caps).not.toContain('CAP_SYS_MODULE');
+  expect(expected.securityOpts).toStrictEqual(['apparmor=unconfined']);
+  expect(expected.devices).toStrictEqual(['/dev/kvm', '/dev/net/tun']);
+  expect(expected.optionalDevices).toStrictEqual(['/dev/zfs', '/dev/loop-control']);
+});
+
+test('#findSocketDrift passes the proxy socket directory', () => {
+  expect(
+    findSocketDrift([{ Source: '/run/imp-docker', Destination: '/run/imp-docker' }]),
+  ).toBeNull();
+});
+
+test('#findSocketDrift flags a mount of the host Docker socket', () => {
+  expect(
+    findSocketDrift([{ Source: '/var/run/docker.sock', Destination: '/var/run/docker.sock' }]),
+  ).toBe('it mounts /var/run/docker.sock at /var/run/docker.sock');
+});
+
+test.each(['/var/run', '/run', '/var', '/'])(
+  '#findSocketDrift flags a mount of %s, which holds the host Docker socket',
+  (dir) => {
+    expect(findSocketDrift([{ Source: dir, Destination: '/host' }])).toBe(
+      `it mounts ${dir} at /host`,
+    );
+  },
+);
+
+test('#findProxyDrift passes the proxy as deploy/imp-host.args.json runs it', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '65534:65534',
+        host: {
+          Privileged: false,
+          CapAdd: null,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          Devices: [],
+          ReadonlyRootfs: true,
+          NetworkMode: 'none',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBeNull();
+});
+
+test('#findProxyDrift flags a proxy that adds a capability', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '65534:65534',
+        host: {
+          Privileged: false,
+          CapAdd: ['SYS_ADMIN'],
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          Devices: [],
+          ReadonlyRootfs: true,
+          NetworkMode: 'none',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBe('it keeps capabilities (drops ALL)');
+});
+
+test('#findProxyDrift flags a proxy on a network', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '65534:65534',
+        host: {
+          Privileged: false,
+          CapAdd: null,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          Devices: [],
+          ReadonlyRootfs: true,
+          NetworkMode: 'bridge',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBe('its root is read-only, network bridge');
+});
+
+test('#findProxyDrift flags a proxy with a writable root', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '65534:65534',
+        host: {
+          Privileged: false,
+          CapAdd: null,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          Devices: [],
+          ReadonlyRootfs: false,
+          NetworkMode: 'none',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBe('its root is writable, network none');
+});
+
+test('#findProxyDrift flags a proxy that runs as root', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '',
+        host: {
+          Privileged: false,
+          CapAdd: null,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          Devices: [],
+          ReadonlyRootfs: true,
+          NetworkMode: 'none',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBe('it runs as root, not 65534:65534');
+});
+
+test('#findProxyDrift flags a proxy without no-new-privileges', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '65534:65534',
+        host: {
+          Privileged: false,
+          CapAdd: null,
+          CapDrop: ['ALL'],
+          SecurityOpt: [],
+          Devices: [],
+          ReadonlyRootfs: true,
+          NetworkMode: 'none',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBe('its security options are none, not no-new-privileges');
+});
+
+test('#findProxyDrift flags a proxy with a device', () => {
+  expect(
+    findProxyDrift(
+      {
+        user: '65534:65534',
+        host: {
+          Privileged: false,
+          CapAdd: null,
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          Devices: [{ PathOnHost: '/dev/kvm' }],
+          ReadonlyRootfs: true,
+          NetworkMode: 'none',
+        },
+      },
+      {
+        capDrop: ['ALL'],
+        securityOpts: ['no-new-privileges'],
+        isReadOnly: true,
+        network: 'none',
+        user: '65534:65534',
+      },
+    ),
+  ).toBe('it has devices');
+});
+
+test('#readExpectedProxy reads the proxy section of the deploy arguments', () => {
+  const argsJson = JSON.stringify({
+    proxy: {
+      privileges: [
+        ['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges'],
+        ['--read-only', '--tmpfs', '/tmp'],
+        ['--network', 'none'],
+        ['--user', '65534:65534'],
+      ],
+    },
   });
 
-  test('flags a capability, a network, a writable root or root', () => {
-    expect(
-      findProxyDrift({ ...proxy, host: { ...proxy.host, CapAdd: ['SYS_ADMIN'] } }, deployProxy),
-    ).toContain('keeps capabilities');
+  expect(readExpectedProxy(argsJson)).toStrictEqual({
+    capDrop: ['ALL'],
+    securityOpts: ['no-new-privileges'],
+    isReadOnly: true,
+    network: 'none',
+    user: '65534:65534',
+  });
+});
 
-    expect(
-      findProxyDrift({ ...proxy, host: { ...proxy.host, NetworkMode: 'bridge' } }, deployProxy),
-    ).toContain('network bridge');
+test('#readExpectedProxy reads a writable root, the default network and root for a bare proxy section', () => {
+  const argsJson = JSON.stringify({ proxy: { privileges: [] } });
 
-    expect(
-      findProxyDrift({ ...proxy, host: { ...proxy.host, ReadonlyRootfs: false } }, deployProxy),
-    ).toContain('writable');
-
-    expect(findProxyDrift({ ...proxy, user: '' }, deployProxy)).toContain('runs as root');
-
-    expect(
-      findProxyDrift({ ...proxy, host: { ...proxy.host, SecurityOpt: [] } }, deployProxy),
-    ).toContain('security options');
+  expect(readExpectedProxy(argsJson)).toStrictEqual({
+    capDrop: [],
+    securityOpts: [],
+    isReadOnly: false,
+    network: 'default',
+    user: '',
   });
 });

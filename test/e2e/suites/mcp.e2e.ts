@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
 import { runImp, tryImp } from '../lib/imp-cli';
-import { registerImp } from '../lib/imps';
 import { startHttpMcpSession, startMcpSession } from '../lib/mcp';
 import type { McpSession, ToolResult } from '../lib/mcp';
 import { setupSuite } from '../lib/setup-suite';
@@ -59,9 +58,6 @@ async function runShell(name: string, command: string): Promise<Readonly<Record<
 }
 
 test('imp_create boots imps inside the prefix', async () => {
-  registerImp(tiny);
-  registerImp(full);
-
   const created = await session.runTool('imp_create', {
     name: tiny,
     image: resolveImageName('e2e-tiny'),

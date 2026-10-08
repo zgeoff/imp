@@ -1,130 +1,156 @@
-import { afterAll, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LIB_SCRIPT, REPO_ROOT, runCommand } from './instance';
+import { createStubBin } from '../../../scripts/test-utils/create-stub-bin';
 
-const SECRET = 'fake-tskey-for-the-trace-check';
-const dir = mkdtempSync(join(process.env['TMPDIR'] ?? '/tmp', 'imp-tskey-'));
-const opCalls = join(dir, 'op-calls');
+// These tests drive load_tailscale_authkey in scripts/lib.sh and its caller
+// scripts/dev.sh, which readTailscaleAuthKey reads the key through.
 
-// a stand-in for one CLI: `op` succeeds or fails and counts its calls;
-// `docker` succeeds except for `inspect` and a `run` other than the proxy's,
-// so dev.sh up stops right at the container start
-function writeFakeBin(binDir: string, opBehaviour: 'key' | 'fail'): string {
-  const op =
-    opBehaviour === 'key'
-      ? `#!/bin/sh\necho call >> '${opCalls}'\necho '${SECRET}'\n`
-      : `#!/bin/sh\necho call >> '${opCalls}'\nexit 1\n`;
+function setupTest() {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-tskey-'));
 
-  // the proxy's compile writes its binary into the data dir, and its run
-  // passes; every other run fails
-  const docker =
-    '#!/bin/sh\ncase "$*" in *imp-docker-proxy.new) : > "$IMP_DEV_DATA/imp-docker-proxy.new"; exit 0 ;; esac\n' +
-    'case "$*" in *bin/imp-docker-proxy) exit 0 ;; esac\n' +
-    'case "$1" in run|inspect) exit 1 ;; esac\nexit 0\n';
-
-  for (const [name, script] of [
-    ['op', op],
-    ['docker', docker],
-  ] as const) {
-    writeFileSync(join(binDir, name), script);
-    chmodSync(join(binDir, name), 0o755);
-  }
-
-  return `${binDir}:${process.env['PATH'] ?? ''}`;
-}
-
-function runTraced(script: string, env: Readonly<Record<string, string>>) {
-  return runCommand(['bash', '-x', '-c', script, 'bash', LIB_SCRIPT], { env });
-}
-
-afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
-
-test('a key from the env never shows in a bash -x trace', async () => {
-  const result = await runTraced('source "$1"; load_tailscale_authkey; echo "found $?"', {
-    TAILSCALE_AUTHKEY: SECRET,
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  expect(result.stdout).toBe('found 0\n');
-  expect(result.stderr).not.toContain(SECRET);
-});
+  return { dir };
+}
 
-test('a key from op is exported and never shows in a bash -x trace', async () => {
-  const binDir = mkdtempSync(join(dir, 'bin-'));
+test('it keeps a key from the env out of a bash -x trace', () => {
+  const ctx = setupTest();
 
-  // the comparison runs untraced: only the function's own trace is checked
-  const result = await runTraced(
-    `source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey
-    { set +x; } 2>/dev/null; [ "$TAILSCALE_AUTHKEY" = '${SECRET}' ] && echo match`,
-    { PATH: writeFakeBin(binDir, 'key'), IMP_TAILSCALE_OP: '1' },
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      '-x',
+      '-c',
+      'source "$1"; load_tailscale_authkey; echo "found $?"',
+      'bash',
+      join(import.meta.dir, '..', '..', '..', 'scripts', 'lib.sh'),
+    ],
+    {
+      env: {
+        PATH: process.env['PATH'] ?? '',
+        HOME: ctx.dir,
+        TAILSCALE_AUTHKEY: 'fake-tskey-for-the-trace-check',
+      },
+    },
   );
 
-  expect(result.stdout).toBe('match\n');
-  expect(result.stderr).not.toContain(SECRET);
+  expect(result.stdout.toString()).toBe('found 0\n');
+  expect(result.stderr.toString()).not.toContain('fake-tskey-for-the-trace-check');
 });
 
-test('after an op miss, the rest of the run skips op', async () => {
-  const binDir = mkdtempSync(join(dir, 'bin-'));
+test('it exports a key from op and keeps it out of a bash -x trace', () => {
+  const ctx = setupTest();
+  const op = createStubBin(ctx.dir, 'op', "echo 'fake-tskey-for-the-trace-check'");
 
-  rmSync(opCalls, { force: true });
+  // the comparison runs untraced: only the function's own trace is checked
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      '-x',
+      '-c',
+      `source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey
+      { set +x; } 2>/dev/null; [ "$TAILSCALE_AUTHKEY" = 'fake-tskey-for-the-trace-check' ] && echo match`,
+      'bash',
+      join(import.meta.dir, '..', '..', '..', 'scripts', 'lib.sh'),
+    ],
+    {
+      env: {
+        PATH: `${op.bin}:${process.env['PATH'] ?? ''}`,
+        HOME: ctx.dir,
+        IMP_TAILSCALE_OP: '1',
+      },
+    },
+  );
 
-  const result = await runCommand(
+  expect(result.stdout.toString()).toBe('match\n');
+  expect(result.stderr.toString()).not.toContain('fake-tskey-for-the-trace-check');
+});
+
+test('it asks op once in a run after an op miss', () => {
+  const ctx = setupTest();
+  const op = createStubBin(ctx.dir, 'op', 'exit 1');
+
+  const result = Bun.spawnSync(
     [
       'bash',
       '-c',
       'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey; load_tailscale_authkey; echo "$IMP_TAILSCALE_OP_MISSED"',
       'bash',
-      LIB_SCRIPT,
+      join(import.meta.dir, '..', '..', '..', 'scripts', 'lib.sh'),
     ],
-    { env: { PATH: writeFakeBin(binDir, 'fail'), IMP_TAILSCALE_OP: '1' } },
+    {
+      env: {
+        PATH: `${op.bin}:${process.env['PATH'] ?? ''}`,
+        HOME: ctx.dir,
+        IMP_TAILSCALE_OP: '1',
+      },
+    },
   );
 
-  const calls = readFileSync(opCalls, 'utf8').trim().split('\n');
+  expect(result.stdout.toString()).toBe('1\n');
 
-  expect(result.stdout).toBe('1\n');
-  expect(calls).toHaveLength(1);
+  expect(readFileSync(op.calls, 'utf8')).toBe(
+    'op read op://cloud/imp-tailscale-authkey/credential\n',
+  );
 });
 
-test('without IMP_TAILSCALE_OP=1, op is never called', async () => {
-  const binDir = mkdtempSync(join(dir, 'bin-'));
+test('it never asks op without IMP_TAILSCALE_OP=1', () => {
+  const ctx = setupTest();
+  const op = createStubBin(ctx.dir, 'op', "echo 'fake-tskey-for-the-trace-check'");
 
-  rmSync(opCalls, { force: true });
-
-  const result = await runCommand(
+  Bun.spawnSync(
     [
       'bash',
       '-c',
-      'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey; echo "found $?"',
+      'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey',
       'bash',
-      LIB_SCRIPT,
+      join(import.meta.dir, '..', '..', '..', 'scripts', 'lib.sh'),
     ],
-    { env: { PATH: writeFakeBin(binDir, 'key') } },
+    { env: { PATH: `${op.bin}:${process.env['PATH'] ?? ''}`, HOME: ctx.dir } },
   );
 
-  // the repo's own .env may still supply a key; op must not be asked
-  expect(result.exitCode).toBe(0);
-  expect(existsSync(opCalls)).toBeFalse();
+  expect(readFileSync(op.calls, 'utf8')).toBe('');
 });
 
-test('dev.sh up passes the key to docker by name only, and never traces it', async () => {
-  const binDir = mkdtempSync(join(dir, 'bin-'));
+test('it passes the key to docker by name only in dev.sh up, and never traces it', () => {
+  const ctx = setupTest();
 
-  const result = await runCommand(['bash', '-x', join(REPO_ROOT, 'scripts', 'dev.sh'), 'up'], {
+  // the proxy's compile writes its binary into the data dir, and its run
+  // passes; every other run and inspect fails, so up stops right at the
+  // container start, after building its argv
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    [
+      'case "$*" in *imp-docker-proxy.new) : > "$IMP_DEV_DATA/imp-docker-proxy.new"; exit 0 ;; esac',
+      'case "$*" in *bin/imp-docker-proxy) exit 0 ;; esac',
+      'case "$1" in run|inspect) exit 1 ;; esac',
+      'exit 0',
+    ].join('\n'),
+  );
+
+  const repo = join(import.meta.dir, '..', '..', '..');
+
+  const result = Bun.spawnSync(['bash', '-x', join(repo, 'scripts', 'dev.sh'), 'up'], {
     env: {
-      PATH: writeFakeBin(binDir, 'key'),
-      TAILSCALE_AUTHKEY: SECRET,
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      HOME: ctx.dir,
+      TAILSCALE_AUTHKEY: 'fake-tskey-for-the-trace-check',
       IMP_DEV_NAME: 'imp-dev-trace-check',
-      IMP_DEV_DATA: join(dir, 'data'),
+      IMP_DEV_DATA: join(ctx.dir, 'data'),
       IMP_HOST_IMAGE_READY: '1',
-      IMP_KERNEL: join(REPO_ROOT, 'package.json'),
-      IMP_SYSTEM_DRIVE: join(REPO_ROOT, 'package.json'),
+      IMP_KERNEL: join(repo, 'package.json'),
+      IMP_SYSTEM_DRIVE: join(repo, 'package.json'),
     },
   });
 
-  // the fake docker refuses `run`, so up fails right after building its argv
+  const trace = result.stderr.toString();
+
   expect(result.exitCode).not.toBe(0);
-  expect(result.stderr).toContain('-e TAILSCALE_AUTHKEY ');
-  expect(result.stderr).not.toContain(SECRET);
+  expect(trace).toContain('-e TAILSCALE_AUTHKEY ');
+  expect(trace).not.toContain('fake-tskey-for-the-trace-check');
 });

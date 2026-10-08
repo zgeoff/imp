@@ -9,7 +9,7 @@ import { runChecked } from './instance';
 // key, and one command, a push to one bare repo. Imps reach it through the
 // host container's NAT; #26's egress policies may block private ranges.
 
-export interface GitSshServer extends AsyncDisposable {
+export interface StubGitSshServer {
   readonly port: number;
 
   // `ssh-ed25519 AAAA...`, for the imp's known_hosts
@@ -20,6 +20,9 @@ export interface GitSshServer extends AsyncDisposable {
 
   // logins whose signature the key verified
   readonly logins: () => number;
+
+  // closes the listener once open connections end
+  readonly stop: () => Promise<void>;
 }
 
 const RECEIVE_PACK = /^git-receive-pack '\/?repo\.git'$/;
@@ -96,11 +99,11 @@ function handleConnection(
   });
 }
 
-export async function startGitSshServer(
+export async function startStubGitSshServer(
   address: string,
   dir: string,
   allowedKey: string,
-): Promise<GitSshServer> {
+): Promise<StubGitSshServer> {
   const hostKeyPath = join(dir, 'git-host-key');
   const repo = join(dir, 'repo.git');
 
@@ -126,7 +129,7 @@ export async function startGitSshServer(
     hostKey: readFileSync(`${hostKeyPath}.pub`, 'utf8').split(' ').slice(0, 2).join(' '),
     repo,
     logins: () => counts.logins,
-    [Symbol.asyncDispose]: () =>
+    stop: () =>
       new Promise<void>((resolve) => {
         server.close(() => {
           resolve();

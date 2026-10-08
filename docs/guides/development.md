@@ -79,12 +79,14 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 scripts/test-e2e.sh                          # the acceptance set: every suite
 scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
+scripts/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
 
 | Flag      | Effect                                                                                                                                  |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `--only`  | Comma-separated suites or sets. `acceptance` (the default) is every suite; `fast` is the CI subset.                                     |
+| `--group` | One of the three groups the `fast` set splits into (`FAST_GROUPS` in `test/e2e/lib/suites.ts`): `1`, `2` or `3`.                        |
 | `--clean` | Logs the instance out of the tailnet, removes the container and wipes its data dir, and the moves suites' second host and its data dir. |
 | `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                                                          |
 | `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                                                                |

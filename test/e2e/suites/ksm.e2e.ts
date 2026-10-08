@@ -272,10 +272,20 @@ test.skipIf(!KSM_READY)(
       );
     }
 
-    // two governor ticks after the last write
-    await Bun.sleep(12_000);
+    // the governor's enforce pass brings the guests back within the budget,
+    // as it did within two ticks of the last write
+    const awakeMib = await waitFor(
+      'the governor to keep the guests within the budget',
+      async () => {
+        const mib = await readAwakePssMib();
 
-    const awakeMib = await readAwakePssMib();
+        expect(mib).toBeLessThanOrEqual(BUDGET_MIB);
+
+        return mib;
+      },
+      { timeoutMs: 12_000, intervalMs: 500 },
+    );
+
     const rows = await listImps();
 
     const states = rows.filter((row) => names.includes(row.name)).map((row) => row.state);

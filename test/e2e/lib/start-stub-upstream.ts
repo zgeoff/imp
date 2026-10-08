@@ -20,7 +20,7 @@ interface SeenRequest {
 // the OAuth side: /oauth/token takes a JSON refresh request and rotates the
 // refresh token each time, and /oauth-e2e/me says whether the bearer token is
 // the access token issued last. Every token is made up for the run.
-interface FakeOAuth {
+interface StubOAuth {
   readonly clientId: string;
 
   // the refresh token a secret starts from
@@ -38,8 +38,8 @@ interface FakeOAuth {
   readonly exchange: (refreshToken: string) => number;
 }
 
-export interface FakeUpstream extends AsyncDisposable {
-  readonly oauth: FakeOAuth;
+export interface StubUpstream {
+  readonly oauth: StubOAuth;
 
   // https://<address>:<port>, for the broker's test-upstreams file
   readonly origin: string;
@@ -51,11 +51,14 @@ export interface FakeUpstream extends AsyncDisposable {
 
   // a bare repo at <owner>/<repo>.git that accepts pushes
   readonly createRepo: (path: string) => Promise<string>;
+
+  // stops both listeners and removes the certificates and repos
+  readonly stop: () => Promise<void>;
 }
 
 const CGI_HEADER_END = /\r?\n\r?\n/;
 
-export async function startFakeUpstream(address: string, token: string): Promise<FakeUpstream> {
+export async function startStubUpstream(address: string, token: string): Promise<StubUpstream> {
   const dir = mkdtempSync(join(tmpdir(), 'imp-e2e-upstream-'));
   const repos = join(dir, 'repos');
   const expected = `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
@@ -204,7 +207,7 @@ export async function startFakeUpstream(address: string, token: string): Promise
 
       return repo;
     },
-    [Symbol.asyncDispose]: async () => {
+    stop: async () => {
       await server.stop(true);
       await plainServer.stop(true);
 

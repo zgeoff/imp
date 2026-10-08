@@ -1,4 +1,4 @@
-import { SUITES, SUITE_SETS } from './suites';
+import { FAST_GROUPS, SUITES, SUITE_SETS } from './suites';
 
 export interface HarnessArgs {
   // suite names, in run order
@@ -10,6 +10,17 @@ export interface HarnessArgs {
   readonly keep: boolean;
   readonly reuse: boolean;
   readonly help: boolean;
+}
+
+// --group N: one of the fast set's CI groups, as its runner runs it
+function resolveGroup(group: string): readonly string[] {
+  const suites = /^[1-9]\d*$/.test(group) ? FAST_GROUPS[Number(group) - 1] : undefined;
+
+  if (suites === undefined) {
+    throw new Error(`--group takes 1 to ${String(FAST_GROUPS.length)}, not ${group}`);
+  }
+
+  return suites;
 }
 
 function resolveSuites(only: string): readonly string[] {
@@ -45,6 +56,7 @@ function resolveSuites(only: string): readonly string[] {
 export function parseArgs(argv: readonly string[]): HarnessArgs {
   const rest = [...argv];
   let only: string | null = null;
+  let group: string | null = null;
   let clean = false;
   let keep = false;
   let reuse = false;
@@ -78,6 +90,15 @@ export function parseArgs(argv: readonly string[]): HarnessArgs {
 
         break;
       }
+      case '--group': {
+        group = rest.shift() ?? null;
+
+        if (group === null) {
+          throw new Error('--group needs a group number');
+        }
+
+        break;
+      }
       default: {
         throw new Error(`unknown argument: ${arg}`);
       }
@@ -86,6 +107,14 @@ export function parseArgs(argv: readonly string[]): HarnessArgs {
 
   if (clean && reuse) {
     throw new Error('--clean and --reuse contradict each other');
+  }
+
+  if (group !== null && only !== null) {
+    throw new Error('--group and --only contradict each other');
+  }
+
+  if (group !== null) {
+    return { suites: resolveGroup(group), acceptance: false, clean, keep, reuse, help };
   }
 
   const acceptance = only === null || only.split(',').some((item) => item.trim() === 'acceptance');

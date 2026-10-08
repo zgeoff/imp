@@ -110,6 +110,39 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
+// The fast set as three static lists in SUITES order, one per CI runner and
+// instance; each held about 225 s of suite work in CI runs 37683236504 and
+// 37680258353. Rebalance by the times in .cache/e2e/results.json.
+export const FAST_GROUPS: readonly (readonly string[])[] = [
+  [
+    'lifecycle',
+    'registry',
+    'checkpoints',
+    'disks',
+    'restart',
+    'offsets',
+    'session-logs',
+    'services',
+    'ssh',
+    'ssh-agent',
+    'proxy',
+    'dashboard',
+    'tokens',
+    'leases',
+    'cpu',
+    'templates',
+    'boot-templates',
+    'socket',
+  ],
+  ['sleep', 'reverse', 'jail'],
+  ['mcp', 'inner', 'memory', 'ksm'],
+];
+
+// The group whose CI runner also runs the host networking tests (bun run
+// test:host), so they run once: group 1 installs the dashboard's browser and
+// builds the most fixture images, and group 3 has the most suite work.
+export const HOST_TESTS_GROUP = 2;
+
 // generous: a suite's own waits fail long before this
 const SUITE_TIMEOUT_MS = 3_600_000;
 

@@ -15,7 +15,7 @@ import {
   startImp,
   tryImp,
 } from '../lib/imp-cli';
-import { createImp, registerImp, removeImps } from '../lib/imps';
+import { createImp, removeImps } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
@@ -118,8 +118,6 @@ function buildEvChanges(lines: readonly string[]): string[] {
 }
 
 test('imp new boots the default image and the first exec answers within the limit', async () => {
-  registerImp(name);
-
   const started = Date.now();
 
   const out = await runImp('new', name, '--json');
@@ -183,8 +181,8 @@ test('exec -t runs the command on a pseudo-terminal', async () => {
 
 test('console runs commands in a shell and returns its exit code', async () => {
   const session = await runConsole(name, [
-    { afterMs: 0, line: 'echo console-$((40 + 2))' },
-    { afterMs: 1500, line: 'exit 5' },
+    { after: null, line: 'echo console-$((40 + 2))' },
+    { after: 'console-42', line: 'exit 5' },
   ]);
 
   expect(session.output).toContain('console-42');
@@ -251,8 +249,6 @@ test('rm removes the imp and its network device', async () => {
 test('imp events streams a create, sleep, wake and rm, and the api audit log has them', async () => {
   // an imp already there, whose snapshot line says the stream is open
   await createImp(anchorName, '--memory', '512');
-
-  registerImp(eventsName);
 
   const events = await startImp(['events']);
 
