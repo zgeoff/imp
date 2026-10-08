@@ -3,84 +3,89 @@ package proto
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"testing"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
-func TestRoundTrip(t *testing.T) {
+func TestWriterFramesEachPayloadBehindATypeAndBigEndianLength(t *testing.T) {
 	var buf bytes.Buffer
-	w := NewWriter(&buf)
-	if err := w.WriteJSON(TypeRequest, Request{Op: OpPing}); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Write(TypeStdinEOF, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Write(TypeStdout, []byte("hello")); err != nil {
-		t.Fatal(err)
-	}
 
-	want := []byte{1, 0, 0, 0, 13}
-	if got := buf.Bytes()[:5]; !bytes.Equal(got, want) {
-		t.Fatalf("header = %v, want %v", got, want)
-	}
+	err := NewWriter(&buf).WriteJSON(TypeRequest, Request{Op: OpPing})
 
-	r := NewReader(&buf)
-	cases := []struct {
-		typ     Type
-		payload string
-	}{{TypeRequest, `{"op":"ping"}`}, {TypeStdinEOF, ""}, {TypeStdout, "hello"}}
-	for _, c := range cases {
-		f, err := r.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if f.Type != c.typ || string(f.Payload) != c.payload {
-			t.Fatalf("got %s %q, want %s %q", f.Type, f.Payload, c.typ, c.payload)
-		}
-	}
-	if _, err := r.Next(); err != io.EOF {
-		t.Fatalf("err = %v, want io.EOF", err)
-	}
+	assert.NilError(t, err)
+	assert.DeepEqual(t, buf.Bytes(), append([]byte{1, 0, 0, 0, 13}, `{"op":"ping"}`...))
 }
 
-func TestSplitsLargePayload(t *testing.T) {
+func TestReaderReadsBackWhatTheWriterSentThenACleanEOF(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	assert.NilError(t, w.WriteJSON(TypeRequest, Request{Op: OpPing}))
+	assert.NilError(t, w.Write(TypeStdinEOF, nil))
+	assert.NilError(t, w.Write(TypeStdout, []byte("hello")))
+	r := NewReader(&buf)
+
+	var frames []Frame
+	for range 3 {
+		f, err := r.Next()
+		assert.NilError(t, err)
+		frames = append(frames, f)
+	}
+	_, err := r.Next()
+
+	assert.Check(t, cmp.DeepEqual(frames, []Frame{
+		{Type: TypeRequest, Payload: []byte(`{"op":"ping"}`)},
+		{Type: TypeStdinEOF, Payload: []byte{}},
+		{Type: TypeStdout, Payload: []byte("hello")},
+	}))
+	assert.Check(t, cmp.Equal(err, io.EOF))
+}
+
+func TestWriterSplitsAPayloadLargerThanMaxPayloadIntoFrames(t *testing.T) {
 	var buf bytes.Buffer
 	data := bytes.Repeat([]byte("x"), MaxPayload+10)
-	if err := NewWriter(&buf).Write(TypeStdout, data); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, NewWriter(&buf).Write(TypeStdout, data))
 	r := NewReader(&buf)
-	var got int
+
+	var sizes []int
+	var got []byte
 	for {
 		f, err := r.Next()
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		got += len(f.Payload)
+		assert.NilError(t, err)
+		sizes = append(sizes, len(f.Payload))
+		got = append(got, f.Payload...)
 	}
-	if got != len(data) {
-		t.Fatalf("got %d bytes, want %d", got, len(data))
-	}
+
+	assert.Check(t, cmp.DeepEqual(sizes, []int{MaxPayload, 10}))
+	assert.Check(t, bytes.Equal(got, data), "the reassembled payload differs from what was sent")
 }
 
-func TestTooLarge(t *testing.T) {
+func TestReaderRefusesAFrameLongerThanMaxPayload(t *testing.T) {
 	hdr := []byte{8, 0, 0, 0, 0}
 	binary.BigEndian.PutUint32(hdr[1:], MaxPayload+1)
-	if _, err := NewReader(bytes.NewReader(hdr)).Next(); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
-	}
+
+	_, err := NewReader(bytes.NewReader(hdr)).Next()
+
+	assert.ErrorIs(t, err, ErrTooLarge)
 }
 
-func TestTruncated(t *testing.T) {
-	for _, in := range [][]byte{{8, 0, 0}, {8, 0, 0, 0, 4, 'a'}} {
-		_, err := NewReader(bytes.NewReader(in)).Next()
-		if err == nil || err == io.EOF {
-			t.Fatalf("input %v: err = %v, want truncation error", in, err)
-		}
+func TestReaderReportsATruncatedFrameAsAnUnexpectedEOF(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []byte
+	}{
+		{name: "header", in: []byte{8, 0, 0}},
+		{name: "payload", in: []byte{8, 0, 0, 0, 4, 'a'}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewReader(bytes.NewReader(tc.in)).Next()
+
+			assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		})
 	}
 }
