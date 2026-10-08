@@ -1,414 +1,461 @@
-import { expect, test } from 'bun:test';
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync, readdirSync, symlinkSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { updateEnv } from '@imp/test-utils/update-env';
+import { waitFor } from '@imp/test-utils/wait-for';
+import type { KyselyPlugin } from 'kysely';
+import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import type { ImpdDeps } from '../create-impd';
 import { createImage, findImageByName, listImages } from '../db/images';
 import { listImps } from '../db/imps';
-import { setupImpTest } from '../imps/test-imps';
-import { buildImagePaths } from '../storage/data-layout';
+import { openDatabase } from '../db/open-database';
+import { runChecked } from '../process/run-command';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildFilesTar } from '../test-utils/build-files-tar';
 import { buildQueryGate } from '../test-utils/build-query-gate';
-import { buildStubGuest } from '../test-utils/build-stub-guest';
-import type { StubAnswer, StubRun } from '../test-utils/build-stub-guest';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import type { StubAnswer } from '../test-utils/build-stub-guest';
+import { buildStubImageBuilder } from '../test-utils/build-stub-image-builder';
+import { buildStubImageMkfs } from '../test-utils/build-stub-image-mkfs';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { createBuilderImage } from '../test-utils/create-builder-image';
+import { findFreePorts } from '../test-utils/find-free-ports';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
-import { PIN_INSPECT_FORMAT } from './image-pin';
 import { HOST_ADD_WARNING, createImageService } from './image-service';
 
-const CONTAINER_ID = 'e'.repeat(64);
-const CONFIG = '{"Cmd":["/bin/sh"],"Env":["PATH=/bin"]}';
-const REPO_DIGEST = `sha256:${'b'.repeat(64)}`;
+async function setupTest(
+  config: {
+    // IMP_* settings impd and the image service read
+    readonly env?: Readonly<Record<string, string>>;
 
-interface AddTestOptions {
-  readonly env?: Readonly<Record<string, string>>;
+    // how long the builder image's pull may take
+    readonly builderImagePullMs?: number;
+  } = {},
+) {
+  const stack = new AsyncDisposableStack();
 
-  // what the builder answers a pull, by default an image for linux/amd64
-  readonly onPull?: (run: StubRun) => Promise<StubAnswer> | StubAnswer;
+  onTestFinished(() => stack.disposeAsync());
 
-  // what the builder exports, from a scratch directory; by default a small tree
-  readonly buildExport?: (dir: string) => readonly Uint8Array[];
+  const dataDir = await mkdtemp(join(tmpdir(), 'isolated-add-'));
 
-  // the builders get impd's own add of their image, not a test image
-  readonly isRealBuilderImage?: boolean;
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  // sh lines the host docker runs after it logs its call; by default none,
-  // so every call fails
-  readonly hostDocker?: (dataDir: string) => string;
+  const db = await openDatabase(':memory:');
 
-  // how long the builder image's pull may take
-  readonly builderImagePullMs?: number;
+  stack.defer(() => db.destroy());
 
-  // runs as an export starts; mkfs.ext4 waits for startMkfs
-  readonly onExport?: () => Promise<void>;
-  readonly pauseMkfs?: boolean;
+  // a host docker that logs every call and models none: an isolated add
+  // makes no call; a test that needs the host engine writes its own
+  const docker = buildStubDockerCli({ dir: dataDir });
 
-  // a select of this name the gate can hold; a storage whose removals fail
-  readonly gatedName?: string;
-  readonly isRemoveFailing?: boolean;
-}
+  updateEnv('PATH', docker.path);
 
-// the error `adding` rejects with, or null
-async function readFailure(adding: Promise<unknown>): Promise<unknown> {
-  try {
-    await adding;
-  } catch (error) {
-    return error;
-  }
+  // the builder image pulls' limits, which expirePullLimits ends
+  const pullLimits: AbortController[] = [];
 
-  return null;
-}
-
-// a tar of a directory holding these files
-function buildTar(dir: string, files: Readonly<Record<string, string>>): Uint8Array {
-  const tree = join(dir, `tree-${Bun.randomUUIDv7()}`);
-
-  mkdirSync(tree, { recursive: true });
-
-  for (const [name, content] of Object.entries(files)) {
-    writeFileSync(join(tree, name), content);
-  }
-
-  return Bun.spawnSync(['tar', '-C', tree, '-c', ...Object.keys(files)]).stdout;
-}
-
-// A builder's engine on amd64, through the real builder lifecycle, and a
-// host docker that logs every call and fails: an isolated add makes none
-async function setupAdd(options: Readonly<AddTestOptions> = {}) {
-  const ctx = await setupImpTest({
-    env: { IMP_BUILD_MEMORY_MIB: '512', IMP_BUILD_DISK_GIB: '4', ...options.env },
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address; a builder takes 512 MiB and 4 GiB
+  const impdConfig = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+    ...config.env,
   });
 
-  await ctx.createTestImage('base');
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-  const exported = options.buildExport?.(ctx.dataDir) ?? [
-    buildTar(ctx.dataDir, { hello: 'pulled\n' }),
-  ];
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-  const runFakeStep = async (run: StubRun): Promise<StubAnswer> => {
-    const argv = run.argv.slice(1).join(' ');
+  const vmm = buildStubVmm();
 
-    if (argv.startsWith('info ')) {
-      return {};
-    }
+  // a sparse copy: a builder's disk is a clone of its image's sparse rootfs
+  const storage = createXfsBackend({
+    dataDir,
+    cloneFile: async (source, target) => {
+      await runChecked(['cp', '--sparse=always', source, target]);
+    },
+  });
 
-    if (argv.startsWith('version ')) {
-      return { stdout: '"linux" "x86_64"\n' };
-    }
-
-    if (argv.startsWith('pull ')) {
-      const pulled = await options.onPull?.(run);
-
-      return pulled ?? {};
-    }
-
-    if (argv.startsWith(`image inspect --format ${PIN_INSPECT_FORMAT} `)) {
-      const ref = run.argv.at(-1) ?? '';
-      const repository = ref.split(':')[0] ?? '';
-
-      const inspect = {
-        Id: `sha256:${'c'.repeat(64)}`,
-        RepoDigests: [`${repository}@${REPO_DIGEST}`],
-        Os: 'linux',
-        Architecture: 'amd64',
-        Config: {},
-      };
-
-      return { stdout: JSON.stringify(inspect) };
-    }
-
-    if (argv.startsWith('tag ')) {
-      return {};
-    }
-
-    if (argv === 'image inspect --format {{json .Config}} imp-build:latest') {
-      return { stdout: CONFIG };
-    }
-
-    if (argv === 'create imp-build:latest /bin/true') {
-      return { stdout: `${CONTAINER_ID}\n` };
-    }
-
-    if (argv === `export ${CONTAINER_ID}`) {
-      await options.onExport?.();
-
-      return { stdout: exported };
-    }
-
-    // a build, for an add and a build of one digest
-    if (argv.startsWith('image inspect --format {{.Id}} docker/dockerfile')) {
-      return { stdout: `sha256:${'f'.repeat(64)}\n` };
-    }
-
-    if (argv.startsWith('build ')) {
-      await run.readStdin();
-
-      return {};
-    }
-
-    return { code: 1, stderr: `the fake builder has no ${argv}` };
-  };
-
-  const guest = buildStubGuest(runFakeStep);
   const logs: string[] = [];
-  const bin = join(ctx.dataDir, 'fake-bin');
-  const hostLog = join(ctx.dataDir, 'host-docker.log');
 
-  mkdirSync(bin);
+  const deps: ImpdDeps = {
+    db,
 
-  const hostLines = options.hostDocker?.(ctx.dataDir) ?? '';
-
-  writeFileSync(
-    join(bin, 'docker'),
-    `#!/bin/sh\necho "$*" >>'${hostLog}'\n${hostLines}\nexit 1\n`,
-    {
-      mode: 0o755,
-    },
-  );
-
-  const mkfsStarted = join(ctx.dataDir, 'mkfs-started');
-  const mkfsReleased = join(ctx.dataDir, 'mkfs-released');
-
-  if (options.pauseMkfs === true) {
-    const mkfs = Bun.which('mkfs.ext4', { PATH: `${process.env['PATH'] ?? ''}:/usr/sbin:/sbin` });
-
-    writeFileSync(
-      join(bin, 'mkfs.ext4'),
-      `#!/bin/sh\ntouch '${mkfsStarted}'\nwhile [ ! -e '${mkfsReleased}' ]; do sleep 0.05; done\nexec '${mkfs ?? 'mkfs.ext4'}' "$@"\n`,
-      { mode: 0o755 },
-    );
-  }
-
-  const waitForMkfs = async () => {
-    while (!existsSync(mkfsStarted)) {
-      await Bun.sleep(20);
-    }
-  };
-
-  const startMkfs = () => {
-    writeFileSync(mkfsReleased, '');
-  };
-
-  const gate = buildQueryGate(options.gatedName ?? '');
-
-  const storage: StorageBackend =
-    options.isRemoveFailing === true
-      ? { ...ctx.storage, removeImage: () => Promise.reject(new Error('the disk is read-only')) }
-      : ctx.storage;
-
-  const holder: { images: ReturnType<typeof createImageService> | null } = { images: null };
-
-  const builders = createBuilders({
-    config: ctx.config,
-    db: ctx.db,
-    imps: { ...ctx.imps, openBuilderExec: (_name, request) => guest.open(request) },
-    ensureImage: async () => {
-      if (options.isRealBuilderImage === true) {
-        await holder.images?.ensureBuilderImage();
-
-        return;
-      }
-
-      const image = await findImageByName(ctx.db, BUILDER_IMAGE);
-
-      if (image === undefined) {
-        await ctx.createTestImage(BUILDER_IMAGE);
-      }
-    },
-    log: (message) => {
-      logs.push(message);
-    },
-  });
-
-  const images = createImageService({
-    config: ctx.config,
-    db: ctx.db.withPlugin(gate.plugin),
+    // the bearer impd's API takes; no test here calls it
+    rootToken: 'root-token',
     storage,
-    storageGate: ctx.storageGate,
-    diskBudget: ctx.diskBudget,
-    readBuilders: () => builders,
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so an add never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
     log: (message) => {
       logs.push(message);
     },
-    ...(options.builderImagePullMs !== undefined && {
-      builderImagePullMs: options.builderImagePullMs,
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
     }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  };
+
+  const impd = await createImpd(impdConfig, deps);
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
   });
 
-  holder.images = images;
+  // The image service under test, on the builder imps impd runs, whose
+  // agent is the test's; a gate's plugin may hold a select, and a storage
+  // may stand in for impd's
+  const createImages = (
+    open: (request: AgentExecRequest) => Promise<ExecStream>,
+    wiring: {
+      readonly plugin?: Readonly<KyselyPlugin>;
+      readonly storage?: StorageBackend;
+    } = {},
+  ) => {
+    const images = createImageService({
+      config: impdConfig,
+      db: db.withPlugin(wiring.plugin ?? buildQueryGate('').plugin),
+      storage: wiring.storage ?? storage,
+      storageGate: impd.storageGate,
+      diskBudget: impd.diskBudget,
+      readBuilders: () => builders,
+      log: (message) => {
+        logs.push(message);
+      },
+      builderImagePullMs: config.builderImagePullMs,
 
-  // each call with the fake host docker first on PATH
-  const withHostDocker = async <T>(run: () => Promise<T>): Promise<T> => {
-    const savedPath = process.env['PATH'];
+      // a limit that ends only when the test expires it
+      startPullLimit: () => {
+        const limit = new AbortController();
 
-    process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
+        pullLimits.push(limit);
 
-    try {
-      return await run();
-    } finally {
-      process.env['PATH'] = savedPath;
-    }
+        return limit.signal;
+      },
+    });
+
+    const builders = createBuilders({
+      config: impdConfig,
+      db,
+      imps: { ...impd.imps, openBuilderExec: (_name, request) => open(request) },
+      ensureImage: (signal) => images.ensureBuilderImage(signal),
+      log: (message) => {
+        logs.push(message);
+      },
+    });
+
+    return { images };
   };
 
-  const readHostCalls = () => (existsSync(hostLog) ? readFileSync(hostLog, 'utf8') : '');
+  return {
+    // a release deferred here runs before impd stops and its database closes
+    stack,
+    config: impdConfig,
 
-  // the work directories an add leaves under images/, which none should
-  const listWorkDirs = () =>
-    readdirSync(join(ctx.dataDir, 'images')).filter((entry) => entry.startsWith('.build-'));
-
-  // the rootfs directories of builder images under images/
-  const listBuiltRootfs = () =>
-    readdirSync(join(ctx.dataDir, 'images')).filter((entry) => entry.startsWith('imp-build-'));
-
-  // a build of a context that makes the add's own export, so its digest
-  const runBuild = (name: string, signal = new AbortController().signal) => {
-    const tarPath = join(ctx.dataDir, `context-${Bun.randomUUIDv7()}.tar`);
-
-    writeFileSync(tarPath, buildTar(ctx.dataDir, { Dockerfile: 'FROM busybox:1.37\nRUN true\n' }));
-
-    return images.buildImageFromContext(tarPath, name, undefined, { signal });
-  };
-
-  return Object.assign(ctx, {
-    guest,
+    // ends every builder image pull limit started so far, as its timeout would
+    expirePullLimits: () => {
+      for (const limit of pullLimits) {
+        limit.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+      }
+    },
+    db,
+    dataDir,
+    storage,
+    diskBudget: impd.diskBudget,
+    docker,
     logs,
-    addImages: images,
-    withHostDocker,
-    readHostCalls,
-    listWorkDirs,
-    listBuiltRootfs,
-    runBuild,
-    waitForMkfs,
-    startMkfs,
-    gate,
-  });
+    createImages,
+  };
 }
 
-test('an add pulls and exports in a builder for one platform, and the host engine sees none of it', async () => {
-  await using ctx = await setupAdd();
+test('it adds an image through a builder for one platform, with no host engine call', async () => {
+  const ctx = await setupTest();
 
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const add = ctx.createImages(builder.guest.open);
   const resolved: string[] = [];
 
-  const image = await ctx.withHostDocker(() =>
-    ctx.addImages.addImage('busybox', 'box', {
-      onResolved: (reference) => {
-        resolved.push(reference);
-      },
-    }),
+  const image = await add.images.addImage('busybox', 'box', {
+    onResolved: (reference) => {
+      resolved.push(reference);
+    },
+  });
+
+  const imps = await listImps(ctx.db);
+
+  const workDirs = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
+    entry.startsWith('.build-'),
   );
 
-  // the reference the pull resolved, for the audit row
-  expect(resolved).toEqual([`busybox@${REPO_DIGEST}`]);
-
   // keyed as a build is, by impd's own hash of what the builder sent
-  expect(image).toMatchObject({ name: 'box', ref: 'busybox' });
-  expect(image.digest).toMatch(/^imp-build-[a-f0-9]{64}$/v);
-  expect(existsSync(buildImagePaths(ctx.dataDir, image.digest).rootfs)).toBe(true);
-  expect(ctx.readHostCalls()).toBe('');
-  expect(ctx.listWorkDirs()).toEqual([]);
+  expect(image as unknown).toStrictEqual({
+    id: expect.any(String) as unknown,
+    name: 'box',
+    ref: 'busybox',
+    digest: expect.stringMatching(/^imp-build-[a-f0-9]{64}$/v) as unknown,
+    source: 'oci',
+    sourceImp: null,
+    sizeBytes: expect.any(Number) as unknown,
+    createdAt: expect.any(Date) as unknown,
+  });
 
-  // the tag written out, the platform named, and the builder gone
-  const commands = ctx.guest.runs.map((run) => run.argv.slice(1).join(' '));
+  // the reference the pull resolved, for the audit row
+  expect(resolved).toStrictEqual([`busybox@sha256:${'b'.repeat(64)}`]);
+  expect(existsSync(buildImagePaths(ctx.dataDir, image.digest).rootfs)).toBeTrue();
+  expect(ctx.docker.readCalls()).toStrictEqual([]);
+  expect(workDirs).toStrictEqual([]);
+  expect(imps).toStrictEqual([]);
 
-  expect(commands).toContain('pull --quiet --platform linux/amd64 busybox:latest');
-  expect(commands).toContain('tag busybox:latest imp-build:latest');
+  // the tag written out and the platform named
+  expect(builder.guest.runs.map((run) => run.argv.slice(1).join(' '))).toIncludeAllMembers([
+    'pull --quiet --platform linux/amd64 busybox:latest',
+    'tag busybox:latest imp-build:latest',
+  ]);
 
-  const left = await listImps(ctx.db);
-
-  expect(left).toEqual([]);
-
-  expect(ctx.logs.join('\n')).toContain(
-    `impd: image add box: busybox:latest for linux/amd64 (busybox@${REPO_DIGEST}), digest ${image.digest}`,
+  // the line goes on with the step timings
+  expect(ctx.logs).toSatisfyAny((line: string) =>
+    line.startsWith(
+      `impd: image add box: busybox:latest for linux/amd64 (busybox@sha256:${'b'.repeat(64)}), digest ${image.digest};`,
+    ),
   );
 });
 
-test('a failed pull returns its error, and leaves no builder, rootfs or work directory', async () => {
-  await using ctx = await setupAdd({
+test('it returns a failed pull in the builder as the client error', async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
     onPull: () => ({ code: 1, stderr: 'Error response from daemon: manifest unknown' }),
   });
 
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:nope', 'box')),
-  );
+  const add = ctx.createImages(builder.guest.open);
 
-  expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-  expect(String(failure)).toContain('manifest unknown');
-
-  const imps = await listImps(ctx.db);
-
-  expect(imps).toEqual([]);
-
-  const box = await findImageByName(ctx.db, 'box');
-
-  expect(box).toBeUndefined();
-  expect(ctx.listWorkDirs()).toEqual([]);
-  expect(ctx.readHostCalls()).toBe('');
+  expect(add.images.addImage('busybox:nope', 'box')).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message:
+      'the pull of busybox:nope in the builder failed: Error response from daemon: manifest unknown',
+  });
 });
 
-test('an export over IMP_BUILD_IMAGE_MAX_MIB is refused, and leaves nothing behind', async () => {
-  await using ctx = await setupAdd({
-    env: { IMP_BUILD_IMAGE_MAX_MIB: '1' },
-    buildExport: (dir) => [buildTar(dir, { big: 'x'.repeat(2 * 1024 ** 2) })],
+test("it returns a registry's refusal of a pull in the builder as the client error", async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onPull: () => ({
+      code: 1,
+      stderr:
+        'Error response from daemon: pull access denied for private.test/x, repository does not exist or may require docker login: denied: requested access to the resource is denied',
+    }),
   });
 
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
-  );
+  const add = ctx.createImages(builder.guest.open);
 
-  expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-  expect(String(failure)).toContain('IMP_BUILD_IMAGE_MAX_MIB');
-
-  const imps = await listImps(ctx.db);
-
-  expect(imps).toEqual([]);
-
-  const box = await findImageByName(ctx.db, 'box');
-
-  expect(box).toBeUndefined();
-  expect(ctx.listWorkDirs()).toEqual([]);
+  expect(add.images.addImage('private.test/x:1', 'box')).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('requested access to the resource is denied') as unknown,
+  });
 });
 
-// an image whose /etc/imp/image.json its author made a link to the host path
-// `target`, as a registry image may be
-function buildLinkedTar(dir: string, target: string): Uint8Array {
-  const tree = join(dir, `linked-${Bun.randomUUIDv7()}`);
+test('it leaves no builder, row or work directory after a failed pull', async () => {
+  const ctx = await setupTest();
 
-  mkdirSync(join(tree, 'etc', 'imp'), { recursive: true });
-  rmSync(join(tree, 'etc', 'imp', 'image.json'), { force: true });
-  symlinkSync(target, join(tree, 'etc', 'imp', 'image.json'));
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
 
-  return Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout;
-}
-
-test("an added image's image.json link changes no host file", async () => {
-  const canary = { path: '' };
-
-  await using ctx = await setupAdd({
-    buildExport: (dir) => {
-      canary.path = join(dir, 'canary');
-
-      writeFileSync(canary.path, "the host's\n");
-
-      return [buildLinkedTar(dir, canary.path)];
-    },
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onPull: () => ({ code: 1, stderr: 'Error response from daemon: manifest unknown' }),
   });
 
-  const image = await ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box'));
+  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:nope', 'box');
 
-  expect(image.digest).toMatch(/^imp-build-[a-f0-9]{64}$/v);
-  expect(readFileSync(canary.path, 'utf8')).toBe("the host's\n");
+  await adding.catch(() => {});
+
+  expect(adding).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message:
+      'the pull of busybox:nope in the builder failed: Error response from daemon: manifest unknown',
+  });
+
+  const imps = await listImps(ctx.db);
+  const box = await findImageByName(ctx.db, 'box');
+
+  const workDirs = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
+    entry.startsWith('.build-'),
+  );
+
+  expect(imps).toStrictEqual([]);
+  expect(box).toBe(undefined);
+  expect(workDirs).toStrictEqual([]);
+  expect(ctx.docker.readCalls()).toStrictEqual([]);
 });
 
-test('a client that goes ends the pull in the builder, and the builder with it', async () => {
+test('it refuses an export over IMP_BUILD_IMAGE_MAX_MIB', async () => {
+  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_MIB: '1' } });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { big: 'x'.repeat(2 * 1024 ** 2) })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const add = ctx.createImages(builder.guest.open);
+
+  expect(add.images.addImage('busybox:1.37', 'box')).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('IMP_BUILD_IMAGE_MAX_MIB') as unknown,
+  });
+});
+
+test('it leaves no builder, row or work directory after an export over the limit', async () => {
+  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_MIB: '1' } });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { big: 'x'.repeat(2 * 1024 ** 2) })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+
+  await adding.catch(() => {});
+
+  expect(adding).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('IMP_BUILD_IMAGE_MAX_MIB') as unknown,
+  });
+
+  const imps = await listImps(ctx.db);
+  const box = await findImageByName(ctx.db, 'box');
+
+  const workDirs = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
+    entry.startsWith('.build-'),
+  );
+
+  expect(imps).toStrictEqual([]);
+  expect(box).toBe(undefined);
+  expect(workDirs).toStrictEqual([]);
+});
+
+test("it changes no host file through an added image's image.json link", async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const canary = join(ctx.dataDir, 'canary');
+  const tree = join(ctx.dataDir, 'linked-tree');
+
+  await writeFile(canary, "the host's\n");
+  await mkdir(join(tree, 'etc', 'imp'), { recursive: true });
+
+  symlinkSync(canary, join(tree, 'etc', 'imp', 'image.json'));
+
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  await ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+
+  const content = await readFile(canary, 'utf8');
+
+  expect(content).toBe("the host's\n");
+});
+
+test('it ends the pull in the builder, and the builder, when the client goes', async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
   const pulling = Promise.withResolvers<null>();
   const never = Promise.withResolvers<StubAnswer>();
 
-  await using ctx = await setupAdd({
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
     onPull: () => {
       pulling.resolve(null);
 
@@ -416,527 +463,753 @@ test('a client that goes ends the pull in the builder, and the builder with it',
     },
   });
 
-  const controller = new AbortController();
+  const client = new AbortController();
 
-  const adding = readFailure(
-    ctx.withHostDocker(() =>
-      ctx.addImages.addImage('busybox:1.37', 'box', { signal: controller.signal }),
-    ),
-  );
+  const adding = ctx
+    .createImages(builder.guest.open)
+    .images.addImage('busybox:1.37', 'box', { signal: client.signal });
 
   await pulling.promise;
 
-  controller.abort(new Error('the client went'));
+  client.abort(new Error('the client went'));
 
-  const failure = await adding;
+  expect(adding).rejects.toThrow('the client went');
 
-  expect(String(failure)).toContain('the client went');
+  const imps = await listImps(ctx.db);
+  const box = await findImageByName(ctx.db, 'box');
 
   // the exec ends, and the builder's removal ends the pull with it
-  const pull = ctx.guest.runs.find((run) => run.argv[1] === 'pull');
+  expect(builder.guest.runs.find((run) => run.argv[1] === 'pull')?.closed).toBe(true);
+  expect(imps).toStrictEqual([]);
+  expect(box).toBe(undefined);
+});
 
-  expect(pull?.closed).toBe(true);
+test.each([
+  [
+    '203.0.113.5:5000/x:1',
+    'image 203.0.113.5:5000/x:1: registry 203.0.113.5:5000 is an IP address',
+  ],
+  ['localhost:5000/x:1', "image localhost:5000/x:1: registry localhost:5000 is the host's own"],
+  ['registry.localhost/x:1', "registry registry.localhost is the host's own"],
+
+  // a bracketed IPv6 literal is no reference the schema takes
+  ['[2001:db8::1]:5000/x:1', 'invalid image reference'],
+])('it refuses %s before any builder boots', async (ref, problem) => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
+  const add = ctx.createImages(builder.guest.open);
+
+  expect(add.images.addImage(ref, 'box')).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining(problem) as unknown,
+  });
 
   const imps = await listImps(ctx.db);
 
-  expect(imps).toEqual([]);
+  expect(builder.guest.runs).toStrictEqual([]);
+  expect(imps).toStrictEqual([]);
+  expect(ctx.docker.readCalls()).toStrictEqual([]);
+});
+
+test('it fails the add of a builder the governor refuses, with no host engine call', async () => {
+  const ctx = await setupTest({ env: { IMP_RAM_BUDGET_MIB: '256' } });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
+  const add = ctx.createImages(builder.guest.open);
+
+  expect(add.images.addImage('busybox:1.37', 'box')).rejects.toThrow('the whole RAM budget');
 
   const box = await findImageByName(ctx.db, 'box');
 
-  expect(box).toBeUndefined();
+  expect(builder.guest.runs).toStrictEqual([]);
+  expect(box).toBe(undefined);
+  expect(ctx.docker.readCalls()).toStrictEqual([]);
 });
 
-test('a registry on the host itself or at an IP literal is refused before any builder boots', async () => {
-  await using ctx = await setupAdd();
+test('it fails the add with SERVICE_UNAVAILABLE when the host engine cannot give the builder image', async () => {
+  const ctx = await setupTest();
 
-  for (const [ref, problem] of [
-    [
-      '203.0.113.5:5000/x:1',
-      'image 203.0.113.5:5000/x:1: registry 203.0.113.5:5000 is an IP address',
-    ],
-    ['localhost:5000/x:1', "image localhost:5000/x:1: registry localhost:5000 is the host's own"],
-    ['registry.localhost/x:1', "registry registry.localhost is the host's own"],
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
+  const add = ctx.createImages(builder.guest.open);
 
-    // a bracketed IPv6 literal is no reference the schema takes
-    ['[2001:db8::1]:5000/x:1', 'invalid image reference'],
-  ] as const) {
-    const failure = await readFailure(ctx.withHostDocker(() => ctx.addImages.addImage(ref, 'box')));
+  expect(add.images.addImage('busybox:1.37', 'box')).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+    message: expect.stringContaining(
+      `impd cannot add its builder image ${ctx.config.build.image}`,
+    ) as unknown,
+  });
+});
 
-    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
-    expect(String(failure)).toContain(problem);
-  }
+test('it asks the host engine only for the builder image when it cannot give it', async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
+  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+
+  await adding.catch(() => {});
+
+  expect(adding).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
 
   const imps = await listImps(ctx.db);
 
-  expect(ctx.guest.runs).toEqual([]);
-  expect(imps).toEqual([]);
-  expect(ctx.readHostCalls()).toBe('');
+  // the inspect that found no image, then the pull, both by its digest
+  expect(ctx.docker.readCalls()).toStrictEqual([
+    `image inspect ${ctx.config.build.image}`,
+    `pull --quiet ${ctx.config.build.image}`,
+  ]);
+
+  expect(builder.guest.runs).toStrictEqual([]);
+  expect(imps).toStrictEqual([]);
 });
 
-test('a builder the governor refuses fails the add, with no host engine call', async () => {
-  await using ctx = await setupAdd({ env: { IMP_RAM_BUDGET_MIB: '256' } });
-
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
-  );
-
-  expect(String(failure)).toContain('the whole RAM budget');
-  expect(ctx.guest.runs).toEqual([]);
-  expect(ctx.readHostCalls()).toBe('');
-
-  const box = await findImageByName(ctx.db, 'box');
-
-  expect(box).toBeUndefined();
-});
-
-test('a builder image the host engine cannot give fails the add with a clear error, never a host add', async () => {
-  await using ctx = await setupAdd({ isRealBuilderImage: true });
-
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
-  );
-
-  expect(failure).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
-  expect(String(failure)).toContain(`impd cannot add its builder image ${ctx.config.build.image}`);
-
-  // the only host calls are for the builder image, by its digest
-  const calls = ctx.readHostCalls().trim().split('\n');
-
-  expect(calls.every((call) => call.endsWith(ctx.config.build.image))).toBe(true);
-  expect(ctx.guest.runs).toEqual([]);
-
-  const imps = await listImps(ctx.db);
-
-  expect(imps).toEqual([]);
-});
-
-// The host engine as the proxy's lock leaves it: the builder image pulls by
-// its digest, and create and export serve a small tree
-function buildBuilderHost(dataDir: string, pull = 'touch "$pulled"; exit 0'): string {
-  const tar = join(dataDir, 'builder.tar');
-
-  writeFileSync(tar, buildTar(dataDir, { dockerd: 'builder\n' }));
-
-  const inspect = JSON.stringify([{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }]);
-
-  return [
-    `pulled='${dataDir}/pulled'`,
-    'case "$1 $2" in',
-    `  "image inspect") [ -f "$pulled" ] && { echo '${inspect}'; exit 0; } ;;`,
-    `  "pull --quiet") ${pull} ;;`,
-    `  "create "*) echo '${CONTAINER_ID}'; exit 0 ;;`,
-    `  "export "*) cat '${tar}'; exit 0 ;;`,
-    '  "rm -f") exit 0 ;;',
-    'esac',
-  ].join('\n');
-}
-
-test('an IMP_BUILD_IMAGE bump adds the new builder image once, by its digest, and moves the row', async () => {
-  await using ctx = await setupAdd({ hostDocker: buildBuilderHost });
+test('it adds a bumped IMP_BUILD_IMAGE once, by its digest, and moves the row', async () => {
+  const ctx = await setupTest();
 
   // the builder image of an older release
-  await ctx.createTestImage(BUILDER_IMAGE);
+  await createImage(ctx.db, {
+    name: BUILDER_IMAGE,
+    ref: 'ghcr.io/zgeoff/imp-base:0.1.0',
+    digest: `sha256:${'0'.repeat(64)}`,
+    sizeBytes: 6,
+  });
+
+  // the host engine as the proxy's lock leaves it: the builder image pulls
+  // by its digest, and create and export serve a small tree
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'e'.repeat(64) },
+    exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
+  });
+
+  const add = ctx.createImages(
+    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
+  );
 
   // what each add and build calls first; the second finds the row current
-  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
-  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+  await add.images.ensureBuilderImage();
+  await add.images.ensureBuilderImage();
 
-  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+  const row = await findImageByName(ctx.db, BUILDER_IMAGE);
 
-  expect(builder).toMatchObject({
-    ref: ctx.config.build.image,
-    digest: `sha256:${'f'.repeat(64)}`,
+  const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
+
+  expect(row?.ref).toStrictEqual(ctx.config.build.image);
+  expect(row?.digest).toStrictEqual(`sha256:${'f'.repeat(64)}`);
+  expect(pulls).toStrictEqual([`pull --quiet ${ctx.config.build.image}`]);
+});
+
+test('it seeds the default image at first start through a builder', async () => {
+  const ctx = await setupTest();
+
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'e'.repeat(64) },
+    exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
   });
 
-  const pulls = ctx
-    .readHostCalls()
-    .split('\n')
-    .filter((call) => call.startsWith('pull '));
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
 
-  expect(pulls).toEqual([`pull --quiet ${ctx.config.build.image}`]);
-});
-
-test('the first-start seed goes through a builder too', async () => {
-  await using ctx = await setupAdd();
-
-  // the harness's own images, so the seed has none
-  for (const name of ['base']) {
-    await ctx.db.deleteFrom('images').where('name', '=', name).execute();
-  }
-
-  await ctx.withHostDocker(() => ctx.addImages.seedDefaultImage());
+  await ctx.createImages(builder.guest.open).images.seedDefaultImage();
 
   const seeded = await findImageByName(ctx.db, 'ubuntu');
 
-  expect(seeded).toMatchObject({ ref: 'ubuntu:24.04' });
-  expect(ctx.readHostCalls()).toBe('');
+  const image = ctx.config.build.image;
 
-  const commands = ctx.guest.runs.map((run) => run.argv.slice(1).join(' '));
+  // the host engine gives only the builder image; ubuntu comes in a builder
+  expect(seeded?.ref).toBe('ubuntu:24.04');
 
-  expect(commands).toContain('pull --quiet --platform linux/amd64 ubuntu:24.04');
+  expect(ctx.docker.readCalls()).toStrictEqual([
+    `image inspect ${image}`,
+    `pull --quiet ${image}`,
+    `image inspect ${image}`,
+    `create ${image} /bin/true`,
+    `export ${'e'.repeat(64)}`,
+    `rm -f ${'e'.repeat(64)}`,
+  ]);
 });
 
-test('a seed that failed after the builder image landed seeds at the next start', async () => {
-  await using ctx = await setupAdd();
+test('it seeds the default image at the next start once the builder image has landed', async () => {
+  const ctx = await setupTest();
 
-  await ctx.db.deleteFrom('images').where('name', '=', 'base').execute();
-  await ctx.createTestImage(BUILDER_IMAGE);
-  await ctx.withHostDocker(() => ctx.addImages.seedDefaultImage());
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  await ctx.createImages(builder.guest.open).images.seedDefaultImage();
 
   const seeded = await findImageByName(ctx.db, 'ubuntu');
 
-  expect(seeded).toMatchObject({ ref: 'ubuntu:24.04' });
+  expect(seeded?.ref).toBe('ubuntu:24.04');
+  expect(ctx.docker.readCalls()).toStrictEqual([]);
 });
 
-test('IMP_BUILD_ISOLATION=host adds on the host engine, as before, with a warning and no builder', async () => {
-  await using ctx = await setupAdd({ env: { IMP_BUILD_ISOLATION: 'host' } });
+test('it sends an add to the host engine, with a warning and no builder, under IMP_BUILD_ISOLATION=host', async () => {
+  const ctx = await setupTest({ env: { IMP_BUILD_ISOLATION: 'host' } });
 
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
-  );
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
 
-  // the fake host docker fails every call
-  expect(failure).toBeInstanceOf(Error);
-  expect(ctx.readHostCalls()).toContain('image inspect busybox:1.37');
+  // the host docker models no call, so the add fails there
+  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+
+  await adding.catch(() => {});
+
+  expect(adding).rejects.toThrow('stub docker: pull --quiet busybox:1.37 is not modelled');
+
+  expect(ctx.docker.readCalls()).toStrictEqual([
+    'image inspect busybox:1.37',
+    'pull --quiet busybox:1.37',
+  ]);
+
   expect(ctx.logs).toContain(HOST_ADD_WARNING);
-  expect(ctx.guest.runs).toEqual([]);
+  expect(builder.guest.runs).toStrictEqual([]);
 });
 
-// a pull that never ends: exec, so the timeout's kill reaches it
-const HANG = 'exec sleep 30';
+test('it fails a builder image pull that hangs at its limit, naming IMP_BUILD_IMAGE', async () => {
+  const ctx = await setupTest({ builderImagePullMs: 300 });
 
-test('a builder image pull that hangs fails at its timeout, naming IMP_BUILD_IMAGE', async () => {
-  await using ctx = await setupAdd({
-    hostDocker: (dataDir) => buildBuilderHost(dataDir, HANG),
-    builderImagePullMs: 300,
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+    ],
   });
 
-  const started = performance.now();
-
-  const failure = await readFailure(ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage()));
-
-  expect(performance.now() - started).toBeLessThan(5000);
-  expect(failure).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
-
-  expect(String(failure)).toContain(
-    `impd cannot add its builder image ${ctx.config.build.image} (IMP_BUILD_IMAGE)`,
+  const add = ctx.createImages(
+    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
   );
 
-  expect(String(failure)).toContain(
-    `the pull did not finish in 0.3 s; on a slow link, pull ${ctx.config.build.image} on the host engine first (docker pull ${ctx.config.build.image})`,
-  );
+  const image = ctx.config.build.image;
+  const ensuring = add.images.ensureBuilderImage();
 
-  // the inspect that found no image, then the pull: nothing else on the host
-  expect(ctx.readHostCalls().trim().split('\n')).toEqual([
+  await waitFor(() => {
+    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${image}`);
+  });
+
+  ctx.expirePullLimits();
+
+  expect(ensuring).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+    message: `impd cannot add its builder image ${image} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: the pull did not finish in 0.3 s; on a slow link, pull ${image} on the host engine first (docker pull ${image}), and impd takes it from there`,
+  });
+});
+
+test('it makes no host engine call beyond the inspect and the pull when the pull hangs', async () => {
+  const ctx = await setupTest({ builderImagePullMs: 300 });
+
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+    ],
+  });
+
+  const ensuring = ctx
+    .createImages(buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open)
+    .images.ensureBuilderImage();
+
+  await waitFor(() => {
+    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${ctx.config.build.image}`);
+  });
+
+  ctx.expirePullLimits();
+
+  await ensuring.catch(() => {});
+
+  expect(ensuring).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+
+  expect(ctx.docker.readCalls()).toStrictEqual([
     `image inspect ${ctx.config.build.image}`,
     `pull --quiet ${ctx.config.build.image}`,
   ]);
 });
 
-test('an add after a failed builder image pull pulls again', async () => {
-  // the first pull hangs, the second succeeds
-  const pull =
-    'if [ -f "$pulled.tried" ]; then touch "$pulled"; exit 0; fi; touch "$pulled.tried"; exec sleep 30';
+test('it pulls the builder image again on the add after a pull that failed', async () => {
+  const ctx = await setupTest({ builderImagePullMs: 300 });
 
-  await using ctx = await setupAdd({
-    hostDocker: (dataDir) => buildBuilderHost(dataDir, pull),
-    builderImagePullMs: 1000,
+  const host = {
+    refs: [ctx.config.build.image],
+    inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+    isOnHost: false,
+  };
+
+  buildStubDockerCli({ dir: ctx.dataDir, images: [{ ...host, pull: 'hang' }] });
+
+  const add = ctx.createImages(
+    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
+  );
+
+  const failing = add.images.ensureBuilderImage();
+
+  await waitFor(() => {
+    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${ctx.config.build.image}`);
   });
 
-  const first = await readFailure(ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage()));
+  ctx.expirePullLimits();
 
-  expect(String(first)).toContain('the pull did not finish');
+  await failing.catch(() => {});
 
-  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+  expect(failing).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
 
-  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+  // the registry answers now
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ ...host, pull: 'ok' }],
+    create: { id: 'e'.repeat(64) },
+    exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
+  });
 
-  const pulls = ctx
-    .readHostCalls()
-    .split('\n')
-    .filter((call) => call.startsWith('pull '));
+  await add.images.ensureBuilderImage();
 
-  expect(builder).toMatchObject({ ref: ctx.config.build.image });
-  expect(pulls).toHaveLength(2);
+  const row = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
+
+  expect(row?.ref).toStrictEqual(ctx.config.build.image);
+  expect(pulls.length).toBe(2);
 });
 
-test('a caller that goes stops waiting, and the pull it shared goes on for the others', async () => {
-  const go = { path: '' };
+test('it stops the wait of a caller that goes, and the pull it shared goes on for the others', async () => {
+  const ctx = await setupTest();
 
-  await using ctx = await setupAdd({
-    hostDocker: (dataDir) => {
-      go.path = join(dataDir, 'go');
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'e'.repeat(64) },
+    exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
+  });
 
-      return buildBuilderHost(
-        dataDir,
-        `while [ ! -f '${go.path}' ]; do sleep 0.05; done; touch "$pulled"; exit 0`,
-      );
+  const add = ctx.createImages(
+    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
+  );
+
+  const client = new AbortController();
+
+  const leaving = add.images.ensureBuilderImage(client.signal);
+  const staying = add.images.ensureBuilderImage();
+
+  client.abort(new Error('the client went'));
+
+  expect(leaving).rejects.toThrow('the client went');
+
+  await staying;
+
+  const row = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
+
+  expect(row?.ref).toStrictEqual(ctx.config.build.image);
+  expect(pulls.length).toBe(1);
+});
+
+test('it does not pull a builder image the host engine has already', async () => {
+  const ctx = await setupTest({ builderImagePullMs: 300 });
+
+  // the operator's own `docker pull` of IMP_BUILD_IMAGE; a pull would hang
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+        pull: 'hang',
+      },
+    ],
+    create: { id: 'e'.repeat(64) },
+    exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
+  });
+
+  await ctx
+    .createImages(buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open)
+    .images.ensureBuilderImage();
+
+  const row = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
+
+  expect(row?.ref).toStrictEqual(ctx.config.build.image);
+  expect(pulls).toStrictEqual([]);
+});
+
+test('it names the error of a step after the pull that fails past the limit, not the pull', async () => {
+  const ctx = await setupTest({ builderImagePullMs: 300 });
+
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: [ctx.config.build.image],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
+      },
+    ],
+    create: { id: 'e'.repeat(64) },
+    exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
+  });
+
+  const mkfs = buildStubImageMkfs(ctx.dataDir);
+
+  const ensuring = ctx
+    .createImages(buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open)
+    .images.ensureBuilderImage();
+
+  await mkfs.waitForStart();
+
+  // the rootfs write outlasts the pull's limit, then fails
+  ctx.expirePullLimits();
+  mkfs.fail('no space left on device');
+
+  expect(ensuring).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+    message: expect.stringMatching(
+      /^(?!.*the pull did not finish).*no space left on device/sv,
+    ) as unknown,
+  });
+});
+
+test('it leaves no row, rootfs, hold or builder when the client leaves an add while mkfs.ext4 runs', async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const mkfs = buildStubImageMkfs(ctx.dataDir);
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const client = new AbortController();
+
+  const adding = ctx
+    .createImages(builder.guest.open)
+    .images.addImage('busybox:1.37', 'box', { signal: client.signal });
+
+  await mkfs.waitForStart();
+
+  client.abort(new Error('the client went'));
+  mkfs.release();
+
+  expect(adding).rejects.toThrow('the client went');
+
+  const box = await findImageByName(ctx.db, 'box');
+  const status = await ctx.diskBudget.readStatus();
+  const imps = await listImps(ctx.db);
+
+  const built = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
+    entry.startsWith('imp-build-'),
+  );
+
+  expect(box).toBe(undefined);
+  expect(built).toStrictEqual([]);
+  expect(status.pendingBytes).toBe(0);
+  expect(imps).toStrictEqual([]);
+});
+
+test('it leaves no new row and no rootfs when a template takes the name during an add', async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const exporting = Promise.withResolvers<null>();
+  const templated = Promise.withResolvers<null>();
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onExport: async () => {
+      exporting.resolve(null);
+
+      await templated.promise;
     },
   });
 
-  const controller = new AbortController();
+  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
 
-  // one PATH for both callers: each call's own would restore it as it ends
-  await ctx.withHostDocker(async () => {
-    const leaving = readFailure(ctx.addImages.ensureBuilderImage(controller.signal));
-    const staying = ctx.addImages.ensureBuilderImage();
+  await exporting.promise;
 
-    controller.abort(new Error('the client went'));
-
-    const left = await leaving;
-
-    expect(String(left)).toContain('the client went');
-
-    writeFileSync(go.path, '');
-
-    await staying;
-  });
-
-  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
-
-  const pulls = ctx
-    .readHostCalls()
-    .split('\n')
-    .filter((call) => call.startsWith('pull '));
-
-  expect(builder).toMatchObject({ ref: ctx.config.build.image });
-  expect(pulls).toHaveLength(1);
-});
-
-test('a builder image the host engine has already, pulled ahead by its reference, is not pulled', async () => {
-  await using ctx = await setupAdd({
-    hostDocker: (dataDir) => {
-      // the operator's own `docker pull` of IMP_BUILD_IMAGE
-      writeFileSync(join(dataDir, 'pulled'), '');
-
-      return buildBuilderHost(dataDir, HANG);
-    },
-    builderImagePullMs: 300,
-  });
-
-  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
-
-  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
-
-  const pulls = ctx
-    .readHostCalls()
-    .split('\n')
-    .filter((call) => call.startsWith('pull '));
-
-  expect(builder).toMatchObject({ ref: ctx.config.build.image });
-  expect(pulls).toEqual([]);
-});
-
-test('a step after the pull that fails past the limit names its own error, not the pull', async () => {
-  const create = `  "create "*) sleep 0.6; echo 'no space left on device' >&2; exit 1 ;;`;
-
-  await using ctx = await setupAdd({
-    hostDocker: (dataDir) => buildBuilderHost(dataDir).replace(/^ {2}"create "\*\).*$/mv, create),
-    builderImagePullMs: 300,
-  });
-
-  const failure = await readFailure(ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage()));
-
-  expect(failure).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
-  expect(String(failure)).toContain('no space left on device');
-  expect(String(failure)).not.toContain('the pull did not finish');
-});
-
-// a template row named `name`, as an imp's image would be
-function createTemplateRow(db: Parameters<typeof createImage>[0], name: string) {
-  return createImage(db, {
-    name,
+  await createImage(ctx.db, {
+    name: 'box',
     ref: 'imp:dev',
     digest: `sha256:${'d'.repeat(64)}`,
     sizeBytes: 1,
     source: 'imp',
     sourceImp: 'dev',
   });
-}
 
-test('a client that leaves an add while mkfs.ext4 runs leaves no row, no rootfs and no hold', async () => {
-  await using ctx = await setupAdd({ pauseMkfs: true });
+  templated.resolve(null);
 
-  const controller = new AbortController();
-
-  const failure = await ctx.withHostDocker(async () => {
-    const adding = readFailure(
-      ctx.addImages.addImage('busybox:1.37', 'box', { signal: controller.signal }),
-    );
-
-    await ctx.waitForMkfs();
-
-    controller.abort(new Error('the client went'));
-    ctx.startMkfs();
-
-    return adding;
-  });
+  expect(adding).rejects.toThrow('image box is a template');
 
   const box = await findImageByName(ctx.db, 'box');
   const status = await ctx.diskBudget.readStatus();
-  const imps = await listImps(ctx.db);
 
-  expect(String(failure)).toContain('the client went');
-  expect(box).toBeUndefined();
-  expect(ctx.listBuiltRootfs()).toEqual([]);
-  expect(status.pendingBytes).toBe(0);
-  expect(imps).toEqual([]);
-});
-
-test('a template that takes the name during an add leaves no new row and no rootfs', async () => {
-  const holder: { db?: Parameters<typeof createImage>[0] } = {};
-
-  await using ctx = await setupAdd({
-    onExport: async () => {
-      if (holder.db !== undefined) {
-        await createTemplateRow(holder.db, 'box');
-      }
-    },
-  });
-
-  holder.db = ctx.db;
-
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
+  const built = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
+    entry.startsWith('imp-build-'),
   );
 
-  const box = await findImageByName(ctx.db, 'box');
-  const status = await ctx.diskBudget.readStatus();
-
-  expect(String(failure)).toContain('image box is a template');
-  expect(box).toMatchObject({ source: 'imp' });
-  expect(ctx.listBuiltRootfs()).toEqual([]);
+  expect(box?.source).toBe('imp');
+  expect(built).toStrictEqual([]);
   expect(status.pendingBytes).toBe(0);
 });
 
-test("an add and a build of one digest at once: one row fails, the other's row and rootfs stay", async () => {
-  await using ctx = await setupAdd({ pauseMkfs: true });
+test("it keeps the other's row and rootfs when an add and a build of one digest run at once and one row fails", async () => {
+  const ctx = await setupTest();
 
-  // one PATH for both callers: each call's own would restore it as it ends
-  const [failure, built] = await ctx.withHostDocker(async () => {
-    const adding = readFailure(ctx.addImages.addImage('busybox:1.37', 'box'));
-    const building = ctx.runBuild('web');
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
 
-    // both exports are in, so both wait on the one mkfs.ext4
-    await ctx.waitForMkfs();
+  const mkfs = buildStubImageMkfs(ctx.dataDir);
 
-    while (ctx.guest.runs.filter((run) => run.argv[1] === 'export' && run.closed).length < 2) {
-      await Bun.sleep(20);
-    }
-
-    await Bun.sleep(200);
-
-    await createTemplateRow(ctx.db, 'box');
-
-    ctx.startMkfs();
-
-    return Promise.all([adding, building]);
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
+  const service = ctx.createImages(builder.guest.open);
+  const adding = service.images.addImage('busybox:1.37', 'box');
+  const context = join(ctx.dataDir, 'context');
+
+  await mkdir(context);
+  await writeFile(join(context, 'Dockerfile'), 'FROM busybox:1.37\nRUN true\n');
+
+  await Bun.write(
+    `${context}.tar`,
+    Bun.spawnSync(['tar', '-C', context, '-c', 'Dockerfile']).stdout,
+  );
+
+  const building = service.images.buildImageFromContext(`${context}.tar`, 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  // both exports are in, so both wait on the one mkfs.ext4
+  await mkfs.waitForStart();
+
+  await waitFor(() => {
+    expect(builder.guest.runs.filter((run) => run.argv[1] === 'export' && run.closed)).toHaveLength(
+      2,
+    );
+  });
+
+  await createImage(ctx.db, {
+    name: 'box',
+    ref: 'imp:dev',
+    digest: `sha256:${'d'.repeat(64)}`,
+    sizeBytes: 1,
+    source: 'imp',
+    sourceImp: 'dev',
+  });
+
+  mkfs.release();
+
+  expect(adding).rejects.toThrow('image box is a template');
+
+  const built = await building;
   const status = await ctx.diskBudget.readStatus();
 
-  expect(String(failure)).toContain('image box is a template');
-  expect(built).toMatchObject({ name: 'web' });
-  expect(ctx.listBuiltRootfs()).toEqual([built.digest]);
-  expect(existsSync(buildImagePaths(ctx.dataDir, built.digest).rootfs)).toBe(true);
+  const rootfs = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
+    entry.startsWith('imp-build-'),
+  );
+
+  expect(built.name).toBe('web');
+  expect(rootfs).toStrictEqual([built.digest]);
   expect(status.pendingBytes).toBe(0);
 });
 
-// An add of `one`'s digest held between finding its rootfs and writing its
-// row while `imp image rm one` runs; `isRowFailing` makes that row fail too
-async function runRemoveDuringAdd(isRowFailing: boolean) {
+test('it keeps the rootfs when an image rm runs while an add of its digest is between rootfs and row', async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const gate = buildQueryGate('box');
+
+  // a held select goes before the database closes, however the test ends
+  ctx.stack.defer(() => {
+    gate.release();
+  });
+
   const exports = { count: 0 };
-  const holder: { arm?: () => void } = {};
 
   // the second add's export arms the gate, after its name check
-  const ctx = await setupAdd({
-    gatedName: 'box',
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
     onExport: () => {
       exports.count += 1;
 
       if (exports.count === 2) {
-        holder.arm?.();
+        gate.arm();
       }
 
       return Promise.resolve();
     },
   });
 
-  holder.arm = ctx.gate.arm;
+  const add = ctx.createImages(builder.guest.open, { plugin: gate.plugin });
 
-  const first = await ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'one'));
+  const first = await add.images.addImage('busybox:1.37', 'one');
 
-  const end = await ctx.withHostDocker(async () => {
-    const adding = readFailure(ctx.addImages.addImage('busybox:1.37', 'box'));
+  const adding = add.images.addImage('busybox:1.37', 'box');
 
-    await ctx.gate.reached;
+  await gate.reached;
 
-    await ctx.addImages.removeImage('one');
+  await add.images.removeImage('one');
 
-    if (isRowFailing) {
-      await createTemplateRow(ctx.db, 'box');
-    }
+  gate.release();
 
-    ctx.gate.release();
-
-    return adding;
-  });
+  await adding;
 
   const rows = await listImages(ctx.db);
 
-  const hasRootfs = existsSync(buildImagePaths(ctx.dataDir, first.digest).rootfs);
+  expect(
+    rows.filter((row) => row.name !== BUILDER_IMAGE).map((row) => [row.name, row.digest]),
+  ).toStrictEqual([['box', first.digest]]);
 
-  await ctx[Symbol.asyncDispose]();
-
-  return {
-    end,
-    rows: rows
-      .filter((row) => ['one', 'box'].includes(row.name))
-      .map((row) => [row.name, row.digest]),
-    hasRootfs,
-    first,
-  };
-}
-
-test('an image rm while an add of its digest sits between its rootfs and its row keeps that rootfs', async () => {
-  const kept = await runRemoveDuringAdd(false);
-
-  expect(kept.end).toBeNull();
-  expect(kept.rows).toEqual([['box', kept.first.digest]]);
-  expect(kept.hasRootfs).toBe(true);
+  expect(existsSync(buildImagePaths(ctx.dataDir, first.digest).rootfs)).toBe(true);
 });
 
-test("that rootfs goes after all when the add's row then fails", async () => {
-  const failed = await runRemoveDuringAdd(true);
+test("it removes that rootfs after all when the add's row then fails", async () => {
+  const ctx = await setupTest();
 
-  expect(String(failed.end)).toContain('UNIQUE');
-  expect(failed.rows).toEqual([['box', `sha256:${'d'.repeat(64)}`]]);
-  expect(failed.hasRootfs).toBe(false);
-});
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
 
-test('a cleanup removal that fails is logged, and the add returns its own error', async () => {
-  const holder: { db?: Parameters<typeof createImage>[0] } = {};
+  const gate = buildQueryGate('box');
 
-  await using ctx = await setupAdd({
-    isRemoveFailing: true,
-    onExport: async () => {
-      if (holder.db !== undefined) {
-        await createTemplateRow(holder.db, 'box');
+  // a held select goes before the database closes, however the test ends
+  ctx.stack.defer(() => {
+    gate.release();
+  });
+
+  const exports = { count: 0 };
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onExport: () => {
+      exports.count += 1;
+
+      if (exports.count === 2) {
+        gate.arm();
       }
+
+      return Promise.resolve();
     },
   });
 
-  holder.db = ctx.db;
+  const add = ctx.createImages(builder.guest.open, { plugin: gate.plugin });
 
-  const failure = await readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
+  const first = await add.images.addImage('busybox:1.37', 'one');
+
+  const adding = add.images.addImage('busybox:1.37', 'box');
+
+  await gate.reached;
+
+  await add.images.removeImage('one');
+
+  await createImage(ctx.db, {
+    name: 'box',
+    ref: 'imp:dev',
+    digest: `sha256:${'d'.repeat(64)}`,
+    sizeBytes: 1,
+    source: 'imp',
+    sourceImp: 'dev',
+  });
+
+  gate.release();
+
+  expect(adding).rejects.toThrow('UNIQUE');
+
+  const rows = await listImages(ctx.db);
+
+  expect(
+    rows.filter((row) => row.name !== BUILDER_IMAGE).map((row) => [row.name, row.digest]),
+  ).toStrictEqual([['box', `sha256:${'d'.repeat(64)}`]]);
+
+  expect(existsSync(buildImagePaths(ctx.dataDir, first.digest).rootfs)).toBe(false);
+});
+
+test('it logs a cleanup removal that fails, and returns the add its own error', async () => {
+  const ctx = await setupTest();
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+
+  const exporting = Promise.withResolvers<null>();
+  const templated = Promise.withResolvers<null>();
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
+    repoDigest: `sha256:${'b'.repeat(64)}`,
+    onExport: async () => {
+      exporting.resolve(null);
+
+      await templated.promise;
+    },
+  });
+
+  // a storage whose removals fail, as on a disk gone read-only
+  const add = ctx.createImages(builder.guest.open, {
+    storage: {
+      ...ctx.storage,
+      removeImage: () => Promise.reject(new Error('the disk is read-only')),
+    },
+  });
+
+  const adding = add.images.addImage('busybox:1.37', 'box');
+
+  await exporting.promise;
+
+  await createImage(ctx.db, {
+    name: 'box',
+    ref: 'imp:dev',
+    digest: `sha256:${'d'.repeat(64)}`,
+    sizeBytes: 1,
+    source: 'imp',
+    sourceImp: 'dev',
+  });
+
+  templated.resolve(null);
+
+  expect(adding).rejects.toThrow('image box is a template');
+
+  expect(ctx.logs).toSatisfyAny((line: string) =>
+    /^impd: image box: could not remove the unused rootfs of imp-build-[a-f0-9]{64}: the disk is read-only$/v.test(
+      line,
+    ),
   );
-
-  expect(String(failure)).toContain('image box is a template');
-
-  expect(ctx.logs.join('\n')).toContain(
-    'impd: image box: could not remove the unused rootfs of imp-build-',
-  );
-
-  expect(ctx.logs.join('\n')).toContain('the disk is read-only');
 });

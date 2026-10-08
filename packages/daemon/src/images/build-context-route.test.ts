@@ -1,13 +1,6 @@
-import { expect, test } from 'bun:test';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -16,291 +9,492 @@ import {
   ImageBuildEventSchema,
   ImageBuildResultSchema,
 } from '@imp/api';
-import type { Scope } from '@imp/api';
-import * as z from 'zod';
+import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { updateEnv } from '@imp/test-utils/update-env';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
 import { createApiAudit } from '../audit/api-audit';
+import { toApiImage } from '../build-router';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import type { ImpdDeps } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
-import { createImage } from '../db/images';
+import { openDatabase } from '../db/open-database';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
+import { runChecked } from '../process/run-command';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
-import { buildUploadsDir } from '../storage/data-layout';
+import {
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+  buildUploadsDir,
+} from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockCaller } from '../test-utils/build-mock-caller';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
 import { createBuildContextRoute } from './build-context-route';
-import { BUILD_KEEPALIVE_MS } from './build-event-stream';
 import { PIN_INSPECT_FORMAT } from './image-pin';
-import type { ImageService } from './image-service';
 
-interface BuildCall {
-  readonly bytes: string;
-  readonly name: string;
-  readonly dockerfile: string | undefined;
-}
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-interface TestOptions {
-  readonly env?: Readonly<Record<string, string>>;
+  onTestFinished(() => stack.disposeAsync());
 
-  // holds every build until it resolves
-  readonly gate?: Promise<void>;
+  const dataDir = await mkdtemp(join(tmpdir(), 'build-context-route-'));
 
-  // replaces the fake build; 'image-service' builds as impd does
-  readonly build?: ImageService['buildImageFromContext'] | 'image-service';
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  // the gap between a streamed build's progress lines
-  readonly keepaliveMs?: number;
-}
+  const db = await openDatabase(':memory:');
 
-// the headers of a client that reads the build as a stream of events
-const STREAM = { accept: IMAGE_BUILD_STREAM_TYPE };
+  stack.defer(() => db.destroy());
 
-type BuildEvent = z.infer<typeof ImageBuildEventSchema>;
+  // the engine a host build sends its context to
+  const engine = startStubDockerEngine({ dir: dataDir });
 
-// impd with a fake build that records what reached it; 'image-service'
-// builds on the host engine, a fake docker, through the same input guard
-// and pins as a builder's
-async function setupTest(options: TestOptions = {}) {
-  const harness = await setupImpTest({ env: { IMP_BUILD_ISOLATION: 'host', ...options.env } });
+  stack.defer(() => engine.stop());
 
-  const calls: BuildCall[] = [];
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one; adds
+  // and builds run on the host's engine, the stubs
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_BUILD_ISOLATION: 'host',
+    DOCKER_HOST: engine.dockerHost,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
 
-  // builds stopped because their client went
-  const stopped: string[] = [];
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-  const writeBuildCall: ImageService['buildImageFromContext'] = async (
-    tarPath,
-    name,
-    dockerfile,
-    buildOptions,
-  ) => {
-    const signal = buildOptions.signal;
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-    calls.push({ bytes: readFileSync(tarPath, 'utf8'), name, dockerfile });
+  const vmm = buildStubVmm();
 
-    const gone = Promise.withResolvers<void>();
+  const deps: ImpdDeps = {
+    db,
 
-    signal.addEventListener('abort', () => {
-      stopped.push(name);
-      gone.resolve();
-    });
+    // the bearer the test's client sends
+    rootToken: 'root-token',
 
-    await Promise.race([options.gate, gone.promise]);
+    // a sparse copy for a reflink: the temp dir is not XFS
+    storage: createXfsBackend({
+      dataDir,
+      cloneFile: async (source, target) => {
+        await runChecked(['cp', '--sparse=always', source, target]);
+      },
+    }),
 
-    signal.throwIfAborted();
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
 
-    return createImage(harness.db, {
-      name,
-      ref: `imp/${name}:latest`,
-      digest: 'sha256:x',
-      sizeBytes: 1,
-    });
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   };
 
-  const build =
-    options.build === 'image-service'
-      ? harness.images.buildImageFromContext
-      : (options.build ?? writeBuildCall);
+  const impd = await createImpd(config, deps);
 
-  const images = { ...harness.images, buildImageFromContext: build };
+  stack.defer(() => impd.broker.stop());
 
-  const root = buildTestApp(
-    { ...harness, images },
-    harness,
-    undefined,
-    {},
-    null,
-    {},
-    options.keepaliveMs,
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // the root bearer's client, against impd's own app
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: (request) => impd.api.app.handle(request),
+    }),
   );
 
-  const sendBuild = (
-    query: string,
-    body: string | ReadableStream<Uint8Array>,
-    token = TEST_TOKEN,
-    headers: Readonly<Record<string, string>> = {},
-    signal: AbortSignal | null = null,
-  ): Promise<Response> =>
-    root.app.handle(
-      new Request(`http://impd.test${IMAGE_BUILD_PATH}?${query}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, ...headers },
-        body,
-        signal,
-      }),
-    );
-
-  const readStatus = async (
-    query: string,
-    body: string | ReadableStream<Uint8Array>,
-    token = TEST_TOKEN,
-    headers: Readonly<Record<string, string>> = {},
-  ): Promise<number> => {
-    const response = await sendBuild(query, body, token, headers);
-
-    return response.status;
-  };
-
-  const createToken = async (scope: Scope, imps: readonly string[] | null = null) => {
-    const made = await root.client.tokens.create({
-      name: `t-${scope}-${String(imps?.length ?? 0)}`,
-      scope,
-      ...(imps !== null && { imps: [...imps] }),
-    });
-
-    return made.secret;
-  };
-
-  // the outcome of every images.build audit row, oldest first
-  const readOutcomes = async (count: number): Promise<string[]> => {
-    const deadline = Date.now() + 5000;
-
-    for (;;) {
-      const rows = await listApiCalls(harness.db, null, 100, null);
-
-      const builds = rows.filter((row) => row.procedure === 'images.build');
-
-      if (builds.length >= count || Date.now() > deadline) {
-        return builds.map((row) => row.outcome).toReversed();
-      }
-
-      await Bun.sleep(5);
-    }
-  };
-
   return {
-    harness,
-    app: root.app,
-    calls,
-    stopped,
-    sendBuild,
-    readStatus,
-    createToken,
-    readOutcomes,
-    listUploads: () => readdirSync(buildUploadsDir(harness.config.dataDir)),
-    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
+    // a release deferred here runs before impd stops and its database closes
+    stack,
+    config,
+    db,
+    dataDir,
+    engine,
+    impd,
+    client,
   };
 }
 
-// every event of a streamed answer, to its end
-async function readEvents(response: Response): Promise<BuildEvent[]> {
-  const text = await response.text();
+test('it builds an uploaded context and answers the image', async () => {
+  const ctx = await setupTest();
 
-  return text
-    .trim()
-    .split('\n')
-    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
-}
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
-// free ports for impd's API and its proxy, outside the imp ports of the
-// 64-slot subnet the env names
-function pickApiPorts(): { readonly api: number; readonly env: Record<string, string> } {
-  const ports = findFreePorts(3);
-  const api = ports.take();
-  const proxy = ports.take();
-  const base = ports.take();
+  // the frontend is on the host, and the engine tags what it builds
+  const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
-  if ([api, proxy].some((port) => port >= base && port < base + 64)) {
-    return pickApiPorts();
-  }
-
-  return {
-    api,
-    env: {
-      IMP_API_PORT: String(api),
-      IMP_PROXY_PORT: String(proxy),
-      IMP_PORT_BASE: String(base),
-      IMP_SUBNET: '10.99.0.0/24',
-    },
-  };
-}
-
-// a body with no Content-Length: the route can only count what arrives
-function createByteStream(total: number): ReadableStream<Uint8Array> {
-  const state = { sent: 0 };
-
-  return new ReadableStream({
-    pull: (controller) => {
-      if (state.sent >= total) {
-        controller.close();
-
-        return;
-      }
-
-      const chunk = new Uint8Array(Math.min(64 * 1024, total - state.sent));
-
-      state.sent += chunk.byteLength;
-
-      controller.enqueue(chunk);
-    },
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar,
   });
-}
 
-test('a streamed context builds, answers the image and leaves no file behind', async () => {
-  await using ctx = await setupTest();
+  updateEnv('PATH', docker.path);
 
-  const response = await ctx.sendBuild('name=web&dockerfile=docker/Dockerfile', 'tar bytes');
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
   const body: unknown = await response.json();
 
   expect(response.status).toBe(200);
   expect(ImageBuildResultSchema.parse(body).name).toBe('web');
-  expect(ctx.calls).toEqual([{ bytes: 'tar bytes', name: 'web', dockerfile: 'docker/Dockerfile' }]);
-  expect(ctx.listUploads()).toEqual([]);
-
-  const outcomes = await ctx.readOutcomes(1);
-
-  expect(outcomes).toEqual(['ok']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a client that accepts the stream gets the headers at once, progress while it builds, then the image', async () => {
+test('it sends the engine the context under the image tag and the Dockerfile path', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context', 'docker'), { recursive: true });
+  await writeFile(join(ctx.dataDir, 'context', 'docker', 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'docker']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web&dockerfile=docker/Dockerfile`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const build = ctx.engine.seen.find((request) => request.target.startsWith('/build'));
+
+  const query = new URL(`http://docker${build?.target ?? ''}`).searchParams;
+
+  expect(query.get('t')).toBe('imp/web:latest');
+  expect(query.get('dockerfile')).toBe('docker/Dockerfile');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it removes the upload and audits the build as ok once the build ends', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
+
+  const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar,
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const builds = rows.filter((row) => row.procedure === 'images.build');
+
+    expect(builds).not.toBeEmpty();
+
+    return builds.map((row) => row.outcome);
+  });
+
+  const uploads = await readdir(buildUploadsDir(ctx.dataDir));
+
+  expect(outcomes).toStrictEqual(['ok']);
+  expect(uploads).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it answers a streamed build with its headers while the build still runs', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine holds the build until the test ends
+  const held = Promise.withResolvers<void>();
+
+  // a failed build, once the test lets it go
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    await held.promise;
+
+    return new Response(`${JSON.stringify({ error: 'held for the test' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      body: tar,
+    }),
+  );
+
+  // let go, and read the stream to its end, before the engine stops
+  // released before impd stops, so the held builds settle first
+  ctx.stack.defer(async () => {
+    held.resolve();
+
+    await response.text();
+  });
+
+  expect([response.status, response.headers.get('content-type')]).toStrictEqual([
+    200,
+    IMAGE_BUILD_STREAM_TYPE,
+  ]);
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it streams progress lines while the build runs, then the image', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
+
+  const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar,
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine holds the build until the client has read three keepalives
   const gate = Promise.withResolvers<void>();
 
-  await using ctx = await setupTest({ gate: gate.promise, keepaliveMs: 10 });
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
 
-  // answered while the build still waits on the gate
-  const response = await ctx.sendBuild('name=web', 'tar bytes', TEST_TOKEN, STREAM);
+    await gate.promise;
 
-  expect(response.status).toBe(200);
-  expect(response.headers.get('content-type')).toBe(IMAGE_BUILD_STREAM_TYPE);
+    return null;
+  });
 
-  while (ctx.calls.length === 0) {
-    await Bun.sleep(1);
+  // a keepalive every 10 ms, so a held build sends lines
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10,
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { accept: IMAGE_BUILD_STREAM_TYPE },
+      body: tar,
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const reader = response.body?.pipeThrough(new TextDecoderStream()).getReader();
+  const read = { text: '' };
+
+  while (read.text.split('"phase":"build"').length <= 3) {
+    const chunk = await reader?.read();
+
+    read.text += chunk?.value ?? '';
   }
-
-  await Bun.sleep(50);
 
   gate.resolve();
 
-  const events = await readEvents(response);
+  for (let chunk = await reader?.read(); chunk?.done === false; chunk = await reader?.read()) {
+    read.text += chunk.value;
+  }
 
-  const phases = events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []));
+  const events = read.text
+    .trim()
+    .split('\n')
+    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
 
-  expect(phases[0]).toBe('upload');
-  expect(phases.filter((phase) => phase === 'build').length).toBeGreaterThan(2);
+  expect(events[0]).toMatchObject({ type: 'progress', phase: 'upload' });
   expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'web' } });
-  expect(ctx.listUploads()).toEqual([]);
-
-  const outcomes = await ctx.readOutcomes(1);
-
-  expect(outcomes).toEqual(['ok']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
 // impd on a real socket behind the wake proxy, as a build over HTTPS reaches
 // it: the first line comes back while the upload still holds its rest
-test('through the proxy, a progress line arrives before the upload ends', async () => {
-  const ports = pickApiPorts();
-  const gate = Promise.withResolvers<void>();
+test('it sends a progress line through the proxy before the upload ends', async () => {
+  const ctx = await setupTest();
 
-  await using ctx = await setupTest({ env: ports.env, gate: gate.promise, keepaliveMs: 10 });
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
-  ctx.app.listen({ port: ports.api, hostname: '127.0.0.1' });
+  const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar,
+  });
+
+  updateEnv('PATH', docker.path);
+
+  ctx.impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  // the listeners close before impd stops and its database and dir go
+  ctx.stack.defer(async () => {
+    await ctx.impd.api.app.stop(true);
+  });
+
+  const apiPort = ctx.impd.api.app.server?.port;
+
+  invariant(apiPort);
+
+  // the proxy forwards the API to the port the app took
   const proxy = startWakeProxy({
-    config: ctx.harness.config,
-    db: ctx.harness.db,
-    imps: ctx.harness.imps,
+    config: { ...ctx.config, apiPort },
+    db: ctx.db,
+    imps: ctx.impd.imps,
     log: () => {},
     peers: createForwardedPeers(Date.now),
   });
+
+  ctx.stack.defer(() => proxy.stop());
 
   const apex = proxy.startListener({
     port: 0,
@@ -308,18 +502,19 @@ test('through the proxy, a progress line arrives before the upload ends', async 
     route: () => ({ kind: 'api' }),
   });
 
+  ctx.stack.defer(() => apex.stop(true));
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
   const rest = Promise.withResolvers<void>();
   const upload = { ended: false };
 
-  const encoder = new TextEncoder();
-
   const body = new ReadableStream<Uint8Array>({
     start: async (controller) => {
-      controller.enqueue(encoder.encode('first half, '));
+      controller.enqueue(tar.subarray(0, 512));
 
       await rest.promise;
 
-      controller.enqueue(encoder.encode('second half'));
+      controller.enqueue(tar.subarray(512));
 
       upload.ended = true;
 
@@ -327,834 +522,2725 @@ test('through the proxy, a progress line arrives before the upload ends', async 
     },
   });
 
-  try {
-    const response = await fetch(
-      `http://127.0.0.1:${String(apex.port)}${IMAGE_BUILD_PATH}?name=web`,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${TEST_TOKEN}`, ...STREAM },
-        body,
-        duplex: 'half',
-      },
-    );
-
-    const lines = response.body?.pipeThrough(new TextDecoderStream()).getReader();
-
-    const first = await lines?.read();
-
-    expect(upload.ended).toBe(false);
-
-    expect(JSON.parse(first?.value?.split('\n')[0] ?? 'null')).toMatchObject({
-      type: 'progress',
-      phase: 'upload',
-    });
-
-    rest.resolve();
-    gate.resolve();
-
-    const parts = [first?.value ?? ''];
-
-    for (let chunk = await lines?.read(); chunk?.done === false; chunk = await lines?.read()) {
-      parts.push(chunk.value);
-    }
-
-    const last = ImageBuildEventSchema.parse(
-      JSON.parse(parts.join('').trim().split('\n').at(-1) ?? 'null'),
-    );
-
-    expect(last).toMatchObject({ type: 'image', image: { name: 'web' } });
-    expect(ctx.calls.map((call) => call.bytes)).toEqual(['first half, second half']);
-  } finally {
-    await apex.stop(true);
-    await proxy.stop();
-    await ctx.app.stop(true);
-  }
-});
-
-test('only a manage caller for the whole host may build', async () => {
-  await using ctx = await setupTest();
-
-  const limited = await ctx.createToken('manage', ['dev-*']);
-  const reader = await ctx.createToken('read');
-  const limitedStatus = await ctx.readStatus('name=web', 'tar', limited);
-  const readerStatus = await ctx.readStatus('name=web', 'tar', reader);
-  const strangerStatus = await ctx.readStatus('name=web', 'tar', 'not-a-token');
-
-  expect([limitedStatus, readerStatus, strangerStatus]).toEqual([403, 403, 401]);
-  expect(ctx.calls).toEqual([]);
-
-  const outcomes = await ctx.readOutcomes(2);
-
-  expect(outcomes).toEqual(['FORBIDDEN', 'FORBIDDEN']);
-});
-
-test('a bad name or a Dockerfile outside the context is refused before the upload', async () => {
-  await using ctx = await setupTest();
-
-  const queries = [
-    'name=Bad Name',
-    'name=web&dockerfile=../Dockerfile',
-    'name=web&dockerfile=sub/../../Dockerfile',
-    'name=web&dockerfile=/etc/passwd',
-    '',
-  ];
-
-  for (const query of queries) {
-    const status = await ctx.readStatus(query, 'tar');
-
-    expect(status).toBe(400);
-  }
-
-  expect(ctx.calls).toEqual([]);
-});
-
-test('a context over the limit gets 413, by its Content-Length or by the bytes that come', async () => {
-  await using ctx = await setupTest({ env: { IMP_BUILD_CONTEXT_MAX_MIB: '1' } });
-
-  const declared = await ctx.readStatus('name=web', 'x', TEST_TOKEN, {
-    'content-length': String(2 * 1024 ** 2),
-  });
-
-  expect(declared).toBe(413);
-
-  // a refused Content-Length frees its build slot
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const again = await ctx.readStatus('name=web', 'x', TEST_TOKEN, {
-      'content-length': String(2 * 1024 ** 2),
-    });
-
-    expect(again).toBe(413);
-  }
-
-  const streamed = await ctx.sendBuild('name=web', createByteStream(1024 ** 2 + 1));
-  const body: unknown = await streamed.json();
-
-  expect(streamed.status).toBe(413);
-  expect(body).toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
-  expect(ctx.listUploads()).toEqual([]);
-
-  // a stream refuses a Content-Length with its status; bytes past the limit
-  // come after its 200, so its last line says so
-  const declaredStream = await ctx.readStatus('name=web', 'x', TEST_TOKEN, {
-    ...STREAM,
-    'content-length': String(2 * 1024 ** 2),
-  });
-
-  expect(declaredStream).toBe(413);
-
-  const overStream = await ctx.sendBuild(
-    'name=web',
-    createByteStream(1024 ** 2 + 1),
-    TEST_TOKEN,
-    STREAM,
+  const response = await fetch(
+    `http://127.0.0.1:${String(apex.port)}${IMAGE_BUILD_PATH}?name=web`,
+    {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      body,
+      duplex: 'half',
+    },
   );
 
-  const events = await readEvents(overStream);
+  const reader = response.body?.pipeThrough(new TextDecoderStream()).getReader();
 
-  expect(overStream.status).toBe(200);
-  expect(events.at(-1)).toMatchObject({ type: 'error', code: 'PAYLOAD_TOO_LARGE' });
-  expect(ctx.listUploads()).toEqual([]);
+  const firstChunk = await reader?.read();
 
-  // exactly the limit is fine
-  const atLimit = await ctx.readStatus('name=web', createByteStream(1024 ** 2));
+  const endedAtFirstLine = upload.ended;
 
-  expect(atLimit).toBe(200);
-  expect(ctx.calls).toHaveLength(1);
-});
+  rest.resolve();
 
-test('a fifth build while four upload or run gets 429', async () => {
-  const gate = Promise.withResolvers<void>();
+  const parts = [firstChunk?.value ?? ''];
 
-  await using ctx = await setupTest({ gate: gate.promise });
-
-  const running = [1, 2, 3, 4].map((n) => ctx.readStatus(`name=web${String(n)}`, 'tar'));
-
-  while (ctx.calls.length < 4) {
-    await Bun.sleep(1);
+  for (let chunk = await reader?.read(); chunk?.done === false; chunk = await reader?.read()) {
+    parts.push(chunk.value);
   }
 
-  const fifth = await ctx.readStatus('name=web5', 'tar');
-  const fifthStream = await ctx.readStatus('name=web5', 'tar', TEST_TOKEN, STREAM);
+  const lines = parts.join('').trim().split('\n');
+  const first = ImageBuildEventSchema.parse(JSON.parse(lines[0] ?? 'null'));
+  const last = ImageBuildEventSchema.parse(JSON.parse(lines.at(-1) ?? 'null'));
 
-  expect([fifth, fifthStream]).toEqual([429, 429]);
+  expect(endedAtFirstLine).toBe(false);
+  expect(first).toMatchObject({ type: 'progress', phase: 'upload' });
+  expect(last).toMatchObject({ type: 'image', image: { name: 'web' } });
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a build to a manage token limited to some imps, and audits it', async () => {
+  const ctx = await setupTest();
+
+  const made = await ctx.client.tokens.create({
+    name: 'limited',
+    scope: 'manage',
+    imps: ['dev-*'],
+  });
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${made.secret}` },
+      body: 'tar',
+    }),
+  );
+
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const builds = rows.filter((row) => row.procedure === 'images.build');
+
+    expect(builds).not.toBeEmpty();
+
+    return builds.map((row) => row.outcome);
+  });
+
+  expect(response.status).toBe(403);
+  expect(outcomes).toStrictEqual(['FORBIDDEN']);
+  expect(ctx.engine.seen).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a build to a read token, and audits it', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${made.secret}` },
+      body: 'tar',
+    }),
+  );
+
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const builds = rows.filter((row) => row.procedure === 'images.build');
+
+    expect(builds).not.toBeEmpty();
+
+    return builds.map((row) => row.outcome);
+  });
+
+  expect(response.status).toBe(403);
+  expect(outcomes).toStrictEqual(['FORBIDDEN']);
+  expect(ctx.engine.seen).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it answers 401 to a build with a bearer that is no token', async () => {
+  const ctx = await setupTest();
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer not-a-token' },
+      body: 'tar',
+    }),
+  );
+
+  expect(response.status).toBe(401);
+  expect(ctx.engine.seen).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test.each([
+  ['name=Bad Name'],
+  ['name=web&dockerfile=../Dockerfile'],
+  ['name=web&dockerfile=sub/../../Dockerfile'],
+  ['name=web&dockerfile=/etc/passwd'],
+  [''],
+])('it refuses the query %p with 400 before the upload', async (query) => {
+  const ctx = await setupTest();
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?${query}`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: 'tar',
+    }),
+  );
+
+  expect(response.status).toBe(400);
+  expect(ctx.engine.seen).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses with 413 a context whose Content-Length is over the limit', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { 'content-length': String(2 * 1024 ** 2) },
+      body: 'x',
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const body: unknown = await response.json();
+
+  expect({ status: response.status, body }).toStrictEqual({
+    status: 413,
+    body: {
+      code: 'PAYLOAD_TOO_LARGE',
+      message: 'the build context is larger than the limit, 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)',
+    },
+  });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it frees the build slot of a context refused for its Content-Length', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  // four refusals, one for each build slot
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await route.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+        method: 'POST',
+        headers: { 'content-length': String(2 * 1024 ** 2) },
+        body: 'x',
+      }),
+      buildMockCaller(),
+      toApiImage,
+    );
+  }
+
+  const fifth = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { 'content-length': String(2 * 1024 ** 2) },
+      body: 'x',
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  expect(fifth.status).toBe(413);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses with 413 a context whose bytes run over the limit, and removes the upload', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  // a body with no Content-Length, one byte over the limit
+  const context = new Blob([new Uint8Array(1024 ** 2 + 1)]).stream();
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      body: context,
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const body: unknown = await response.json();
+  const uploads = await readdir(buildUploadsDir(ctx.dataDir));
+
+  expect(response.status).toBe(413);
+
+  expect(body).toStrictEqual({
+    code: 'PAYLOAD_TOO_LARGE',
+    message: 'the build context is larger than the limit, 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)',
+  });
+
+  expect(uploads).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses with 413 a streamed build whose Content-Length is over the limit', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { accept: IMAGE_BUILD_STREAM_TYPE, 'content-length': String(2 * 1024 ** 2) },
+      body: 'x',
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  expect(response.status).toBe(413);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+// bytes past the limit come after the stream's 200, so its last line says so
+test('it ends a streamed build whose bytes run over the limit with a too-large error', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const context = new Blob([new Uint8Array(1024 ** 2 + 1)]).stream();
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { accept: IMAGE_BUILD_STREAM_TYPE },
+      body: context,
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const text = await response.text();
+  const uploads = await readdir(buildUploadsDir(ctx.dataDir));
+
+  const last = ImageBuildEventSchema.parse(JSON.parse(text.trim().split('\n').at(-1) ?? 'null'));
+
+  expect(response.status).toBe(200);
+
+  expect(last).toStrictEqual({
+    type: 'error',
+    code: 'PAYLOAD_TOO_LARGE',
+    message: 'the build context is larger than the limit, 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)',
+  });
+
+  expect(uploads).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+// an empty tar, as long as the limit: the build reads it, and finds no Dockerfile
+test('it hands a context of exactly the limit to the build', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const context = new Blob([new Uint8Array(1024 ** 2)]).stream();
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      body: context,
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const body: unknown = await response.json();
+
+  expect({ status: response.status, body }).toStrictEqual({
+    status: 400,
+    body: { code: 'BAD_REQUEST', message: 'there is no Dockerfile in the build context' },
+  });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a build with no body', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, { method: 'POST' }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const body: unknown = await response.json();
+
+  expect({ status: response.status, body }).toStrictEqual({
+    status: 400,
+    body: { code: 'BAD_REQUEST', message: 'the build context is missing: send a tar' },
+  });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a build whose body is longer than its Content-Length', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const context = new Blob([new Uint8Array(64)]).stream();
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { 'content-length': '4' },
+      body: context,
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const body: unknown = await response.json();
+
+  expect({ status: response.status, body }).toStrictEqual({
+    status: 400,
+    body: { code: 'BAD_REQUEST', message: 'the body is longer than its Content-Length' },
+  });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a build whose body is empty', async () => {
+  const ctx = await setupTest();
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      body: new ReadableStream({
+        start: (controller) => {
+          controller.close();
+        },
+      }),
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const body: unknown = await response.json();
+
+  expect({ status: response.status, body }).toStrictEqual({
+    status: 400,
+    body: { code: 'BAD_REQUEST', message: 'the build context is empty: send a tar' },
+  });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a fifth build with 429 while four run', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine holds every build until the test ends
+  const held = Promise.withResolvers<void>();
+
+  // a failed build, once the test lets it go
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    await held.promise;
+
+    return new Response(`${JSON.stringify({ error: 'held for the test' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const running = [1, 2, 3, 4].map((n) =>
+    ctx.impd.api.app.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web${String(n)}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer root-token' },
+        body: tar,
+      }),
+    ),
+  );
+
+  // let go before the engine stops
+  // released before impd stops, so the held builds settle first
+  ctx.stack.defer(async () => {
+    held.resolve();
+
+    await Promise.allSettled(running);
+  });
+
+  await waitFor(() => {
+    expect(
+      ctx.engine.seen.filter((request) => request.target.startsWith('/build')).length,
+    ).toBeGreaterThanOrEqual(4);
+  });
+
+  const fifth = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  expect(fifth.status).toBe(429);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a fifth streamed build with 429, before its stream, while four run', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const held = Promise.withResolvers<void>();
+
+  // a failed build, once the test lets it go
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    await held.promise;
+
+    return new Response(`${JSON.stringify({ error: 'held for the test' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const running = [1, 2, 3, 4].map((n) =>
+    ctx.impd.api.app.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web${String(n)}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer root-token' },
+        body: tar,
+      }),
+    ),
+  );
+
+  // let go before the engine stops
+  // released before impd stops, so the held builds settle first
+  ctx.stack.defer(async () => {
+    held.resolve();
+
+    await Promise.allSettled(running);
+  });
+
+  await waitFor(() => {
+    expect(
+      ctx.engine.seen.filter((request) => request.target.startsWith('/build')).length,
+    ).toBeGreaterThanOrEqual(4);
+  });
+
+  const fifth = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      body: tar,
+    }),
+  );
+
+  expect(fifth.status).toBe(429);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it frees each build slot once its build ends', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
+
+  const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: [
+          'imp/web1:latest',
+          'imp/web2:latest',
+          'imp/web3:latest',
+          'imp/web4:latest',
+          'imp/web5:latest',
+        ],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar,
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine holds the first four builds until all four have come
+  const gate = Promise.withResolvers<void>();
+
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    await gate.promise;
+
+    return null;
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const running = [1, 2, 3, 4].map((n) =>
+    ctx.impd.api.app.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web${String(n)}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer root-token' },
+        body: tar,
+      }),
+    ),
+  );
+
+  await waitFor(() => {
+    expect(
+      ctx.engine.seen.filter((request) => request.target.startsWith('/build')).length,
+    ).toBeGreaterThanOrEqual(4);
+  });
 
   gate.resolve();
 
-  const statuses = await Promise.all(running);
+  const responses = await Promise.all(running);
 
-  expect(statuses).toEqual([200, 200, 200, 200]);
+  const statuses = responses.map((built) => built.status);
 
-  const sixth = await ctx.readStatus('name=web6', 'tar');
+  const fifth = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
 
-  expect(sixth).toBe(200);
+  expect(statuses).toStrictEqual([200, 200, 200, 200]);
+  expect(fifth.status).toBe(200);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
 test.each([
   ['JSON', {}],
-  ['a stream', STREAM],
+  ['a stream', { accept: IMAGE_BUILD_STREAM_TYPE }],
 ])(
-  'a client that goes mid-build, answered as %s, stops the build, frees its slot and its file',
+  'it stops the engine build of a client that goes, answered as %s, and removes its upload',
   async (_, headers) => {
-    const gate = Promise.withResolvers<void>();
+    const ctx = await setupTest();
 
-    await using ctx = await setupTest({ gate: gate.promise, keepaliveMs: 10 });
+    await mkdir(join(ctx.dataDir, 'context'));
+    await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+    const docker = buildStubDockerCli({
+      dir: ctx.dataDir,
+      images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+    });
+
+    updateEnv('PATH', docker.path);
+
+    // the engine holds each build until its client goes
+    const builds = { started: 0, stopped: 0 };
+
+    ctx.engine.setAnswer(async (request, seen) => {
+      if (!seen.target.startsWith('/build')) {
+        return null;
+      }
+
+      builds.started += 1;
+
+      await new Promise((resolve) => {
+        request.signal.addEventListener('abort', resolve);
+      });
+
+      builds.stopped += 1;
+
+      return new Response(null, { status: 499 });
+    });
+
+    const tar = Bun.spawnSync([
+      'tar',
+      '-C',
+      join(ctx.dataDir, 'context'),
+      '-c',
+      'Dockerfile',
+    ]).stdout;
 
     const clients = [1, 2, 3, 4].map(() => new AbortController());
 
-    const builds = clients.map((client, n) =>
-      ctx.sendBuild(`name=gone${String(n)}`, 'tar', TEST_TOKEN, headers, client.signal),
-    );
-
-    while (ctx.calls.length < 4) {
-      await Bun.sleep(1);
-    }
-
-    for (const client of clients) {
-      client.abort();
-    }
-
-    await Promise.allSettled(builds);
-
-    // a stream answered before its build ended: the build's audit row comes
-    // after its file is gone
-    await ctx.readOutcomes(4);
-
-    expect(ctx.stopped.toSorted()).toEqual(['gone0', 'gone1', 'gone2', 'gone3']);
-    expect(ctx.listUploads()).toEqual([]);
-
-    gate.resolve();
-
-    const next = await ctx.readStatus('name=web', 'tar');
-
-    expect(next).toBe(200);
-  },
-);
-
-// a docker on PATH whose pulls hang, and which logs its argv; a pull execs
-// its sleep, so killing it leaves nothing holding its pipes
-// a docker on PATH that logs its argv to log, then runs the given lines
-function writeFakeDocker(
-  dir: string,
-  lines: readonly string[],
-): { readonly log: string; readonly path: string } {
-  const bin = join(dir, 'fake-bin');
-  const log = join(dir, 'docker.log');
-
-  mkdirSync(bin, { recursive: true });
-
-  writeFileSync(join(bin, 'docker'), ['#!/bin/sh', `echo "$*" >>'${log}'`, ...lines].join('\n'), {
-    mode: 0o755,
-  });
-
-  return { log, path: `${bin}:${process.env['PATH'] ?? ''}` };
-}
-
-function writeHangingDocker(dir: string): { readonly log: string; readonly path: string } {
-  return writeFakeDocker(dir, [
-    `[ "$1" = version ] && echo '"linux" "amd64"' && exit 0`,
-    '[ "$1" = pull ] && exec sleep 30',
-    'exit 1',
-  ]);
-}
-
-// a tar of a context holding only this Dockerfile
-function buildDockerfileTar(dir: string, dockerfile: string): Uint8Array {
-  const contextDir = join(dir, `context-${Bun.randomUUIDv7()}`);
-
-  mkdirSync(contextDir);
-  writeFileSync(join(contextDir, 'Dockerfile'), dockerfile);
-
-  return Bun.spawnSync(['tar', '-C', contextDir, '-c', 'Dockerfile']).stdout;
-}
-
-function readLog(log: string): string[] {
-  return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
-}
-
-test('a client that goes during a base image pull ends it, starts no other and frees its slot', async () => {
-  await using ctx = await setupTest({ build: 'image-service' });
-
-  const docker = writeHangingDocker(ctx.harness.config.dataDir);
-
-  const tar = buildDockerfileTar(
-    ctx.harness.config.dataDir,
-    'FROM first.test/a:1\nFROM second.test/b:1\n',
-  );
-
-  const savedPath = process.env['PATH'];
-
-  process.env['PATH'] = docker.path;
-
-  try {
-    const clients = [1, 2, 3, 4].map(() => new AbortController());
-
-    const builds = clients.map((client, n) =>
-      ctx.sendBuild(
-        `name=pull${String(n)}`,
-        new Blob([tar]).stream(),
-        TEST_TOKEN,
-        {},
-        client.signal,
+    const sent = clients.map((client, n) =>
+      ctx.impd.api.app.handle(
+        new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=gone${String(n)}`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer root-token', ...headers },
+          body: tar,
+          signal: client.signal,
+        }),
       ),
     );
 
-    while (readLog(docker.log).filter((line) => line.startsWith('pull')).length < 4) {
-      await Bun.sleep(5);
-    }
+    await waitFor(() => {
+      expect(builds.started).toBeGreaterThanOrEqual(4);
+    });
 
     for (const client of clients) {
       client.abort();
     }
 
-    // the pulls sleep 30 s: only their kill settles the builds in time
-    await Promise.allSettled(builds);
+    await Promise.allSettled(sent);
 
-    const pulls = readLog(docker.log).filter((line) => line.startsWith('pull'));
+    // a stream answered before its build ended: the build's audit row comes
+    // after its file is gone; the engine hears each close in its own time
+    const stopped = await waitFor(async () => {
+      const rows = await listApiCalls(ctx.db, null, 100, null);
 
-    expect(pulls).toEqual(Array.from({ length: 4 }, () => 'pull --quiet first.test/a:1'));
-    expect(ctx.listUploads()).toEqual([]);
+      expect(rows.filter((row) => row.procedure === 'images.build').length).toBeGreaterThanOrEqual(
+        4,
+      );
 
-    // not a tar: refused by the build, not for want of a slot
-    const next = await ctx.readStatus('name=web', 'not a tar');
+      expect(builds.stopped).toBeGreaterThanOrEqual(4);
 
-    expect(next).toBe(400);
-  } finally {
-    process.env['PATH'] = savedPath;
+      return builds.stopped;
+    });
+
+    const uploads = await readdir(buildUploadsDir(ctx.dataDir));
+
+    expect(stopped).toBe(4);
+    expect(uploads).toStrictEqual([]);
+    expect(ctx.engine.unexpected).toStrictEqual([]);
+  },
+);
+
+test.each([
+  ['JSON', {}],
+  ['a stream', { accept: IMAGE_BUILD_STREAM_TYPE }],
+])('it frees the build slot of a client that goes, answered as %s', async (_, headers) => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const builds = { started: 0 };
+
+  ctx.engine.setAnswer(async (request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    builds.started += 1;
+
+    await new Promise((resolve) => {
+      request.signal.addEventListener('abort', resolve);
+    });
+
+    return new Response(null, { status: 499 });
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+  const clients = [1, 2, 3, 4].map(() => new AbortController());
+
+  const sent = clients.map((client, n) =>
+    ctx.impd.api.app.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=gone${String(n)}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer root-token', ...headers },
+        body: tar,
+        signal: client.signal,
+      }),
+    ),
+  );
+
+  await waitFor(() => {
+    expect(builds.started).toBeGreaterThanOrEqual(4);
+  });
+
+  for (const client of clients) {
+    client.abort();
   }
+
+  await Promise.allSettled(sent);
+
+  await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    expect(rows.filter((row) => row.procedure === 'images.build').length).toBeGreaterThanOrEqual(4);
+  });
+
+  // not a tar: refused by the build, not for want of a slot
+  const next = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: 'not a tar',
+    }),
+  );
+
+  expect(next.status).toBe(400);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-const DIGEST_A = `sha256:${'a'.repeat(64)}`;
-const DIGEST_B = `sha256:${'b'.repeat(64)}`;
+test('it kills the base image pulls of clients that go, and starts no other pull', async () => {
+  const ctx = await setupTest();
 
-// what the fake docker's inspect answers for an image: on amd64, with these
-// RepoDigests, and no triggers unless given
-function buildInspect(
-  repoDigests: readonly string[],
-  extra: Readonly<Record<string, unknown>> = {},
-  onBuild: readonly string[] | null = null,
-) {
-  const inspect = {
-    Id: `sha256:${'c'.repeat(64)}`,
-    RepoDigests: repoDigests,
-    Os: 'linux',
-    Architecture: 'amd64',
-    Config: onBuild === null ? { Env: ['PATH=/bin'] } : { OnBuild: onBuild },
-  };
+  await mkdir(join(ctx.dataDir, 'context'));
 
-  return `echo '${JSON.stringify({ ...inspect, ...extra })}'`;
-}
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM first.test/a:1\nFROM second.test/b:1\n',
+  );
 
-// An amd64 engine. base.test images and the Dockerfile frontend are on the
-// host; the rest are pulled and then inspected, but mnt.test's pull fails.
-// Marker files next to it take the frontend away and fail its pull.
-const IMAGE_DOCKER = [
-  'for last; do :; done',
-  'pulled="$(dirname "$0")/pulled-$(echo "$last" | tr "/:@" "___")"',
-  'case "$1 $2" in',
-  `  "version --format") echo '"linux" "x86_64"' ;;`,
-  '  "image inspect") case "$last" in',
-  `    base.test/onbuild:1) ${buildInspect([`base.test/onbuild@${DIGEST_A}`], {}, ['RUN id'])} ;;`,
-  `    base.test/local:1) ${buildInspect([])} ;;`,
-  `    base.test/arm:1) ${buildInspect([`base.test/arm@${DIGEST_A}`], { Architecture: 'aarch64' })} ;;`,
-  `    base.test/arm32:1) ${buildInspect([`base.test/arm32@${DIGEST_A}`], { Architecture: 'arm' })} ;;`,
-  `    base.test/private:1) ${buildInspect([`localhost:5000/x@${DIGEST_A}`, `10.0.0.5:5000/y@${DIGEST_B}`])} ;;`,
-  '    base.test/moving:1) n=$(cat "$pulled" 2>/dev/null || echo 0); echo $((n + 1)) >"$pulled"',
-  `      if [ "$n" = 0 ]; then ${buildInspect([`base.test/moving@${DIGEST_A}`])}; else ${buildInspect([`base.test/moving@${DIGEST_B}`])}; fi ;;`,
-  '    moving:1|docker.io/library/moving:1|index.docker.io/library/moving) count="$(dirname "$0")/moving"; n=$(cat "$count" 2>/dev/null || echo 0); echo $((n + 1)) >"$count"',
-  `      if [ "$n" = 0 ]; then ${buildInspect([`moving@${DIGEST_A}`])}; else ${buildInspect([`moving@${DIGEST_B}`])}; fi ;;`,
-  `    LocalHost/name:1) ${buildInspect([`LocalHost/name@${DIGEST_A}`])} ;;`,
-  `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
-  `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
-  '    docker/dockerfile:*) [ -e "$(dirname "$0")/no-frontend" ] && [ ! -e "$pulled" ] && exit 1',
-  `      echo sha256:${'f'.repeat(64)} ;;`,
-  `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
-  '  esac ;;',
-  '  "pull --quiet") case "$last" in',
-  '    docker/dockerfile:*) [ -e "$(dirname "$0")/unreachable-frontend" ] && echo "no route to host" >&2 && exit 1',
-  '      touch "$pulled" ;;',
-  '    mnt.test/*) echo "no such registry" >&2; exit 1 ;;',
-  '    *) touch "$pulled" ;;',
-  '  esac ;;',
-  '  *) exit 1 ;;',
-  'esac',
-];
-
-// the fake docker's argv, with the inspect format named
-function readCalls(log: string): string[] {
-  return readLog(log).map((line) => line.replace(PIN_INSPECT_FORMAT, 'PIN'));
-}
-
-// A build through the image service, with the fake docker on PATH and a
-// fake engine that records the context it gets and fails the build.
-async function sendFakeDockerBuild(
-  dockerfile: string,
-  engineError = 'the fake engine builds nothing',
-  frontend: 'present' | 'no-frontend' | 'unreachable-frontend' = 'present',
-) {
-  const socketDir = mkdtempSync(join(tmpdir(), 'imp-engine-'));
-  const socket = join(socketDir, 'docker.sock');
-  const contexts: Uint8Array[] = [];
-
-  // the fake docker's calls when the engine got the build
-  let callsAtBuild: string[] = [];
-  let log = '';
-
-  const engine = Bun.serve({
-    unix: socket,
-    fetch: async (request) => {
-      const context = await request.arrayBuffer();
-
-      callsAtBuild = readCalls(log);
-
-      contexts.push(new Uint8Array(context));
-
-      return new Response(`${JSON.stringify({ error: engineError })}\n`);
-    },
+  // neither image is on the host, and a pull hangs until it is killed
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['first.test/a:1'],
+        inspects: [{ Id: `sha256:${'a'.repeat(64)}` }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+      {
+        refs: ['second.test/b:1'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}` }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+    ],
   });
 
-  await using ctx = await setupTest({
-    build: 'image-service',
-    env: { DOCKER_HOST: `unix://${socket}` },
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+  const clients = [1, 2, 3, 4].map(() => new AbortController());
+
+  const sent = clients.map((client, n) =>
+    ctx.impd.api.app.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=pull${String(n)}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer root-token' },
+        body: tar,
+        signal: client.signal,
+      }),
+    ),
+  );
+
+  await waitFor(() => {
+    expect(
+      docker.readCalls().filter((call) => call.startsWith('pull')).length,
+    ).toBeGreaterThanOrEqual(4);
   });
 
-  const docker = writeFakeDocker(ctx.harness.config.dataDir, IMAGE_DOCKER);
-  const tar = buildDockerfileTar(ctx.harness.config.dataDir, dockerfile);
-
-  log = docker.log;
-
-  if (frontend !== 'present') {
-    writeFileSync(join(ctx.harness.config.dataDir, 'fake-bin', 'no-frontend'), '');
+  for (const client of clients) {
+    client.abort();
   }
 
-  if (frontend === 'unreachable-frontend') {
-    writeFileSync(join(ctx.harness.config.dataDir, 'fake-bin', 'unreachable-frontend'), '');
+  // the pulls sleep 30 s: only their kill settles the builds within the wait
+  await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    expect(rows.filter((row) => row.procedure === 'images.build').length).toBeGreaterThanOrEqual(4);
+  });
+
+  await Promise.allSettled(sent);
+
+  const uploads = await readdir(buildUploadsDir(ctx.dataDir));
+
+  expect(docker.readCalls().filter((call) => call.startsWith('pull'))).toStrictEqual([
+    'pull --quiet first.test/a:1',
+    'pull --quiet first.test/a:1',
+    'pull --quiet first.test/a:1',
+    'pull --quiet first.test/a:1',
+  ]);
+
+  expect(uploads).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it frees the build slots of clients that go during a base image pull', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM first.test/a:1\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['first.test/a:1'],
+        inspects: [{ Id: `sha256:${'a'.repeat(64)}` }],
+        isOnHost: false,
+        pull: 'hang',
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+  const clients = [1, 2, 3, 4].map(() => new AbortController());
+
+  const sent = clients.map((client, n) =>
+    ctx.impd.api.app.handle(
+      new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=pull${String(n)}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer root-token' },
+        body: tar,
+        signal: client.signal,
+      }),
+    ),
+  );
+
+  await waitFor(() => {
+    expect(
+      docker.readCalls().filter((call) => call.startsWith('pull')).length,
+    ).toBeGreaterThanOrEqual(4);
+  });
+
+  for (const client of clients) {
+    client.abort();
   }
 
-  const savedPath = process.env['PATH'];
+  await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
 
-  process.env['PATH'] = docker.path;
+    expect(rows.filter((row) => row.procedure === 'images.build').length).toBeGreaterThanOrEqual(4);
+  });
 
-  try {
-    const response = await ctx.sendBuild('name=web', new Blob([tar]).stream());
-    const body: unknown = await response.json();
+  await Promise.allSettled(sent);
 
-    // the Dockerfile in the context the engine got
-    const built = contexts.map(
-      (context) =>
-        Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], { stdin: context }).stdout,
-    );
+  // not a tar: refused by the build, not for want of a slot
+  const next = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: 'not a tar',
+    }),
+  );
 
-    return {
-      status: response.status,
-      body,
-      calls: readCalls(docker.log),
-      callsAtBuild,
-      built: built.map((bytes) => new TextDecoder().decode(bytes)),
-    };
-  } finally {
-    process.env['PATH'] = savedPath;
+  expect(next.status).toBe(400);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
 
-    await engine.stop(true);
+test('it refuses a base image with ONBUILD triggers once the host has it', async () => {
+  const ctx = await setupTest();
 
-    rmSync(socketDir, { recursive: true, force: true });
-  }
-}
+  await mkdir(join(ctx.dataDir, 'context'));
 
-test('a base image with ONBUILD triggers is refused once the host has it', async () => {
-  const sent = await sendFakeDockerBuild('FROM base.test/onbuild:1\nRUN true\n');
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM base.test/onbuild:1\nRUN true\n',
+  );
 
-  expect(sent.status).toBe(400);
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/onbuild:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/onbuild@sha256:${'a'.repeat(64)}`],
+            Config: { OnBuild: ['RUN id'] },
+          },
+        ],
+      },
+    ],
+  });
 
-  expect(sent.body).toMatchObject({
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(response.status).toBe(400);
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message: 'FROM base.test/onbuild:1 has ONBUILD triggers, which impd refuses',
   });
 
-  expect(sent.calls).toEqual([
+  expect(calls).toStrictEqual([
     'version --format {{json .Server.Os}} {{json .Server.Arch}}',
     'image inspect --format PIN base.test/onbuild:1',
   ]);
 
-  expect(sent.built).toEqual([]);
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('COPY --from and RUN --mount images are pulled first, like a FROM, by tag or digest', async () => {
-  const sent = await sendFakeDockerBuild(
-    [
-      'FROM base.test/a:1 AS build',
-      `COPY --from=tools.test/b@${DIGEST_B} /x /x`,
-      'COPY --from=build /x /y',
-      'RUN --mount=type=bind,from=mnt.test/c:3,target=/m true',
-    ].join('\n'),
+test('it pulls COPY --from and RUN --mount images first, like a FROM, by tag or digest', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    `FROM base.test/a:1 AS build\nCOPY --from=tools.test/b@sha256:${'b'.repeat(64)} /x /x\nCOPY --from=build /x /y\nRUN --mount=type=bind,from=mnt.test/c:3,target=/m true`,
   );
 
-  expect(sent.status).toBe(400);
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [
+              `other.test/x@sha256:${'b'.repeat(64)}`,
+              `base.test/a@sha256:${'a'.repeat(64)}`,
+            ],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      {
+        refs: [`tools.test/b@sha256:${'b'.repeat(64)}`],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`tools.test/b@sha256:${'b'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+        isOnHost: false,
+      },
+      {
+        refs: ['mnt.test/c:3'],
+        inspects: [
+          { Id: `sha256:${'c'.repeat(64)}`, RepoDigests: [], Config: { Env: ['PATH=/bin'] } },
+        ],
+        isOnHost: false,
+        pull: { stderr: 'no such registry' },
+      },
+    ],
+  });
 
-  expect(sent.body).toMatchObject({
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message: 'RUN --mount from mnt.test/c:3: the pull failed: no such registry',
   });
 
-  expect(sent.calls).toEqual([
+  expect(calls).toStrictEqual([
     'version --format {{json .Server.Os}} {{json .Server.Arch}}',
     'image inspect --format PIN base.test/a:1',
-    `image inspect --format PIN tools.test/b@${DIGEST_B}`,
-    `pull --quiet tools.test/b@${DIGEST_B}`,
-    `image inspect --format PIN tools.test/b@${DIGEST_B}`,
+    `image inspect --format PIN tools.test/b@sha256:${'b'.repeat(64)}`,
+    `pull --quiet tools.test/b@sha256:${'b'.repeat(64)}`,
+    `image inspect --format PIN tools.test/b@sha256:${'b'.repeat(64)}`,
     'image inspect --format PIN mnt.test/c:3',
     'pull --quiet mnt.test/c:3',
   ]);
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('the engine builds the Dockerfile with each image pinned and the platform named', async () => {
-  const sent = await sendFakeDockerBuild(
-    [
-      'FROM --platform=$BUILDPLATFORM base.test/a:1 AS build',
-      'COPY --from=pulled.test/p:2 /x /x',
-      'FROM base.test/retag:1',
-      'RUN --mount=from=build,target=/b --mount=from=base.test/a:1,target=/a true',
-      '',
-    ].join('\n'),
+test('it sends the engine the Dockerfile with each image pinned and the platform named', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM --platform=$BUILDPLATFORM base.test/a:1 AS build\nCOPY --from=pulled.test/p:2 /x /x\nFROM base.test/retag:1\nRUN --mount=from=build,target=/b --mount=from=base.test/a:1,target=/a true\n',
   );
 
-  expect(sent.body).toMatchObject({
-    message: 'docker build failed: the fake engine builds nothing',
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [
+              `other.test/x@sha256:${'b'.repeat(64)}`,
+              `base.test/a@sha256:${'a'.repeat(64)}`,
+            ],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      {
+        refs: ['pulled.test/p:2'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`tools.test/b@sha256:${'b'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+        isOnHost: false,
+      },
+      {
+        refs: ['base.test/retag:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`other.test/x@sha256:${'b'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+    ],
   });
 
-  expect(sent.built).toEqual([
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
+    message: 'docker build failed: the stub engine builds nothing',
+  });
+
+  expect(built).toStrictEqual([
     [
-      `FROM --platform=linux/amd64 base.test/a@${DIGEST_A} AS build`,
-      `COPY --from=tools.test/b@${DIGEST_B} /x /x`,
-      `FROM other.test/x@${DIGEST_B}`,
-      `RUN --mount=from=build,target=/b --mount=from=base.test/a@${DIGEST_A},target=/a true`,
+      `FROM --platform=linux/amd64 base.test/a@sha256:${'a'.repeat(64)} AS build`,
+      `COPY --from=tools.test/b@sha256:${'b'.repeat(64)} /x /x`,
+      `FROM other.test/x@sha256:${'b'.repeat(64)}`,
+      `RUN --mount=from=build,target=/b --mount=from=base.test/a@sha256:${'a'.repeat(64)},target=/a true`,
       '',
     ].join('\n'),
   ]);
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('the frontend runs the triggers of COPY --from and mount images too, so impd refuses them', async () => {
-  const copied = await sendFakeDockerBuild('FROM scratch\nCOPY --from=base.test/onbuild:1 / /\n');
+test('it refuses a COPY --from image with ONBUILD triggers, which the frontend would run', async () => {
+  const ctx = await setupTest();
 
-  const mounted = await sendFakeDockerBuild(
-    'FROM base.test/a:1\nRUN --mount=from=base.test/onbuild:1,target=/m true\n',
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM scratch\nCOPY --from=base.test/onbuild:1 / /\n',
   );
 
-  expect(copied.body).toMatchObject({
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/onbuild:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/onbuild@sha256:${'a'.repeat(64)}`],
+            Config: { OnBuild: ['RUN id'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message: 'COPY --from base.test/onbuild:1 has ONBUILD triggers, which impd refuses',
   });
 
-  expect(mounted.body).toMatchObject({
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a RUN --mount image with ONBUILD triggers, which the frontend would run', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM base.test/a:1\nRUN --mount=from=base.test/onbuild:1,target=/m true\n',
+  );
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [
+              `other.test/x@sha256:${'b'.repeat(64)}`,
+              `base.test/a@sha256:${'a'.repeat(64)}`,
+            ],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      {
+        refs: ['base.test/onbuild:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/onbuild@sha256:${'a'.repeat(64)}`],
+            Config: { OnBuild: ['RUN id'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message: 'RUN --mount from base.test/onbuild:1 has ONBUILD triggers, which impd refuses',
   });
 
-  expect([copied.built, mounted.built]).toEqual([[], []]);
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a ref the build names twice is inspected and pinned once, so a moving tag gives one image', async () => {
-  const sent = await sendFakeDockerBuild(
+test('it inspects and pins a ref the build names twice once, so a moving tag gives one image', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
     'FROM base.test/moving:1\nCOPY --from=base.test/moving:1 /x /x\nRUN --mount=from=base.test/moving:1,target=/m true\n',
   );
 
-  const inspects = sent.calls.filter((call) => call.startsWith('image inspect --format PIN'));
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/moving:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/moving@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/moving@sha256:${'b'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+    ],
+  });
 
-  expect(inspects).toEqual(['image inspect --format PIN base.test/moving:1']);
+  updateEnv('PATH', docker.path);
 
-  expect(sent.built).toEqual([
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(calls.filter((call) => call.startsWith('image inspect --format PIN'))).toStrictEqual([
+    'image inspect --format PIN base.test/moving:1',
+  ]);
+
+  expect(built).toStrictEqual([
     [
-      `FROM base.test/moving@${DIGEST_A}`,
-      `COPY --from=base.test/moving@${DIGEST_A} /x /x`,
-      `RUN --mount=from=base.test/moving@${DIGEST_A},target=/m true`,
+      `FROM base.test/moving@sha256:${'a'.repeat(64)}`,
+      `COPY --from=base.test/moving@sha256:${'a'.repeat(64)} /x /x`,
+      `RUN --mount=from=base.test/moving@sha256:${'a'.repeat(64)},target=/m true`,
       '',
     ].join('\n'),
   ]);
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('the spellings of one image are inspected and pinned once', async () => {
-  const sent = await sendFakeDockerBuild(
+test('it inspects and pins the spellings of one image once', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
     'FROM moving:1\nCOPY --from=docker.io/library/moving:1 /x /x\nRUN --mount=from=index.docker.io/library/moving,target=/m true\n',
   );
 
-  const inspects = sent.calls.filter((call) => call.startsWith('image inspect --format PIN'));
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['moving:1', 'docker.io/library/moving:1', 'index.docker.io/library/moving'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`moving@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`moving@sha256:${'b'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
 
   // moving and moving:1 differ: no tag is latest
-  expect(inspects).toEqual([
+  expect(calls.filter((call) => call.startsWith('image inspect --format PIN'))).toStrictEqual([
     'image inspect --format PIN moving:1',
     'image inspect --format PIN index.docker.io/library/moving',
   ]);
 
-  expect(sent.built).toEqual([
+  expect(built).toStrictEqual([
     [
-      `FROM moving@${DIGEST_A}`,
-      `COPY --from=moving@${DIGEST_A} /x /x`,
-      `RUN --mount=from=moving@${DIGEST_B},target=/m true`,
+      `FROM moving@sha256:${'a'.repeat(64)}`,
+      `COPY --from=moving@sha256:${'a'.repeat(64)} /x /x`,
+      `RUN --mount=from=moving@sha256:${'b'.repeat(64)},target=/m true`,
       '',
     ].join('\n'),
   ]);
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a pinned build the registry denies says how impd pinned it, and what to build from', async () => {
-  const sent = await sendFakeDockerBuild(
-    'FROM base.test/retag:1\n',
-    'pull access denied, repository does not exist or may require authorization',
+test('it says how impd pinned a build the registry denies, and what to build from', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/retag:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/retag:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`other.test/x@sha256:${'b'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(
+      `${JSON.stringify({ error: 'pull access denied, repository does not exist or may require authorization' })}\n`,
+    );
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
   );
 
-  expect(sent.body).toMatchObject({
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
     code: 'BAD_REQUEST',
-    message: `docker build failed: pull access denied, repository does not exist or may require authorization\nimpd pinned FROM base.test/retag:1 as other.test/x@${DIGEST_B}. On the containerd image store a retag of a multi-platform image cannot be pinned: build FROM its original repository, such as busybox:1.37, instead of the retag.`,
+    message: `docker build failed: pull access denied, repository does not exist or may require authorization\nimpd pinned FROM base.test/retag:1 as other.test/x@sha256:${'b'.repeat(64)}. On the containerd image store a retag of a multi-platform image cannot be pinned: build FROM its original repository, such as busybox:1.37, instead of the retag.`,
   });
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('an image with no registry digest, or for another platform, is refused before the build', async () => {
-  const local = await sendFakeDockerBuild('FROM base.test/local:1\n');
-  const copied = await sendFakeDockerBuild('FROM scratch\nCOPY --from=base.test/local:1 / /\n');
-  const arm = await sendFakeDockerBuild('FROM base.test/arm:1\n');
+test('it refuses a FROM image with no registry digest before the build', async () => {
+  const ctx = await setupTest();
 
-  expect(local.body).toMatchObject({
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/local:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/local:1'],
+        inspects: [
+          { Id: `sha256:${'c'.repeat(64)}`, RepoDigests: [], Config: { Env: ['PATH=/bin'] } },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message:
       'FROM base.test/local:1: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).',
   });
 
-  expect(copied.body).toMatchObject({
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a COPY --from image with no registry digest before the build', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM scratch\nCOPY --from=base.test/local:1 / /\n',
+  );
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/local:1'],
+        inspects: [
+          { Id: `sha256:${'c'.repeat(64)}`, RepoDigests: [], Config: { Env: ['PATH=/bin'] } },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message:
       'COPY --from base.test/local:1: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; name a registry image by tag or digest. Local base images are not supported yet (#156).',
   });
 
-  expect(arm.body).toMatchObject({
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses an arm64 image on an amd64 host before the build', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/arm:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/arm:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/arm@sha256:${'a'.repeat(64)}`],
+            Architecture: 'aarch64',
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message:
       'FROM base.test/arm:1: the host has this image for linux/arm64, and builds for linux/amd64',
   });
 
-  const arm32 = await sendFakeDockerBuild('FROM base.test/arm32:1\n');
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
 
-  expect(arm32.body).toMatchObject({
+test('it refuses a 32-bit arm image on an amd64 host before the build', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/arm32:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/arm32:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/arm32@sha256:${'a'.repeat(64)}`],
+            Architecture: 'arm',
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
     code: 'BAD_REQUEST',
     message:
       'FROM base.test/arm32:1: the host has this image for linux/arm, and builds for linux/amd64',
   });
 
-  expect([local.built, copied.built, arm.built, arm32.built]).toEqual([[], [], [], []]);
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-function readMessage(body: unknown): string {
-  return z.object({ message: z.string() }).parse(body).message;
-}
+test('it refuses an image whose registry digests name only registries impd refuses', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/private:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/private:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [
+              `localhost:5000/x@sha256:${'a'.repeat(64)}`,
+              `10.0.0.5:5000/y@sha256:${'b'.repeat(64)}`,
+            ],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
+    message: `FROM base.test/private:1: its registry digests name only registries impd refuses: localhost:5000/x@sha256:${'a'.repeat(64)}, 10.0.0.5:5000/y@sha256:${'b'.repeat(64)}`,
+  });
+
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
 
 // with the image on the host already, no pull would meet the proxy's rule
-test('an image or its digest under a registry the pull rule refuses is refused', async () => {
-  const named = await sendFakeDockerBuild('FROM 127.0.0.1:5000/x:1\n');
-  const pinned = await sendFakeDockerBuild('FROM base.test/private:1\n');
+test('it refuses an image under an IP address registry before any call', async () => {
+  const ctx = await setupTest();
 
-  expect(named.body).toMatchObject({
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM 127.0.0.1:5000/x:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['LocalHost/name:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`LocalHost/name@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message: 'FROM 127.0.0.1:5000/x:1: registry 127.0.0.1:5000 is an IP address',
   });
 
-  expect(pinned.body).toMatchObject({
-    message: `FROM base.test/private:1: its registry digests name only registries impd refuses: localhost:5000/x@${DIGEST_A}, 10.0.0.5:5000/y@${DIGEST_B}`,
+  expect(calls).toStrictEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+// docker reads the label as localhost in any case
+test("it refuses an image under the host's own registry, in any case, before any call", async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM LocalHost/name:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['LocalHost/name:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`LocalHost/name@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
   });
 
-  expect(named.calls).toEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
+  updateEnv('PATH', docker.path);
 
-  // the host has it, so no pull would meet the proxy; docker reads the
-  // label as localhost in any case
-  const local = await sendFakeDockerBuild('FROM LocalHost/name:1\n');
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
 
-  expect(local.body).toMatchObject({
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
     message: "FROM LocalHost/name:1: registry LocalHost is the host's own",
   });
 
-  expect(local.calls).toEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
-  expect(local.built).toEqual([]);
-  expect([named.built, pinned.built]).toEqual([[], []]);
+  expect(calls).toStrictEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a platform variable set by ARG, or another --platform, is refused before any pull', async () => {
-  const global = await sendFakeDockerBuild(
+test('it refuses a global ARG that sets the build platform before any call', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
     'ARG BUILDPLATFORM=linux/arm64\nFROM --platform=$BUILDPLATFORM base.test/a:1\n',
   );
 
-  const staged = await sendFakeDockerBuild('FROM base.test/a:1\nARG TARGETPLATFORM\n');
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/a@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
 
-  const braced = await sendFakeDockerBuild(
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('line 1: ARG BUILDPLATFORM is refused') as unknown,
+  });
+
+  expect(calls).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a stage ARG that sets the target platform before any call', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
+    'FROM base.test/a:1\nARG TARGETPLATFORM\n',
+  );
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/a@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining('line 2: ARG TARGETPLATFORM is refused') as unknown,
+  });
+
+  expect(calls).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it refuses a braced platform variable before any call', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+
+  await writeFile(
+    join(ctx.dataDir, 'context', 'Dockerfile'),
     ['FROM --platform=$', '{BUILDPLATFORM} base.test/a:1\n'].join(''),
   );
 
-  expect(readMessage(global.body)).toContain('line 1: ARG BUILDPLATFORM is refused');
-  expect(readMessage(staged.body)).toContain('line 2: ARG TARGETPLATFORM is refused');
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/a@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+    ],
+  });
 
-  expect(readMessage(braced.body)).toContain(
-    ['FROM --platform=$', '{BUILDPLATFORM} is refused'].join(''),
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
   );
 
-  expect([global.calls, staged.calls, braced.calls]).toEqual([[], [], []]);
+  const body: unknown = await response.json();
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  expect(body).toStrictEqual({
+    code: 'BAD_REQUEST',
+    message: expect.stringContaining(
+      ['FROM --platform=$', '{BUILDPLATFORM} is refused'].join(''),
+    ) as unknown,
+  });
+
+  expect(calls).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('an engine without the Dockerfile frontend pulls it by digest once, before the build', async () => {
-  const lacking = await sendFakeDockerBuild('FROM base.test/a:1\n', undefined, 'no-frontend');
-  const having = await sendFakeDockerBuild('FROM base.test/a:1\n');
+test('it pulls a missing Dockerfile frontend by digest once, before the build', async () => {
+  const ctx = await setupTest();
 
-  const inspectCall = `image inspect --format {{.Id}} ${DOCKERFILE_FRONTEND}`;
-  const frontendCalls = [inspectCall, `pull --quiet ${DOCKERFILE_FRONTEND}`];
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/a:1\n');
 
-  expect(lacking.callsAtBuild.slice(-2)).toEqual(frontendCalls);
-  expect(lacking.calls.filter((call) => call.includes('docker/dockerfile'))).toEqual(frontendCalls);
-  expect(lacking.built).toHaveLength(1);
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/a@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      {
+        refs: [DOCKERFILE_FRONTEND],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}` }],
+        isOnHost: false,
+      },
+    ],
+  });
 
-  expect(having.callsAtBuild.filter((call) => call.includes('docker/dockerfile'))).toEqual([
-    inspectCall,
+  updateEnv('PATH', docker.path);
+
+  const callsAtBuild: string[][] = [];
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    callsAtBuild.push(docker.readCalls());
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  expect(callsAtBuild.map((each) => each.slice(-2))).toStrictEqual([
+    [
+      `image inspect --format {{.Id}} ${DOCKERFILE_FRONTEND}`,
+      `pull --quiet ${DOCKERFILE_FRONTEND}`,
+    ],
   ]);
 
-  expect(having.calls.filter((call) => call.startsWith('pull'))).toEqual([]);
-  expect(having.built).toHaveLength(1);
+  expect(calls.filter((call) => call.includes('docker/dockerfile'))).toStrictEqual([
+    `image inspect --format {{.Id}} ${DOCKERFILE_FRONTEND}`,
+    `pull --quiet ${DOCKERFILE_FRONTEND}`,
+  ]);
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a failed pull of the Dockerfile frontend fails the build before the engine gets it', async () => {
-  const sent = await sendFakeDockerBuild('FROM base.test/a:1\n', undefined, 'unreachable-frontend');
+test('it pulls no Dockerfile frontend the engine has, and checks it before the build', async () => {
+  const ctx = await setupTest();
 
-  expect(sent.status).toBe(502);
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/a:1\n');
 
-  expect(sent.body).toMatchObject({
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/a@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const callsAtBuild: string[][] = [];
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    callsAtBuild.push(docker.readCalls());
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const calls = docker.readCalls().map((call) => call.replace(PIN_INSPECT_FORMAT, 'PIN'));
+
+  expect(
+    callsAtBuild.map((each) => each.filter((call) => call.includes('docker/dockerfile'))),
+  ).toStrictEqual([[`image inspect --format {{.Id}} ${DOCKERFILE_FRONTEND}`]]);
+
+  expect(calls.filter((call) => call.startsWith('pull'))).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it fails a build with 502 before the engine gets it when the frontend pull fails', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/a:1\n');
+
+  // an amd64 host engine with these images
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['base.test/a:1'],
+        inspects: [
+          {
+            Id: `sha256:${'c'.repeat(64)}`,
+            RepoDigests: [`base.test/a@sha256:${'a'.repeat(64)}`],
+            Config: { Env: ['PATH=/bin'] },
+          },
+        ],
+      },
+      {
+        refs: [DOCKERFILE_FRONTEND],
+        inspects: [{ Id: `sha256:${'f'.repeat(64)}` }],
+        isOnHost: false,
+        pull: { stderr: 'no route to host' },
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine fails every build, after it has the context
+  ctx.engine.setAnswer((_request, seen) => {
+    if (!seen.target.startsWith('/build')) {
+      return null;
+    }
+
+    return new Response(`${JSON.stringify({ error: 'the stub engine builds nothing' })}\n`);
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const body: unknown = await response.json();
+
+  // the Dockerfile in each context the engine got
+  const built = ctx.engine.seen
+    .filter((request) => request.target.startsWith('/build'))
+    .map((request) => {
+      const extracted = Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], {
+        stdin: request.body,
+      });
+
+      return new TextDecoder().decode(extracted.stdout);
+    });
+
+  expect(response.status).toBe(502);
+
+  expect(body).toStrictEqual({
     code: 'BAD_GATEWAY',
     message: `the Dockerfile frontend ${DOCKERFILE_FRONTEND}: the pull failed: no route to host`,
   });
 
-  expect(sent.built).toEqual([]);
+  expect(built).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a failed build answers its error and removes the upload', async () => {
-  await using ctx = await setupTest({
-    build: () => Promise.reject(new Error('disk on fire')),
+test('it answers a build that fails after the engine built it with its error, and removes the upload', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+  // the engine builds the image; the unpack's create finds no room
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { stderr: 'no space left on device' },
   });
 
-  const response = await ctx.sendBuild('name=web', 'tar');
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
   const body: unknown = await response.json();
+  const uploads = await readdir(buildUploadsDir(ctx.dataDir));
 
   expect(response.status).toBe(500);
-  expect(body).toEqual({ code: 'INTERNAL_SERVER_ERROR', message: 'disk on fire' });
-  expect(ctx.listUploads()).toEqual([]);
 
-  const streamed = await ctx.sendBuild('name=web', 'tar', TEST_TOKEN, STREAM);
-  const events = await readEvents(streamed);
+  expect(body).toStrictEqual({
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'docker create imp/web:latest /bin/true exited 1: no space left on device',
+  });
 
-  expect(events.at(-1)).toEqual({
+  expect(uploads).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it ends a streamed build that fails with its error, and removes the upload', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { stderr: 'no space left on device' },
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      body: tar,
+    }),
+  );
+
+  const text = await response.text();
+
+  const last = ImageBuildEventSchema.parse(JSON.parse(text.trim().split('\n').at(-1) ?? 'null'));
+
+  const uploads = await readdir(buildUploadsDir(ctx.dataDir));
+
+  expect(last).toStrictEqual({
     type: 'error',
     code: 'INTERNAL_SERVER_ERROR',
-    message: 'disk on fire',
+    message: 'docker create imp/web:latest /bin/true exited 1: no space left on device',
   });
 
-  expect(ctx.listUploads()).toEqual([]);
-
-  const outcomes = await ctx.readOutcomes(2);
-
-  expect(outcomes).toEqual(['INTERNAL_SERVER_ERROR', 'INTERNAL_SERVER_ERROR']);
+  expect(uploads).toStrictEqual([]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a new route clears what an earlier impd left in the uploads directory', async () => {
-  await using harness = await setupImpTest();
+test('it audits a failed build with its code', async () => {
+  const ctx = await setupTest();
 
-  const uploadsDir = buildUploadsDir(harness.config.dataDir);
-  const leftover = join(uploadsDir, 'old.tar');
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  mkdirSync(uploadsDir, { recursive: true });
-  writeFileSync(leftover, 'half a context');
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { stderr: 'no space left on device' },
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: tar,
+    }),
+  );
+
+  const outcomes = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 100, null);
+
+    const builds = rows.filter((row) => row.procedure === 'images.build');
+
+    expect(builds).not.toBeEmpty();
+
+    return builds.map((row) => row.outcome);
+  });
+
+  expect(outcomes).toStrictEqual(['INTERNAL_SERVER_ERROR']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it clears what an earlier impd left in the uploads directory when a route starts', async () => {
+  const ctx = await setupTest();
+
+  const leftover = join(buildUploadsDir(ctx.dataDir), 'old.tar');
+
+  await writeFile(leftover, 'half a context');
 
   createBuildContextRoute({
-    config: harness.config,
-    images: harness.images,
-    diskBudget: harness.diskBudget,
-    audit: createApiAudit({ db: harness.db, now: harness.now, log: () => {} }),
-    keepaliveMs: BUILD_KEEPALIVE_MS,
-    now: harness.now,
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
   });
 
-  expect(existsSync(leftover)).toBe(false);
+  expect(existsSync(leftover)).toBeFalse();
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('an on-host build reports its unpack, after the engine built the image', async () => {
-  const socketDir = mkdtempSync(join(tmpdir(), 'imp-engine-'));
-  const socket = join(socketDir, 'docker.sock');
-  const builtId = `sha256:${'e'.repeat(64)}`;
+test('it reports the unpack of an on-host build after the engine built the image', async () => {
+  const ctx = await setupTest();
 
-  // the engine builds the image at once
-  const engine = Bun.serve({
-    unix: socket,
-    fetch: async (request) => {
-      await request.arrayBuffer();
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-      return new Response(`${JSON.stringify({ id: 'moby.image.id', aux: { ID: builtId } })}\n`);
+  // the frontend and the built tag are on the host; the unpack's create fails
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 1 }],
+      },
+    ],
+  });
+
+  updateEnv('PATH', docker.path);
+
+  const phases: string[] = [];
+
+  const building = ctx.impd.images.buildImage(join(ctx.dataDir, 'context'), 'web', undefined, {
+    setPhase: (phase) => {
+      phases.push(phase);
     },
   });
 
-  await using ctx = await setupTest({
-    build: 'image-service',
-    env: { DOCKER_HOST: `unix://${socket}` },
-  });
-
-  const dataDir = ctx.harness.config.dataDir;
-  const contextDir = join(dataDir, 'context');
-  const inspect = JSON.stringify([{ Id: builtId, Config: {}, Size: 1 }]);
-
-  // the frontend and the built tag are on the host; the unpack's create fails
-  const docker = writeFakeDocker(dataDir, [
-    'for last; do :; done',
-    'case "$1 $2 $last" in',
-    `  "version --format "*) echo '"linux" "x86_64"' ;;`,
-    `  "image inspect docker/dockerfile:"*) echo ${builtId} ;;`,
-    `  "image inspect imp/web:latest") echo '${inspect}' ;;`,
-    '  *) echo "no $1 in this test" >&2; exit 1 ;;',
-    'esac',
-  ]);
-
-  mkdirSync(contextDir);
-  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
-
-  const phases: string[] = [];
-  const savedPath = process.env['PATH'];
-
-  process.env['PATH'] = docker.path;
-
-  try {
-    const failure = await ctx.harness.images
-      .buildImage(contextDir, 'web', undefined, {
-        setPhase: (phase) => {
-          phases.push(phase);
-        },
-      })
-      .catch((error: unknown) => error);
-
-    expect(String(failure)).toContain('no create in this test');
-    expect(phases).toEqual(['build', 'unpack']);
-  } finally {
-    process.env['PATH'] = savedPath;
-
-    await engine.stop(true);
-
-    rmSync(socketDir, { recursive: true, force: true });
-  }
+  expect(building).rejects.toThrow('stub docker: create imp/web:latest /bin/true is not modelled');
+  expect(phases).toStrictEqual(['build', 'unpack']);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('on-host builds and uploads share the four build slots', async () => {
-  await using ctx = await setupTest();
+test('it refuses an on-host build at once while uploads hold all four build slots', async () => {
+  const ctx = await setupTest();
 
-  const held = [1, 2, 3, 4].map(() => ctx.harness.images.claimBuildSlot());
+  const held = [1, 2, 3, 4].map(() => ctx.impd.images.claimBuildSlot());
 
-  // an on-host build waits for no slot: it is refused at once, before any check
-  const onHost = await ctx.harness.images
-    .buildImage('relative/path', 'web')
-    .catch((error: unknown) => error);
+  onTestFinished(() => {
+    for (const release of held) {
+      release();
+    }
+  });
 
-  const upload = await ctx.readStatus('name=web', 'tar');
+  const building = ctx.impd.images.buildImage('relative/path', 'web');
 
-  expect(onHost).toMatchObject({ code: 'TOO_MANY_REQUESTS' });
-  expect(upload).toBe(429);
+  expect(building).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
 
-  // a slot freed lets the next one through to its own checks
+test('it refuses an upload with 429 while on-host builds hold all four build slots', async () => {
+  const ctx = await setupTest();
+
+  const held = [1, 2, 3, 4].map(() => ctx.impd.images.claimBuildSlot());
+
+  onTestFinished(() => {
+    for (const release of held) {
+      release();
+    }
+  });
+
+  const response = await ctx.impd.api.app.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token' },
+      body: 'tar',
+    }),
+  );
+
+  expect(response.status).toBe(429);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it lets an on-host build through to its own checks once a build slot is free', async () => {
+  const ctx = await setupTest();
+
+  const held = [1, 2, 3, 4].map(() => ctx.impd.images.claimBuildSlot());
+
+  onTestFinished(() => {
+    for (const release of held.slice(1)) {
+      release();
+    }
+  });
+
   held[0]?.();
+  const building = ctx.impd.images.buildImage('relative/path', 'web');
 
-  const next = await ctx.harness.images
-    .buildImage('relative/path', 'web')
-    .catch((error: unknown) => error);
-
-  expect(next).toMatchObject({ code: 'BAD_REQUEST' });
-
-  for (const release of held.slice(1)) {
-    release();
-  }
+  expect(building).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });

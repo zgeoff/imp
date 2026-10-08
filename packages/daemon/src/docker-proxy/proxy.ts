@@ -37,7 +37,7 @@ const DROPPED_RESPONSE_HEADERS = new Set([
 
 const LabelsSchema = z.record(z.string(), z.string()).nullish();
 
-const ContainerSchema = z.object({
+export const ContainerSchema = z.object({
   Id: z.string().regex(/^[a-f0-9]{64}$/v),
   Config: z.object({ Labels: LabelsSchema }),
 });

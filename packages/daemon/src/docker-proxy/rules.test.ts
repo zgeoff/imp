@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { parseQuery } from './router';
 import {
@@ -6,469 +6,891 @@ import {
   checkBuildQuery,
   checkCreateBody,
   checkImageReference,
+  checkNoQuery,
   checkPullQuery,
   checkReferenceRegistry,
   checkRemoveQuery,
   readImageReference,
 } from './rules';
 
-const HOST_IMAGE = 'ghcr.io/zgeoff/imp-host:latest';
-
 // the query impd sends for a build: one tag, the frontend pinned
-const BUILD_ARGS = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
-const BUILD = `t=imp%2Fx%3Alatest&version=2&buildargs=${BUILD_ARGS}`;
+test('#checkBuildQuery passes a build query as impd sends it', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(
+    checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}`)),
+  ).toStrictEqual({ isOk: true });
+});
+
+test('#checkBuildQuery passes a build query that names a dockerfile inside the context', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(
+    checkBuildQuery(
+      parseQuery(
+        `t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}&dockerfile=sub%2FDockerfile.dev`,
+      ),
+    ),
+  ).toStrictEqual({ isOk: true });
+});
+
+test.each([
+  ['imp-host%3Alatest', 'param t "imp-host:latest" is not imp/<name>:latest'],
+  ['imp%2Fx%3Av2', 'param t "imp/x:v2" is not imp/<name>:latest'],
+  ['imp%2Fx%3Alatest&t=imp%2Fy%3Alatest', 'param t is given 2 times'],
+])('#checkBuildQuery refuses a build query whose t is %s', (tag, reason) => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(checkBuildQuery(parseQuery(`t=${tag}&version=2&buildargs=${buildargs}`))).toStrictEqual({
+    isOk: false,
+    reason,
+  });
+});
+
+test('#checkBuildQuery refuses a build query without a tag', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(checkBuildQuery(parseQuery(`version=2&buildargs=${buildargs}`))).toStrictEqual({
+    isOk: false,
+    reason: 'param t is missing',
+  });
+});
+
+// the classic builder, version 1, takes no frontend pin
+test('#checkBuildQuery refuses a build query without version 2', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&buildargs=${buildargs}`))).toStrictEqual({
+    isOk: false,
+    reason: 'param version is missing',
+  });
+});
+
+test('#checkBuildQuery refuses a build query that gives version twice', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(
+    checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}&version=2`)),
+  ).toStrictEqual({ isOk: false, reason: 'param version is given 2 times' });
+});
+
+test('#checkBuildQuery refuses a build query for the classic builder', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(
+    checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&version=1&buildargs=${buildargs}`)),
+  ).toStrictEqual({ isOk: false, reason: 'param version is "1"' });
+});
+
+test.each([
+  ['..%2FDockerfile', '../Dockerfile'],
+  ['a%2F..%2F..%2Fb', 'a/../../b'],
+  ['%2Fetc%2Fpasswd', '/etc/passwd'],
+  ['.%2FDockerfile', './Dockerfile'],
+  ['a%2F%2Fb', 'a//b'],
+  ['', ''],
+  ['a%20b', 'a b'],
+])('#checkBuildQuery refuses a dockerfile %s outside the context', (encoded, path) => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(
+    checkBuildQuery(
+      parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}&dockerfile=${encoded}`),
+    ),
+  ).toStrictEqual({
+    isOk: false,
+    reason: `param dockerfile is ${JSON.stringify(path)}, not a path inside the context`,
+  });
+});
+
+test('#checkBuildQuery refuses a build query without build args', () => {
+  expect(checkBuildQuery(parseQuery('t=imp%2Fx%3Alatest&version=2'))).toStrictEqual({
+    isOk: false,
+    reason: 'param buildargs is missing',
+  });
+});
+
+test('#checkBuildQuery refuses build args that do not pin the frontend', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({}));
+
+  expect(
+    checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}`)),
+  ).toStrictEqual({ isOk: false, reason: 'param buildargs does not set BUILDKIT_SYNTAX' });
+});
+
+test.each([
+  ['docker/dockerfile:1'],
+  ['docker/dockerfile:1.19'],
+  ['docker/dockerfile@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6'],
+  ['evil/frontend:1'],
+])('#checkBuildQuery refuses build args that pin the frontend %s', (frontend) => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: frontend }));
+
+  expect(
+    checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}`)),
+  ).toStrictEqual({
+    isOk: false,
+    reason: `param buildargs sets BUILDKIT_SYNTAX=${JSON.stringify(frontend)}`,
+  });
+});
+
+test('#checkBuildQuery refuses build args that are not JSON', () => {
+  expect(checkBuildQuery(parseQuery('t=imp%2Fx%3Alatest&version=2&buildargs=nope'))).toStrictEqual({
+    isOk: false,
+    reason: 'param buildargs is not JSON',
+  });
+});
+
+test('#checkBuildQuery refuses build args that are not an object', () => {
+  expect(
+    checkBuildQuery(parseQuery('t=imp%2Fx%3Alatest&version=2&buildargs=%5B%5D')),
+  ).toStrictEqual({ isOk: false, reason: 'param buildargs is not an object' });
+});
+
+test.each([['HTTP_PROXY'], ['BUILDKIT_CONTEXT_KEEP_GIT_DIR'], ['BUILDKIT_INLINE_CACHE']])(
+  '#checkBuildQuery refuses build args that set %s beside the pin',
+  (extra) => {
+    const buildargs = encodeURIComponent(
+      JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND, [extra]: '1' }),
+    );
+
+    expect(
+      checkBuildQuery(parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}`)),
+    ).toStrictEqual({ isOk: false, reason: `param buildargs sets ${extra}="1"` });
+  },
+);
+
+// each needs a session, or moves the build off its context, network or tag
+test.each([
+  ['session', 'abc'],
+  ['remote', 'https://x'],
+  ['networkmode', 'host'],
+  ['buildid', 'x'],
+  ['outputs', '[{"Type":"local"}]'],
+  ['platform', 'linux/arm64'],
+  ['pull', '1'],
+  ['cachefrom', '["x"]'],
+  ['target', 'x'],
+  ['nocache', '1'],
+  ['labels', '{}'],
+  ['extrahosts', 'a:1.2.3.4'],
+  ['shmsize', '1'],
+  ['memory', '1'],
+  ['q', '1'],
+])('#checkBuildQuery refuses a build query with %s=%s', (key, value) => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+  const param = encodeURIComponent(value);
+
+  expect(
+    checkBuildQuery(
+      parseQuery(`t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}&${key}=${param}`),
+    ),
+  ).toStrictEqual({ isOk: false, reason: `param ${key} is not allowed` });
+});
+
+test('#checkBuildQuery refuses a refused param given twice as not allowed', () => {
+  const buildargs = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+
+  expect(
+    checkBuildQuery(
+      parseQuery(
+        `t=imp%2Fx%3Alatest&version=2&buildargs=${buildargs}&networkmode=host&networkmode=host`,
+      ),
+    ),
+  ).toStrictEqual({ isOk: false, reason: 'param networkmode is not allowed' });
+});
+
+test('#checkBuildContentType passes the tar Content-Type docker build sends', () => {
+  expect(checkBuildContentType('application/x-tar')).toStrictEqual({ isOk: true });
+});
+
+test('#checkBuildContentType passes a build with no Content-Type', () => {
+  expect(checkBuildContentType(null)).toStrictEqual({ isOk: true });
+});
+
+// a form body the engine would read with the query, a parameterised or
+// padded tar, and any other value
+test.each([
+  ['application/x-www-form-urlencoded'],
+  ['application/x-www-form-urlencoded; charset=utf-8'],
+  ['APPLICATION/X-WWW-FORM-URLENCODED'],
+  ['multipart/form-data; boundary=x'],
+  ['multipart/form-data'],
+  ['application/x-tar; charset=utf-8'],
+  ['application/x-tar '],
+  [''],
+  ['text/plain'],
+])('#checkBuildContentType refuses the Content-Type %p', (value) => {
+  expect(checkBuildContentType(value)).toStrictEqual({
+    isOk: false,
+    reason: `a build body is a tar context, and Content-Type ${JSON.stringify(value)} is not application/x-tar`,
+  });
+});
+
+// docker lowercases the registry, so any case of localhost is the host's
+test.each([
+  ['LocalHost/name', "registry LocalHost is the host's own"],
+  ['LOCALHOST:5000/x', "registry LOCALHOST:5000 is the host's own"],
+  ['Reg.LocalHost/x', "registry Reg.LocalHost is the host's own"],
+  ['10.0.0.5:5000/y', 'registry 10.0.0.5:5000 is an IP address'],
+])('#checkReferenceRegistry names the refused registry of %s', (reference, problem) => {
+  expect(checkReferenceRegistry(reference)).toBe(problem);
+});
+
+test('#checkReferenceRegistry passes a named registry', () => {
+  expect(checkReferenceRegistry('ghcr.io/x')).toBeNull();
+});
+
+test.each([
+  ['busybox', 'docker.io', 'library/busybox'],
+  ['docker.io/library/busybox:1.36', 'docker.io', 'library/busybox'],
+  ['index.docker.io/library/busybox', 'docker.io', 'library/busybox'],
+  ['ghcr.io/zgeoff/imp-host:latest', 'ghcr.io', 'zgeoff/imp-host'],
+  ['localhost:5000/x@sha256:ab', 'localhost:5000', 'x'],
+  ['LocalHost/name', 'LocalHost', 'name'],
+  ['imp-host:dev', 'docker.io', 'library/imp-host'],
+  ['zgeoff/imp:1', 'docker.io', 'zgeoff/imp'],
+])('#readImageReference reads %s as registry %s and path %s', (reference, registry, path) => {
+  expect(readImageReference(reference)).toStrictEqual({ registry, path });
+});
+
+test.each([
+  ['localhost/x', "registry localhost is the host's own"],
+  ['localhost:5000/x', "registry localhost:5000 is the host's own"],
+  ['reg.localhost/x', "registry reg.localhost is the host's own"],
+  ['127.0.0.1:5000/x', 'registry 127.0.0.1:5000 is an IP address'],
+  ['169.254.169.254/x', 'registry 169.254.169.254 is an IP address'],
+  ['[::1]:5000/x', 'image "[::1]:5000/x" is not a reference'],
+  ['[fe80::1]/x', 'image "[fe80::1]/x" is not a reference'],
+  [
+    'ghcr.io/zgeoff/imp-host:other',
+    'image ghcr.io/zgeoff/imp-host:other is the repository imp-host runs from',
+  ],
+  [
+    'ghcr.io/zgeoff/imp-host@sha256:aa',
+    'image ghcr.io/zgeoff/imp-host@sha256:aa is the repository imp-host runs from',
+  ],
+  ['-busybox', 'image "-busybox" is not a reference'],
+  ['busy box', 'image "busy box" is not a reference'],
+])('#checkImageReference refuses the image %s', (reference, reason) => {
+  expect(checkImageReference(reference, 'ghcr.io/zgeoff/imp-host:latest')).toStrictEqual({
+    isOk: false,
+    reason,
+  });
+});
+
+test('#checkImageReference refuses the repository of a host image on Docker Hub', () => {
+  expect(checkImageReference('imp-host:dev', 'imp-host:dev')).toStrictEqual({
+    isOk: false,
+    reason: 'image imp-host:dev is the repository imp-host runs from',
+  });
+});
+
+// the NixOS module pins the host image by digest: the guard still names its
+// repository
+test('#checkImageReference refuses the repository of a host image pinned by digest', () => {
+  expect(
+    checkImageReference(
+      'ghcr.io/zgeoff/imp-host:latest',
+      'ghcr.io/zgeoff/imp-host:0.25.1@sha256:aa',
+    ),
+  ).toStrictEqual({
+    isOk: false,
+    reason: 'image ghcr.io/zgeoff/imp-host:latest is the repository imp-host runs from',
+  });
+});
+
+test('#checkImageReference passes another repository of the host image registry', () => {
+  expect(
+    checkImageReference('ghcr.io/zgeoff/other:latest', 'ghcr.io/zgeoff/imp-host:latest'),
+  ).toStrictEqual({ isOk: true });
+});
+
+test('#checkPullQuery passes a pull as docker pull sends it', () => {
+  expect(
+    checkPullQuery(
+      parseQuery('fromImage=docker.io%2Flibrary%2Fbusybox&tag=latest'),
+      'ghcr.io/zgeoff/imp-host:latest',
+      null,
+    ),
+  ).toStrictEqual({ isOk: true });
+});
+
+// `docker pull <DOCKERFILE_FRONTEND>` sends the digest as the tag; the
+// rule a base image's pull meets, with no exception for it
+test('#checkPullQuery passes a pull of the Dockerfile frontend by its digest', () => {
+  const digest = encodeURIComponent(DOCKERFILE_FRONTEND.split('@')[1] ?? '');
+
+  expect(
+    checkPullQuery(
+      parseQuery(`fromImage=docker.io%2Fdocker%2Fdockerfile&tag=${digest}`),
+      'ghcr.io/zgeoff/imp-host:latest',
+      null,
+    ),
+  ).toStrictEqual({ isOk: true });
+});
+
+test.each([
+  ['fromSrc=-&repo=x', 'param fromSrc is not allowed'],
+  ['fromImage=busybox&tag=latest&changes=CMD', 'param changes is not allowed'],
+  ['fromImage=busybox&tag=a&tag=b', 'param tag is given 2 times'],
+  ['fromImage=busybox&tag=a%20b', 'param tag is "a b"'],
+  ['tag=latest', 'param fromImage is missing'],
+  ['fromImage=busybox', 'param tag is missing'],
+  ['fromImage=127.0.0.1%3A5000%2Fx&tag=latest', 'registry 127.0.0.1:5000 is an IP address'],
+  [
+    'fromImage=ghcr.io%2Fzgeoff%2Fimp-host&tag=evil',
+    'image ghcr.io/zgeoff/imp-host is the repository imp-host runs from',
+  ],
+])('#checkPullQuery refuses the pull query %s', (raw, reason) => {
+  expect(checkPullQuery(parseQuery(raw), 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason,
+  });
+});
+
+// `docker pull <repo>:<tag>@<digest>` sends the repository and the digest
+test('#checkPullQuery passes a pull of IMP_BUILD_IMAGE by its digest under imp isolation', () => {
+  const digest = `sha256:${'d'.repeat(64)}`;
+
+  expect(
+    checkPullQuery(
+      parseQuery(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${digest}`),
+      'ghcr.io/zgeoff/imp-host:latest',
+      `ghcr.io/zgeoff/imp-base:0.29.0@${digest}`,
+    ),
+  ).toStrictEqual({ isOk: true });
+});
+
+// the engine pulls fromImage's repository at the tag, whatever else it names
+test.each([
+  ['docker.io/library/busybox', '1.37'],
+  ['ghcr.io/zgeoff/imp-base', '0.29.0'],
+  ['ghcr.io/zgeoff/imp-base', `sha256:${'e'.repeat(64)}`],
+  ['ghcr.io/zgeoff/imp-other', `sha256:${'d'.repeat(64)}`],
+  ['docker.io/zgeoff/imp-base', `sha256:${'d'.repeat(64)}`],
+  [`ghcr.io/zgeoff/imp-base@sha256:${'e'.repeat(64)}`, `sha256:${'e'.repeat(64)}`],
+])('#checkPullQuery refuses a pull of %s at %s under imp isolation', (fromImage, tag) => {
+  const only = `ghcr.io/zgeoff/imp-base:0.29.0@sha256:${'d'.repeat(64)}`;
+
+  const query = new URLSearchParams({ fromImage, tag }).toString();
+
+  expect(checkPullQuery(parseQuery(query), 'ghcr.io/zgeoff/imp-host:latest', only)).toStrictEqual({
+    isOk: false,
+    reason: `a pull of ${fromImage}:${tag} is refused: under IMP_BUILD_ISOLATION=imp the proxy pulls only IMP_BUILD_IMAGE, ${only}`,
+  });
+});
+
+test.each([
+  ['fromImage=ghcr.io%2Fzgeoff%2Fimp-base', 'param tag is missing'],
+  [
+    `fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=sha256%3A${'d'.repeat(64)}&repo=x`,
+    'param repo is not allowed',
+  ],
+])('#checkPullQuery keeps the rules every pull meets under imp isolation for %s', (raw, reason) => {
+  const only = `ghcr.io/zgeoff/imp-base:0.29.0@sha256:${'d'.repeat(64)}`;
+
+  expect(checkPullQuery(parseQuery(raw), 'ghcr.io/zgeoff/imp-host:latest', only)).toStrictEqual({
+    isOk: false,
+    reason,
+  });
+});
+
+test('#checkRemoveQuery passes the force docker rm -f sends', () => {
+  expect(checkRemoveQuery(parseQuery('force=1'))).toStrictEqual({ isOk: true });
+});
+
+test.each([
+  ['force=1&link=1', 'param link is not allowed'],
+  ['force=1&v=1', 'param v is not allowed'],
+  ['link=1', 'param link is not allowed'],
+  ['force=yes', 'param force is "yes"'],
+])('#checkRemoveQuery refuses the remove query %s', (raw, reason) => {
+  expect(checkRemoveQuery(parseQuery(raw))).toStrictEqual({ isOk: false, reason });
+});
+
+test('#checkNoQuery passes a call with no params', () => {
+  expect(checkNoQuery(parseQuery(''))).toStrictEqual({ isOk: true });
+});
+
+test('#checkNoQuery refuses a call with a param', () => {
+  expect(checkNoQuery(parseQuery('name=x'))).toStrictEqual({
+    isOk: false,
+    reason: 'param name is not allowed',
+  });
+});
 
 // the body `docker create busybox /bin/true` 29.8 sends
-const CREATE_BODY = {
-  Hostname: '',
-  Domainname: '',
-  User: '',
-  AttachStdin: false,
-  AttachStdout: true,
-  AttachStderr: true,
-  Tty: false,
-  OpenStdin: false,
-  StdinOnce: false,
-  Env: null,
-  Cmd: ['/bin/true'],
-  Image: 'busybox',
-  Volumes: {},
-  WorkingDir: '',
-  Entrypoint: null,
-  OnBuild: null,
-  Labels: {},
-  HostConfig: {
-    Binds: null,
-    ContainerIDFile: '',
-    LogConfig: { Type: '', Config: {} },
-    NetworkMode: 'default',
-    PortBindings: {},
-    RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
-    AutoRemove: false,
-    VolumeDriver: '',
-    VolumesFrom: null,
-    ConsoleSize: [0, 0],
-    CapAdd: null,
-    CapDrop: null,
-    Privileged: false,
-    Mounts: null,
-    Devices: [],
-    MemorySwappiness: -1,
-  },
-  NetworkingConfig: {
-    EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
-  },
-};
-
-function buildArgsQuery(value: Readonly<Record<string, string>>): string {
-  return `t=imp%2Fx%3Alatest&version=2&buildargs=${encodeURIComponent(JSON.stringify(value))}`;
-}
-
-function checkBuild(raw: string): string {
-  const checked = checkBuildQuery(parseQuery(raw));
-
-  return checked.isOk ? 'ok' : checked.reason;
-}
-
-function checkCreate(
-  patch: Readonly<Record<string, unknown>>,
-  hostConfig: Readonly<Record<string, unknown>> = {},
-): string {
+test('#checkCreateBody passes a create body as docker create sends it', () => {
   const body = {
-    ...CREATE_BODY,
-    ...patch,
-    HostConfig: { ...CREATE_BODY.HostConfig, ...hostConfig },
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: 'busybox',
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
   };
 
-  const checked = checkCreateBody(body, HOST_IMAGE, null);
-
-  return checked.isOk ? 'ok' : checked.reason;
-}
-
-describe('a build query', () => {
-  test('passes as impd sends it, with or without a dockerfile', () => {
-    expect(checkBuild(BUILD)).toBe('ok');
-    expect(checkBuild(`${BUILD}&dockerfile=sub%2FDockerfile.dev`)).toBe('ok');
-  });
-
-  test('fails with a tag that is not imp/<name>:latest, or a second tag', () => {
-    expect(checkBuild(`t=imp-host%3Alatest&version=2&buildargs=${BUILD_ARGS}`)).toContain(
-      'param t',
-    );
-
-    expect(checkBuild(`t=imp%2Fx%3Av2&version=2&buildargs=${BUILD_ARGS}`)).toContain('param t');
-    expect(checkBuild(`version=2&buildargs=${BUILD_ARGS}`)).toBe('param t is missing');
-    expect(checkBuild(`${BUILD}&t=imp%2Fy%3Alatest`)).toBe('param t is given 2 times');
-  });
-
-  test('fails without version=2: the classic builder takes no frontend pin', () => {
-    expect(checkBuild(`t=imp%2Fx%3Alatest&buildargs=${BUILD_ARGS}`)).toBe(
-      'param version is missing',
-    );
-
-    expect(checkBuild(`t=imp%2Fx%3Alatest&version=1&buildargs=${BUILD_ARGS}`)).toBe(
-      'param version is "1"',
-    );
-
-    expect(checkBuild(`${BUILD}&version=2`)).toBe('param version is given 2 times');
-  });
-
-  test('fails with a dockerfile outside the context', () => {
-    for (const path of [
-      '..%2FDockerfile',
-      'a%2F..%2F..%2Fb',
-      '%2Fetc%2Fpasswd',
-      '.%2FDockerfile',
-      'a%2F%2Fb',
-    ]) {
-      expect(checkBuild(`${BUILD}&dockerfile=${path}`)).toContain('not a path inside the context');
-    }
-  });
-
-  test('fails without the pinned frontend: missing, by tag only, or another one', () => {
-    expect(checkBuild('t=imp%2Fx%3Alatest&version=2')).toBe('param buildargs is missing');
-    expect(checkBuild(buildArgsQuery({}))).toBe('param buildargs does not set BUILDKIT_SYNTAX');
-
-    for (const frontend of [
-      'docker/dockerfile:1',
-      'docker/dockerfile:1.19',
-      'docker/dockerfile@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6',
-      'evil/frontend:1',
-    ]) {
-      expect(checkBuild(buildArgsQuery({ BUILDKIT_SYNTAX: frontend }))).toContain(
-        'sets BUILDKIT_SYNTAX',
-      );
-    }
-
-    expect(checkBuild(`t=imp%2Fx%3Alatest&version=2&buildargs=nope`)).toBe(
-      'param buildargs is not JSON',
-    );
-
-    expect(checkBuild(`t=imp%2Fx%3Alatest&version=2&buildargs=%5B%5D`)).toBe(
-      'param buildargs is not an object',
-    );
-  });
-
-  test('fails with a build arg beside the pin', () => {
-    for (const extra of ['HTTP_PROXY', 'BUILDKIT_CONTEXT_KEEP_GIT_DIR', 'BUILDKIT_INLINE_CACHE']) {
-      expect(
-        checkBuild(buildArgsQuery({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND, [extra]: '1' })),
-      ).toBe(`param buildargs sets ${extra}="1"`);
-    }
-  });
-
-  test('fails with each param that needs a session or moves the build', () => {
-    for (const [key, value] of [
-      ['session', 'abc'],
-      ['remote', 'https://x'],
-      ['networkmode', 'host'],
-      ['buildid', 'x'],
-      ['outputs', '[{"Type":"local"}]'],
-      ['platform', 'linux/arm64'],
-      ['pull', '1'],
-      ['cachefrom', '["x"]'],
-      ['target', 'x'],
-      ['nocache', '1'],
-      ['labels', '{}'],
-      ['extrahosts', 'a:1.2.3.4'],
-      ['shmsize', '1'],
-      ['memory', '1'],
-      ['q', '1'],
-    ] as const) {
-      expect(checkBuild(`${BUILD}&${key}=${encodeURIComponent(value)}`)).toBe(
-        `param ${key} is not allowed`,
-      );
-    }
-  });
-
-  test('fails with a refused param given twice', () => {
-    expect(checkBuild(`${BUILD}&networkmode=host&networkmode=host`)).toBe(
-      'param networkmode is not allowed',
-    );
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: true,
+    image: 'busybox',
   });
 });
 
-describe('a build Content-Type', () => {
-  test('passes as `docker build` sends it, or when absent', () => {
-    expect(checkBuildContentType('application/x-tar').isOk).toBe(true);
-    expect(checkBuildContentType(null).isOk).toBe(true);
-  });
-
-  test('fails with a form, which the engine would read with the query', () => {
-    for (const value of [
-      'application/x-www-form-urlencoded',
-      'application/x-www-form-urlencoded; charset=utf-8',
-      'APPLICATION/X-WWW-FORM-URLENCODED',
-      'multipart/form-data; boundary=x',
-      'multipart/form-data',
-    ]) {
-      const checked = checkBuildContentType(value);
-      const reason = checked.isOk ? 'ok' : checked.reason;
-
-      expect(reason).toContain('is not application/x-tar');
-    }
-  });
-
-  test('fails with any other value, a parameterised tar or an empty one included', () => {
-    for (const value of [
-      'application/x-tar; charset=utf-8',
-      'application/x-tar ',
-      '',
-      'text/plain',
-    ]) {
-      expect(checkBuildContentType(value).isOk).toBe(false);
-    }
-  });
-});
-
-describe('an image reference', () => {
-  test('names a refused registry in any case', () => {
-    expect(checkReferenceRegistry('LocalHost/name')).toBe("registry LocalHost is the host's own");
-
-    expect(checkReferenceRegistry('LOCALHOST:5000/x')).toBe(
-      "registry LOCALHOST:5000 is the host's own",
-    );
-
-    expect(checkReferenceRegistry('Reg.LocalHost/x')).toBe(
-      "registry Reg.LocalHost is the host's own",
-    );
-
-    expect(checkReferenceRegistry('ghcr.io/x')).toBeNull();
-  });
-
-  test('reads the registry and the repository as the engine does', () => {
-    expect(readImageReference('busybox')).toEqual({
-      registry: 'docker.io',
-      path: 'library/busybox',
-    });
-
-    expect(readImageReference('docker.io/library/busybox:1.36')).toEqual({
-      registry: 'docker.io',
-      path: 'library/busybox',
-    });
-
-    expect(readImageReference('ghcr.io/zgeoff/imp-host:latest')).toEqual({
-      registry: 'ghcr.io',
-      path: 'zgeoff/imp-host',
-    });
-
-    expect(readImageReference('localhost:5000/x@sha256:ab')).toEqual({
-      registry: 'localhost:5000',
-      path: 'x',
-    });
-
-    // docker lowercases the first label, so this is the localhost registry
-    expect(readImageReference('LocalHost/name')).toEqual({
-      registry: 'LocalHost',
-      path: 'name',
-    });
-
-    expect(readImageReference('imp-host:dev')).toEqual({
-      registry: 'docker.io',
-      path: 'library/imp-host',
-    });
-  });
-
-  test('fails on the host loopback, an IP address or the repository imp-host runs from', () => {
-    for (const reference of [
-      'localhost/x',
-      'localhost:5000/x',
-      'reg.localhost/x',
-      '127.0.0.1:5000/x',
-      '169.254.169.254/x',
-      '[::1]:5000/x',
-      '[fe80::1]/x',
-      'ghcr.io/zgeoff/imp-host:other',
-      'ghcr.io/zgeoff/imp-host@sha256:aa',
-    ]) {
-      expect(checkImageReference(reference, HOST_IMAGE).isOk).toBe(false);
-    }
-
-    expect(checkImageReference('imp-host:dev', 'imp-host:dev').isOk).toBe(false);
-
-    // the NixOS module's digest pin: the guard still names the repository
-    expect(
-      checkImageReference(
-        'ghcr.io/zgeoff/imp-host:latest',
-        'ghcr.io/zgeoff/imp-host:0.25.1@sha256:aa',
-      ).isOk,
-    ).toBe(false);
-
-    expect(checkImageReference('ghcr.io/zgeoff/other:latest', HOST_IMAGE).isOk).toBe(true);
-  });
-});
-
-describe('a pull query', () => {
-  const checkPull = (raw: string): string => {
-    const checked = checkPullQuery(parseQuery(raw), HOST_IMAGE, null);
-
-    return checked.isOk ? 'ok' : checked.reason;
+test('#checkCreateBody refuses a create body with another command', () => {
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/sh'],
+    Image: 'busybox',
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
   };
 
-  test('passes as `docker pull` sends it', () => {
-    expect(checkPull('fromImage=docker.io%2Flibrary%2Fbusybox&tag=latest')).toBe('ok');
-  });
-
-  // `docker pull <DOCKERFILE_FRONTEND>` sends the digest as the tag; the
-  // rule a base image's pull meets, with no exception for it
-  test('passes for the Dockerfile frontend, by digest', () => {
-    const digest = DOCKERFILE_FRONTEND.split('@')[1] ?? '';
-
-    expect(
-      checkPull(`fromImage=docker.io%2Fdocker%2Fdockerfile&tag=${encodeURIComponent(digest)}`),
-    ).toBe('ok');
-  });
-
-  test('fails with fromSrc, repo or changes, or on a refused registry', () => {
-    expect(checkPull('fromSrc=-&repo=x')).toContain('is not allowed');
-    expect(checkPull('fromImage=busybox&changes=CMD')).toContain('is not allowed');
-    expect(checkPull('fromImage=busybox&tag=a&tag=b')).toBe('param tag is given 2 times');
-    expect(checkPull('fromImage=127.0.0.1%3A5000%2Fx&tag=latest')).toContain('IP address');
-
-    expect(checkPull('fromImage=ghcr.io%2Fzgeoff%2Fimp-host&tag=evil')).toContain(
-      'imp-host runs from',
-    );
-
-    expect(checkPull('tag=latest')).toBe('param fromImage is missing');
-    expect(checkPull('fromImage=busybox')).toBe('param tag is missing');
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason: 'Cmd is ["/bin/sh"], not ["/bin/true"]',
   });
 });
 
-describe('a pull under IMP_BUILD_ISOLATION=imp', () => {
-  const DIGEST = `sha256:${'d'.repeat(64)}`;
-  const ONLY = `ghcr.io/zgeoff/imp-base:0.29.0@${DIGEST}`;
-
-  const checkPull = (raw: string): string => {
-    const checked = checkPullQuery(parseQuery(raw), HOST_IMAGE, ONLY);
-
-    return checked.isOk ? 'ok' : checked.reason;
+test.each([
+  ['Entrypoint', ['/bin/sh']],
+  ['Labels', { a: 'b' }],
+  ['Volumes', { '/x': {} }],
+  ['Env', ['A=1']],
+  ['User', 'root'],
+  ['AttachStdin', true],
+  ['Healthcheck', { Test: ['CMD', 'x'] }],
+])('#checkCreateBody refuses a create body that sets %s', (key, value) => {
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: 'busybox',
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+    [key]: value,
   };
 
-  // `docker pull <repo>:<tag>@<digest>` sends the repository and the digest
-  test('passes for IMP_BUILD_IMAGE by its digest, as `docker pull` sends it', () => {
-    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}`)).toBe('ok');
-  });
-
-  test('fails for any other image, tag or digest', () => {
-    const other = `sha256:${'e'.repeat(64)}`;
-
-    expect(checkPull('fromImage=docker.io%2Flibrary%2Fbusybox&tag=1.37')).toContain(
-      `the proxy pulls only IMP_BUILD_IMAGE, ${ONLY}`,
-    );
-
-    expect(checkPull('fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=0.29.0')).toContain('refused');
-    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${other}`)).toContain('refused');
-    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-other&tag=${DIGEST}`)).toContain('refused');
-    expect(checkPull(`fromImage=docker.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}`)).toContain('refused');
-
-    // the engine pulls fromImage's repository at the tag, whatever else it names
-    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base%40${other}&tag=${other}`)).toContain(
-      'refused',
-    );
-  });
-
-  test('keeps the rules every pull meets', () => {
-    expect(checkPull('fromImage=ghcr.io%2Fzgeoff%2Fimp-base')).toBe('param tag is missing');
-
-    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}&repo=x`)).toBe(
-      'param repo is not allowed',
-    );
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason: `${key} is set`,
   });
 });
 
-describe('a remove query', () => {
-  test('takes force only', () => {
-    expect(checkRemoveQuery(parseQuery('force=1')).isOk).toBe(true);
-    expect(checkRemoveQuery(parseQuery('force=1&link=1')).isOk).toBe(false);
-    expect(checkRemoveQuery(parseQuery('force=1&v=1')).isOk).toBe(false);
-    expect(checkRemoveQuery(parseQuery('link=1')).isOk).toBe(false);
+test.each([
+  ['Privileged', true],
+  ['Binds', ['/:/host']],
+  ['Mounts', [{ Type: 'bind', Source: '/', Target: '/host' }]],
+  ['CapAdd', ['SYS_ADMIN']],
+  ['Devices', [{ PathOnHost: '/dev/kvm' }]],
+  ['NetworkMode', 'host'],
+  ['PidMode', 'host'],
+  ['IpcMode', 'host'],
+  ['UsernsMode', 'host'],
+  ['SecurityOpt', ['seccomp=unconfined']],
+  ['VolumesFrom', ['imp-host']],
+  ['RestartPolicy', { Name: 'always', MaximumRetryCount: 0 }],
+  ['MemorySwappiness', 60],
+  ['Tmpfs', { '/x': '' }],
+  ['Runtime', 'runc'],
+  ['CgroupParent', '/'],
+  ['PortBindings', { '22/tcp': [{ HostPort: '22' }] }],
+  ['Sysctls', { 'kernel.core_pattern': '|/x' }],
+  ['DeviceRequests', [{ Driver: 'nvidia', Count: -1 }]],
+  ['DeviceCgroupRules', ['b 7:* rmw']],
+  ['PidMode', 'container:imp-host'],
+])('#checkCreateBody refuses a create body whose HostConfig sets %s to %p', (key, value) => {
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: 'busybox',
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+      [key]: value,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+  };
+
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason: `HostConfig.${key} is set`,
   });
 });
 
-describe('a create body', () => {
-  test('passes as `docker create <image> /bin/true` sends it', () => {
-    expect(checkCreate({})).toBe('ok');
+test('#checkCreateBody refuses a create body whose HostConfig is not an object', () => {
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: 'busybox',
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: 'host',
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+  };
 
-    expect(checkCreateBody(CREATE_BODY, HOST_IMAGE, null)).toEqual({
-      isOk: true,
-      image: 'busybox',
-    });
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason: 'HostConfig is not an object',
   });
+});
 
-  test('fails with another command, an entrypoint, labels, volumes or env', () => {
-    expect(checkCreate({ Cmd: ['/bin/sh'] })).toContain('Cmd is');
-    expect(checkCreate({ Entrypoint: ['/bin/sh'] })).toBe('Entrypoint is set');
-    expect(checkCreate({ Labels: { a: 'b' } })).toBe('Labels is set');
-    expect(checkCreate({ Volumes: { '/x': {} } })).toBe('Volumes is set');
-    expect(checkCreate({ Env: ['A=1'] })).toBe('Env is set');
-    expect(checkCreate({ User: 'root' })).toBe('User is set');
-    expect(checkCreate({ AttachStdin: true })).toBe('AttachStdin is set');
+test.each([
+  ['127.0.0.1:5000/x', 'registry 127.0.0.1:5000 is an IP address'],
+  ['localhost:5000/x', "registry localhost:5000 is the host's own"],
+  [
+    'ghcr.io/zgeoff/imp-host:latest',
+    'image ghcr.io/zgeoff/imp-host:latest is the repository imp-host runs from',
+  ],
+])('#checkCreateBody refuses a create body from the image %s', (image, reason) => {
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: image,
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+  };
+
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason,
   });
+});
 
-  test('fails with any HostConfig key off its default', () => {
-    const cases: readonly (readonly [string, unknown])[] = [
-      ['Privileged', true],
-      ['Binds', ['/:/host']],
-      ['Mounts', [{ Type: 'bind', Source: '/', Target: '/host' }]],
-      ['CapAdd', ['SYS_ADMIN']],
-      ['Devices', [{ PathOnHost: '/dev/kvm' }]],
-      ['NetworkMode', 'host'],
-      ['PidMode', 'host'],
-      ['IpcMode', 'host'],
-      ['UsernsMode', 'host'],
-      ['SecurityOpt', ['seccomp=unconfined']],
-      ['VolumesFrom', ['imp-host']],
-      ['RestartPolicy', { Name: 'always', MaximumRetryCount: 0 }],
-      ['MemorySwappiness', 60],
-      ['Tmpfs', { '/x': '' }],
-      ['Runtime', 'runc'],
-      ['CgroupParent', '/'],
-      ['PortBindings', { '22/tcp': [{ HostPort: '22' }] }],
-      ['Sysctls', { 'kernel.core_pattern': '|/x' }],
-      ['DeviceRequests', [{ Driver: 'nvidia', Count: -1 }]],
-      ['DeviceCgroupRules', ['b 7:* rmw']],
-      ['PidMode', 'container:imp-host'],
-    ];
-
-    for (const [key, value] of cases) {
-      expect(checkCreate({}, { [key]: value })).toBe(`HostConfig.${key} is set`);
-    }
+test('#checkCreateBody refuses a create body that is not an object', () => {
+  expect(checkCreateBody([], 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason: 'the body is not a JSON object',
   });
+});
 
-  test('fails with an image on the host loopback or the host repository', () => {
-    expect(checkCreate({ Image: '127.0.0.1:5000/x' })).toContain('IP address');
-    expect(checkCreate({ Image: 'localhost:5000/x' })).toContain("the host's own");
+test('#checkCreateBody refuses a create body with no Image', () => {
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: 1,
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+  };
 
-    expect(checkCreate({ Image: 'ghcr.io/zgeoff/imp-host:latest' })).toContain(
-      'imp-host runs from',
-    );
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', null)).toStrictEqual({
+    isOk: false,
+    reason: 'Image is missing',
   });
+});
 
-  test('fails when it is not an object, or has no Image', () => {
-    expect(checkCreateBody([], HOST_IMAGE, null).isOk).toBe(false);
-    expect(checkCreate({ Image: 1 })).toBe('Image is missing');
+test.each([
+  [`ghcr.io/zgeoff/imp-base:0.29.0@sha256:${'d'.repeat(64)}`],
+  [`ghcr.io/zgeoff/imp-base@sha256:${'d'.repeat(64)}`],
+])('#checkCreateBody passes a create from IMP_BUILD_IMAGE as %s under imp isolation', (image) => {
+  const only = `ghcr.io/zgeoff/imp-base:0.29.0@sha256:${'d'.repeat(64)}`;
+
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: image,
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+  };
+
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', only)).toStrictEqual({
+    isOk: true,
+    image,
   });
+});
 
-  test('under IMP_BUILD_ISOLATION=imp, passes only for IMP_BUILD_IMAGE by its digest', () => {
-    const digest = `sha256:${'d'.repeat(64)}`;
-    const only = `ghcr.io/zgeoff/imp-base:0.29.0@${digest}`;
+test.each([
+  ['busybox'],
+  ['ghcr.io/zgeoff/imp-base:0.29.0'],
+  [`ghcr.io/zgeoff/imp-base@sha256:${'e'.repeat(64)}`],
+  [`ghcr.io/zgeoff/imp-other@sha256:${'d'.repeat(64)}`],
+  [`sha256:${'d'.repeat(64)}`],
+])('#checkCreateBody refuses a create from %s under imp isolation', (image) => {
+  const only = `ghcr.io/zgeoff/imp-base:0.29.0@sha256:${'d'.repeat(64)}`;
 
-    const checkLocked = (image: string): string => {
-      const checked = checkCreateBody({ ...CREATE_BODY, Image: image }, HOST_IMAGE, only);
+  const body = {
+    Hostname: '',
+    Domainname: '',
+    User: '',
+    AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: null,
+    Cmd: ['/bin/true'],
+    Image: image,
+    Volumes: {},
+    WorkingDir: '',
+    Entrypoint: null,
+    OnBuild: null,
+    Labels: {},
+    HostConfig: {
+      Binds: null,
+      ContainerIDFile: '',
+      LogConfig: { Type: '', Config: {} },
+      NetworkMode: 'default',
+      PortBindings: {},
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      AutoRemove: false,
+      VolumeDriver: '',
+      VolumesFrom: null,
+      ConsoleSize: [0, 0],
+      CapAdd: null,
+      CapDrop: null,
+      Privileged: false,
+      Mounts: null,
+      Devices: [],
+      MemorySwappiness: -1,
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { default: { IPAMConfig: null, Links: null, Aliases: null } },
+    },
+  };
 
-      return checked.isOk ? 'ok' : checked.reason;
-    };
-
-    expect(checkLocked(only)).toBe('ok');
-    expect(checkLocked(`ghcr.io/zgeoff/imp-base@${digest}`)).toBe('ok');
-
-    expect(checkLocked('busybox')).toBe(
-      `a create from busybox is refused: under IMP_BUILD_ISOLATION=imp the proxy creates only from IMP_BUILD_IMAGE, ${only}`,
-    );
-
-    expect(checkLocked('ghcr.io/zgeoff/imp-base:0.29.0')).toContain('is refused');
-    expect(checkLocked(`ghcr.io/zgeoff/imp-base@sha256:${'e'.repeat(64)}`)).toContain('is refused');
-    expect(checkLocked(`ghcr.io/zgeoff/imp-other@${digest}`)).toContain('is refused');
-    expect(checkLocked(digest)).toContain('is refused');
+  expect(checkCreateBody(body, 'ghcr.io/zgeoff/imp-host:latest', only)).toStrictEqual({
+    isOk: false,
+    reason: `a create from ${image} is refused: under IMP_BUILD_ISOLATION=imp the proxy creates only from IMP_BUILD_IMAGE, ${only}`,
   });
 });

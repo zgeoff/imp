@@ -67,16 +67,14 @@ export const HOST_ADD_WARNING =
 
 const RepoDigestsSchema = z.array(z.string()).nullish();
 
-const InspectSchema = z
-  .array(
-    z.object({
-      Id: z.string(),
-      Config: z.unknown(),
-      Size: z.number().optional(),
-      RepoDigests: RepoDigestsSchema,
-    }),
-  )
-  .length(1);
+const InspectSchema = z.tuple([
+  z.object({
+    Id: z.string(),
+    Config: z.unknown(),
+    Size: z.number().optional(),
+    RepoDigests: RepoDigestsSchema,
+  }),
+]);
 
 // what a streamed add or build hears of: `signal` aborts when the client
 // goes, and `setPhase` hears each phase as it starts
@@ -184,8 +182,12 @@ export interface ImageServiceDeps {
   readonly readBuilders: () => Builders | null;
   readonly log: (message: string) => void;
 
-  // BUILDER_IMAGE_PULL_MS, but for tests
-  readonly builderImagePullMs?: number;
+  // BUILDER_IMAGE_PULL_MS, but for tests; undefined keeps the default
+  readonly builderImagePullMs?: number | undefined;
+
+  // starts the limit on the builder image's pull; AbortSignal.timeout by
+  // default, and a signal the test aborts in tests
+  readonly startPullLimit?: (pullMs: number) => AbortSignal;
 
   // the environment of images.add's docker calls; impd's own by default
   readonly dockerEnv?: Readonly<Record<string, string>>;
@@ -504,11 +506,6 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const inspect = await readInspect(ref, options.signal);
 
     options.onPulled?.();
-
-    if (inspect === undefined) {
-      throw new Error(`docker image inspect ${ref}: no result`);
-    }
-
     const resolved = pickRepoDigest(ref, inspect.RepoDigests ?? []);
 
     if (resolved !== null) {
@@ -618,7 +615,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // signal; once it settles, the next add starts afresh
   const startBuilderImage = (ref: string): Promise<ImageRecord> => {
     const pullMs = deps.builderImagePullMs ?? BUILDER_IMAGE_PULL_MS;
-    const timeout = AbortSignal.timeout(pullMs);
+    const timeout = deps.startPullLimit?.(pullMs) ?? AbortSignal.timeout(pullMs);
 
     // a later step that fails after the limit is no pull that timed out
     const step = { pulled: false };
@@ -1191,7 +1188,8 @@ async function readTreeUsage(root: string): Promise<{ bytes: number; inodes: num
   return { bytes: parseDuCount(bytes), inodes: parseDuCount(inodes) };
 }
 
-function parseDuCount(stdout: string): number {
+// the count du prints before its path
+export function parseDuCount(stdout: string): number {
   const count = Number(stdout.split(/\s/)[0]);
 
   if (!Number.isSafeInteger(count)) {

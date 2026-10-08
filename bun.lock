@@ -110,6 +110,7 @@
       "devDependencies": {
         "@faker-js/faker": "catalog:",
         "@imp/test-utils": "workspace:*",
+        "@msw/data": "catalog:",
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
         "@types/dns-packet": "catalog:",

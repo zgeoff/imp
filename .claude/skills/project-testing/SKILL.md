@@ -26,13 +26,14 @@ the rules for writing tests live in the testing skill.
 | ZFS on a host, with VMs | `scripts/zfs-host-test.sh`                                             | sudo, Docker, KVM, the zfs module                                                       |
 | Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`        | A small filesystem mounted at `<dir>`                                                   |
 | ACME issuer             | `bun run test:pebble`                                                  | Docker                                                                                  |
-| Docker idle             | `bun run test:slow`                                                    | Nothing beyond Bun; about 6.5 minutes                                                   |
 
 Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
 tests need `jq`, and `release-please-config.test.ts` and `scripts/check-doc-refs.ts` run `git`.
 
 The build disk hold's `<file>` is `packages/daemon/src/images/isolated-build.test.ts`; its
-small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory.
+small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory. Each trial measures the
+filesystem with `packages/daemon/src/test-utils/start-disk-sampler.ts`, which removes its filler
+file when the test ends.
 
 The root `bunfig.toml`'s `pathIgnorePatterns` skips `packages/dashboard/**`, so the dashboard's
 tests run from the package. Its `bunfig.toml` preloads `@zgeoff/bun-test-extended`,
@@ -102,10 +103,10 @@ Utils that take a caller's stack and register nothing themselves:
 `packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source)`) runs one test file in a
 child `bun test` with `dir` as its working and temp dir.
 
-Plain `bun test` does not match `*.e2e.ts`, `*.pebble.ts`, or `*.slow.ts`; each of those runs only
-when its `./` path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain
-`bun test` and skip unless their variables are set. The `*.host.test.ts` files load too, and each
-test skips where its namespace probe fails; `bun run test:host` runs exactly those files.
+Plain `bun test` does not match `*.e2e.ts` or `*.pebble.ts`; each of those runs only when its `./`
+path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain `bun test`
+and skip unless their variables are set. The `*.host.test.ts` files load too, and each test skips
+where its namespace probe fails; `bun run test:host` runs exactly those files.
 
 ## End-to-end harness
 
@@ -331,7 +332,6 @@ this checkout whatever its `-C` says.
 - **`go`** runs `gofmt -l`, `go vet ./...` and `scripts/test-go.sh` in `agent/`, with
   `GO_TEST_JSONFILE` under `runner.temp`, and uploads that JSON as `go-test-results`, whether the
   tests pass or fail.
-- No job runs `bun run test:slow`.
 
 ## Stand-ins by boundary
 
@@ -347,8 +347,11 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Guest agent         | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                 | The agent on the vsock socket: CONNECT and frames                       |
 | Builder guest       | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                 | A builder's agent: output and exit per exec                             |
 | zfs                 | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                     | `zfs`, send and receive, and the mount table                            |
-| Docker engine       | A unix-socket server (4)                                                            | The engine API                                                          |
-| Docker CLI          | A `docker` script on `PATH` in the images tests                                     | The `docker` binary                                                     |
+| Docker engine       | `test-utils/start-stub-docker-engine.ts` (4)                                        | The engine API on its unix socket                                       |
+| Docker CLI          | `test-utils/build-stub-docker-cli.ts` (`buildStubDockerCli`)                        | The host's `docker` binary, first on `PATH`                             |
+| Image builder       | `test-utils/build-stub-image-builder.ts` (`buildStubImageBuilder`)                  | A builder's engine: pull, pin, build, create and export                 |
+| mkfs.ext4           | `test-utils/build-stub-image-mkfs.ts` (`buildStubImageMkfs`)                        | `mkfs.ext4` held until the test releases or fails it                    |
+| Silent build engine | `test-utils/start-stub-silent-build-engine.ts` (4)                                  | An engine silent through a build's quiet RUN step                       |
 | CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                                         | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`                 |
 | Docker for upgrade  | `scripts/test-utils/build-stub-host-docker.ts`                                      | The docker that `deploy/upgrade.sh` drives on a host                    |
 | Docker for dev.sh   | `scripts/test-utils/build-stub-dev-docker.ts`                                       | The images, labels and containers `dev.sh prune` reads                  |
@@ -380,9 +383,15 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 1. `vmm/firecracker-client.test.ts`, `vmm/vm-runner.test.ts`.
 2. `vmm/template-vm.test.ts` spawns it as the VMM process.
 3. `vmm/firecracker-process.test.ts`, `vmm/vm-runner.test.ts`.
-4. `Bun.serve({ unix })` in `docker-proxy/proxy.test.ts` and `images/docker-build.test.ts`; a
-   `node:net` server, `test-utils/start-stub-silent-build-engine.ts`, in
-   `images/docker-build.slow.ts`.
+4. `startStubDockerEngine`: a `Bun.serve({ unix })` in the test's temp dir, over `@msw/data`
+   collections of containers and images; a call it does not model gets a 500 that names it and lands
+   in `unexpected`, which each test that uses it asserts empty. It reads image names as the engine
+   does (`busybox` is `docker.io/library/busybox:latest`). MSW's passthrough drops `unix`, so the
+   engine stays a server. `docker-proxy/proxy.test.ts` serves the proxy on a unix socket as its main
+   does. `test-utils/start-stub-silent-build-engine.ts` is a raw socket engine that stays silent
+   through a build, for `images/docker-build.test.ts`'s idle-limit test: a child Bun with
+   `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1` runs `test-utils/run-idle-limited-docker-build.ts`, whose
+   unprotected fetch starts once both builds are silent (`started`) and expires after about 8 s.
 5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`.
 6. `broker/broker.test.ts`, `broker/broker-oauth.test.ts`.
 7. The shell tests in `scripts/` and `deploy/`: a stub on a temp `PATH` logs each call to one file
@@ -495,7 +504,6 @@ file leaves every host on its real origin.
 | `scripts/test-zfs.sh`      | yes          | no  | no     | no          | no                    |
 | Build disk hold            | sudo (2)     | no  | no     | no          | no                    |
 | `test:pebble`              | no           | no  | yes    | no          | pinned ghcr.io images |
-| `test:slow`                | no           | no  | no     | no          | no                    |
 | End to end                 | sudo (3)     | yes | yes    | (4)         | yes                   |
 | `scripts/zfs-host-test.sh` | sudo         | yes | yes    | no          | yes                   |
 

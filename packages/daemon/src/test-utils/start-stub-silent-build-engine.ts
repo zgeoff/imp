@@ -1,3 +1,4 @@
+import { onTestFinished } from 'bun:test';
 import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 
@@ -12,28 +13,27 @@ interface StubSilentBuildEngineOptions {
   readonly holdUntil: () => Promise<void>;
 }
 
-export interface StubSilentBuildEngine {
-  readonly [Symbol.asyncDispose]: () => Promise<void>;
-}
-
-// Docker's engine answering a build at once, then sending nothing until
-// `holdUntil` settles, as BuildKit does through a RUN step with no output.
-// A raw socket server, so no idle limit of a Bun server ends the silence.
-export async function startStubSilentBuildEngine(
-  options: StubSilentBuildEngineOptions,
-): Promise<StubSilentBuildEngine> {
+// Docker's engine answering a build at once, then silent until `holdUntil`
+// settles, as through a RUN step with no output; a raw socket server, so no
+// Bun server idle limit ends the silence. It stops when the test ends.
+export async function startStubSilentBuildEngine(options: StubSilentBuildEngineOptions) {
   const sockets = new Set<Socket>();
+
+  const firstClose = Promise.withResolvers<void>();
+  const firstRequest = Promise.withResolvers<void>();
 
   const engine = createServer((socket) => {
     sockets.add(socket);
 
     socket.on('close', () => {
       sockets.delete(socket);
+      firstClose.resolve();
     });
 
     socket.on('error', () => {});
 
     socket.once('data', () => {
+      firstRequest.resolve();
       void sendBuildAnswer(socket, options);
     });
   });
@@ -42,23 +42,32 @@ export async function startStubSilentBuildEngine(
     engine.listen(options.socketPath, resolve);
   });
 
-  // the first dispose closes the engine; a later one waits on the same close
-  const closing: { done: Promise<void> | null } = { done: null };
+  // the first stop closes the engine; a later one waits on the same close
+  const stopping: { done: Promise<void> | null } = { done: null };
+
+  const stop = (): Promise<void> => {
+    stopping.done ??= new Promise<void>((resolve) => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+
+      engine.close(() => {
+        resolve();
+      });
+    });
+
+    return stopping.done;
+  };
+
+  onTestFinished(stop);
 
   return {
-    [Symbol.asyncDispose]: () => {
-      closing.done ??= new Promise<void>((resolve) => {
-        for (const socket of sockets) {
-          socket.destroy();
-        }
+    // settles once the first connection closes, from either end
+    closed: firstClose.promise,
 
-        engine.close(() => {
-          resolve();
-        });
-      });
-
-      return closing.done;
-    },
+    // settles once the first request has arrived and been answered at once
+    started: firstRequest.promise,
+    stop,
   };
 }
 

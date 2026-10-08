@@ -41,6 +41,9 @@ export interface BuildersDeps {
 
   // REMOVE_RETRY_MS, but for tests
   readonly removeRetryMs?: number;
+
+  // the engine wait's clock; Date.now and Bun.sleep by default
+  readonly engineClock?: EngineClock;
 }
 
 function pickBuilderName(): string {
@@ -49,9 +52,19 @@ function pickBuilderName(): string {
   return `imp-build-${picks.map((pick) => NAME_ALPHABET[Math.floor(pick)]).join('')}`;
 }
 
+// how the engine wait reads the time and waits between its asks
+interface EngineClock {
+  readonly now: () => number;
+  readonly wait: (ms: number) => Promise<void>;
+}
+
 // a builder's dockerd starts with the guest, a little after its agent
-async function waitForEngine(exec: GuestExec, signal: AbortSignal): Promise<void> {
-  const deadline = Date.now() + ENGINE_READY_MS;
+async function waitForEngine(
+  exec: GuestExec,
+  signal: AbortSignal,
+  clock: Readonly<EngineClock>,
+): Promise<void> {
+  const deadline = clock.now() + ENGINE_READY_MS;
 
   for (;;) {
     const info = await exec(['docker', 'info', '--format', '{{.ServerVersion}}'], {
@@ -63,18 +76,19 @@ async function waitForEngine(exec: GuestExec, signal: AbortSignal): Promise<void
       return;
     }
 
-    if (Date.now() > deadline) {
+    if (clock.now() > deadline) {
       throw new Error(
         `the builder's engine did not answer in ${String(ENGINE_READY_MS / 1000)} s: ${info.stderr.trim()}`,
       );
     }
 
-    await Bun.sleep(ENGINE_POLL_MS);
+    await clock.wait(ENGINE_POLL_MS);
   }
 }
 
 export function createBuilders(deps: BuildersDeps): Builders {
   const retryMs = deps.removeRetryMs ?? REMOVE_RETRY_MS;
+  const engineClock = deps.engineClock ?? { now: Date.now, wait: Bun.sleep };
 
   const retrying = new Set<string>();
 
@@ -152,7 +166,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
         const exec = createGuestExec((request) => deps.imps.openBuilderExec(name, request));
 
-        await waitForEngine(exec, signal);
+        await waitForEngine(exec, signal, engineClock);
 
         const readyMs = Math.round(performance.now() - started);
 

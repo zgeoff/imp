@@ -1,9 +1,12 @@
-import { afterAll, beforeEach, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { parseQuery } from '../docker-proxy/router';
 import { checkBuildQuery } from '../docker-proxy/rules';
+import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
+import { startStubSilentBuildEngine } from '../test-utils/start-stub-silent-build-engine';
 import {
   DockerBuildError,
   readBuiltImageId,
@@ -11,218 +14,454 @@ import {
   runDockerBuild,
 } from './docker-build';
 
-const IMAGE_ID = `sha256:${'c'.repeat(64)}`;
-const dir = mkdtempSync(join(tmpdir(), 'imp-docker-build-'));
-const socketPath = join(dir, 'engine.sock');
-const tarPath = join(dir, 'context.tar');
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-interface Seen {
-  readonly target: string;
-  readonly contentType: string | null;
-  readonly body: string;
+  onTestFinished(() => stack.disposeAsync());
+
+  const dir = await mkdtemp(join(tmpdir(), 'docker-build-'));
+
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
+
+  const engine = startStubDockerEngine({ dir });
+
+  stack.defer(() => engine.stop());
+
+  // a release deferred here runs before the engine stops and the dir goes
+  return { stack, dir, engine };
 }
 
-const seen: Seen[] = [];
-const engine: { answer: () => Response | Promise<Response> } = { answer: () => new Response() };
+test('#readBuiltImageId reads the image ID past the trace messages', async () => {
+  const id = await readBuiltImageId([
+    { id: 'moby.buildkit.trace', aux: 'CgQ=' },
+    { id: 'moby.image.id', aux: { ID: `sha256:${'c'.repeat(64)}` } },
+  ]);
 
-const server = Bun.serve({
-  unix: socketPath,
-  fetch: async (request) => {
-    const url = new URL(request.url);
-
-    seen.push({
-      target: `${url.pathname}${url.search}`,
-      contentType: request.headers.get('content-type'),
-      body: await request.text(),
-    });
-
-    return engine.answer();
-  },
+  expect(id).toBe(`sha256:${'c'.repeat(64)}`);
 });
 
-writeFileSync(tarPath, 'the context');
+test('#readBuiltImageId fails the client build with the last 4000 characters of its error', () => {
+  const long = `${'x'.repeat(5000)}exit code: 1`;
 
-beforeEach(() => {
-  seen.length = 0;
+  expect(
+    readBuiltImageId([{ error: long, errorDetail: { message: long } }]),
+  ).rejects.toThrowWithMessage(DockerBuildError, `docker build failed: ${long.slice(-4000)}`);
 });
 
-afterAll(async () => {
-  await server.stop(true);
-
-  rmSync(dir, { recursive: true, force: true });
+test('#readBuiltImageId fails the client build with an error that has no detail', () => {
+  expect(readBuiltImageId([{ error: 'exit code: 2' }])).rejects.toThrowWithMessage(
+    DockerBuildError,
+    'docker build failed: exit code: 2',
+  );
 });
 
-function buildLines(...messages: readonly unknown[]): string {
-  return messages.map((message) => `${JSON.stringify(message)}\n`).join('');
-}
+test('#readBuiltImageId fails a stream with no image ID as impd error, not the client build', () => {
+  const reading = readBuiltImageId([{ stream: 'done' }]);
 
-function runBuild(signal = new AbortController().signal): Promise<string> {
-  return runDockerBuild({
-    dockerHost: `unix://${socketPath}`,
+  expect(reading).rejects.toThrowWithMessage(Error, 'docker build: the engine sent no image ID');
+  expect(reading).rejects.not.toBeInstanceOf(DockerBuildError);
+});
+
+test('#runDockerBuild sends the context as a tar body, with a query the proxy lets through', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  await runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
     tarPath,
     tag: 'imp/x:latest',
     dockerfile: 'sub/Df',
-    signal,
+    signal: new AbortController().signal,
   });
-}
 
-test('the image ID is the moby.image.id message, past the trace messages', async () => {
-  const id = await readBuiltImageId([
-    { id: 'moby.buildkit.trace', aux: 'CgQ=' },
-    { id: 'moby.image.id', aux: { ID: IMAGE_ID } },
-  ]);
+  const [build] = ctx.engine.seen;
 
-  expect(id).toBe(IMAGE_ID);
+  invariant(build);
+
+  const query = parseQuery(build.target.slice(build.target.indexOf('?') + 1));
+
+  expect(checkBuildQuery(query)).toStrictEqual({ isOk: true });
+  expect(new URL(`http://docker${build.target}`).searchParams.get('dockerfile')).toBe('sub/Df');
+  expect(build.headers['content-type']).toBe('application/x-tar');
+  expect(new TextDecoder().decode(build.body)).toBe('the context');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('an error message fails the build with its last 4000 characters', async () => {
-  const long = `${'x'.repeat(5000)}exit code: 1`;
+test('#runDockerBuild returns the image ID the engine built', async () => {
+  const ctx = await setupTest();
 
-  const failure = await readBuiltImageId([{ error: long, errorDetail: { message: long } }]).catch(
-    (error: unknown) => error,
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  ctx.engine.setAnswer(
+    () =>
+      new Response(
+        `${JSON.stringify({ id: 'moby.image.id', aux: { ID: `sha256:${'c'.repeat(64)}` } })}\n`,
+      ),
   );
 
-  expect(failure).toBeInstanceOf(DockerBuildError);
-  expect(String(failure)).toEndWith('exit code: 1');
-  expect(String(failure)).toHaveLength('DockerBuildError: docker build failed: '.length + 4000);
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
+
+  expect(building).resolves.toBe(`sha256:${'c'.repeat(64)}`);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a stream with no image ID fails, but not as the client’s build', async () => {
-  const failure = await readBuiltImageId([{ stream: 'done' }]).catch((error: unknown) => error);
+test('#runDockerBuild reads a message split across chunks whole', async () => {
+  const ctx = await setupTest();
 
-  expect(failure).not.toBeInstanceOf(DockerBuildError);
-  expect(String(failure)).toContain('no image ID');
-});
+  const tarPath = join(ctx.dir, 'context.tar');
 
-test('impd sends the context as the body, with a query the proxy lets through', async () => {
-  engine.answer = () =>
-    new Response(
-      buildLines(
-        { id: 'moby.buildkit.trace', aux: 'CgQ=' },
-        { id: 'moby.image.id', aux: { ID: IMAGE_ID } },
+  await Bun.write(tarPath, 'the context');
+
+  ctx.engine.setAnswer(
+    () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            const line = `${JSON.stringify({ id: 'moby.image.id', aux: { ID: `sha256:${'c'.repeat(64)}` } })}\n`;
+
+            controller.enqueue(new TextEncoder().encode(line.slice(0, 10)));
+            controller.enqueue(new TextEncoder().encode(line.slice(10)));
+            controller.close();
+          },
+        }),
       ),
-    );
+  );
 
-  const id = await runBuild();
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
 
-  const [request] = seen;
-
-  expect(id).toBe(IMAGE_ID);
-
-  const query = new URL(`http://docker${request?.target ?? ''}`).search.slice(1);
-
-  expect(request?.body).toBe('the context');
-  expect(request?.contentType).toBe('application/x-tar');
-  expect(checkBuildQuery(parseQuery(query))).toEqual({ isOk: true });
-});
-
-// a quiet RUN step leaves the answer silent past Bun's 360 s limit
-test('the build lifts the limit on a silent answer', async () => {
-  engine.answer = () => new Response(buildLines({ id: 'moby.image.id', aux: { ID: IMAGE_ID } }));
-
-  const sent = spyOn(globalThis, 'fetch');
-
-  try {
-    await runBuild();
-
-    expect(sent.mock.calls.map(([, init = {}]): unknown => Reflect.get(init, 'timeout'))).toEqual([
-      false,
-    ]);
-  } finally {
-    sent.mockRestore();
-  }
-});
-
-test('a message split across chunks is read whole', async () => {
-  const lines = buildLines({ id: 'moby.image.id', aux: { ID: IMAGE_ID } });
-
-  engine.answer = () =>
-    new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(lines.slice(0, 10)));
-          controller.enqueue(new TextEncoder().encode(lines.slice(10)));
-          controller.close();
-        },
-      }),
-    );
-
-  const id = await runBuild();
-
-  expect(id).toBe(IMAGE_ID);
+  expect(building).resolves.toBe(`sha256:${'c'.repeat(64)}`);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
 // #173 turns #163's refusal-as-500 into the client's error, as impd's own
-// checks of the same rules answer; a 403 not from the proxy stays impd's
-test('a refusal and a context over the proxy’s limit are the client’s; other answers are impd’s', async () => {
-  engine.answer = () => Response.json({ message: 'imp-docker-proxy: no' }, { status: 403 });
+// checks of the same rules answer
 
-  const refused = await runBuild().catch((error: unknown) => error);
+test('#runDockerBuild fails with the proxy refusal as the client bad request', async () => {
+  const ctx = await setupTest();
 
-  expect(refused).toMatchObject({ code: 'BAD_REQUEST', message: 'imp-docker-proxy: no' });
+  const tarPath = join(ctx.dir, 'context.tar');
 
-  engine.answer = () => Response.json({ message: 'too large' }, { status: 413 });
+  await Bun.write(tarPath, 'the context');
 
-  const tooLarge = await runBuild().catch((error: unknown) => error);
+  ctx.engine.setAnswer(() => Response.json({ message: 'imp-docker-proxy: no' }, { status: 403 }));
 
-  expect(tooLarge).toBeInstanceOf(DockerBuildError);
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
 
-  engine.answer = () => Response.json({ message: 'denied' }, { status: 403 });
-
-  const denied = await runBuild().catch((error: unknown) => error);
-
-  expect(denied).not.toBeInstanceOf(DockerBuildError);
-  expect(denied).not.toHaveProperty('code');
-  expect(String(denied)).toContain('answered 403: denied');
-
-  engine.answer = () =>
-    Response.json({ message: 'imp-docker-proxy: the engine call failed: x' }, { status: 502 });
-
-  const failed = await runBuild().catch((error: unknown) => error);
-
-  expect(failed).not.toHaveProperty('code');
-  expect(String(failed)).toContain('answered 502');
+  expect(building).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'imp-docker-proxy: no' });
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('an abort ends the request while the build runs', async () => {
-  const controller = new AbortController();
+test('#runDockerBuild fails a context over the proxy limit as the client build', async () => {
+  const ctx = await setupTest();
 
-  engine.answer = () =>
-    new Response(
-      new ReadableStream({
-        start(stream) {
-          stream.enqueue(new TextEncoder().encode(buildLines({ id: 'moby.buildkit.trace' })));
-          controller.abort();
-        },
-      }),
-    );
+  const tarPath = join(ctx.dir, 'context.tar');
 
-  const failure = await runBuild(controller.signal).catch((error: unknown) => error);
+  await Bun.write(tarPath, 'the context');
 
-  expect(controller.signal.aborted).toBeTrue();
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).not.toBeInstanceOf(DockerBuildError);
+  ctx.engine.setAnswer(() => Response.json({ message: 'too large' }, { status: 413 }));
+
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(DockerBuildError, 'too large');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 
-test('a line that is not JSON, or too long, fails the build with a clear error', async () => {
-  engine.answer = () => new Response('{"stream":"ok"}\n<html>proxy error</html>\n');
+test('#runDockerBuild fails a 403 the proxy did not write as impd error', async () => {
+  const ctx = await setupTest();
 
-  const notJson = await runBuild().catch((error: unknown) => error);
+  const tarPath = join(ctx.dir, 'context.tar');
 
-  expect(String(notJson)).toContain('a line that is not JSON: <html>proxy error</html>');
+  await Bun.write(tarPath, 'the context');
 
-  engine.answer = () => new Response('x'.repeat(9 * 1024 ** 2));
+  ctx.engine.setAnswer(() => Response.json({ message: 'denied' }, { status: 403 }));
 
-  const tooLong = await runBuild().catch((error: unknown) => error);
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
 
-  expect(String(tooLong)).toContain('a line longer than');
-});
-
-test('builds go to the unix socket DOCKER_HOST names, and only to one', () => {
-  expect(readDockerSocket('unix:///run/imp-docker/docker.sock')).toBe(
-    '/run/imp-docker/docker.sock',
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'docker build: the engine answered 403: denied',
   );
 
-  expect(readDockerSocket(null)).toBe('/var/run/docker.sock');
-  expect(() => readDockerSocket('tcp://10.0.0.1:2375')).toThrow('only through a unix socket');
+  expect(building).rejects.not.toHaveProperty('code');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('#runDockerBuild fails the proxy engine failure as impd error', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  ctx.engine.setAnswer(() =>
+    Response.json({ message: 'imp-docker-proxy: the engine call failed: x' }, { status: 502 }),
+  );
+
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'docker build: the engine answered 502: imp-docker-proxy: the engine call failed: x',
+  );
+
+  expect(building).rejects.not.toHaveProperty('code');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('#runDockerBuild fails an answer that is not JSON with its text', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  ctx.engine.setAnswer(() => new Response('  boom\n', { status: 500 }));
+
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(Error, 'docker build: the engine answered 500: boom');
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('#runDockerBuild fails a line that is not JSON and names it', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  ctx.engine.setAnswer(() => new Response('{"stream":"ok"}\n<html>proxy error</html>\n'));
+
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'docker build: the engine sent a line that is not JSON: <html>proxy error</html>',
+  );
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('#runDockerBuild fails a line longer than 8 MiB', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  ctx.engine.setAnswer(() => new Response('x'.repeat(9 * 1024 ** 2)));
+
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'docker build: the engine sent a line longer than 8388608 characters',
+  );
+
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('#runDockerBuild ends the request when its signal aborts while the build runs', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+
+  await Bun.write(tarPath, 'the context');
+
+  const controller = new AbortController();
+
+  ctx.engine.setAnswer(
+    () =>
+      new Response(
+        new ReadableStream({
+          start(stream) {
+            stream.enqueue(
+              new TextEncoder().encode(`${JSON.stringify({ id: 'moby.buildkit.trace' })}\n`),
+            );
+
+            controller.abort();
+          },
+        }),
+      ),
+  );
+
+  const building = runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: controller.signal,
+  });
+
+  await building.catch(() => {});
+
+  expect(controller.signal.aborted).toBeTrue();
+  expect(building).rejects.toMatchObject({ name: 'AbortError', code: 20 });
+  expect(building).rejects.not.toBeInstanceOf(DockerBuildError);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+// Bun reads its fetch idle limit (360 s by default) only at startup, so a
+// child Bun runs with 1 s; its unprotected fetch is the control that the
+// limit expires, after about 8 s on Bun 1.4.2
+test('#runDockerBuild gets the image of a build silent past the idle limit, which a client still cancels', async () => {
+  const ctx = await setupTest();
+
+  const ended = Promise.withResolvers<void>();
+
+  const control = await startStubSilentBuildEngine({
+    socketPath: join(ctx.dir, 'control-engine.sock'),
+    imageId: `sha256:${'d'.repeat(64)}`,
+    holdUntil: () => ended.promise,
+  });
+
+  ctx.stack.defer(() => control.stop());
+
+  // silent until the control's connection is gone, past the limit
+  const build = await startStubSilentBuildEngine({
+    socketPath: join(ctx.dir, 'build-engine.sock'),
+    imageId: `sha256:${'c'.repeat(64)}`,
+    holdUntil: () => control.closed,
+  });
+
+  ctx.stack.defer(() => build.stop());
+
+  const cancelled = await startStubSilentBuildEngine({
+    socketPath: join(ctx.dir, 'cancel-engine.sock'),
+    imageId: `sha256:${'e'.repeat(64)}`,
+    holdUntil: () => ended.promise,
+  });
+
+  ctx.stack.defer(() => cancelled.stop());
+
+  // the held answers end before the engines stop
+  ctx.stack.defer(() => {
+    ended.resolve();
+  });
+
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, '../test-utils/run-idle-limited-docker-build.ts'),
+      JSON.stringify({
+        dir: ctx.dir,
+        buildEngine: join(ctx.dir, 'build-engine.sock'),
+        cancelEngine: join(ctx.dir, 'cancel-engine.sock'),
+        controlEngine: join(ctx.dir, 'control-engine.sock'),
+      }),
+    ],
+    {
+      env: { ...process.env, BUN_CONFIG_HTTP_IDLE_TIMEOUT: '1' },
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    },
+  );
+
+  // the child goes first, before the engines it calls
+  ctx.stack.defer(() => {
+    child.kill();
+  });
+
+  // the control starts once both builds are silent, so it goes quiet last
+  await Promise.all([build.started, cancelled.started]);
+  await child.stdin.write('control\n');
+  await child.stdin.flush();
+
+  await control.closed;
+
+  await child.stdin.write('cancel\n');
+  await child.stdin.flush();
+
+  await cancelled.closed;
+
+  const output = await new Response(child.stdout).text();
+
+  const lines: unknown[] = output
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as unknown);
+
+  const exitCode = await child.exited;
+
+  expect(exitCode).toBe(0);
+
+  expect(lines).toIncludeSameMembers([
+    { kind: 'control', isOk: false, error: { name: 'TimeoutError', code: 23 } },
+    { kind: 'build', isOk: true, id: `sha256:${'c'.repeat(64)}` },
+    { kind: 'cancel', isOk: false, error: { name: 'AbortError', code: 20 } },
+  ]);
+}, 30_000);
+
+test.each([
+  ['unix:///run/imp-docker/docker.sock', '/run/imp-docker/docker.sock'],
+  [null, '/var/run/docker.sock'],
+])('#readDockerSocket reads %p as the socket %s', (dockerHost, socket) => {
+  expect(readDockerSocket(dockerHost)).toBe(socket);
+});
+
+test('#readDockerSocket refuses a DOCKER_HOST that is not a unix socket', () => {
+  expect(() => readDockerSocket('tcp://10.0.0.1:2375')).toThrowWithMessage(
+    Error,
+    'DOCKER_HOST is tcp://10.0.0.1:2375; impd builds images only through a unix socket, unix:///<path>',
+  );
 });
