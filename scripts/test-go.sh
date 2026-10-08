@@ -5,15 +5,19 @@
 #
 #   scripts/test-go.sh [go test flags]
 #
-# GO_TEST_JSONFILE picks where the JSON results land (default: a file under
-# TMPDIR). Extra arguments go to `go test` after -race, such as -count=1.
+# GO_TEST_JSONFILE picks where the JSON results land (default: a new file
+# under TMPDIR for each run). Extra arguments go to `go test` after -race, such as -count=1.
 # The script exits with the test run's status, after printing the slowest
 # cases whether the run passed or failed.
 set -euo pipefail
 cd "$(dirname "$0")/../agent"
 
-jsonfile=${GO_TEST_JSONFILE:-${TMPDIR:-/tmp}/imp-go-test.json}
-mkdir -p "$(dirname "$jsonfile")"
+if [ -n "${GO_TEST_JSONFILE:-}" ]; then
+  jsonfile=$GO_TEST_JSONFILE
+  mkdir -p "$(dirname "$jsonfile")"
+else
+  jsonfile=$(mktemp "${TMPDIR:-/tmp}/imp-go-test.XXXXXX.json")
+fi
 
 status=0
 go tool gotestsum --format testname --jsonfile "$jsonfile" -- -race "$@" ./... || status=$?
