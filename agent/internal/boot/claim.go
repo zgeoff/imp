@@ -37,7 +37,12 @@ func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) e
 	if err != nil {
 		return proto.Claim{}, err
 	}
-	defer func() { l.Close() }()
+	// a failed listen again leaves l nil, with nothing to close
+	defer func() {
+		if l != nil {
+			l.Close()
+		}
+	}()
 	log.Printf("boot: parked as a boot template")
 	for {
 		c, err := l.Accept()
