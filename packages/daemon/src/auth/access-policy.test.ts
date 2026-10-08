@@ -1,284 +1,580 @@
 import { expect, test } from 'bun:test';
 import { impContract } from '@imp/api';
-import { isContractProcedure } from '@orpc/contract';
-import { PROCEDURE_ACCESS, checkAccess, findAccess, isAuditedProcedure } from './access-policy';
-import type { Caller } from './caller';
-import { buildTestCaller } from './test-callers';
+import { traverseContractProcedures } from '@orpc/server';
+import { buildMockCaller } from '../test-utils/build-mock-caller';
+import {
+  PROCEDURE_ACCESS,
+  checkAccess,
+  findAccess,
+  findForkAuthority,
+  findGrantAuthority,
+  isAuditedProcedure,
+  isRefusalAudited,
+  readField,
+} from './access-policy';
 
-// the secrets that exist, by name, at their generation now
-const GENERATIONS = new Map([
-  ['gh', 'gen-gh'],
-  ['npm', 'gen-npm'],
-]);
+test('#PROCEDURE_ACCESS has a rule for every procedure in the contract, and no stale rule', () => {
+  const paths: string[] = [];
 
-// the refusal's message, or null when the call is allowed
-async function check(path: string, caller: Readonly<Caller>, input: unknown) {
-  const refusal = await readRefusal(path, caller, input);
-
-  return refusal?.message ?? null;
-}
-
-function readRefusal(path: string, caller: Readonly<Caller>, input: unknown) {
-  return checkAccess(findAccess(path), caller, input, (name) =>
-    Promise.resolve(GENERATIONS.get(name) ?? null),
-  );
-}
-
-// a manage token for dev-* that may grant gh as it is now
-const GRANTER = buildTestCaller({
-  imps: ['dev-*'],
-  grantable: [{ name: 'gh', generation: 'gen-gh' }],
-});
-
-// every procedure path in the contract, walked at run time
-function listContractPaths(router: unknown, prefix = ''): string[] {
-  if (typeof router !== 'object' || router === null) {
-    return [];
-  }
-
-  const entries: readonly (readonly [string, unknown])[] = Object.entries(router);
-
-  return entries.flatMap(([key, value]) =>
-    isContractProcedure(value) ? [`${prefix}${key}`] : listContractPaths(value, `${prefix}${key}.`),
-  );
-}
-
-test('every procedure in the contract has an access rule, and no rule is stale', () => {
-  const paths = listContractPaths(impContract);
-
-  expect(paths.length).toBeGreaterThan(30);
-  expect(paths.filter((path) => findAccess(path) === null)).toEqual([]);
-  expect(Object.keys(PROCEDURE_ACCESS).toSorted()).toEqual(paths.toSorted());
-});
-
-test('a path with no rule is refused to every caller and audited', async () => {
-  const refusal = await check('imps.someday', buildTestCaller(), {});
-
-  expect(refusal).toBe('this call has no access rule');
-  expect(isAuditedProcedure('imps.someday')).toBeTrue();
-});
-
-test('reads, the event stream and exec tickets are not audited; changes are', () => {
-  expect(isAuditedProcedure('imps.list')).toBeFalse();
-  expect(isAuditedProcedure('events.stream')).toBeFalse();
-  expect(isAuditedProcedure('exec.ticket')).toBeFalse();
-  expect(isAuditedProcedure('tokens.whoami')).toBeFalse();
-  expect(isAuditedProcedure('imps.sleep')).toBeTrue();
-  expect(isAuditedProcedure('tokens.create')).toBeTrue();
-});
-
-test('scopes nest: manage does what exec does, and exec what read does', async () => {
-  const refusals = await Promise.all([
-    check('imps.stop', buildTestCaller({ scope: 'manage' }), { name: 'a' }),
-    check('imps.stop', buildTestCaller({ scope: 'exec' }), { name: 'a' }),
-    check('imps.get', buildTestCaller({ scope: 'exec' }), { name: 'a' }),
-    check('imps.stop', buildTestCaller({ scope: 'read' }), { name: 'a' }),
-  ]);
-
-  expect(refusals).toEqual([null, null, null, 'token test has scope read; this needs exec']);
-});
-
-test('a caller with patterns touches only its imps, and never the host', async () => {
-  const caller = buildTestCaller({ imps: ['dev-*'] });
-
-  const refusals = await Promise.all([
-    check('imps.destroy', caller, { name: 'dev-a' }),
-    check('imps.destroy', caller, { name: 'prod' }),
-
-    // a create must name its imp, so impd never picks a name outside them
-    check('imps.create', caller, {}),
-
-    // both ends of a fork
-    check('imps.fork', caller, { source: 'prod', name: 'dev-copy' }),
-
-    // a list is the handler's to filter
-    check('imps.list', caller, {}),
-  ]);
-
-  expect(refusals).toEqual([
-    null,
-    'token test may not touch imp prod',
-    'token test is limited to some imps, so the call must name the imp (name)',
-    'token test may not touch imp prod',
-    null,
-  ]);
-
-  const hostWide = await Promise.all(
-    ['secrets.add', 'secrets.refresh', 'backups.restore', 'tokens.create'].map((path) =>
-      check(path, caller, { name: 'dev-a' }),
-    ),
-  );
-
-  expect(hostWide.every((refusal) => refusal?.includes('host-wide') === true)).toBeTrue();
-});
-
-test('a grant needs the imp in the patterns and the secret on the list, each way', async () => {
-  const outcomes: string[] = [];
-
-  for (const path of ['grants.add', 'grants.delete']) {
-    for (const name of ['dev-a', 'prod']) {
-      for (const secret of ['gh', 'npm']) {
-        const refusal = await readRefusal(path, GRANTER, { name, secret });
-
-        outcomes.push(`${path} ${name} ${secret} ${refusal?.reason ?? 'allowed'}`);
-      }
-    }
-  }
-
-  expect(outcomes).toEqual([
-    'grants.add dev-a gh allowed',
-    'grants.add dev-a npm not_grantable',
-    'grants.add prod gh imp_out_of_scope',
-    'grants.add prod npm imp_out_of_scope',
-    'grants.delete dev-a gh allowed',
-    'grants.delete dev-a npm not_grantable',
-    'grants.delete prod gh imp_out_of_scope',
-    'grants.delete prod npm imp_out_of_scope',
-  ]);
-});
-
-test('a grant is refused without manage, without a list, or for a secret it cannot name', async () => {
-  const exec = buildTestCaller({ ...GRANTER, scope: 'exec' });
-  const noList = buildTestCaller({ imps: ['dev-*'] });
-
-  const reasons = await Promise.all(
-    [
-      readRefusal('grants.add', exec, { name: 'dev-a', secret: 'gh' }),
-      readRefusal('grants.add', noList, { name: 'dev-a', secret: 'gh' }),
-      readRefusal('grants.add', GRANTER, { name: 'dev-a', secret: 'nope' }),
-      readRefusal('grants.add', GRANTER, { name: 'dev-a', secret: 'Bad Name!' }),
-      readRefusal('grants.add', GRANTER, { name: 'dev-a', secret: 7 }),
-      readRefusal('grants.add', GRANTER, { name: 'dev-a' }),
-    ].map(async (pending) => {
-      const refusal = await pending;
-
-      return refusal?.reason;
-    }),
-  );
-
-  expect(reasons).toEqual([
-    'scope',
-    'not_grantable',
-    'not_grantable',
-    'not_grantable',
-    'not_grantable',
-    'not_grantable',
-  ]);
-
-  // a host-wide manage caller grants any secret
-  const hostWide = await check('grants.add', buildTestCaller(), { name: 'prod', secret: 'npm' });
-
-  expect(hostWide).toBeNull();
-});
-
-test('a list entry for a secret deleted, or deleted and made again, grants nothing', async () => {
-  const stale = buildTestCaller({
-    imps: ['dev-*'],
-    grantable: [
-      { name: 'gh', generation: 'gen-gh-before' },
-      { name: 'gone', generation: 'gen-gone' },
-    ],
+  traverseContractProcedures({ router: impContract, path: [] }, (procedure) => {
+    paths.push(procedure.path.join('.'));
   });
 
-  const refusals = await Promise.all([
-    readRefusal('grants.add', stale, { name: 'dev-a', secret: 'gh' }),
-    readRefusal('grants.delete', stale, { name: 'dev-a', secret: 'gone' }),
-  ]);
-
-  // the same refusal as for a name never on the list: it does not say
-  // whether the secret exists
-  expect(refusals).toEqual([
-    { message: 'token test may not grant or revoke secret gh', reason: 'not_grantable' },
-    { message: 'token test may not grant or revoke secret gone', reason: 'not_grantable' },
-  ]);
+  expect(Object.keys(PROCEDURE_ACCESS)).toIncludeSameMembers(paths);
 });
 
-test('a token made able to grant may not fork or move, even with every entry stale', async () => {
-  const stale = buildTestCaller({
+test('#checkAccess refuses a path with no rule to every caller', async () => {
+  const refusal = await checkAccess(findAccess('imps.someday'), buildMockCaller(), {}, () =>
+    Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({ message: 'this call has no access rule', reason: null });
+});
+
+test.each([
+  ['imps.someday', true],
+  ['imps.sleep', true],
+  ['tokens.create', true],
+  ['images.addStream', false],
+  ['imps.list', false],
+  ['events.stream', false],
+  ['exec.ticket', false],
+  ['leases.list', false],
+  ['tokens.whoami', false],
+])('#isAuditedProcedure answers %s with %p', (procedure, audited) => {
+  expect(isAuditedProcedure(procedure)).toBe(audited);
+});
+
+test.each([
+  ['images.addStream', true],
+  ['images.buildStream', true],
+  ['imps.sleep', false],
+  ['imps.someday', false],
+])('#isRefusalAudited answers %s with %p', (procedure, audited) => {
+  expect(isRefusalAudited(procedure)).toBe(audited);
+});
+
+test.each([
+  ['imps.stop', 'manage'],
+  ['imps.stop', 'exec'],
+  ['imps.get', 'exec'],
+  ['imps.get', 'read'],
+] as const)('#checkAccess lets %s through for a caller with scope %s', async (path, scope) => {
+  const refusal = await checkAccess(
+    findAccess(path),
+    buildMockCaller({ scope }),
+    { name: 'a' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toBeNull();
+});
+
+test('#checkAccess refuses a call that needs a scope above the caller’s', async () => {
+  const caller = buildMockCaller({ scope: 'read' });
+
+  const refusal = await checkAccess(findAccess('imps.stop'), caller, { name: 'a' }, () =>
+    Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} has scope read; this needs exec`,
+    reason: 'scope',
+  });
+});
+
+test('#checkAccess lets a caller with patterns touch an imp within them', async () => {
+  const refusal = await checkAccess(
+    findAccess('imps.destroy'),
+    buildMockCaller({ imps: ['dev-*'] }),
+    { name: 'dev-a' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toBeNull();
+});
+
+test('#checkAccess refuses a caller with patterns an imp outside them', async () => {
+  const caller = buildMockCaller({ imps: ['dev-*'] });
+
+  const refusal = await checkAccess(findAccess('imps.destroy'), caller, { name: 'prod' }, () =>
+    Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may not touch imp prod`,
+    reason: 'imp_out_of_scope',
+  });
+});
+
+test('#checkAccess makes a caller with patterns name the imp it creates', async () => {
+  const caller = buildMockCaller({ imps: ['dev-*'] });
+
+  const refusal = await checkAccess(findAccess('imps.create'), caller, {}, () =>
+    Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} is limited to some imps, so the call must name the imp (name)`,
+    reason: 'imp_out_of_scope',
+  });
+});
+
+test('#checkAccess refuses a fork whose source is outside the caller’s patterns', async () => {
+  const caller = buildMockCaller({ imps: ['dev-*'] });
+
+  const refusal = await checkAccess(
+    findAccess('imps.fork'),
+    caller,
+    { source: 'prod', name: 'dev-copy' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may not touch imp prod`,
+    reason: 'imp_out_of_scope',
+  });
+});
+
+test('#checkAccess leaves a list to its handler for a caller with patterns', async () => {
+  const refusal = await checkAccess(
+    findAccess('imps.list'),
+    buildMockCaller({ imps: ['dev-*'] }),
+    {},
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toBeNull();
+});
+
+test.each([['secrets.add'], ['secrets.refresh'], ['backups.restore'], ['tokens.create']])(
+  '#checkAccess refuses the host-wide call %s to a caller with patterns',
+  async (path) => {
+    const caller = buildMockCaller({ imps: ['dev-*'] });
+
+    const refusal = await checkAccess(findAccess(path), caller, { name: 'dev-a' }, () =>
+      Promise.resolve(null),
+    );
+
+    expect(refusal).toStrictEqual({
+      message: `token ${caller.name} is limited to some imps; this call is host-wide`,
+      reason: null,
+    });
+  },
+);
+
+test.each([
+  ['grants.add', 'dev-a', 'gh'],
+  ['grants.delete', 'dev-a', 'gh'],
+])(
+  '#checkAccess lets %s of imp %s and secret %s through, for a token that may grant gh to dev-*',
+  async (path, name, secret) => {
+    const refusal = await checkAccess(
+      findAccess(path),
+      buildMockCaller({ imps: ['dev-*'], grantable: [{ name: 'gh', generation: 'gen-gh' }] }),
+      { name, secret },
+      (each) =>
+        Promise.resolve(
+          new Map([
+            ['gh', 'gen-gh'],
+            ['npm', 'gen-npm'],
+          ]).get(each) ?? null,
+        ),
+    );
+
+    expect(refusal).toBeNull();
+  },
+);
+
+test.each([
+  ['grants.add', 'dev-a', 'npm', 'not_grantable'],
+  ['grants.add', 'prod', 'gh', 'imp_out_of_scope'],
+  ['grants.add', 'prod', 'npm', 'imp_out_of_scope'],
+  ['grants.delete', 'dev-a', 'npm', 'not_grantable'],
+  ['grants.delete', 'prod', 'gh', 'imp_out_of_scope'],
+  ['grants.delete', 'prod', 'npm', 'imp_out_of_scope'],
+] as const)(
+  '#checkAccess refuses %s of imp %s and secret %s, for a token that may grant gh to dev-*, as %s',
+  async (path, name, secret, reason) => {
+    const refusal = await checkAccess(
+      findAccess(path),
+      buildMockCaller({ imps: ['dev-*'], grantable: [{ name: 'gh', generation: 'gen-gh' }] }),
+      { name, secret },
+      (each) =>
+        Promise.resolve(
+          new Map([
+            ['gh', 'gen-gh'],
+            ['npm', 'gen-npm'],
+          ]).get(each) ?? null,
+        ),
+    );
+
+    expect(refusal?.reason).toBe(reason);
+  },
+);
+
+test('#checkAccess refuses a grant to a token below manage, for its scope', async () => {
+  const caller = buildMockCaller({
+    scope: 'exec',
+    imps: ['dev-*'],
+    grantable: [{ name: 'gh', generation: 'gen-gh' }],
+  });
+
+  const refusal = await checkAccess(
+    findAccess('grants.add'),
+    caller,
+    { name: 'dev-a', secret: 'gh' },
+    () => Promise.resolve('gen-gh'),
+  );
+
+  expect(refusal?.reason).toBe('scope');
+});
+
+test('#checkAccess refuses a grant to a token with patterns and no list', async () => {
+  const caller = buildMockCaller({ imps: ['dev-*'] });
+
+  const refusal = await checkAccess(
+    findAccess('grants.add'),
+    caller,
+    { name: 'dev-a', secret: 'gh' },
+    () => Promise.resolve('gen-gh'),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may not grant or revoke secret gh`,
+    reason: 'not_grantable',
+  });
+});
+
+test.each([
+  [{ name: 'dev-a', secret: 'Bad Name!' }, 'a name that is no secret name'],
+  [{ name: 'dev-a', secret: 7 }, 'a secret that is not a string'],
+  [{ name: 'dev-a' }, 'no secret'],
+])('#checkAccess refuses a grant of %p, %s, without naming it', async (input) => {
+  const caller = buildMockCaller({
+    imps: ['dev-*'],
+    grantable: [{ name: 'gh', generation: 'gen-gh' }],
+  });
+
+  const refusal = await checkAccess(findAccess('grants.add'), caller, input, () =>
+    Promise.resolve('gen-gh'),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may not grant or revoke that secret`,
+    reason: 'not_grantable',
+  });
+});
+
+test('#checkAccess lets a host-wide manage caller grant any secret', async () => {
+  const refusal = await checkAccess(
+    findAccess('grants.add'),
+    buildMockCaller(),
+    { name: 'prod', secret: 'npm' },
+    () => Promise.resolve('gen-npm'),
+  );
+
+  expect(refusal).toBeNull();
+});
+
+test('#checkAccess refuses a list entry for a secret deleted and made again, as for one never listed', async () => {
+  const caller = buildMockCaller({
+    imps: ['dev-*'],
+    grantable: [{ name: 'gh', generation: 'gen-gh-before' }],
+  });
+
+  const refusal = await checkAccess(
+    findAccess('grants.add'),
+    caller,
+    { name: 'dev-a', secret: 'gh' },
+    () => Promise.resolve('gen-gh'),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may not grant or revoke secret gh`,
+    reason: 'not_grantable',
+  });
+});
+
+test('#checkAccess refuses a list entry for a deleted secret, as for one never listed', async () => {
+  const caller = buildMockCaller({
     imps: ['dev-*'],
     grantable: [{ name: 'gone', generation: 'gen-gone' }],
   });
 
-  for (const caller of [GRANTER, stale, { ...GRANTER, kind: 'dashboard' as const }]) {
-    const refusals = await Promise.all([
-      check('imps.fork', caller, { source: 'dev-a', name: 'dev-b' }),
-      check('moves.prepare', caller, { name: 'dev-a' }),
-      check('moves.send', caller, { name: 'dev-a' }),
-      check('moves.resume', caller, { name: 'dev-a' }),
-    ]);
+  const refusal = await checkAccess(
+    findAccess('grants.delete'),
+    caller,
+    { name: 'dev-a', secret: 'gone' },
+    () => Promise.resolve(null),
+  );
 
-    expect(refusals.every((refusal) => refusal?.includes('may not fork or move') === true)).toBe(
-      true,
-    );
-  }
-
-  // undoing a move and the rest of the imp's calls stay open to it, and
-  // the same patterns without a list fork
-  const plain = buildTestCaller({ imps: ['dev-*'] });
-
-  const allowed = await Promise.all([
-    check('moves.abort', GRANTER, { name: 'dev-a' }),
-    check('imps.destroy', GRANTER, { name: 'dev-a' }),
-    check('imps.fork', plain, { source: 'dev-a', name: 'dev-b' }),
-  ]);
-
-  expect(allowed).toEqual([null, null, null]);
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may not grant or revoke secret gone`,
+    reason: 'not_grantable',
+  });
 });
 
-// whether a call is refused, and why, leaving out the caller's name
-async function readDecision(path: string, caller: Readonly<Caller>, input: unknown) {
-  const refusal = await readRefusal(path, caller, input);
+test.each([
+  ['imps.fork', 'token', 'gen-gh'],
+  ['moves.prepare', 'token', 'gen-gh'],
+  ['moves.send', 'token', 'gen-gh'],
+  ['moves.resume', 'token', 'gen-gh'],
+  ['imps.fork', 'dashboard', 'gen-gh'],
+  ['moves.prepare', 'dashboard', 'gen-gh'],
+  ['moves.send', 'dashboard', 'gen-gh'],
+  ['moves.resume', 'dashboard', 'gen-gh'],
+  ['imps.fork', 'token', 'gen-gh-stale'],
+  ['moves.prepare', 'token', 'gen-gh-stale'],
+] as const)(
+  '#checkAccess refuses %s to a %s caller made able to grant, with its entry at %s',
+  async (path, kind, generation) => {
+    const caller = buildMockCaller({
+      kind,
+      imps: ['dev-*'],
+      grantable: [{ name: 'gh', generation }],
+    });
 
-  return refusal === null ? 'allowed' : `refused: ${String(refusal.reason)}`;
-}
+    const refusal = await checkAccess(
+      findAccess(path),
+      caller,
+      { source: 'dev-a', name: 'dev-b' },
+      () => Promise.resolve('gen-gh'),
+    );
 
-test('an OAuth grant gets its token’s answer on every procedure, and grants no secret', async () => {
-  const paths = Object.keys(PROCEDURE_ACCESS);
-  const inputs: readonly unknown[] = [{ name: 'dev-a', secret: 'gh' }, { name: 'web' }, {}];
-  const differences: string[] = [];
+    expect(refusal).toStrictEqual({
+      message: `${kind} ${caller.name} may grant secrets, so it may not fork or move an imp`,
+      reason: null,
+    });
+  },
+);
 
-  const cases = [
-    ...(['read', 'exec', 'manage'] as const).flatMap((scope) =>
-      [null, ['dev-*']].map((imps) => ({ scope, imps, grantable: [] })),
-    ),
+test.each([['moves.abort'], ['imps.destroy']])(
+  '#checkAccess lets a caller made able to grant make %s',
+  async (path) => {
+    const refusal = await checkAccess(
+      findAccess(path),
+      buildMockCaller({ imps: ['dev-*'], grantable: [{ name: 'gh', generation: 'gen-gh' }] }),
+      { name: 'dev-a' },
+      () => Promise.resolve('gen-gh'),
+    );
 
-    // a token that may grant gh to its imps, which therefore may not fork
-    { scope: 'manage' as const, imps: ['dev-*'], grantable: GRANTER.grantable },
-  ];
+    expect(refusal).toBeNull();
+  },
+);
 
-  for (const limits of cases) {
-    const token = buildTestCaller(limits);
+test('#checkAccess lets a caller with the same patterns and no list fork', async () => {
+  const refusal = await checkAccess(
+    findAccess('imps.fork'),
+    buildMockCaller({ imps: ['dev-*'] }),
+    { source: 'dev-a', name: 'dev-b' },
+    () => Promise.resolve(null),
+  );
 
-    const grant = buildTestCaller({
-      ...limits,
+  expect(refusal).toBeNull();
+});
+
+test.each([
+  ['grants.add', 'read', null, [], 'oauth laptop has scope read; this needs manage', 'scope'],
+  ['grants.delete', 'read', null, [], 'oauth laptop has scope read; this needs manage', 'scope'],
+  ['grants.add', 'read', ['dev-*'], [], 'oauth laptop has scope read; this needs manage', 'scope'],
+  [
+    'grants.delete',
+    'read',
+    ['dev-*'],
+    [],
+    'oauth laptop has scope read; this needs manage',
+    'scope',
+  ],
+  ['grants.add', 'exec', null, [], 'oauth laptop has scope exec; this needs manage', 'scope'],
+  ['grants.delete', 'exec', null, [], 'oauth laptop has scope exec; this needs manage', 'scope'],
+  ['grants.add', 'exec', ['dev-*'], [], 'oauth laptop has scope exec; this needs manage', 'scope'],
+  [
+    'grants.delete',
+    'exec',
+    ['dev-*'],
+    [],
+    'oauth laptop has scope exec; this needs manage',
+    'scope',
+  ],
+  ['grants.add', 'manage', null, [], 'oauth laptop may not grant or revoke secrets', null],
+  ['grants.delete', 'manage', null, [], 'oauth laptop may not grant or revoke secrets', null],
+  ['grants.add', 'manage', ['dev-*'], [], 'oauth laptop may not grant or revoke secrets', null],
+  ['grants.delete', 'manage', ['dev-*'], [], 'oauth laptop may not grant or revoke secrets', null],
+  [
+    'grants.add',
+    'manage',
+    ['dev-*'],
+    [{ name: 'gh', generation: 'gen-gh' }],
+    'oauth laptop may not grant or revoke secrets',
+    null,
+  ],
+  [
+    'grants.delete',
+    'manage',
+    ['dev-*'],
+    [{ name: 'gh', generation: 'gen-gh' }],
+    'oauth laptop may not grant or revoke secrets',
+    null,
+  ],
+] as const)(
+  '#checkAccess refuses an OAuth grant %s of a secret, with scope %s, patterns %p and list %p',
+  async (path, scope, imps, grantable, message, reason) => {
+    const caller = buildMockCaller({
       kind: 'oauth',
-      name: 'conn/grant-a',
+      name: 'laptop',
+      scope,
+      imps,
+      grantable,
       grantId: 'grant-a',
       principal: 'grant:grant-a',
     });
 
-    for (const path of paths) {
-      const isSecretGrant = findAccess(path)?.on === 'grant';
+    const refusal = await checkAccess(
+      findAccess(path),
+      caller,
+      { name: 'dev-a', secret: 'gh' },
+      () => Promise.resolve('gen-gh'),
+    );
 
-      for (const input of inputs) {
-        const forToken = await readDecision(path, token, input);
-        const forGrant = await readDecision(path, grant, input);
+    expect(refusal).toStrictEqual({ message, reason });
+  },
+);
 
-        const isRight = isSecretGrant ? forGrant.startsWith('refused') : forGrant === forToken;
+test.each([['imps.fork'], ['moves.prepare'], ['moves.send'], ['moves.resume']])(
+  '#checkAccess refuses %s to a caller whose only list entry names a deleted secret',
+  async (path) => {
+    const caller = buildMockCaller({
+      imps: ['dev-*'],
+      grantable: [{ name: 'gone', generation: 'gen-gone' }],
+    });
 
-        if (!isRight) {
-          differences.push(`${path} ${limits.scope}: ${forToken} / ${forGrant}`);
-        }
-      }
-    }
-  }
+    const refusal = await checkAccess(
+      findAccess(path),
+      caller,
+      { source: 'dev-a', name: 'dev-b' },
+      () => Promise.resolve(null),
+    );
 
-  expect(differences).toEqual([]);
+    expect(refusal).toStrictEqual({
+      message: `token ${caller.name} may grant secrets, so it may not fork or move an imp`,
+      reason: null,
+    });
+  },
+);
 
-  // the fork a grantable token may not make, its grant may not make either
-  const forkGrant = buildTestCaller({ ...GRANTER, kind: 'oauth', grantId: 'grant-b' });
+// A conformance check over every procedure, but the grants of secrets: an
+// OAuth grant gets the answer its token would, for each scope and patterns
+test.each([
+  ['read', null, []],
+  ['read', ['dev-*'], []],
+  ['exec', null, []],
+  ['exec', ['dev-*'], []],
+  ['manage', null, []],
+  ['manage', ['dev-*'], []],
+  ['manage', ['dev-*'], [{ name: 'gh', generation: 'gen-gh' }]],
+] as const)(
+  '#checkAccess gives an OAuth grant its %s token’s answer, for patterns %p and list %p',
+  async (scope, imps, grantable) => {
+    const token = buildMockCaller({ name: 'laptop', scope, imps, grantable });
 
-  const fork = await check('imps.fork', forkGrant, { source: 'dev-a', name: 'dev-b' });
+    const grant = buildMockCaller({
+      kind: 'oauth',
+      name: 'laptop',
+      scope,
+      imps,
+      grantable,
+      grantId: 'grant-a',
+      principal: 'grant:grant-a',
+    });
 
-  expect(fork).toContain('may not fork');
+    const paths = Object.keys(PROCEDURE_ACCESS).filter((path) => findAccess(path)?.on !== 'grant');
+    const inputs = [{ name: 'dev-a', secret: 'gh' }, { name: 'web' }, {}];
+
+    const generations = new Map([['gh', 'gen-gh']]);
+
+    const readGeneration = (name: string) => Promise.resolve(generations.get(name) ?? null);
+
+    const answers = await Promise.all(
+      paths.flatMap((path) =>
+        inputs.map(async (input) => {
+          const forToken = await checkAccess(findAccess(path), token, input, readGeneration);
+          const forGrant = await checkAccess(findAccess(path), grant, input, readGeneration);
+
+          return {
+            path,
+            token: forToken?.reason ?? forToken?.message.replace('token ', '') ?? null,
+            grant: forGrant?.reason ?? forGrant?.message.replace('oauth ', '') ?? null,
+          };
+        }),
+      ),
+    );
+
+    expect(answers.filter((answer) => answer.token !== answer.grant)).toStrictEqual([]);
+  },
+);
+
+test('#findGrantAuthority puts no limit on a host-wide caller', () => {
+  expect(findGrantAuthority(buildMockCaller(), 'gh')).toBeNull();
+});
+
+test('#findGrantAuthority gives a caller with patterns its token and the listed generation', () => {
+  const caller = buildMockCaller({
+    imps: ['dev-*'],
+    grantable: [{ name: 'gh', generation: 'gen-gh' }],
+  });
+
+  expect(findGrantAuthority(caller, 'gh')).toStrictEqual({
+    tokenId: String(caller.tokenId),
+    generation: 'gen-gh',
+  });
+});
+
+test('#findGrantAuthority throws for a secret the caller’s list does not name', () => {
+  const caller = buildMockCaller({ imps: ['dev-*'], grantable: [] });
+
+  expect(() => findGrantAuthority(caller, 'gh')).toThrowWithMessage(
+    Error,
+    `token ${caller.name} reached a grant of gh it may not make`,
+  );
+});
+
+test('#findGrantAuthority throws for a caller with patterns and no token', () => {
+  const caller = buildMockCaller({
+    kind: 'tailnet',
+    tokenId: null,
+    imps: ['dev-*'],
+    grantable: [{ name: 'gh', generation: 'gen-gh' }],
+  });
+
+  expect(() => findGrantAuthority(caller, 'gh')).toThrowWithMessage(
+    Error,
+    `tailnet ${caller.name} reached a grant of gh it may not make`,
+  );
+});
+
+test('#findForkAuthority puts no limit on a host-wide caller', () => {
+  expect(findForkAuthority(buildMockCaller())).toBeNull();
+});
+
+test('#findForkAuthority gives a caller with patterns its token and its list', () => {
+  const caller = buildMockCaller({
+    imps: ['dev-*'],
+    grantable: [{ name: 'gh', generation: 'gen-gh' }],
+  });
+
+  expect(findForkAuthority(caller)).toStrictEqual({
+    tokenId: caller.tokenId,
+    grantable: [{ name: 'gh', generation: 'gen-gh' }],
+  });
+});
+
+test.each([
+  [{ name: 'dev-a' }, 'name', 'dev-a'],
+  [{ name: 7 }, 'name', null],
+  [{}, 'name', null],
+  ['dev-a', 'name', null],
+  [null, 'name', null],
+])('#readField reads from %p the field %s as %p', (input, field, value) => {
+  expect(readField(input, field)).toBe(value);
 });

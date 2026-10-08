@@ -1,87 +1,44 @@
 import { expect, test } from 'bun:test';
-import { utils } from 'ssh2';
+import { invariant } from '@imp/test-utils/invariant';
 import { createEd25519Key } from '../ssh/host-key';
+import { buildStubTailscale } from '../test-utils/build-stub-tailscale';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createKnownHosts } from './ambient-request';
 import { isSameOrigin, resolveCaller } from './authenticate';
-import type { CallerSources } from './authenticate';
 import { buildSessionValue } from './session-cookie';
-import { createTailnetIdentities } from './tailnet-identity';
-import type { TailnetPeer } from './tailnet-identity';
+import { createTailnetIdentities, runWhois } from './tailnet-identity';
 import { ROOT_TOKEN_ID, loadTokenStore } from './token-store';
 
-const NOW = 1_800_000_000_000;
-const ROOT = 'root-secret';
-const TAILNET_PEER = '100.101.102.103';
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
-
-const FAKE_STATUS = {
-  state: 'Running',
-  hostname: 'imp',
-  dnsName: 'imp.tail1234.ts.net',
-  ip: '100.64.0.1',
-  ips: ['100.64.0.1'],
-};
-
-// alice's laptop is the one tailnet peer; her rule gives read on dev-*
-function buildTailnet() {
-  const peers = new Map([[TAILNET_PEER, ALICE]]);
-
-  return {
-    identities: createTailnetIdentities({
-      rules: [{ match: 'user:alice@example.com', scope: 'read', imps: ['dev-*'] }],
-      whois: (address) => Promise.resolve(peers.get(address) ?? null),
-      readTailscale: () => Promise.resolve(FAKE_STATUS),
-      now: () => NOW,
-    }),
-    knownHosts: createKnownHosts({
-      readTailscale: () => Promise.resolve(FAKE_STATUS),
-      domain: 'imp.example.com',
-    }),
-  };
-}
-
-async function setupTest(tailnet = false) {
+async function setupTest() {
   const database = await createTestDatabase();
 
-  const tokens = await loadTokenStore({
-    db: database.db,
-    rootToken: ROOT,
-    now: () => NOW,
-    onRemove: () => {},
-    isFileKey: () => false,
-  });
-
-  const sources: CallerSources = {
-    tokens,
-    rootToken: ROOT,
-    now: () => NOW,
-    tailnet: tailnet ? buildTailnet() : null,
+  return {
+    // the token store over this database, as impd loads it
+    loadTokens: (rootToken: string) =>
+      loadTokenStore({
+        db: database.db,
+        rootToken,
+        now: Date.now,
+        onRemove: () => {},
+        isFileKey: () => false,
+      }),
   };
-
-  const buildSession = (tokenId: string) =>
-    `imp_session=${buildSessionValue(ROOT, { tokenId, expiresAt: NOW + 60_000 })}`;
-
-  return { ...database, tokens, sources, buildSession };
 }
 
-function buildRequest(headers: Readonly<Record<string, string>>, host = 'imp:7070'): Request {
-  return new Request(`http://${host}/rpc/imps/list`, {
-    method: 'POST',
-    headers: { host, ...headers },
-  });
-}
+test('#resolveCaller takes the root token as root, from any origin', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
-const BY_TOKEN = { peer: null, cookie: true } as const;
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'imp:7070', authorization: 'Bearer root-secret', origin: 'http://evil' },
+    }),
+    { tokens, rootToken: 'root-secret', now: Date.now, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
-test('the root token is a token with every scope, from anywhere, for good', async () => {
-  await using ctx = await setupTest();
-
-  const request = buildRequest({ authorization: `Bearer ${ROOT}`, origin: 'http://evil' });
-
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
-
-  expect(caller).toEqual({
+  expect(caller).toStrictEqual({
     kind: 'token',
     name: 'root',
     scope: 'manage',
@@ -95,197 +52,345 @@ test('the root token is a token with every scope, from anywhere, for good', asyn
   });
 });
 
-test('a made token is itself, with its scope and imps', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller takes a made token as itself, with its scope and imps', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+  const made = await tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
 
-  const made = await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
+  const [tokenId = ''] = made.secret.slice('imp_'.length).split('.');
 
-  const request = buildRequest({ authorization: `Bearer ${made.secret}` });
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'imp:7070', authorization: `Bearer ${made.secret}` },
+    }),
+    { tokens, rootToken: 'root-secret', now: Date.now, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
-
-  expect(caller).toMatchObject({
+  expect(caller).toStrictEqual({
     kind: 'token',
     name: 'ci',
     scope: 'exec',
     imps: ['dev-*'],
+    grantable: [],
+    tokenId,
+    grantId: null,
+    expiresAt: null,
+    principal: `token:${tokenId}`,
+    display: 'ci',
   });
 });
 
-test('a token through the API, a dashboard session and a bound key are one principal', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller makes a token, its dashboard session and its bound key one principal', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
   const line = `${createEd25519Key().public} me@laptop`;
 
-  const made = await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [line] });
+  const made = await tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [line] });
 
-  const api = await resolveCaller(
-    buildRequest({ authorization: `Bearer ${made.secret}` }),
-    ctx.sources,
-    BY_TOKEN,
-  );
+  const [tokenId = ''] = made.secret.slice('imp_'.length).split('.');
+  const sources = { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null };
+  const session = buildSessionValue('root-secret', { tokenId, expiresAt: 1_800_000_060_000 });
 
-  const tokenId = api?.tokenId ?? '';
+  const [api, dashboard] = await Promise.all([
+    resolveCaller(
+      new Request('http://imp:7070/rpc/imps/list', {
+        method: 'POST',
+        headers: { host: 'imp:7070', authorization: `Bearer ${made.secret}` },
+      }),
+      sources,
+      { peer: null, cookie: true },
+    ),
+    resolveCaller(
+      new Request('http://imp:7070/rpc/imps/list', {
+        method: 'POST',
+        headers: {
+          host: 'imp:7070',
+          'sec-fetch-site': 'same-origin',
+          cookie: `imp_session=${session}`,
+        },
+      }),
+      sources,
+      { peer: null, cookie: true },
+    ),
+  ]);
 
-  const dashboard = await resolveCaller(
-    buildRequest({ cookie: ctx.buildSession(tokenId), 'sec-fetch-site': 'same-origin' }),
-    ctx.sources,
-    BY_TOKEN,
-  );
+  const blob = Buffer.from(line.split(' ')[1] ?? '', 'base64');
+  const ssh = tokens.findSshKey(blob)?.caller;
 
-  const parsed = utils.parseKey(line);
+  expect(api).toMatchObject({ kind: 'token', principal: `token:${tokenId}`, display: 'ci' });
 
-  if (parsed instanceof Error) {
-    throw parsed;
-  }
-
-  const ssh = ctx.tokens.findSshKey(parsed.getPublicSSH())?.caller;
-  const owner = { principal: `token:${tokenId}`, display: 'ci' };
-
-  expect(api).toMatchObject({ kind: 'token', ...owner });
-  expect(dashboard).toMatchObject({ kind: 'dashboard', ...owner });
-  expect(ssh).toMatchObject({ kind: 'ssh', ...owner });
-
-  // a new token under the old name is someone else
-  await ctx.tokens.remove('ci');
-
-  const again = await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
-
-  expect(ctx.tokens.authenticate(again.secret)?.principal).not.toBe(owner.principal);
-});
-
-test('the root token and a root dashboard session are the principal root', async () => {
-  await using ctx = await setupTest();
-
-  const session = await resolveCaller(
-    buildRequest({ cookie: ctx.buildSession(ROOT_TOKEN_ID), 'sec-fetch-site': 'same-origin' }),
-    ctx.sources,
-    BY_TOKEN,
-  );
-
-  expect(session).toMatchObject({ kind: 'dashboard', principal: 'root' });
-});
-
-test('a wrong bearer token is refused, even with a valid session beside it', async () => {
-  await using ctx = await setupTest();
-
-  const request = buildRequest({
-    authorization: 'Bearer wrong',
-    cookie: ctx.buildSession(ROOT_TOKEN_ID),
-    'sec-fetch-site': 'same-origin',
+  expect(dashboard).toMatchObject({
+    kind: 'dashboard',
+    principal: `token:${tokenId}`,
+    display: 'ci',
   });
 
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
+  expect(ssh).toMatchObject({ kind: 'ssh', principal: `token:${tokenId}`, display: 'ci' });
+});
+
+test('#resolveCaller makes a new token under a removed token’s name another principal', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+  const first = await tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  const [firstId = ''] = first.secret.slice('imp_'.length).split('.');
+
+  await tokens.remove('ci');
+
+  const again = await tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'imp:7070', authorization: `Bearer ${again.secret}` },
+    }),
+    { tokens, rootToken: 'root-secret', now: Date.now, tailnet: null },
+    { peer: null, cookie: true },
+  );
+
+  invariant(caller);
+
+  expect(caller.principal).not.toBe(`token:${firstId}`);
+});
+
+test('#resolveCaller makes a root dashboard session the principal root', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId: ROOT_TOKEN_ID, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
+
+  expect(caller?.kind).toBe('dashboard');
+  expect(caller?.principal).toBe('root');
+});
+
+test('#resolveCaller refuses a wrong bearer token, even with a valid session beside it', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        authorization: 'Bearer wrong',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId: ROOT_TOKEN_ID, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
   expect(caller).toBeNull();
 });
 
-test('a same-origin session is the dashboard, with its token’s scope, until it expires', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller takes a same-origin session as the dashboard, with its token’s scope and the session’s expiry', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+  const made = await tokens.create({ name: 'viewer', scope: 'read', imps: null });
 
-  const made = await ctx.tokens.create({ name: 'viewer', scope: 'read', imps: null });
+  const [tokenId = ''] = made.secret.slice('imp_'.length).split('.');
 
-  const tokenId = ctx.tokens.authenticate(made.secret)?.tokenId ?? '';
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
-  const request = buildRequest({
-    cookie: ctx.buildSession(tokenId),
-    'sec-fetch-site': 'same-origin',
-  });
-
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
-
-  expect(caller).toMatchObject({
+  expect(caller).toStrictEqual({
     kind: 'dashboard',
     name: 'viewer',
     scope: 'read',
-    expiresAt: NOW + 60_000,
+    imps: null,
+    grantable: [],
+    tokenId,
+    grantId: null,
+    expiresAt: 1_800_000_060_000,
+    principal: `token:${tokenId}`,
+    display: 'viewer',
   });
-
-  const later = { ...ctx.sources, now: () => NOW + 60_000 };
-
-  const expired = await resolveCaller(request, later, BY_TOKEN);
-
-  expect(expired).toBeNull();
 });
 
-test('a session ends when its token is removed', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller refuses a session at its expiry', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+  const made = await tokens.create({ name: 'viewer', scope: 'read', imps: null });
 
-  const made = await ctx.tokens.create({ name: 'viewer', scope: 'read', imps: null });
+  const [tokenId = ''] = made.secret.slice('imp_'.length).split('.');
 
-  const tokenId = ctx.tokens.authenticate(made.secret)?.tokenId ?? '';
-
-  const request = buildRequest({
-    cookie: ctx.buildSession(tokenId),
-    'sec-fetch-site': 'same-origin',
-  });
-
-  await ctx.tokens.remove('viewer');
-
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_060_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
   expect(caller).toBeNull();
 });
 
-test('a v1 session from before named tokens logs nobody in', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller refuses a session whose token was removed', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+  const made = await tokens.create({ name: 'viewer', scope: 'read', imps: null });
 
-  const request = buildRequest({
-    cookie: `imp_session=v1.${String(NOW + 60_000)}.c2lnbmF0dXJl`,
-    'sec-fetch-site': 'same-origin',
-  });
+  const [tokenId = ''] = made.secret.slice('imp_'.length).split('.');
 
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
+  await tokens.remove('viewer');
+
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
   expect(caller).toBeNull();
 });
 
-test('a bad session cookie an imp planted first does not hide the real one', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller refuses a v1 session from before named tokens', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
-  const request = buildRequest({
-    cookie: `imp_session=planted; ${ctx.buildSession(ROOT_TOKEN_ID)}`,
-    'sec-fetch-site': 'same-origin',
-  });
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: 'imp_session=v1.1800000060000.c2lnbmF0dXJl',
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
-  const caller = await resolveCaller(request, ctx.sources, BY_TOKEN);
-
-  expect(caller).not.toBeNull();
+  expect(caller).toBeNull();
 });
 
-test('it refuses the session from another port of the same host, or where cookies do not count', async () => {
-  await using ctx = await setupTest();
+test('#resolveCaller finds the real session behind a bad one an imp planted first', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
-  const crossPort = buildRequest({
-    cookie: ctx.buildSession(ROOT_TOKEN_ID),
-    'sec-fetch-site': 'same-site',
-  });
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=planted; imp_session=${buildSessionValue('root-secret', { tokenId: ROOT_TOKEN_ID, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
-  const sameOrigin = buildRequest({
-    cookie: ctx.buildSession(ROOT_TOKEN_ID),
-    'sec-fetch-site': 'same-origin',
-  });
-
-  const fromCrossPort = await resolveCaller(crossPort, ctx.sources, BY_TOKEN);
-
-  const withoutCookies = await resolveCaller(sameOrigin, ctx.sources, {
-    peer: null,
-    cookie: false,
-  });
-
-  expect(fromCrossPort).toBeNull();
-  expect(withoutCookies).toBeNull();
+  expect(caller?.kind).toBe('dashboard');
 });
 
-test('a tailnet peer that a rule matches gets the rule’s scope and imps', async () => {
-  await using ctx = await setupTest(true);
+test('#resolveCaller refuses a session from another port of the same host', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
-  const caller = await resolveCaller(buildRequest({}), ctx.sources, {
-    peer: TAILNET_PEER,
-    cookie: false,
-  });
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-site',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId: ROOT_TOKEN_ID, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: true },
+  );
 
-  expect(caller).toEqual({
+  expect(caller).toBeNull();
+});
+
+test('#resolveCaller refuses a session where cookies do not count', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const caller = await resolveCaller(
+    new Request('http://imp:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'imp:7070',
+        'sec-fetch-site': 'same-origin',
+        cookie: `imp_session=${buildSessionValue('root-secret', { tokenId: ROOT_TOKEN_ID, expiresAt: 1_800_000_060_000 })}`,
+      },
+    }),
+    { tokens, rootToken: 'root-secret', now: () => 1_800_000_000_000, tailnet: null },
+    { peer: null, cookie: false },
+  );
+
+  expect(caller).toBeNull();
+});
+
+test('#resolveCaller gives a tailnet peer that a rule matches the rule’s scope and imps', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
+  const caller = await resolveCaller(
+    new Request('http://localhost:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'localhost:7070' },
+    }),
+    {
+      tokens,
+      rootToken: 'root-secret',
+      now: Date.now,
+      tailnet: {
+        identities: createTailnetIdentities({
+          rules: [{ match: 'user:alice@example.com', scope: 'read', imps: ['dev-*'] }],
+          whois: (address) => runWhois(address, tailscale.run),
+          readTailscale: tailscale.readTailscale,
+          now: Date.now,
+        }),
+        knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+      },
+    },
+    { peer: '100.101.102.103', cookie: false },
+  );
+
+  expect(caller).toStrictEqual({
     kind: 'tailnet',
     name: 'alice@example.com',
     scope: 'read',
@@ -299,81 +404,301 @@ test('a tailnet peer that a rule matches gets the rule’s scope and imps', asyn
   });
 });
 
-test('a tailnet identity needs a tailnet address, and rules', async () => {
-  await using off = await setupTest(false);
-  await using on = await setupTest(true);
+test('#resolveCaller refuses another user’s tailnet peer that no rule matches', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
-  const options = { peer: TAILNET_PEER, cookie: false };
+  const tailscale = buildStubTailscale();
 
-  const withoutRules = await resolveCaller(buildRequest({}), off.sources, options);
+  tailscale.registerPeer('100.101.102.104', { node: 'desk', login: 'bob@example.com' });
 
-  // a peer on the docker bridge is no tailnet peer, whatever whois says
-  const bridge = { peer: '172.17.0.1', cookie: false };
-
-  const fromBridge = await resolveCaller(buildRequest({}), on.sources, bridge);
-
-  expect(withoutRules).toBeNull();
-  expect(fromBridge).toBeNull();
-});
-
-test('a tailnet identity is refused on a rebound host name', async () => {
-  await using ctx = await setupTest(true);
-
-  const options = { peer: TAILNET_PEER, cookie: false };
-
-  // a page on evil.example whose name now resolves to impd's address
-  const rebound = buildRequest({ origin: 'http://evil.example:7070' }, 'evil.example:7070');
-  const sameNameNoOrigin = buildRequest({}, 'evil.example:7070');
-
-  const fromRebound = await resolveCaller(rebound, ctx.sources, options);
-  const fromReboundName = await resolveCaller(sameNameNoOrigin, ctx.sources, options);
-
-  expect(fromRebound).toBeNull();
-  expect(fromReboundName).toBeNull();
-
-  const known = ['imp:7070', 'imp.tail1234.ts.net:7070', '100.64.0.1:7070', 'imp.example.com'];
-
-  const callers = await Promise.all(
-    known.map((host) => resolveCaller(buildRequest({}, host), ctx.sources, options)),
+  const caller = await resolveCaller(
+    new Request('http://localhost:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'localhost:7070' },
+    }),
+    {
+      tokens,
+      rootToken: 'root-secret',
+      now: Date.now,
+      tailnet: {
+        identities: createTailnetIdentities({
+          rules: [{ match: 'user:alice@example.com', scope: 'read', imps: ['dev-*'] }],
+          whois: (address) => runWhois(address, tailscale.run),
+          readTailscale: tailscale.readTailscale,
+          now: Date.now,
+        }),
+        knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+      },
+    },
+    { peer: '100.101.102.104', cookie: false },
   );
 
-  expect(callers.map((caller) => caller?.name)).toEqual(known.map(() => 'alice@example.com'));
+  expect(caller).toBeNull();
 });
 
-test('a tailnet identity is refused to a page on an imp’s port', async () => {
-  await using ctx = await setupTest(true);
+test('#resolveCaller refuses a tailnet peer when no rule gives the tailnet access', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
 
-  const options = { peer: TAILNET_PEER, cookie: false };
-  const fromImpPage = buildRequest({ origin: 'http://imp:20001', 'sec-fetch-site': 'same-site' });
-  const fromImpNoMetadata = buildRequest({ origin: 'http://imp:20001' });
+  const caller = await resolveCaller(
+    new Request('http://localhost:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'localhost:7070' },
+    }),
+    { tokens, rootToken: 'root-secret', now: Date.now, tailnet: null },
+    { peer: '100.101.102.103', cookie: false },
+  );
 
-  const fromDashboard = buildRequest({
-    origin: 'http://imp:7070',
-    'sec-fetch-site': 'same-origin',
+  expect(caller).toBeNull();
+});
+
+test('#resolveCaller refuses a peer on the docker bridge, whatever whois says', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('172.17.0.1', { node: 'laptop', login: 'alice@example.com' });
+
+  const caller = await resolveCaller(
+    new Request('http://localhost:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'localhost:7070' },
+    }),
+    {
+      tokens,
+      rootToken: 'root-secret',
+      now: Date.now,
+      tailnet: {
+        identities: createTailnetIdentities({
+          rules: [{ match: '*', scope: 'read' }],
+          whois: (address) => runWhois(address, tailscale.run),
+          readTailscale: tailscale.readTailscale,
+          now: Date.now,
+        }),
+        knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+      },
+    },
+    { peer: '172.17.0.1', cookie: false },
+  );
+
+  expect(caller).toBeNull();
+});
+
+test('#resolveCaller refuses a request whose peer is unknown, with tailnet rules', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const tailscale = buildStubTailscale();
+
+  const caller = await resolveCaller(
+    new Request('http://localhost:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: { host: 'localhost:7070' },
+    }),
+    {
+      tokens,
+      rootToken: 'root-secret',
+      now: Date.now,
+      tailnet: {
+        identities: createTailnetIdentities({
+          rules: [{ match: '*', scope: 'read' }],
+          whois: (address) => runWhois(address, tailscale.run),
+          readTailscale: tailscale.readTailscale,
+          now: Date.now,
+        }),
+        knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+      },
+    },
+    { peer: null, cookie: false },
+  );
+
+  expect(caller).toBeNull();
+});
+
+test.each([
+  [{ host: 'evil.example:7070', origin: 'http://evil.example:7070' }, 'with its origin'],
+  [{ host: 'evil.example:7070' }, 'without an origin'],
+])('#resolveCaller refuses a tailnet identity on a rebound host name, %p %s', async (headers) => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
+  const caller = await resolveCaller(
+    new Request(`http://${headers.host}/rpc/imps/list`, { method: 'POST', headers }),
+    {
+      tokens,
+      rootToken: 'root-secret',
+      now: Date.now,
+      tailnet: {
+        identities: createTailnetIdentities({
+          rules: [{ match: '*', scope: 'read' }],
+          whois: (address) => runWhois(address, tailscale.run),
+          readTailscale: tailscale.readTailscale,
+          now: Date.now,
+        }),
+        knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+      },
+    },
+    { peer: '100.101.102.103', cookie: false },
+  );
+
+  expect(caller).toBeNull();
+});
+
+test.each([['imp:7070'], ['imp.tail1234.ts.net:7070'], ['100.64.0.1:7070'], ['imp.example.com']])(
+  '#resolveCaller takes a tailnet identity on the known host %p',
+  async (host) => {
+    const ctx = await setupTest();
+    const tokens = await ctx.loadTokens('root-secret');
+
+    const tailscale = buildStubTailscale({
+      status: {
+        hostname: 'imp',
+        dnsName: 'imp.tail1234.ts.net',
+        ip: '100.64.0.1',
+        ips: ['100.64.0.1'],
+      },
+    });
+
+    tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
+    const caller = await resolveCaller(
+      new Request(`http://${host}/rpc/imps/list`, { method: 'POST', headers: { host } }),
+      {
+        tokens,
+        rootToken: 'root-secret',
+        now: Date.now,
+        tailnet: {
+          identities: createTailnetIdentities({
+            rules: [{ match: '*', scope: 'read' }],
+            whois: (address) => runWhois(address, tailscale.run),
+            readTailscale: tailscale.readTailscale,
+            now: Date.now,
+          }),
+          knownHosts: createKnownHosts({
+            readTailscale: tailscale.readTailscale,
+            domain: 'imp.example.com',
+          }),
+        },
+      },
+      { peer: '100.101.102.103', cookie: false },
+    );
+
+    expect(caller?.name).toBe('alice@example.com');
+  },
+);
+
+test.each([
+  [{ origin: 'http://localhost:20001', 'sec-fetch-site': 'same-site' }, 'with fetch metadata'],
+  [{ origin: 'http://localhost:20001' }, 'without fetch metadata'],
+])(
+  '#resolveCaller refuses a tailnet identity to a page on an imp’s port, %p %s',
+  async (headers) => {
+    const ctx = await setupTest();
+    const tokens = await ctx.loadTokens('root-secret');
+
+    const tailscale = buildStubTailscale();
+
+    tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
+    const caller = await resolveCaller(
+      new Request('http://localhost:7070/rpc/imps/list', {
+        method: 'POST',
+        headers: { host: 'localhost:7070', ...headers },
+      }),
+      {
+        tokens,
+        rootToken: 'root-secret',
+        now: Date.now,
+        tailnet: {
+          identities: createTailnetIdentities({
+            rules: [{ match: '*', scope: 'read' }],
+            whois: (address) => runWhois(address, tailscale.run),
+            readTailscale: tailscale.readTailscale,
+            now: Date.now,
+          }),
+          knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+        },
+      },
+      { peer: '100.101.102.103', cookie: false },
+    );
+
+    expect(caller).toBeNull();
+  },
+);
+
+test('#resolveCaller takes a tailnet identity from the dashboard’s own page', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.loadTokens('root-secret');
+
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
+  const caller = await resolveCaller(
+    new Request('http://localhost:7070/rpc/imps/list', {
+      method: 'POST',
+      headers: {
+        host: 'localhost:7070',
+        origin: 'http://localhost:7070',
+        'sec-fetch-site': 'same-origin',
+      },
+    }),
+    {
+      tokens,
+      rootToken: 'root-secret',
+      now: Date.now,
+      tailnet: {
+        identities: createTailnetIdentities({
+          rules: [{ match: '*', scope: 'read' }],
+          whois: (address) => runWhois(address, tailscale.run),
+          readTailscale: tailscale.readTailscale,
+          now: Date.now,
+        }),
+        knownHosts: createKnownHosts({ readTailscale: tailscale.readTailscale, domain: null }),
+      },
+    },
+    { peer: '100.101.102.103', cookie: false },
+  );
+
+  expect(caller?.kind).toBe('tailnet');
+});
+
+test.each([
+  ['http://imp:7070', true],
+  ['https://imp:7070', true],
+  ['http://imp:20001', false],
+  ['http://other:7070', false],
+  ['null', false],
+  ['not a url', false],
+])('#isSameOrigin without fetch metadata answers the origin %p with %p', (origin, same) => {
+  const request = new Request('http://imp:7070/rpc/imps/list', {
+    method: 'POST',
+    headers: { host: 'imp:7070', origin },
   });
 
-  const callers = await Promise.all(
-    [fromImpPage, fromImpNoMetadata, fromDashboard].map((request) =>
-      resolveCaller(request, ctx.sources, options),
-    ),
-  );
-
-  expect(callers.map((caller) => caller?.kind ?? null)).toEqual([null, null, 'tailnet']);
+  expect(isSameOrigin(request)).toBe(same);
 });
 
-test('without fetch metadata it needs an origin naming this host and port', () => {
-  expect(isSameOrigin(buildRequest({ origin: 'http://imp:7070' }))).toBe(true);
+test('#isSameOrigin refuses a request with no origin and no fetch metadata', () => {
+  const request = new Request('http://imp:7070/rpc/imps/list', {
+    method: 'POST',
+    headers: { host: 'imp:7070' },
+  });
 
-  // the scheme may differ behind a TLS front
-  expect(isSameOrigin(buildRequest({ origin: 'https://imp:7070' }))).toBe(true);
-  expect(isSameOrigin(buildRequest({ origin: 'http://imp:20001' }))).toBe(false);
-  expect(isSameOrigin(buildRequest({ origin: 'http://other:7070' }))).toBe(false);
-  expect(isSameOrigin(buildRequest({ origin: 'null' }))).toBe(false);
-  expect(isSameOrigin(buildRequest({}))).toBe(false);
+  expect(isSameOrigin(request)).toBeFalse();
 });
 
-test('fetch metadata wins over a matching origin', () => {
-  const request = buildRequest({ origin: 'http://imp:7070', 'sec-fetch-site': 'cross-site' });
+test('#isSameOrigin lets fetch metadata win over a matching origin', () => {
+  const request = new Request('http://imp:7070/rpc/imps/list', {
+    method: 'POST',
+    headers: { host: 'imp:7070', origin: 'http://imp:7070', 'sec-fetch-site': 'cross-site' },
+  });
 
-  expect(isSameOrigin(request)).toBe(false);
+  expect(isSameOrigin(request)).toBeFalse();
 });

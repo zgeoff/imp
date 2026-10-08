@@ -3,34 +3,26 @@ import { isImpAllowed } from '@imp/api';
 import fc from 'fast-check';
 import { toLikePattern } from './imp-patterns';
 
-test('null patterns allow every imp', () => {
-  expect(isImpAllowed(null, 'anything')).toBeTrue();
+test('it turns each * into the % of a LIKE pattern', () => {
+  expect(toLikePattern('a*b*')).toBe('a%b%');
 });
 
-test('a pattern is a name with * for any run of characters', () => {
-  expect(isImpAllowed(['dev-*'], 'dev-a')).toBeTrue();
-  expect(isImpAllowed(['dev-*'], 'dev-')).toBeTrue();
-  expect(isImpAllowed(['dev-*'], 'prod-dev-a')).toBeFalse();
-  expect(isImpAllowed(['*-ci'], 'build-ci')).toBeTrue();
-  expect(isImpAllowed(['a*b*c'], 'abc')).toBeTrue();
-  expect(isImpAllowed(['a*b*c'], 'axxbyyc')).toBeTrue();
-  expect(isImpAllowed(['a*b*c'], 'acb')).toBeFalse();
-  expect(isImpAllowed(['ab*ba'], 'aba')).toBeFalse();
-  expect(isImpAllowed(['exact'], 'exact')).toBeTrue();
-  expect(isImpAllowed(['exact'], 'exactly')).toBeFalse();
-  expect(isImpAllowed(['one', 'two-*'], 'two-x')).toBeTrue();
-  expect(isImpAllowed(['*'], 'x')).toBeTrue();
+test('it leaves a pattern without * as it is', () => {
+  expect(toLikePattern('exact')).toBe('exact');
 });
 
-test('the matcher agrees with the LIKE pattern the audit queries use', () => {
+test('it makes LIKE patterns that agree with the matcher the API uses', () => {
   const name = fc.stringMatching(/^[a-z][a-z0-9-]{0,8}$/);
   const pattern = fc.stringMatching(/^[a-z*][a-z0-9*-]{0,6}$/);
 
-  fc.assert(
-    fc.property(pattern, name, (each, imp) => {
-      const like = new RegExp(`^${toLikePattern(each).replaceAll('%', '.*')}$`);
+  // a failure reports its seed and shrunk counterexample, to replay it
+  expect(() => {
+    fc.assert(
+      fc.property(pattern, name, (each, imp) => {
+        const like = new RegExp(`^${toLikePattern(each).replaceAll('%', '.*')}$`);
 
-      expect(isImpAllowed([each], imp)).toBe(like.test(imp));
-    }),
-  );
+        return isImpAllowed([each], imp) === like.test(imp);
+      }),
+    );
+  }).not.toThrow();
 });

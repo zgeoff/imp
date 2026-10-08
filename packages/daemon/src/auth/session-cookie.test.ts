@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
+import { invariant } from '@imp/test-utils/invariant';
 import {
   buildClearedSessionCookies,
   buildSessionCookie,
@@ -9,86 +10,164 @@ import {
   removeSessionCookie,
 } from './session-cookie';
 
-const NOW = 1_800_000_000_000;
-const CLAIM = { tokenId: 'abcdefghijklmnop', expiresAt: NOW + 1000 };
+test('#buildSessionValue signs the version, the token and the expiry', () => {
+  const value = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
 
-test('it accepts a session it signed, naming its token, until the session expires', () => {
-  const value = buildSessionValue('secret', CLAIM);
-
-  expect(value).toMatch(/^v2\.abcdefghijklmnop\.\d+\.[\w-]{43}$/);
-  expect(readSession(value, 'secret', NOW)).toEqual(CLAIM);
-  expect(readSession(value, 'secret', NOW + 1000)).toBeNull();
+  expect(value).toMatch(/^v2\.abcdefghijklmnop\.1800000001000\.[\w-]{43}$/);
 });
 
-test('it rejects a session signed with another root token', () => {
-  expect(readSession(buildSessionValue('old', CLAIM), 'new', NOW)).toBeNull();
+test('#buildSessionValue keys the signature on a key derived from the root token, not the token', () => {
+  const value = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
+
+  const keyedOnToken = createHmac('sha256', 'secret')
+    .update('imp-session-v2.abcdefghijklmnop.1800000001000')
+    .digest('base64url');
+
+  const signature = value.split('.').at(-1);
+
+  invariant(signature);
+
+  expect(signature).not.toBe(keyedOnToken);
 });
 
-test('it rejects a session whose expiry or token was changed', () => {
-  const [version, tokenId, , signature] = buildSessionValue('secret', CLAIM).split('.');
-  const later = `${version ?? ''}.${tokenId ?? ''}.${String(NOW + 9999)}.${signature ?? ''}`;
-  const root = `${version ?? ''}.root.${String(CLAIM.expiresAt)}.${signature ?? ''}`;
+test('#readSession accepts a session it signed, naming its token, before it expires', () => {
+  const claim = { tokenId: 'abcdefghijklmnop', expiresAt: 1_800_000_001_000 };
+  const value = buildSessionValue('secret', claim);
 
-  expect(readSession(later, 'secret', NOW)).toBeNull();
-  expect(readSession(root, 'secret', NOW)).toBeNull();
+  expect(readSession(value, 'secret', 1_800_000_000_999)).toStrictEqual(claim);
 });
 
-test('it rejects malformed sessions and v1 ones', () => {
-  const valid = buildSessionValue('secret', CLAIM);
+test('#readSession rejects a session at its expiry', () => {
+  const value = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
 
-  for (const value of ['', 'v2', 'v2.x.y', `v1${valid.slice(2)}`, `${valid}.extra`, `${valid}x`]) {
-    expect(readSession(value, 'secret', NOW)).toBeNull();
-  }
+  expect(readSession(value, 'secret', 1_800_000_001_000)).toBeNull();
 });
 
-test('it reads every session from a cookie header among other cookies', () => {
-  expect(readSessionCookies('a=1; imp_session=x; b=2; imp_session=v1.2.a=b')).toEqual([
+test('#readSession rejects a session signed with another root token', () => {
+  const value = buildSessionValue('old', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
+
+  expect(readSession(value, 'new', 1_800_000_000_000)).toBeNull();
+});
+
+test('#readSession rejects a session whose expiry was changed', () => {
+  const [version, tokenId, , signature] = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  }).split('.');
+
+  const later = `${String(version)}.${String(tokenId)}.1800000009999.${String(signature)}`;
+
+  expect(readSession(later, 'secret', 1_800_000_000_000)).toBeNull();
+});
+
+test('#readSession rejects a session whose token was changed to root', () => {
+  const [version, , expiry, signature] = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  }).split('.');
+
+  const root = `${String(version)}.root.${String(expiry)}.${String(signature)}`;
+
+  expect(readSession(root, 'secret', 1_800_000_000_000)).toBeNull();
+});
+
+test.each([
+  ['', 'empty'],
+  ['v2', 'only a version'],
+  ['v2.x.y', 'no signature'],
+  ['v2.abcdefghijklmnop.soon.c2ln', 'an expiry that is not a number'],
+])('#readSession rejects %p, which has %s', (value) => {
+  expect(readSession(value, 'secret', 1_800_000_000_000)).toBeNull();
+});
+
+test('#readSession rejects a v1 session that carries the same signature', () => {
+  const valid = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
+
+  expect(readSession(`v1${valid.slice(2)}`, 'secret', 1_800_000_000_000)).toBeNull();
+});
+
+test('#readSession rejects a valid session with a part added', () => {
+  const valid = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
+
+  expect(readSession(`${valid}.extra`, 'secret', 1_800_000_000_000)).toBeNull();
+});
+
+test('#readSession rejects a valid session with its signature lengthened', () => {
+  const valid = buildSessionValue('secret', {
+    tokenId: 'abcdefghijklmnop',
+    expiresAt: 1_800_000_001_000,
+  });
+
+  expect(readSession(`${valid}x`, 'secret', 1_800_000_000_000)).toBeNull();
+});
+
+test('#readSessionCookies reads every session among other cookies, in order', () => {
+  expect(readSessionCookies('a=1; imp_session=x; b=2; imp_session=v1.2.a=b')).toStrictEqual([
     'x',
     'v1.2.a=b',
   ]);
-
-  expect(readSessionCookies('a=1')).toEqual([]);
-  expect(readSessionCookies(null)).toEqual([]);
 });
 
-test('it removes only the session, under either name, from a cookie header', () => {
-  expect(removeSessionCookie('a=1; imp_session=v1.2.abc; b=x=y')).toBe('a=1; b=x=y');
-  expect(removeSessionCookie('a=1; __Host-imp_session=v1.2.abc')).toBe('a=1');
-  expect(removeSessionCookie('imp_session=v1.2.abc; __Host-imp_session=v1.2.abc')).toBeNull();
-  expect(removeSessionCookie('imp_session_other=1')).toBe('imp_session_other=1');
+test('#readSessionCookies reads the session under either name', () => {
+  expect(readSessionCookies('__Host-imp_session=s; imp_session=p')).toStrictEqual(['s', 'p']);
 });
 
-test('it reads the session under either name', () => {
-  expect(readSessionCookies('__Host-imp_session=s; imp_session=p')).toEqual(['s', 'p']);
+test('#readSessionCookies reads none from a header without a session', () => {
+  expect(readSessionCookies('a=1')).toStrictEqual([]);
 });
 
-test('it sets an http-only strict cookie, a __Host- one behind TLS', () => {
+test('#readSessionCookies reads none without a cookie header', () => {
+  expect(readSessionCookies(null)).toStrictEqual([]);
+});
+
+test.each([
+  ['a=1; imp_session=v1.2.abc; b=x=y', 'a=1; b=x=y'],
+  ['a=1; __Host-imp_session=v1.2.abc', 'a=1'],
+  ['imp_session=v1.2.abc; __Host-imp_session=v1.2.abc', null],
+  ['imp_session_other=1', 'imp_session_other=1'],
+])('#removeSessionCookie turns %p into %p', (header, kept) => {
+  expect(removeSessionCookie(header)).toBe(kept);
+});
+
+test('#buildSessionCookie sets an http-only strict cookie over plain HTTP', () => {
   expect(buildSessionCookie('v', false)).toBe(
     'imp_session=v; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict',
   );
+});
 
+test('#buildSessionCookie sets a Secure __Host- cookie behind TLS', () => {
   expect(buildSessionCookie('v', true)).toBe(
     '__Host-imp_session=v; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict; Secure',
   );
 });
 
-test('a logout clears the plain cookie, and over TLS the __Host- one too', () => {
-  expect(buildClearedSessionCookies(false)).toEqual([
+test('#buildClearedSessionCookies clears the plain cookie over plain HTTP', () => {
+  expect(buildClearedSessionCookies(false)).toStrictEqual([
     'imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
-  ]);
-
-  expect(buildClearedSessionCookies(true)).toEqual([
-    'imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
-    '__Host-imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure',
   ]);
 });
 
-test('the signature keys on a key derived from the root token, not the token', () => {
-  const signature = buildSessionValue('secret', CLAIM).split('.').at(-1);
-
-  const keyedOnToken = createHmac('sha256', 'secret')
-    .update(`imp-session-v2.${CLAIM.tokenId}.${String(CLAIM.expiresAt)}`)
-    .digest('base64url');
-
-  expect(signature).not.toBe(keyedOnToken);
+test('#buildClearedSessionCookies clears both cookies behind TLS', () => {
+  expect(buildClearedSessionCookies(true)).toStrictEqual([
+    'imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
+    '__Host-imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure',
+  ]);
 });
