@@ -40,7 +40,8 @@ test('it counts the watches and the reads they ask for', async () => {
   await iterator.next();
 
   void iterator.next();
-  expect([states.watches, states.reads]).toStrictEqual([1, 2]);
+  expect(states.watches).toBe(1);
+  expect(states.reads).toBe(2);
 });
 
 test('it ends a watch whose signal aborts, and counts the abort', async () => {
@@ -56,7 +57,8 @@ test('it ends a watch whose signal aborts, and counts the abort', async () => {
 
   const read = await reading;
 
-  expect([read, states.aborts]).toStrictEqual([{ done: true, value: undefined }, 1]);
+  expect(read).toStrictEqual({ done: true, value: undefined });
+  expect(states.aborts).toBe(1);
 });
 
 test('it ends a watch once the queue is read after the stream ends', async () => {

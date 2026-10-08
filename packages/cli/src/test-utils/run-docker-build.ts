@@ -1,8 +1,10 @@
 // whether `docker buildx` runs on this machine; the Docker suites skip
-// without it
-export function checkDockerBuildx(): boolean {
-  return Bun.spawnSync(['docker', 'buildx', 'version'], { stdout: 'ignore', stderr: 'ignore' })
-    .success;
+// without it. `docker` is the binary, the one on PATH by default.
+export function checkDockerBuildx(docker = 'docker'): boolean {
+  return (
+    Bun.which(docker) !== null &&
+    Bun.spawnSync([docker, 'buildx', 'version'], { stdout: 'ignore', stderr: 'ignore' }).success
+  );
 }
 
 export interface DockerBuildOptions {

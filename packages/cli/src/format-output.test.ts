@@ -1,7 +1,11 @@
 import { expect, test } from 'bun:test';
+import { buildMockApiCall } from '@imp/api/test-utils/build-mock-api-call';
+import { buildMockCheckpoint } from '@imp/api/test-utils/build-mock-checkpoint';
 import { buildMockIdentity } from '@imp/api/test-utils/build-mock-identity';
+import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { buildMockSession } from '@imp/api/test-utils/build-mock-session';
+import { buildMockToken } from '@imp/api/test-utils/build-mock-token';
 import {
   formatApiCalls,
   formatBootStatus,
@@ -11,6 +15,7 @@ import {
   formatGc,
   formatHttps,
   formatIdentity,
+  formatImages,
   formatImps,
   formatSessions,
   formatSshKey,
@@ -33,15 +38,22 @@ test('#formatTable pads each column to its widest cell', () => {
 });
 
 test('#formatCheckpoints lists checkpoints with their size in MiB and their disk size', () => {
+  // an older checkpoint: no label, and no size
+  const { label, sizeBytes, ...older } = buildMockCheckpoint({
+    id: 'cp-d5e6f7',
+    createdAt: new Date(0),
+    diskMib: 65_536 + 512,
+  });
+
   const table = formatCheckpoints([
-    {
+    buildMockCheckpoint({
       id: 'cp-a2b3c4',
       label: 'clean',
       createdAt: new Date(0),
       sizeBytes: 3_145_728,
       diskMib: 32_768,
-    },
-    { id: 'cp-d5e6f7', createdAt: new Date(0), diskMib: 65_536 + 512 },
+    }),
+    older,
   ]);
 
   expect(table.split('\n')).toStrictEqual([
@@ -398,15 +410,15 @@ test('#formatTokens lists tokens with their scope and imps, and * for every imp'
   const createdAt = new Date('2026-10-02T00:00:00Z');
 
   const text = formatTokens([
-    {
+    buildMockToken({
       name: 'ci',
       scope: 'manage',
       imps: ['dev-*', 'ci-*'],
       sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
       grantable: ['gh', 'npm'],
       createdAt,
-    },
-    { name: 'ops', scope: 'manage', imps: null, sshKeys: [], grantable: [], createdAt },
+    }),
+    buildMockToken({ name: 'ops', scope: 'manage', imps: null, grantable: [], createdAt }),
   ]);
 
   expect(text.split('\n').map((line) => line.trimEnd())).toStrictEqual([
@@ -419,7 +431,15 @@ test('#formatTokens lists tokens with their scope and imps, and * for every imp'
 test('#formatTokens lists a token from an impd that sends no grantable list', () => {
   const createdAt = new Date('2026-10-02T00:00:00Z');
 
-  const text = formatTokens([{ name: 'ci', scope: 'exec', imps: null, sshKeys: [], createdAt }]);
+  const { grantable, ...older } = buildMockToken({
+    name: 'ci',
+    scope: 'exec',
+    imps: null,
+    sshKeys: [],
+    createdAt,
+  });
+
+  const text = formatTokens([older]);
 
   expect(text.split('\n').map((line) => line.trimEnd())).toStrictEqual([
     'NAME  SCOPE  IMPS  GRANTABLE  SSH KEYS  CREATED',
@@ -479,11 +499,26 @@ test('#formatIdentity names a caller from an impd that sends no grantable list',
 });
 
 test('#formatApiCalls names who made each api call', () => {
-  const call = { at: new Date(0), procedure: 'imps.stop', outcome: 'ok', durationMs: 3 } as const;
+  // a dashboard call carries no actor name, and this one names no imp
+  const { actorName, imp, ...dashboard } = buildMockApiCall({
+    at: new Date(0),
+    procedure: 'imps.stop',
+    actor: 'dashboard',
+    outcome: 'ok',
+    durationMs: 3,
+  });
 
   const text = formatApiCalls([
-    { ...call, actor: 'token', actorName: 'ci', imp: 'dev' },
-    { ...call, actor: 'dashboard' },
+    buildMockApiCall({
+      at: new Date(0),
+      procedure: 'imps.stop',
+      actor: 'token',
+      actorName: 'ci',
+      imp: 'dev',
+      outcome: 'ok',
+      durationMs: 3,
+    }),
+    dashboard,
   ]);
 
   expect(text.split('\n')).toStrictEqual([
@@ -495,19 +530,25 @@ test('#formatApiCalls names who made each api call', () => {
 
 test('#formatApiCalls ends the line with the detail of a call', () => {
   const pulled = `busybox@sha256:${'b'.repeat(64)}`;
-
-  const text = formatApiCalls([
-    {
-      at: new Date(0),
-      procedure: 'images.add',
-      outcome: 'ok',
-      durationMs: 3,
-      actor: 'token',
-      detail: pulled,
-    },
-  ]);
+  const text = formatApiCalls([buildMockApiCall({ procedure: 'images.add', detail: pulled })]);
 
   expect(text.split('\n')[1]).toEndWith(`  ${pulled}`);
+});
+
+test('#formatImages lists each image with its short digest and its size in MiB', () => {
+  const text = formatImages([
+    buildMockImage({
+      name: 'base',
+      ref: 'busybox:1.37',
+      digest: `sha256:${'a'.repeat(64)}`,
+      sizeBytes: 5 * 1_048_576,
+    }),
+  ]);
+
+  expect(text.split('\n')).toStrictEqual([
+    'NAME  REF           DIGEST               SIZE',
+    'base  busybox:1.37  sha256:aaaaaaaaaaaa  5 MiB',
+  ]);
 });
 
 test('#formatHttps shows nothing for an impd that does not report HTTPS', () => {

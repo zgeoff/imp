@@ -1,5 +1,4 @@
 import { expect, mock, test } from 'bun:test';
-import { buildMockIdentity } from '@imp/api/test-utils/build-mock-identity';
 import { buildMockSystemInfo } from '@imp/api/test-utils/build-mock-system-info';
 import { ORPCError } from '@orpc/client';
 import { buildRanking, createPlaced, readFreeMib } from './place-imp';
@@ -13,22 +12,22 @@ test('#buildRanking ranks the host with the most free RAM first, a tie in name o
       {
         host: 'a',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ ...ram, ramBudgetMib: 8192, ramUsedMib: 4096 }),
+          info: { ...ram, ramBudgetMib: 8192, ramUsedMib: 4096 },
         }),
       },
       {
         host: 'b',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ ...ram, ramBudgetMib: 16_384, ramReservedMib: 1024 }),
+          info: { ...ram, ramBudgetMib: 16_384, ramReservedMib: 1024 },
         }),
       },
       {
         host: 'c',
-        value: buildMockHostProbe({ info: buildMockSystemInfo({ ...ram, ramBudgetMib: 8192 }) }),
+        value: buildMockHostProbe({ info: { ...ram, ramBudgetMib: 8192 } }),
       },
       {
         host: 'd',
-        value: buildMockHostProbe({ info: buildMockSystemInfo({ ...ram, ramBudgetMib: 8192 }) }),
+        value: buildMockHostProbe({ info: { ...ram, ramBudgetMib: 8192 } }),
       },
     ],
     {
@@ -80,23 +79,23 @@ test('#buildRanking ranks a host below another when its sleepers take more RAM',
       {
         host: 'sleepy',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({
+          info: {
             ramBudgetMib: 8192,
             ramUsedMib: 1000,
             ramReservedMib: 500,
             ramSleepingMib: 4096,
-          }),
+          },
         }),
       },
       {
         host: 'busy',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({
+          info: {
             ramBudgetMib: 8192,
             ramUsedMib: 4096,
             ramReservedMib: 0,
             ramSleepingMib: 0,
-          }),
+          },
         }),
       },
     ],
@@ -168,7 +167,7 @@ test('#buildRanking drops a host without its own default image when none is aske
       {
         host: 'has',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ defaults: { image: 'base' } }),
+          info: { defaults: { image: 'base' } },
           images: ['myapp'],
         }),
       },
@@ -193,7 +192,7 @@ test('#buildRanking drops a host with no default image when none is asked', () =
       {
         host: 'none',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ defaults: { image: null } }),
+          info: { defaults: { image: null } },
           images: ['myapp'],
         }),
       },
@@ -220,7 +219,7 @@ test('#buildRanking keeps a small host whose budget fits its default memory', ()
       {
         host: 'small',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ ramBudgetMib: 1024, defaults: { memoryMib: 512 } }),
+          info: { ramBudgetMib: 1024, defaults: { memoryMib: 512 } },
         }),
       },
     ],
@@ -244,7 +243,7 @@ test('#buildRanking drops a host whose budget is below the memory asked', () => 
       {
         host: 'small',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ ramBudgetMib: 1024, defaults: { memoryMib: 512 } }),
+          info: { ramBudgetMib: 1024, defaults: { memoryMib: 512 } },
         }),
       },
     ],
@@ -270,7 +269,7 @@ test('#buildRanking drops a host whose budget is below its own default memory', 
       {
         host: 'tight',
         value: buildMockHostProbe({
-          info: buildMockSystemInfo({ ramBudgetMib: 1024, defaults: { memoryMib: 2048 } }),
+          info: { ramBudgetMib: 1024, defaults: { memoryMib: 2048 } },
         }),
       },
     ],
@@ -298,7 +297,7 @@ test.each([['open'], [null]] as const)(
         {
           host: 'open',
           value: buildMockHostProbe({
-            info: buildMockSystemInfo({ egress: { isEnforced: false } }),
+            info: { egress: { isEnforced: false } },
           }),
         },
       ],
@@ -322,7 +321,7 @@ test('#buildRanking drops a host that cannot enforce a box policy', () => {
     [
       {
         host: 'open',
-        value: buildMockHostProbe({ info: buildMockSystemInfo({ egress: { isEnforced: false } }) }),
+        value: buildMockHostProbe({ info: { egress: { isEnforced: false } } }),
       },
     ],
     {
@@ -342,9 +341,9 @@ test('#buildRanking drops a host that cannot enforce a box policy', () => {
 });
 
 test('#buildRanking drops a host that predates the public policy', () => {
-  const { features, ...older } = buildMockSystemInfo({ version: '0.12.0' });
+  const older = buildMockHostProbe({ info: { version: '0.12.0' }, withoutInfo: ['features'] });
 
-  const ranking = buildRanking([{ host: 'older', value: buildMockHostProbe({ info: older }) }], {
+  const ranking = buildRanking([{ host: 'older', value: older }], {
     name: 'dev',
     image: null,
     memoryMib: null,
@@ -364,7 +363,7 @@ test('#buildRanking drops a host that cannot enforce a public policy', () => {
     [
       {
         host: 'unenforced',
-        value: buildMockHostProbe({ info: buildMockSystemInfo({ egress: { isEnforced: false } }) }),
+        value: buildMockHostProbe({ info: { egress: { isEnforced: false } } }),
       },
     ],
     {
@@ -402,7 +401,7 @@ test('#buildRanking drops a host with low storage', () => {
     [
       {
         host: 'low',
-        value: buildMockHostProbe({ info: buildMockSystemInfo({ storage: { isLow: true } }) }),
+        value: buildMockHostProbe({ info: { storage: { isLow: true } } }),
       },
     ],
     {
@@ -424,7 +423,7 @@ test('#buildRanking drops a host with fewer cores than the CPU limit', () => {
     [
       {
         host: 'small',
-        value: buildMockHostProbe({ info: buildMockSystemInfo({ cpu: { hostCpus: 4 } }) }),
+        value: buildMockHostProbe({ info: { cpu: { hostCpus: 4 } } }),
       },
     ],
     {
@@ -471,7 +470,7 @@ test('#buildRanking drops a host whose token has read scope', () => {
     [
       {
         host: 'read',
-        value: buildMockHostProbe({ identity: buildMockIdentity({ scope: 'read' }) }),
+        value: buildMockHostProbe({ identity: { scope: 'read' } }),
       },
     ],
     {
@@ -495,7 +494,7 @@ test("#buildRanking drops a host whose token may not touch the imp's name", () =
     [
       {
         host: 'limited',
-        value: buildMockHostProbe({ identity: buildMockIdentity({ imps: ['ci-*'] }) }),
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
       },
     ],
     {
@@ -519,7 +518,7 @@ test("#buildRanking keeps a host whose token patterns match the imp's name", () 
     [
       {
         host: 'limited',
-        value: buildMockHostProbe({ identity: buildMockIdentity({ imps: ['ci-*'] }) }),
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
       },
     ],
     {
@@ -543,7 +542,7 @@ test('#buildRanking drops a host whose limited token cannot create an unnamed im
     [
       {
         host: 'limited',
-        value: buildMockHostProbe({ identity: buildMockIdentity({ imps: ['ci-*'] }) }),
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
       },
     ],
     {
@@ -567,7 +566,7 @@ test('#buildRanking drops a host whose limited token cannot take --public or --n
     [
       {
         host: 'limited',
-        value: buildMockHostProbe({ identity: buildMockIdentity({ imps: ['ci-*'] }) }),
+        value: buildMockHostProbe({ identity: { imps: ['ci-*'] } }),
       },
     ],
     {
@@ -590,9 +589,9 @@ test('#buildRanking drops a host whose limited token cannot take --public or --n
 });
 
 test('#buildRanking drops an impd from before placement', () => {
-  const { defaults, ...old } = buildMockSystemInfo({ version: '0.12.0' });
+  const old = buildMockHostProbe({ info: { version: '0.12.0' }, withoutInfo: ['defaults'] });
 
-  const ranking = buildRanking([{ host: 'old', value: buildMockHostProbe({ info: old }) }], {
+  const ranking = buildRanking([{ host: 'old', value: old }], {
     name: 'dev',
     image: null,
     memoryMib: null,

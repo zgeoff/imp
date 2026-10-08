@@ -55,11 +55,23 @@ test('#runCli closes an empty stdin', async () => {
 });
 
 test('#runCli keeps the test run’s variables from the CLI', async () => {
-  updateEnv('IMP_URL', 'localhost:7070');
+  const home = await mkdtemp(join(tmpdir(), 'start-cli-'));
 
-  const result = await runCli({ args: ['gc', '--secret-files'] });
+  onTestFinished(() => rm(home, { recursive: true, force: true }));
 
-  expect(result.stderr).toBe('imp: --secret-files goes with --orphans\n');
+  // IMP_HOST wins over IMP_URL, so a leaked one names a host no config saves
+  updateEnv('IMP_HOST', 'work');
+
+  const result = await runCli({
+    args: ['ls'],
+    env: { HOME: home, XDG_CONFIG_HOME: home, IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: Unable to connect. Is the computer able to access the url?\n',
+    code: 1,
+  });
 });
 
 test('#startCli hands the running process to the caller', async () => {
