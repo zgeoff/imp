@@ -16,6 +16,9 @@ interface EventStreamOptions {
   // never
   readonly endsAt: number | null;
   readonly now: () => number;
+
+  // starts the end's timer and returns its cancel; setTimeout by default
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
   readonly queueLimit?: number;
 
   // the events this subscriber may see, such as those of a token's imps;
@@ -55,7 +58,12 @@ export async function* openEventStream(options: EventStreamOptions): AsyncGenera
 
   // a dashboard session's stream ends with it, 30 days on
   const cancelTimer =
-    options.endsAt === null ? null : startTimerAt(stopStream, options.endsAt, { now: options.now });
+    options.endsAt === null
+      ? null
+      : startTimerAt(stopStream, options.endsAt, {
+          now: options.now,
+          ...(options.startTimer !== undefined && { startTimer: options.startTimer }),
+        });
 
   try {
     const snapshot = await options.readSnapshot();

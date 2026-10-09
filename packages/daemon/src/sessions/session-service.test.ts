@@ -1,253 +1,400 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import type { Socket } from 'node:net';
-import * as z from 'zod';
-import type { AgentSession } from '../agent-client/agent-requests';
-import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import { createImage } from '../db/images';
 import { findImpByName } from '../db/imps';
-import { buildTestApp, createImpTest } from '../imps/test-imps';
-import { readRejection } from '../read-rejection';
+import { openDatabase } from '../db/open-database';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImpPaths } from '../storage/data-layout';
-import { startStubAgent } from '../test-utils/start-stub-agent';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockAgentSession } from '../test-utils/build-mock-agent-session';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubSessionAgent } from '../test-utils/start-stub-session-agent';
 
-const STARTED_AT = Date.UTC(2026, 9, 2, 12, 0, 0);
-
-function buildSession(name: string, change: Readonly<Partial<AgentSession>> = {}): AgentSession {
-  return {
-    name,
-    pid: 300,
-    argv: ['bash', '-l'],
-    state: 'running',
-    attached: false,
-    cols: 120,
-    rows: 40,
-    started_unix_ms: STARTED_AT,
-    ...change,
-  };
-}
-
-const AgentRequestSchema = z.object({ op: z.string(), session: z.string().optional() });
-
-type AgentRequest = z.infer<typeof AgentRequestSchema>;
-
-function sendResponse(socket: Socket, value: unknown): void {
-  socket.end(encodeJsonFrame(FRAME_TYPES.response, value));
-}
-
-// An agent that answers activity with `sessions` and kills by name; one
-// from before sessions knows no session.kill.
-function buildSessionAgent(initial: readonly AgentSession[], knowsKill: boolean) {
-  const sessions = [...initial];
-  const ops: string[] = [];
-
-  const handleRequest = (socket: Socket, request: Readonly<AgentRequest>): void => {
-    ops.push(request.op);
-
-    if (request.op === 'activity') {
-      sendResponse(socket, { tcp_established: 0, exec_sessions: 0, load1: 0, sessions });
-
-      return;
-    }
-
-    if (request.op !== 'session.kill' || !knowsKill) {
-      sendResponse(socket, { error: { code: 'UNKNOWN_OP', message: 'unknown op' } });
-
-      return;
-    }
-
-    const index = sessions.findIndex((session) => session.name === request.session);
-
-    if (index === -1) {
-      sendResponse(socket, { error: { code: 'NO_SESSION', message: 'no session' } });
-
-      return;
-    }
-
-    sessions.splice(index, 1);
-
-    sendResponse(socket, { ok: true });
-  };
-
-  return { sessions, ops, handleRequest };
-}
-
-async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = true) {
-  // one stack: the stub agent closes before the harness it serves
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const harness = await createImpTest(stack);
+  const dataDir = await mkdtemp(join(tmpdir(), 'session-service-'));
 
-  const app = buildTestApp(harness, harness);
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  await harness.createTestImage('ubuntu');
+  const db = await openDatabase(':memory:');
 
-  const imp = await app.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  stack.defer(() => db.destroy());
 
-  const agent = buildSessionAgent(sessions, knowsKill);
-
-  const listening = await startStubAgent(
-    buildImpPaths(harness.config.dataDir, imp.id).vsockSocket,
-    (socket, request, frames) => {
-      if (frames.length === 1) {
-        agent.handleRequest(socket, AgentRequestSchema.parse(decodeJsonPayload(request)));
-      }
-    },
-  );
-
-  stack.defer(() => {
-    listening.close();
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
-  return {
-    ...harness,
-    ...app,
-    imp,
-    agent,
-  };
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  // the default image, which every create without an image boots
+  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the test's client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them, which a
+    // snapshot must match to load
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: (request) => impd.api.app.handle(request),
+    }),
+  );
+
+  return { db, dataDir, vmm, impd, client, stack };
 }
 
 test('it lists a running imp’s sessions from its agent', async () => {
-  const ctx = await setupSessionTest([
-    buildSession('main', { attached: true }),
-    buildSession('job', { state: 'exited', exit: { code: 137, signal: 9 } }),
-  ]);
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const before = await ctx.client.imps.get({ name: 'dev' });
+  // an agent from before output offsets
+  const main = buildMockAgentSession({
+    name: 'main',
+    attached: true,
+    execution_generation: undefined,
+    boot_id: undefined,
+    end: undefined,
+  });
+
+  const job = buildMockAgentSession({
+    name: 'job',
+    state: 'exited',
+    exit: { code: 137, signal: 9 },
+    execution_generation: undefined,
+    boot_id: undefined,
+    end: undefined,
+  });
+
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main, job], {
+    knowsKill: true,
+    stack: ctx.stack,
+  });
+
   const sessions = await ctx.client.sessions.list({ name: 'dev' });
 
-  expect(sessions).toEqual([
+  expect(sessions).toStrictEqual([
     {
       name: 'main',
-      pid: 300,
-      argv: ['bash', '-l'],
+      pid: main.pid,
+      argv: [...main.argv],
       state: 'running',
       attached: true,
-      cols: 120,
-      rows: 40,
-      startedAt: new Date(STARTED_AT),
+      cols: main.cols,
+      rows: main.rows,
+      startedAt: new Date(main.started_unix_ms),
       continuity: 'none',
     },
     {
       name: 'job',
-      pid: 300,
-      argv: ['bash', '-l'],
+      pid: job.pid,
+      argv: [...job.argv],
       state: 'exited',
       attached: false,
-      cols: 120,
-      rows: 40,
-      startedAt: new Date(STARTED_AT),
+      cols: job.cols,
+      rows: job.rows,
+      startedAt: new Date(job.started_unix_ms),
       exit: { code: null, signal: 'SIGKILL' },
       continuity: 'none',
     },
   ]);
+});
 
-  // impd has not seen the agent before the list; it counts them after
-  const after = await ctx.client.imps.get({ name: 'dev' });
+test('it counts no sessions for an imp whose agent impd has not asked yet', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubSessionAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    [buildMockAgentSession()],
+    { knowsKill: true, stack: ctx.stack },
+  );
+
+  const got = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(got.sessions).toBeUndefined();
+});
+
+test('it counts an imp’s sessions on the imp and the host once it lists them', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubSessionAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    [buildMockAgentSession({ name: 'main' }), buildMockAgentSession({ name: 'job' })],
+    { knowsKill: true, stack: ctx.stack },
+  );
+
+  await ctx.client.sessions.list({ name: 'dev' });
+
+  const got = await ctx.client.imps.get({ name: 'dev' });
   const info = await ctx.client.system.info();
 
-  expect(before.sessions).toBeUndefined();
-  expect(after.sessions).toBe(2);
+  expect(got.sessions).toBe(2);
   expect(info.sessionCount).toBe(2);
 });
 
-test('the idle loop’s activity read records the sessions', async () => {
-  const ctx = await setupSessionTest([buildSession('main')]);
+test('it records the sessions that the idle loop’s activity read finds', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubSessionAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    [buildMockAgentSession({ name: 'main' })],
+    { knowsKill: true, stack: ctx.stack },
+  );
+
   const record = await findImpByName(ctx.db, 'dev');
 
-  if (record === undefined) {
-    throw new Error('no imp');
-  }
+  invariant(record);
 
-  const activity = await ctx.imps.readActivity(record);
-  const imps = await ctx.client.imps.list();
+  const activity = await ctx.impd.imps.readActivity(record);
+  const listed = await ctx.client.imps.list();
 
-  expect(activity?.sessions.map((session) => session.name)).toEqual(['main']);
-  expect(imps[0]?.sessions).toBe(1);
+  expect(activity?.sessions.map((session) => session.name)).toStrictEqual(['main']);
+  expect(listed[0]?.sessions).toBe(1);
 });
 
-test('a sleeping imp lists the sessions it went to sleep with, without a wake', async () => {
-  const ctx = await setupSessionTest([buildSession('main', { attached: true })]);
+test('it records a sleeping imp’s sessions as detached in its snapshot', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  const main = buildMockAgentSession({ name: 'main', attached: true });
+
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main], {
+    knowsKill: true,
+    stack: ctx.stack,
+  });
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
-  const meta = readSnapshotMeta(buildImpPaths(ctx.config.dataDir, ctx.imp.id));
+  const meta = readSnapshotMeta(buildImpPaths(ctx.dataDir, imp.id));
 
-  expect(meta?.sessions).toMatchObject([buildSession('main', { attached: false })]);
-  expect(meta?.sessions?.[0]?.observed_unix_ms).toBeNumber();
-
-  ctx.agent.ops.length = 0;
-
-  const sessions = await ctx.client.sessions.list({ name: 'dev' });
-  const imp = await ctx.client.imps.get({ name: 'dev' });
-
-  expect(sessions.map((session) => [session.name, session.attached])).toEqual([['main', false]]);
-  expect(imp.state).toBe('sleeping');
-  expect(imp.sessions).toBe(1);
-  expect(ctx.fake.wakes).toEqual([]);
-  expect(ctx.agent.ops).toEqual([]);
+  expect(meta?.sessions).toStrictEqual([
+    { ...main, attached: false, observed_unix_ms: expect.toBeNumber() },
+  ]);
 });
 
-test('a stopped imp has no sessions', async () => {
-  const ctx = await setupSessionTest([buildSession('main')]);
+test('it lists a sleeping imp’s sessions without a wake', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    [buildMockAgentSession({ name: 'main', attached: true })],
+    { knowsKill: true, stack: ctx.stack },
+  );
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const opsBefore = agent.ops.length;
+
+  const sessions = await ctx.client.sessions.list({ name: 'dev' });
+  const got = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(sessions.map((session) => [session.name, session.attached])).toStrictEqual([
+    ['main', false],
+  ]);
+
+  expect(got.state).toBe('sleeping');
+  expect(got.sessions).toBe(1);
+  expect(ctx.vmm.wakes).toStrictEqual([]);
+  expect(agent.ops).toHaveLength(opsBefore);
+});
+
+test('it lists no sessions for a stopped imp', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubSessionAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    [buildMockAgentSession({ name: 'main' })],
+    { knowsKill: true, stack: ctx.stack },
+  );
 
   await ctx.client.sessions.list({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
 
   const sessions = await ctx.client.sessions.list({ name: 'dev' });
-  const imp = await ctx.client.imps.get({ name: 'dev' });
+  const got = await ctx.client.imps.get({ name: 'dev' });
 
-  expect(sessions).toEqual([]);
-  expect(imp.sessions).toBe(0);
+  expect(sessions).toStrictEqual([]);
+  expect(got.sessions).toBe(0);
 });
 
-test('a kill wakes a sleeping imp and ends the session', async () => {
-  const ctx = await setupSessionTest([buildSession('main'), buildSession('other')]);
+test('it wakes a sleeping imp for a kill, and ends the session', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    [buildMockAgentSession({ name: 'main' }), buildMockAgentSession({ name: 'other' })],
+    { knowsKill: true, stack: ctx.stack },
+  );
 
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.sessions.kill({ name: 'dev', session: 'main' });
 
-  expect(ctx.fake.wakes).toHaveLength(1);
-  expect(ctx.agent.ops).toContain('session.kill');
+  const got = await ctx.client.imps.get({ name: 'dev' });
 
-  const imp = await ctx.client.imps.get({ name: 'dev' });
-
-  expect(ctx.agent.sessions.map((session) => session.name)).toEqual(['other']);
-  expect(imp.state).toBe('running');
+  expect(ctx.vmm.wakes).toHaveLength(1);
+  expect(agent.sessions.map((session) => session.name)).toStrictEqual(['other']);
+  expect(got.state).toBe('running');
 });
 
-test('a kill of no such session is NOT_FOUND', async () => {
-  const ctx = await setupSessionTest([]);
-  const rejection = await readRejection(ctx.client.sessions.kill({ name: 'dev', session: 'main' }));
+test('it refuses a kill of a session the agent lacks as NOT_FOUND', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  expect(rejection).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'session', name: 'main' } });
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [], {
+    knowsKill: true,
+    stack: ctx.stack,
+  });
+
+  expect(ctx.client.sessions.kill({ name: 'dev', session: 'main' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    data: { kind: 'session', name: 'main' },
+  });
 });
 
-test('a kill on an agent from before sessions is AGENT_OUTDATED', async () => {
-  const ctx = await setupSessionTest([], false);
-  const rejection = await readRejection(ctx.client.sessions.kill({ name: 'dev', session: 'main' }));
+test('it refuses a kill on an agent from before sessions as AGENT_OUTDATED', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED', status: 409 });
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [], {
+    knowsKill: false,
+    stack: ctx.stack,
+  });
+
+  expect(ctx.client.sessions.kill({ name: 'dev', session: 'main' })).rejects.toMatchObject({
+    code: 'AGENT_OUTDATED',
+    status: 409,
+  });
 });
 
-test('a list of an unknown imp is NOT_FOUND', async () => {
-  const ctx = await setupSessionTest([]);
-  const rejection = await readRejection(ctx.client.sessions.list({ name: 'nope' }));
+test('it refuses a list of an unknown imp as NOT_FOUND', async () => {
+  const ctx = await setupTest();
 
-  expect(rejection).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'imp', name: 'nope' } });
+  expect(ctx.client.sessions.list({ name: 'nope' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    data: { kind: 'imp', name: 'nope' },
+  });
 });
 
-test('a session from an agent with offsets lists its generation and its end as last seen', async () => {
-  const generation = 'b'.repeat(32);
+test('it lists a session’s generation, and its end as last seen, from an agent with offsets', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const ctx = await setupSessionTest([
-    buildSession('main', {
-      execution_generation: generation,
-      boot_id: '22222222-2222-4222-8222-222222222222',
-      end: 4096,
-    }),
-  ]);
+  const main = buildMockAgentSession({
+    name: 'main',
+    execution_generation: 'b'.repeat(32),
+    boot_id: '22222222-2222-4222-8222-222222222222',
+    end: 4096,
+  });
+
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main], {
+    knowsKill: true,
+    stack: ctx.stack,
+  });
 
   const before = Date.now();
 
@@ -255,23 +402,42 @@ test('a session from an agent with offsets lists its generation and its end as l
 
   expect(session).toMatchObject({
     continuity: 'offsets',
-    executionGeneration: generation,
+    executionGeneration: 'b'.repeat(32),
     bootId: '22222222-2222-4222-8222-222222222222',
+    end: 4096,
+    endObservedAt: expect.toBeAfter(new Date(before - 1)),
+  });
+});
+
+test('it keeps a session’s generation and when impd saw its end across a sleep', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  const main = buildMockAgentSession({
+    name: 'main',
+    execution_generation: 'b'.repeat(32),
     end: 4096,
   });
 
-  expect(session?.endObservedAt?.getTime()).toBeGreaterThanOrEqual(before);
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main], {
+    knowsKill: true,
+    stack: ctx.stack,
+  });
 
-  // a sleep keeps the generation and when impd saw the end
+  const [seen] = await ctx.client.sessions.list({ name: 'dev' });
+
+  invariant(seen?.endObservedAt);
+
+  const seenBefore = new Date(seen.endObservedAt.getTime() - 1);
+
   await ctx.client.imps.sleep({ name: 'dev' });
 
   const [slept] = await ctx.client.sessions.list({ name: 'dev' });
 
   expect(slept).toMatchObject({
     continuity: 'offsets',
-    executionGeneration: generation,
+    executionGeneration: 'b'.repeat(32),
     end: 4096,
+    endObservedAt: expect.toBeAfter(seenBefore),
   });
-
-  expect(slept?.endObservedAt?.getTime()).toBeGreaterThanOrEqual(before);
 });

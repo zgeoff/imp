@@ -1,176 +1,212 @@
 import { expect, test } from 'bun:test';
-import { EVENT_VERSION } from '@imp/api';
 import type { ImpEvent } from '@imp/api';
+import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
+import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { createEventBus } from './event-bus';
 import { openEventStream } from './event-stream';
 
-const AT = new Date('2026-10-02T12:00:00Z');
-
-function buildDecision(name: string): ImpEvent {
-  return {
-    v: EVENT_VERSION,
-    at: AT,
-    ev: 'GovernorDecision',
-    decision: 'admitted',
-    name,
-    trigger: 'admission',
-    usedMib: 0,
-    budgetMib: 1024,
-  };
-}
-
-// the names of the events a stream sent, until it ended
-async function readNames(stream: Readonly<AsyncGenerator<ImpEvent>>): Promise<string[]> {
-  const names: string[] = [];
-
-  for await (const event of stream) {
-    const name = event.ev === 'GovernorDecision' ? event.name : event.ev;
-
-    names.push(name);
-  }
-
-  return names;
-}
-
-test('an event published while the snapshot is read follows the snapshot', async () => {
+test('it sends an event published while the snapshot is read after the snapshot', async () => {
   const bus = createEventBus();
 
   const controller = new AbortController();
 
+  const snapshot = buildMockGovernorDecision({ name: 'snapshot' });
+  const during = buildMockGovernorDecision({ name: 'during' });
+  const after = buildMockGovernorDecision({ name: 'after' });
+
   const stream = openEventStream({
     bus,
     readSnapshot: () => {
-      bus.publish(buildDecision('during'));
+      bus.publish(during);
 
-      return Promise.resolve([buildDecision('snapshot')]);
+      return Promise.resolve([snapshot]);
     },
     signal: controller.signal,
     endsAt: null,
-    now: Date.now,
+    now: () => Date.UTC(2026, 9, 2, 12),
   });
 
   const first = await stream.next();
   const second = await stream.next();
 
-  bus.publish(buildDecision('after'));
+  bus.publish(after);
 
   const third = await stream.next();
 
   controller.abort();
 
-  const names = [first, second, third].map((result) =>
-    result.done === true || result.value.ev !== 'GovernorDecision' ? null : result.value.name,
-  );
-
-  expect(names).toEqual(['snapshot', 'during', 'after']);
-
-  const last = await stream.next();
-
-  expect(last).toEqual({ done: true, value: undefined });
+  expect(first).toStrictEqual({ done: false, value: snapshot });
+  expect(second).toStrictEqual({ done: false, value: during });
+  expect(third).toStrictEqual({ done: false, value: after });
 });
 
-test('a subscriber that falls behind by the queue limit is ended, not stalled', async () => {
+test('it ends a subscriber that falls behind by the queue limit', async () => {
   const bus = createEventBus();
 
   const stream = openEventStream({
     bus,
     readSnapshot: () => {
-      for (const name of ['a', 'b', 'c']) {
-        bus.publish(buildDecision(name));
-      }
+      bus.publish(buildMockGovernorDecision());
+      bus.publish(buildMockGovernorDecision());
+      bus.publish(buildMockGovernorDecision());
 
       return Promise.resolve([]);
     },
     endsAt: null,
-    now: Date.now,
+    now: () => Date.UTC(2026, 9, 2, 12),
     queueLimit: 2,
   });
 
-  const names = await readNames(stream);
+  const sent = await Array.fromAsync(stream);
 
-  expect(names).toEqual([]);
+  expect(sent).toStrictEqual([]);
 });
 
-test('a stream ends at its abort and at its end time, and lets go of the bus', async () => {
+test('it leaves out the events its subscriber may not see', async () => {
   const bus = createEventBus();
 
   const controller = new AbortController();
 
-  const listeners: string[] = [];
+  const shown = buildMockGovernorDecision({ name: 'shown' });
+
+  const stream = openEventStream({
+    bus,
+    readSnapshot: () => Promise.resolve([]),
+    signal: controller.signal,
+    endsAt: null,
+    now: () => Date.UTC(2026, 9, 2, 12),
+    accepts: (event) => event.ev === 'GovernorDecision' && event.name !== 'hidden',
+  });
+
+  const next = stream.next();
+
+  bus.publish(buildMockGovernorDecision({ name: 'hidden' }));
+  bus.publish(shown);
+
+  const first = await next;
+
+  controller.abort();
+
+  expect(first).toStrictEqual({ done: false, value: shown });
+});
+
+test('it ends at its abort and lets go of the bus', async () => {
+  const bus = createEventBus();
+
+  const controller = new AbortController();
+
+  const subscriptions: string[] = [];
 
   const counted = {
     publish: bus.publish,
     subscribe: (listener: (event: Readonly<ImpEvent>) => void) => {
-      listeners.push('subscribed');
+      subscriptions.push('subscribed');
 
       const unsubscribe = bus.subscribe(listener);
 
       return () => {
-        listeners.push('unsubscribed');
+        subscriptions.push('unsubscribed');
 
         unsubscribe();
       };
     },
   };
 
-  const aborted = readNames(
-    openEventStream({
-      bus: counted,
-      readSnapshot: () => Promise.resolve([buildDecision('snapshot')]),
-      signal: controller.signal,
-      endsAt: null,
-      now: Date.now,
-    }),
-  );
-
-  await Bun.sleep(5);
-
-  controller.abort();
-
-  const sent = await aborted;
-
-  expect(sent).toEqual(['snapshot']);
-
-  const startedAt = Date.now();
-
-  const expired = await readNames(
-    openEventStream({
-      bus: counted,
-      readSnapshot: () => Promise.resolve([]),
-      endsAt: startedAt + 50,
-      now: Date.now,
-    }),
-  );
-
-  expect(expired).toEqual([]);
-  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(45);
-  expect(listeners).toEqual(['subscribed', 'unsubscribed', 'subscribed', 'unsubscribed']);
-});
-
-test('a stream that ends with a 30-day session stays open after the snapshot', async () => {
-  const bus = createEventBus();
-
-  const controller = new AbortController();
+  const snapshot = buildMockGovernorDecision();
 
   const stream = openEventStream({
-    bus,
-    readSnapshot: () => Promise.resolve([buildDecision('snapshot')]),
+    bus: counted,
+    readSnapshot: () => Promise.resolve([snapshot]),
     signal: controller.signal,
-    endsAt: Date.now() + 30 * 86_400_000,
-    now: Date.now,
+    endsAt: null,
+    now: () => Date.UTC(2026, 9, 2, 12),
   });
 
   const first = await stream.next();
 
-  // past the 1 ms an overflowed setTimeout would have waited
-  await Bun.sleep(20);
-
-  bus.publish(buildDecision('later'));
-
-  const second = await stream.next();
+  const waiting = stream.next();
 
   controller.abort();
 
-  expect(first.value).toMatchObject({ name: 'snapshot' });
-  expect(second).toMatchObject({ done: false, value: { name: 'later' } });
+  const last = await waiting;
+
+  expect(first).toStrictEqual({ done: false, value: snapshot });
+  expect(last).toStrictEqual({ done: true, value: undefined });
+  expect(subscriptions).toStrictEqual(['subscribed', 'unsubscribed']);
+});
+
+test('it ends at its end time and lets go of the bus', async () => {
+  const bus = createEventBus();
+  const timers = buildStubTimers();
+  const subscriptions: string[] = [];
+
+  const counted = {
+    publish: bus.publish,
+    subscribe: (listener: (event: Readonly<ImpEvent>) => void) => {
+      subscriptions.push('subscribed');
+
+      const unsubscribe = bus.subscribe(listener);
+
+      return () => {
+        subscriptions.push('unsubscribed');
+
+        unsubscribe();
+      };
+    },
+  };
+
+  const stream = openEventStream({
+    bus: counted,
+    readSnapshot: () => Promise.resolve([]),
+    endsAt: Date.UTC(2026, 9, 2, 12) + 50,
+    now: () => Date.UTC(2026, 9, 2, 12),
+    startTimer: timers.startTimer,
+  });
+
+  const waiting = stream.next();
+  const pendingMs = timers.readPendingMs();
+
+  timers.firePending();
+
+  const last = await waiting;
+
+  expect(pendingMs).toStrictEqual([50]);
+  expect(last).toStrictEqual({ done: true, value: undefined });
+  expect(subscriptions).toStrictEqual(['subscribed', 'unsubscribed']);
+  expect(timers.readPendingMs()).toStrictEqual([]);
+});
+
+test('it stays open after the snapshot until a 30-day end, past the longest timer', async () => {
+  const bus = createEventBus();
+
+  const controller = new AbortController();
+
+  const timers = buildStubTimers();
+  const snapshot = buildMockGovernorDecision();
+  const later = buildMockGovernorDecision();
+
+  const stream = openEventStream({
+    bus,
+    readSnapshot: () => Promise.resolve([snapshot]),
+    signal: controller.signal,
+    endsAt: Date.UTC(2026, 9, 2, 12) + 30 * 86_400_000,
+    now: () => Date.UTC(2026, 9, 2, 12),
+    startTimer: timers.startTimer,
+  });
+
+  const first = await stream.next();
+
+  bus.publish(later);
+
+  const second = await stream.next();
+
+  const pendingMs = timers.readPendingMs();
+
+  controller.abort();
+
+  expect(first).toStrictEqual({ done: false, value: snapshot });
+  expect(second).toStrictEqual({ done: false, value: later });
+
+  // setTimeout's longest delay: a longer one would fire at once
+  expect(pendingMs).toStrictEqual([2 ** 31 - 1]);
 });
