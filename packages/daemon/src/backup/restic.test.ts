@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import * as z from 'zod';
@@ -356,6 +356,10 @@ test('#listSnapshots lists snapshots while a prune holds the lock', async () => 
 
   void restic.prune();
 
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start prune']);
   });
@@ -385,6 +389,10 @@ test('#prune prunes while a snapshot list runs', async () => {
 
   void restic.listSnapshots();
 
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start snapshots']);
   });
@@ -412,6 +420,10 @@ test('#prune waits for a backup that holds the lock', async () => {
   });
 
   const backup = restic.backup('/data/backup/tree', []);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
 
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start backup']);
@@ -453,6 +465,10 @@ test('#prune waits for a check that holds the lock', async () => {
 
   const checked = restic.check('1/5');
 
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start check']);
   });
@@ -480,6 +496,36 @@ test('#prune waits for a check that holds the lock', async () => {
     'start prune',
     'end prune',
   ]);
+});
+
+test('#prune rejects as locked when its wait for the lock runs out', async () => {
+  const runner = buildStubResticLockRunner();
+
+  const restic = createRestic({
+    config: buildMockBackupConfig(),
+    cacheDir: '/data/backup/cache',
+    run: runner.run,
+  });
+
+  void restic.backup('/data/backup/tree', []);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
+  await waitFor(() => {
+    expect(runner.events).toStrictEqual(['start backup']);
+  });
+
+  const pruned = restic.prune();
+
+  await waitFor(() => {
+    expect(runner.events).toStrictEqual(['start backup', 'wait prune']);
+  });
+
+  runner.stopWaits();
+
+  expect(pruned).rejects.toSatisfy(isResticLocked);
 });
 
 test('#parseSnapshots lists snapshots oldest first and reads no tags as none', () => {

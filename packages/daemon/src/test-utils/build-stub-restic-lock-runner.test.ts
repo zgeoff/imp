@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { parseBackupSummary, parseSnapshots } from '../backup/restic';
 import { buildStubResticLockRunner } from './build-stub-restic-lock-runner';
@@ -7,6 +7,10 @@ test('it refuses a command without --retry-lock that meets an exclusive lock', a
   const runner = buildStubResticLockRunner();
 
   void runner.run(['restic', 'prune', '--quiet']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
 
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start prune']);
@@ -25,6 +29,10 @@ test('it starts a waiting --retry-lock command once the lock holder ends', async
   const runner = buildStubResticLockRunner();
   const backup = runner.run(['restic', '--retry-lock', '2m', 'backup', '--json', '/tree']);
   const prune = runner.run(['restic', '--retry-lock', '2m', 'prune', '--quiet']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
 
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start backup', 'wait prune']);
@@ -54,11 +62,58 @@ test('it starts a waiting --retry-lock command once the lock holder ends', async
   ]);
 });
 
+test('it exits 11 from a --retry-lock wait that runs out while the lock is held', async () => {
+  const runner = buildStubResticLockRunner();
+
+  void runner.run(['restic', '--retry-lock', '2m', 'backup', '--json', '/tree']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
+  const prune = runner.run(['restic', '--retry-lock', '2m', 'prune', '--quiet']);
+
+  await waitFor(() => {
+    expect(runner.events).toStrictEqual(['start backup', 'wait prune']);
+  });
+
+  runner.stopWaits();
+
+  const result = await prune;
+
+  expect(result).toStrictEqual({
+    exitCode: 11,
+    stdout: '',
+    stderr: 'unable to create lock in backend\n',
+  });
+
+  expect(runner.events).toStrictEqual(['start backup', 'wait prune', 'give up prune']);
+});
+
+test('it runs unlock while another command holds the lock alone', async () => {
+  const runner = buildStubResticLockRunner();
+
+  void runner.run(['restic', '--retry-lock', '2m', 'prune', '--quiet']);
+  void runner.run(['restic', '--retry-lock', '2m', 'unlock', '--quiet']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
+  await waitFor(() => {
+    expect(runner.events).toStrictEqual(['start prune', 'start unlock']);
+  });
+});
+
 test('it runs shared commands together', async () => {
   const runner = buildStubResticLockRunner();
 
   void runner.run(['restic', 'backup', '--json', '/tree']);
   void runner.run(['restic', 'restore', '--quiet', 'a1:/tree']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
 
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start backup', 'start restore']);
@@ -71,6 +126,10 @@ test('it runs a --no-lock command while another holds the lock alone', async () 
   void runner.run(['restic', 'prune', '--quiet']);
   void runner.run(['restic', 'snapshots', '--no-lock', '--json']);
 
+  onTestFinished(() => {
+    runner.stopAll();
+  });
+
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start prune', 'start snapshots']);
   });
@@ -80,6 +139,10 @@ test('it answers snapshots and backup with output restic’s parsers read', asyn
   const runner = buildStubResticLockRunner();
   const snapshots = runner.run(['restic', 'snapshots', '--no-lock', '--json']);
   const backup = runner.run(['restic', 'backup', '--json', '/tree']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
 
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start snapshots', 'start backup']);
@@ -95,6 +158,22 @@ test('it answers snapshots and backup with output restic’s parsers read', asyn
   expect(parseBackupSummary(backedUp.stdout).snapshotId).toBe('a1');
 });
 
+test('it settles every running and waiting command on stopAll', async () => {
+  const runner = buildStubResticLockRunner();
+  const backup = runner.run(['restic', '--retry-lock', '2m', 'backup', '--json', '/tree']);
+  const prune = runner.run(['restic', '--retry-lock', '2m', 'prune', '--quiet']);
+
+  await waitFor(() => {
+    expect(runner.events).toStrictEqual(['start backup', 'wait prune']);
+  });
+
+  runner.stopAll();
+
+  const results = await Promise.all([backup, prune]);
+
+  expect(results.map((result) => result.exitCode)).toStrictEqual([0, 11]);
+});
+
 test('it refuses to stop a command that does not run', () => {
   const runner = buildStubResticLockRunner();
 
@@ -107,6 +186,10 @@ test('it refuses a second run of a command that still runs', async () => {
   const runner = buildStubResticLockRunner();
 
   void runner.run(['restic', 'backup', '--json', '/tree']);
+
+  onTestFinished(() => {
+    runner.stopAll();
+  });
 
   await waitFor(() => {
     expect(runner.events).toStrictEqual(['start backup']);

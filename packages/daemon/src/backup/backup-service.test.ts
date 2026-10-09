@@ -693,21 +693,36 @@ test('it leaves no imp behind when a restore fails part way', async () => {
 
   writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
-  await ctx.imps.createImp({ name: 'dev' });
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
 
   const run = await backups.runBackup();
 
   const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
   const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
 
-  // a pack restic could not read: the newest disk is missing
+  // a pack restic could not read: the newest disk is missing, after the
+  // checkpoint restored
   rmSync(join(ctx.repoDir, run.snapshotId, manifest.imps[0]?.disk ?? ''));
 
   expect(backups.restoreBackup({ name: 'dev', as: 'copy' })).rejects.toThrow('ENOENT');
 
   const copy = await findImpByName(ctx.db, 'copy');
+  const checkpoints = await ctx.db.selectFrom('checkpoints').select('id').execute();
 
+  expect(ctx.restic.restores).toContain(`imps/${dev.id}/checkpoints/cp-one`);
   expect(copy).toBeUndefined();
+  expect(checkpoints).toStrictEqual([{ id: 'cp-one' }]);
+  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toStrictEqual([]);
 });
 
 test('it rejects a restore of a backup that holds no copy of the imp’s image', async () => {
@@ -847,6 +862,12 @@ test('it logs a failed weekly check loudly and reports it in the status', async 
   );
 
   expect(status.lastCheck?.error).toContain('ciphertext verification failed');
+
+  // both runs stay restore points, oldest first
+  expect(status.points).toStrictEqual([
+    { id: expect.toBeString(), time: new Date('2026-10-02T00:00:00Z'), imps: ['dev'] },
+    { id: expect.toBeString(), time: new Date('2026-10-09T00:00:00Z'), imps: ['dev'] },
+  ]);
 });
 
 test('it tries a prune that met a lock again on the next tick, not the next run', async () => {
@@ -1390,13 +1411,35 @@ test('it holds the storage gate for a restored image and disk room for each rest
 
   const dev = await ctx.imps.createImp({ name: 'dev' });
 
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'one');
+
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
+
   writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'now');
 
   const run = await backups.runBackup();
 
   const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
   const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
-  const usedBytes = manifest.imps[0]?.usedBytes ?? -1;
+  const [recorded] = manifest.imps;
+
+  invariant(recorded);
+
+  const [checkpoint] = recorded.checkpoints;
+
+  invariant(checkpoint);
+
+  const usedBytes = recorded.usedBytes ?? -1;
+  const checkpointUsedBytes = checkpoint.usedBytes ?? -1;
 
   const fresh = await createImpTest(ctx.stack);
 
@@ -1432,8 +1475,9 @@ test('it holds the storage gate for a restored image and disk room for each rest
 
   await freshBackups.restoreBackup({ name: 'dev' });
 
-  // what the disk file held in the tree, not its 32 GiB apparent size
+  // what each disk file held in the tree, not its 32 GiB apparent size
   expect(usedBytes).toBeWithin(1, 1024 ** 2);
+  expect(checkpointUsedBytes).toBeWithin(1, 1024 ** 2);
 
   expect(seen).toStrictEqual([
     {
@@ -1442,8 +1486,9 @@ test('it holds the storage gate for a restored image and disk room for each rest
       pendingBytes: expect.toSatisfy((bytes: number) => bytes > 0),
     },
 
-    // twice the file's blocks: restic's sparse copy, then the disk
-    { dir: dirname(manifest.imps[0]?.disk ?? ''), isJoined: true, pendingBytes: 2 * usedBytes },
+    // twice each file's blocks: restic's sparse copy, then the disk
+    { dir: dirname(checkpoint.disk), isJoined: true, pendingBytes: 2 * checkpointUsedBytes },
+    { dir: dirname(recorded.disk), isJoined: true, pendingBytes: 2 * usedBytes },
   ]);
 });
 
@@ -1548,7 +1593,18 @@ test('it leaves the host’s imps, secrets and grants as they were when a restor
 
   writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
-  await ctx.imps.createImp({ name: 'dev' });
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
+
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
   await ctx.broker.addGrant('dev', 'gh');
 
@@ -1556,6 +1612,8 @@ test('it leaves the host’s imps, secrets and grants as they were when a restor
 
   const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
   const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+
+  const checkpointsBefore = await ctx.db.selectFrom('checkpoints').selectAll().execute();
 
   const impsBefore = await ctx.db
     .selectFrom('imps')
@@ -1578,8 +1636,11 @@ test('it leaves the host’s imps, secrets and grants as they were when a restor
 
   const secretsAfter = await ctx.db.selectFrom('secrets').selectAll().execute();
   const grantsAfter = await ctx.db.selectFrom('grants').selectAll().execute();
+  const checkpointsAfter = await ctx.db.selectFrom('checkpoints').selectAll().execute();
 
+  expect(ctx.restic.restores).toContain(`imps/${dev.id}/checkpoints/cp-one`);
   expect(impsAfter).toStrictEqual(impsBefore);
   expect(secretsAfter).toStrictEqual(secretsBefore);
   expect(grantsAfter).toStrictEqual(grantsBefore);
+  expect(checkpointsAfter).toStrictEqual(checkpointsBefore);
 });
