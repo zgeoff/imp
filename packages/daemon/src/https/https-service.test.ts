@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProxyListenOptions } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
+import { buildMockCertificate } from '../test-utils/build-mock-certificate';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import type { Certificate } from './acme/cert-store';
 import { createCertStore } from './acme/cert-store';
@@ -13,7 +14,6 @@ import type { DnsProvider } from './dns/dns-provider';
 import { createDnsToken } from './dns/dns-token';
 import type { HttpsConfig } from './https-config';
 import { createHttpsService } from './https-service';
-import { createTestCertificate } from './test-certificates';
 
 const DOMAIN = 'imp.test';
 const NAMES = [DOMAIN, `*.${DOMAIN}`];
@@ -209,7 +209,7 @@ async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
 }
 
 test('start returns at once and serves the certificate when it arrives', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   const gate = Promise.withResolvers<undefined>();
 
@@ -243,7 +243,7 @@ test('start returns at once and serves the certificate when it arrives', async (
 });
 
 test('an expired certificate on disk serves at start while renewal fails', async () => {
-  const expired = await createTestCertificate({
+  const expired = await buildMockCertificate({
     names: NAMES,
     notBefore: new Date(Date.now() - 100 * 86_400_000),
     notAfter: new Date(Date.now() - 86_400_000),
@@ -435,7 +435,7 @@ test('a records failure that repeats is logged once, until it changes', async ()
 });
 
 test('the domain points at the tailnet IP, and the listeners bind it', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   await using ctx = setup({ issue: () => Promise.resolve(fresh), tailnetIp: TAILNET_IP });
 
@@ -455,7 +455,7 @@ test('the domain points at the tailnet IP, and the listeners bind it', async () 
 });
 
 test('a public imp gets a record at the public IP, and loses it once it is not public', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   const publicIp = '203.0.113.7';
 
@@ -502,7 +502,7 @@ test('a public imp gets a record at the public IP, and loses it once it is not p
 });
 
 test('with public mode off, the public records impd left go', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   await using ctx = setup({ issue: () => Promise.resolve(fresh), publicImps: ['web'] });
 
@@ -514,7 +514,7 @@ test('with public mode off, the public records impd left go', async () => {
 });
 
 test('a DNS failure on the public records is logged, and the next pass tries again', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   const recording = createRecordingDns();
   let isDown = true;
@@ -545,7 +545,7 @@ test('a DNS failure on the public records is logged, and the next pass tries aga
 });
 
 test('a tailscale serve on the HTTPS port is a warning', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   await using ctx = setup({
     issue: () => Promise.resolve(fresh),
@@ -559,7 +559,7 @@ test('a tailscale serve on the HTTPS port is a warning', async () => {
 });
 
 test('a failed tailscale status keeps the tailnet listener and its connections', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   const answers: (string | null)[] = [TAILNET_IP, null, null, TAILNET_IP];
   const events: string[] = [];

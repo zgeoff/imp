@@ -6,12 +6,12 @@ import { createImpTest } from '../imps/test-imps';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
+import { buildMockCertificate } from '../test-utils/build-mock-certificate';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { createHttpsListeners } from './https-listeners';
 import type { ListenerScope } from './https-listeners';
 import { buildCredentialHash, createPublicScope } from './public-auth';
 import { createPublicLimits } from './public-limits';
-import { createTestCertificate } from './test-certificates';
 
 const DOMAIN = 'imp.test';
 const NAMES = [DOMAIN, `*.${DOMAIN}`];
@@ -202,7 +202,7 @@ test('nothing listens before the first certificate', async () => {
 
 test('the bare domain reaches the API over https, and only one label names an imp', async () => {
   const ctx = await setup();
-  const certificate = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
   ctx.listeners.setCertificate(certificate);
@@ -242,7 +242,7 @@ test('the bare domain reaches the API over https, and only one label names an im
 
 test('the API on the bare domain gets the dashboard session, and an imp never does', async () => {
   const ctx = await setup();
-  const certificate = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
   ctx.listeners.setCertificate(certificate);
@@ -270,7 +270,7 @@ test('the API on the bare domain gets the dashboard session, and an imp never do
 
 test('plain http on the domain redirects to https, and wakes nothing', async () => {
   const ctx = await setup();
-  const certificate = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
   ctx.listeners.setCertificate(certificate);
@@ -296,8 +296,8 @@ test('plain http on the domain redirects to https, and wakes nothing', async () 
 
 test('a new certificate serves new connections while an open WebSocket stays up', async () => {
   const ctx = await setup();
-  const first = await createTestCertificate({ names: ['first.test', ...NAMES] });
-  const second = await createTestCertificate({ names: ['second.test', ...NAMES] });
+  const first = await buildMockCertificate({ names: ['first.test', ...NAMES] });
+  const second = await buildMockCertificate({ names: ['second.test', ...NAMES] });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
   ctx.listeners.setCertificate(first);
@@ -344,7 +344,7 @@ test('a new certificate serves new connections while an open WebSocket stays up'
 
 test('an address that goes away stops being served', async () => {
   const ctx = await setup();
-  const certificate = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: NAMES });
 
   ctx.listeners.setAddresses(['127.0.0.1']);
   ctx.listeners.setCertificate(certificate);
@@ -364,7 +364,7 @@ test('an address that goes away stops being served', async () => {
 
 test('an address it cannot bind is logged once and tried again', async () => {
   const ctx = await setup();
-  const certificate = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: NAMES });
 
   // TEST-NET-1: no interface has it
   ctx.listeners.setCertificate(certificate);
@@ -383,7 +383,7 @@ async function setupPublic() {
 
   ctx.listeners.setAddresses(['127.0.0.1']);
 
-  const certificate = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: NAMES });
 
   ctx.listeners.setCertificate(certificate);
 

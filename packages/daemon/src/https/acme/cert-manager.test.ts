@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildMockCertificate } from '../../test-utils/build-mock-certificate';
 import { createDnsToken } from '../dns/dns-token';
-import { createTestCertificate } from '../test-certificates';
 import { createCertManager } from './cert-manager';
 import type { Certificate } from './cert-store';
 import { createCertStore } from './cert-store';
@@ -43,7 +43,7 @@ function setup(issue: (domain: string) => Promise<Certificate>) {
 }
 
 test('with no certificate it issues one and stores it', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   using ctx = setup(() => Promise.resolve(fresh));
 
@@ -108,7 +108,7 @@ test('a failure backs off across restarts', async () => {
 test('an attempt counts as failed while it runs, so a crash still backs off', async () => {
   const seen: number[] = [];
 
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   using ctx = setup(() => {
     seen.push(ctx.store.readAttempts().failures);
@@ -122,7 +122,7 @@ test('an attempt counts as failed while it runs, so a crash still backs off', as
 });
 
 test('two renewals at once ask the CA once', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   let calls = 0;
 
@@ -142,7 +142,7 @@ test('two renewals at once ask the CA once', async () => {
 });
 
 test('an expired certificate on disk still loads, with a warning', async () => {
-  const expired = await createTestCertificate({
+  const expired = await buildMockCertificate({
     names: NAMES,
     notBefore: new Date(Date.now() - 100 * 86_400_000),
     notAfter: new Date(Date.now() - 10 * 86_400_000),
@@ -163,8 +163,8 @@ test('an expired certificate on disk still loads, with a warning', async () => {
 });
 
 test('a certificate for another domain is replaced', async () => {
-  const other = await createTestCertificate({ names: ['other.test', '*.other.test'] });
-  const fresh = await createTestCertificate({ names: NAMES });
+  const other = await buildMockCertificate({ names: ['other.test', '*.other.test'] });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   using ctx = setup(() => Promise.resolve(fresh));
 
@@ -177,7 +177,7 @@ test('a certificate for another domain is replaced', async () => {
 });
 
 test('a token file that holds no token backs off, and its token works at the next try', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const fresh = await buildMockCertificate({ names: NAMES });
 
   const tokenDir = mkdtempSync(join(tmpdir(), 'imp-token-'));
   const tokenPath = join(tokenDir, 'token');

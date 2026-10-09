@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createTestCertificate } from '../test-certificates';
+import { buildMockCertificate } from '../../test-utils/build-mock-certificate';
 import { createCertStore } from './cert-store';
 
 function useTempDir() {
@@ -21,7 +21,7 @@ test('a certificate and its key come back as they went in, readable by root only
 
   const store = createCertStore(temp.dir);
 
-  const certificate = await createTestCertificate({ names: ['imp.test', '*.imp.test'] });
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
   expect(store.readCertificate()).toBeNull();
 
@@ -41,8 +41,8 @@ test('a chain keeps every certificate in order', async () => {
 
   const store = createCertStore(temp.dir);
 
-  const leaf = await createTestCertificate({ names: ['imp.test'] });
-  const issuer = await createTestCertificate({ names: ['ca.test'] });
+  const leaf = await buildMockCertificate({ names: ['imp.test'] });
+  const issuer = await buildMockCertificate({ names: ['ca.test'] });
 
   const chainPem = `${leaf.chainPem}\n${issuer.chainPem}`;
 
