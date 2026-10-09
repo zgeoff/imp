@@ -1,45 +1,14 @@
 import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-stream';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
+import { buildNotFoundError } from '../api-errors';
 import type { AuditActor } from '../auth/caller';
 import type { ImpRecord } from '../db/imps';
 import { createActivityTracker } from '../imps/activity-tracker';
 import type { ImpRuntime } from '../imps/imp-runtime';
-import type { SshBackend } from './ssh-connection-context';
+import type { SshBackend } from '../ssh/ssh-connection-context';
 
-export const FAKE_IMP: ImpRecord = {
-  id: 'imp-box',
-  name: 'box',
-  imageId: 'image',
-  state: 'running',
-  kind: 'user',
-  vcpus: 2,
-  memoryMib: 512,
-  maxMemoryMib: 512,
-  slot: 1,
-  ip: '10.66.0.6',
-  createdAt: new Date(0),
-  lastActiveAt: new Date(0),
-  sleptAt: null,
-  holdUntil: null,
-  error: null,
-  pid: 100,
-  firecrackerVersion: 'v1.17.0',
-  httpPort: 8080,
-  diskBytes: 34_359_738_368,
-  isDiskGrowPending: false,
-  cpu: { limit: null, weight: 100 },
-  wakeCount: 0,
-  awakeMs: 0,
-  awakeSince: null,
-  isIdentityResetPending: false,
-  isTrustPending: false,
-  publicAuth: null,
-  moveState: null,
-  jailUid: 900_000,
-};
-
-// events a fake stream yields, in order; null ends the stream
+// events a stub stream yields, in order; null ends the stream
 interface EventQueue<T> {
   readonly emit: (event: T | null) => void;
   readonly next: () => Promise<T | null>;
@@ -79,7 +48,7 @@ async function* readEvents<T>(next: () => Promise<T | null>): AsyncGenerator<T, 
 }
 
 // a program the gateway started; the test feeds its output
-interface FakeExec {
+interface StubExec {
   readonly request: AgentExecRequest;
   readonly feature: string | undefined;
   readonly stdin: readonly string[];
@@ -88,16 +57,16 @@ interface FakeExec {
   readonly emit: (event: ExecEvent | null) => void;
 }
 
-// a dial the gateway opened; it answers the whole request once the client
-// half-closes, as an HTTP server would
-interface FakeDial {
+// a dial the gateway opened; it answers `got <input>` once the client
+// half-closes, as an HTTP server answers a whole request
+interface StubDial {
   readonly target: DialTarget;
   readonly input: readonly string[];
 }
 
 // a guest socket the gateway opened (ssh-agent or a remote forward); the
-// test connects clients
-interface FakeListener {
+// test connects guest clients to it
+interface StubListener {
   readonly id: string;
   readonly spec: ListenSpec;
   readonly connect: (id: number) => void;
@@ -108,7 +77,7 @@ interface FakeListener {
 }
 
 // the relay for one guest client; the test sends what the client asks
-interface FakeAccept {
+interface StubAccept {
   readonly listener: string;
   readonly id: number;
   readonly input: readonly string[];
@@ -116,9 +85,9 @@ interface FakeAccept {
   readonly state: { closed: boolean };
 }
 
-// where a fake listener's socket is: an ssh-agent's, the path asked for, or
-// none for a port
-function readFakePath(spec: ListenSpec, id: string): string | null {
+// where a stub listener's socket is, as the agent picks it: an ssh-agent's,
+// the path asked for, or none for a port
+function readStubPath(spec: ListenSpec, id: string): string | null {
   if (spec.network === 'ssh-agent') {
     return `/run/imp/ssh-agent/${id}/agent.sock`;
   }
@@ -129,35 +98,36 @@ function readFakePath(spec: ListenSpec, id: string): string | null {
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
-// impd's side of the gateway in memory: one imp, wakes that a test can
-// fail, and agent streams it scripts through `onExec`
-export function createFakeSshBackend() {
-  const execs: FakeExec[] = [];
-  const dials: FakeDial[] = [];
-  const listeners: FakeListener[] = [];
-  const accepts: FakeAccept[] = [];
+// impd's side of the SSH gateway in memory: the imps a test puts, failures
+// it sets, and agent streams it scripts. Listener ids count from `stub1`; a
+// TCP listener on port 0 gets 40000 plus its count, as the agent picks one.
+export function buildStubSshBackend() {
+  const imps = new Map<string, ImpRecord>();
+
+  const execs: StubExec[] = [];
+  const dials: StubDial[] = [];
+  const listeners: StubListener[] = [];
+  const accepts: StubAccept[] = [];
   const tracker = createActivityTracker();
 
   // who each exec ran as, for the audit
   const actors: AuditActor[] = [];
 
-  const fake: {
+  const stub: {
     wakes: number;
 
     // imp lookups by name, as a login makes them
     lookups: number;
+    findError: Error | null;
     wakeError: Error | null;
     execError: Error | null;
     dialError: Error | null;
     listenError: Error | null;
-
-    // the VM's pid; a test changes it to stand for a wake
-    pid: number;
-    onExec: ((exec: FakeExec) => void) | null;
+    onExec: ((exec: StubExec) => void) | null;
   } = {
-    pid: FAKE_IMP.pid ?? 0,
     wakes: 0,
     lookups: 0,
+    findError: null,
     wakeError: null,
     execError: null,
     dialError: null,
@@ -165,20 +135,29 @@ export function createFakeSshBackend() {
     onExec: null,
   };
 
-  // the runtime's shape, so the fake also stands in for impd's imps
-  const openExec: ImpRuntime['openExec'] = (_name, request, feature) => {
-    if (fake.execError !== null) {
-      return Promise.reject(fake.execError);
+  // the gateway's shape, and the runtime's (no actor) for startSsh's imps
+  const openExec = (
+    _name: string,
+    request: AgentExecRequest,
+    feature: string | undefined,
+    actor?: AuditActor,
+  ): Promise<ExecStream> => {
+    if (actor !== undefined) {
+      actors.push(actor);
+    }
+
+    if (stub.execError !== null) {
+      return Promise.reject(stub.execError);
     }
 
     const queue = createEventQueue<ExecEvent>();
     const stdin: string[] = [];
     const resizes: string[] = [];
     const signals: number[] = [];
-    const exec: FakeExec = { request, feature, stdin, resizes, signals, emit: queue.emit };
+    const exec: StubExec = { request, feature, stdin, resizes, signals, emit: queue.emit };
 
     execs.push(exec);
-    fake.onExec?.(exec);
+    stub.onExec?.(exec);
 
     const stream: ExecStream = {
       pid: 42,
@@ -209,15 +188,14 @@ export function createFakeSshBackend() {
   };
 
   const openDial: SshBackend['openDial'] = (_name, target) => {
-    if (fake.dialError !== null) {
-      return Promise.reject(fake.dialError);
+    if (stub.dialError !== null) {
+      return Promise.reject(stub.dialError);
     }
 
     const queue = createEventQueue<DialEvent>();
     const input: string[] = [];
-    const dial: FakeDial = { target, input };
 
-    dials.push(dial);
+    dials.push({ target, input });
 
     const stream: DialStream = {
       write: (data) => {
@@ -239,12 +217,12 @@ export function createFakeSshBackend() {
   };
 
   const openListener: SshBackend['openListener'] = (_name, spec) => {
-    if (fake.listenError !== null) {
-      return Promise.reject(fake.listenError);
+    if (stub.listenError !== null) {
+      return Promise.reject(stub.listenError);
     }
 
     const queue = createEventQueue<number>();
-    const id = `fake${String(listeners.length + 1)}`;
+    const id = `stub${String(listeners.length + 1)}`;
     const state = { closed: false };
 
     listeners.push({
@@ -258,7 +236,7 @@ export function createFakeSshBackend() {
     });
 
     const listener: GuestListener = {
-      path: readFakePath(spec, id),
+      path: readStubPath(spec, id),
       port: spec.network === 'tcp' ? spec.port || 40_000 + listeners.length : null,
       id,
       connections: () => readEvents(queue.next),
@@ -308,34 +286,53 @@ export function createFakeSshBackend() {
 
   const backend: SshBackend & Pick<ImpRuntime, 'openExec'> = {
     findImp: (name) => {
-      fake.lookups += 1;
+      stub.lookups += 1;
 
-      const found = name === FAKE_IMP.name ? FAKE_IMP : undefined;
-
-      return Promise.resolve(found);
-    },
-    requireRunning: () => {
-      fake.wakes += 1;
-
-      if (fake.wakeError !== null) {
-        return Promise.reject(fake.wakeError);
+      if (stub.findError !== null) {
+        return Promise.reject(stub.findError);
       }
 
-      return Promise.resolve({ imp: { ...FAKE_IMP, pid: fake.pid }, wokeMs: null });
+      return Promise.resolve(imps.get(name));
+    },
+
+    // an imp it holds is running already; a put with a new pid stands for a
+    // wake into a new VM
+    requireRunning: (name) => {
+      stub.wakes += 1;
+
+      if (stub.wakeError !== null) {
+        return Promise.reject(stub.wakeError);
+      }
+
+      const imp = imps.get(name);
+
+      if (imp === undefined) {
+        return Promise.reject(buildNotFoundError('imp', name));
+      }
+
+      return Promise.resolve({ imp, wokeMs: null });
     },
     tracker,
     recordActivity: () => Promise.resolve(),
-    openExec: (name, request, feature, actor?: AuditActor) => {
-      if (actor !== undefined) {
-        actors.push(actor);
-      }
-
-      return openExec(name, request, feature);
-    },
+    openExec,
     openDial,
     openListener,
     openAccept,
   };
 
-  return { backend, fake, actors, execs, dials, listeners, accepts, tracker };
+  return {
+    backend,
+    stub,
+    actors,
+    execs,
+    dials,
+    listeners,
+    accepts,
+    tracker,
+
+    // adds the imp, or replaces the one of its name
+    putImp: (imp: ImpRecord): void => {
+      imps.set(imp.name, imp);
+    },
+  };
 }
