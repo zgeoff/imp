@@ -91,7 +91,7 @@ interface OrphanDir {
   readonly dir: string;
 }
 
-interface ZfsBackendDeps {
+export interface ZfsBackendDeps {
   readonly dataDir: string;
 
   // the dataset mounted on dataDir, such as tank/imp

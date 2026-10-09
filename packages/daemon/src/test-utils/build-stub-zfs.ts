@@ -67,7 +67,13 @@ export function buildStubZfs(options: FakeZfsOptions) {
   const readOnlyDirs = new Set<string>();
 
   const commands: string[] = [];
-  const gates: { match: (command: string) => boolean; opened: Promise<void> }[] = [];
+
+  const gates: {
+    match: (command: string) => boolean;
+    opened: Promise<void>;
+    reach: () => void;
+  }[] = [];
+
   const failures: ((command: string) => boolean)[] = [];
   const state = { txg: 1, crashAt: null as ((command: string) => boolean) | null, crashed: false };
 
@@ -279,7 +285,48 @@ export function buildStubZfs(options: FakeZfsOptions) {
     return buildSuccess();
   };
 
+  // zfs destroy -R: the dataset, its children and their snapshots, and every
+  // clone of those snapshots wherever it is; a mounted one stops it
+  const runDestroyAll = (root: string): CommandResult => {
+    if (!datasets.has(root)) {
+      return buildFailure(`cannot open '${root}': dataset does not exist`);
+    }
+
+    const doomed = new Set<string>();
+
+    const pending = [root];
+
+    for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+      doomed.add(next);
+
+      pending.push(
+        ...[...datasets.keys()].filter((name) => name.startsWith(`${next}/`)),
+        ...findSnapshotsOf(next).flatMap((snapshot) => findClonesOf(snapshot)),
+      );
+    }
+
+    const busy = [...doomed].find((name) => isMounted(name));
+
+    if (busy !== undefined) {
+      return buildFailure(`cannot destroy '${busy}': dataset is busy`);
+    }
+
+    for (const name of doomed) {
+      for (const snapshot of findSnapshotsOf(name)) {
+        snapshots.delete(snapshot);
+      }
+
+      datasets.delete(name);
+    }
+
+    return buildSuccess();
+  };
+
   const listTree = (root: string): CommandResult => {
+    if (!datasets.has(root)) {
+      return buildFailure(`cannot open '${root}': dataset does not exist`);
+    }
+
     const isInTree = (name: string) => name === root || name.startsWith(`${root}/`);
 
     const rows = [
@@ -352,6 +399,25 @@ export function buildStubZfs(options: FakeZfsOptions) {
       return buildSuccess();
     }
 
+    // umount -R <dir>: the dir and every mount beneath it, deepest first; as
+    // util-linux, the dir itself must be a mount
+    if (tool === 'umount' && verb === '-R') {
+      if (!mounts.has(last)) {
+        return buildFailure(`umount: ${last}: not mounted.`);
+      }
+
+      const under = [...mounts.keys()]
+        .filter((dir) => dir === last || dir.startsWith(`${last}/`))
+        .toSorted((a, b) => b.length - a.length);
+
+      for (const dir of under) {
+        mounts.delete(dir);
+        readOnlyDirs.delete(dir);
+      }
+
+      return buildSuccess();
+    }
+
     if (tool === 'umount') {
       readOnlyDirs.delete(verb);
 
@@ -415,6 +481,10 @@ export function buildStubZfs(options: FakeZfsOptions) {
 
     if (verb === 'promote') {
       return runPromote(last);
+    }
+
+    if (verb === 'destroy' && rest[0] === '-R') {
+      return runDestroyAll(last);
     }
 
     if (verb === 'destroy' && rest[0] === '-r') {
@@ -545,6 +615,8 @@ export function buildStubZfs(options: FakeZfsOptions) {
       }
 
       for (const gate of gates.filter((candidate) => candidate.match(command))) {
+        gate.reach();
+
         await gate.opened;
       }
 
@@ -561,14 +633,19 @@ export function buildStubZfs(options: FakeZfsOptions) {
       return handleCommand(argv);
     },
 
-    // matching commands wait until the returned function runs
+    // matching commands wait until release runs; reached resolves once the
+    // first one waits
     blockBefore: (match: (command: string) => boolean) => {
       const gate = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
 
-      gates.push({ match, opened: gate.promise });
+      gates.push({ match, opened: gate.promise, reach: reached.resolve });
 
-      return () => {
-        gate.resolve();
+      return {
+        reached: reached.promise,
+        release: () => {
+          gate.resolve();
+        },
       };
     },
 
@@ -609,6 +686,12 @@ export function buildStubZfs(options: FakeZfsOptions) {
     listSnapshots: () => [...snapshots.keys()].toSorted(),
     readOrigin: (name: string) => datasets.get(name)?.origin ?? null,
     readTxg: (name: string) => (datasets.get(name) ?? snapshots.get(name))?.txg ?? 0,
+
+    // the `creation` the space rows give `name`: an hour after STUB_EPOCH_S per txg
+    readCreatedAt: (name: string) =>
+      new Date(
+        (STUB_EPOCH_S + ((datasets.get(name) ?? snapshots.get(name))?.txg ?? 0) * 3600) * 1000,
+      ),
     readProperty: (name: string, key: string) => datasets.get(name)?.properties?.[key] ?? null,
     isDeferred: (name: string) => snapshots.get(name)?.deferDestroy ?? false,
     readMountedAt: (dir: string) => mounts.get(dir) ?? null,

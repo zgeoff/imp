@@ -1,81 +1,101 @@
 import { expect, test } from 'bun:test';
-import type { ZfsEntry } from './zfs-commands';
+import { buildMockZfsEntry } from '../../test-utils/build-mock-zfs-entry';
 import { planReclaimStep } from './zfs-reclaim';
 
-const ROOTS = { retired: 'tank/imp/retired', staging: 'tank/imp/staging' };
-const RETIRED = ROOTS.retired;
-
-function buildFilesystem(name: string, origin: string | null = null): ZfsEntry {
-  return { name, type: 'filesystem', origin, deferDestroy: false };
-}
-
-function buildSnapshot(name: string, deferDestroy = false): ZfsEntry {
-  return { name, type: 'snapshot', origin: null, deferDestroy };
-}
-
 test('it destroys a retired dataset that holds no snapshots', () => {
-  const entries = [buildFilesystem('tank/imp/disks/a'), buildFilesystem(`${RETIRED}/r`)];
+  const entries = [
+    buildMockZfsEntry({ name: 'tank/imp/disks/a' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r' }),
+  ];
 
-  expect(planReclaimStep(entries, ROOTS)).toEqual({ kind: 'destroy', name: `${RETIRED}/r` });
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toStrictEqual({ kind: 'destroy', name: 'tank/imp/retired/r' });
 });
 
 test('it keeps a retired dataset while one of its checkpoints is live', () => {
   const entries = [
-    buildFilesystem(`${RETIRED}/r`),
-    buildSnapshot(`${RETIRED}/r@cp-old`),
-    buildSnapshot(`${RETIRED}/r@cp-new`, true),
-    buildFilesystem('tank/imp/disks/a', `${RETIRED}/r@cp-new`),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@cp-old', type: 'snapshot' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@cp-new', type: 'snapshot', deferDestroy: true }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/a', origin: 'tank/imp/retired/r@cp-new' }),
   ];
 
-  expect(planReclaimStep(entries, ROOTS)).toBeNull();
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toBeNull();
 });
 
 test('it promotes the clone of the newest snapshot once all are marked', () => {
   const entries = [
-    buildFilesystem(`${RETIRED}/r`),
-    buildSnapshot(`${RETIRED}/r@cp-old`, true),
-    buildFilesystem('tank/imp/disks/b', `${RETIRED}/r@cp-old`),
-    buildSnapshot(`${RETIRED}/r@fork-1`, true),
-    buildFilesystem('tank/imp/disks/c', `${RETIRED}/r@fork-1`),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@cp-old', type: 'snapshot', deferDestroy: true }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/b', origin: 'tank/imp/retired/r@cp-old' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@fork-1', type: 'snapshot', deferDestroy: true }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/c', origin: 'tank/imp/retired/r@fork-1' }),
   ];
 
-  expect(planReclaimStep(entries, ROOTS)).toEqual({
-    kind: 'promote',
-    name: 'tank/imp/disks/c',
-  });
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toStrictEqual({ kind: 'promote', name: 'tank/imp/disks/c' });
 });
 
 test('it destroys a marked snapshot that no clone holds any more', () => {
-  const entries = [buildFilesystem(`${RETIRED}/r`), buildSnapshot(`${RETIRED}/r@cp-old`, true)];
-
-  expect(planReclaimStep(entries, ROOTS)).toEqual({
-    kind: 'destroy',
-    name: `${RETIRED}/r@cp-old`,
-  });
-});
-
-test('it leaves live disks and images alone', () => {
   const entries = [
-    buildFilesystem('tank/imp/images/9f2c'),
-    buildSnapshot('tank/imp/images/9f2c@base', true),
-    buildFilesystem('tank/imp/disks/a'),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@cp-old', type: 'snapshot', deferDestroy: true }),
   ];
 
-  expect(planReclaimStep(entries, ROOTS)).toBeNull();
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toStrictEqual({ kind: 'destroy', name: 'tank/imp/retired/r@cp-old' });
+});
+
+test('it never touches a live disk or image', () => {
+  const entries = [
+    buildMockZfsEntry({ name: 'tank/imp/images/9f2c' }),
+    buildMockZfsEntry({ name: 'tank/imp/images/9f2c@base', type: 'snapshot', deferDestroy: true }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/a' }),
+  ];
+
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toBeNull();
 });
 
 test('it waits for a staging clone of the newest snapshot instead of promoting it', () => {
   const entries = [
-    buildFilesystem(`${RETIRED}/r`),
-    buildSnapshot(`${RETIRED}/r@cp-old`, true),
-    buildFilesystem('tank/imp/disks/b', `${RETIRED}/r@cp-old`),
-    buildSnapshot(`${RETIRED}/r@bk-run-a`, true),
-    buildFilesystem('tank/imp/staging/bk-a', `${RETIRED}/r@bk-run-a`),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@cp-old', type: 'snapshot', deferDestroy: true }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/b', origin: 'tank/imp/retired/r@cp-old' }),
+    buildMockZfsEntry({
+      name: 'tank/imp/retired/r@bk-run-a',
+      type: 'snapshot',
+      deferDestroy: true,
+    }),
+    buildMockZfsEntry({ name: 'tank/imp/staging/bk-a', origin: 'tank/imp/retired/r@bk-run-a' }),
   ];
 
-  expect(planReclaimStep(entries, ROOTS)).toBeNull();
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toBeNull();
+});
 
-  const withFork = [...entries, buildFilesystem('tank/imp/disks/c', `${RETIRED}/r@bk-run-a`)];
+test('it promotes a fork of the newest snapshot beside a staging clone of it', () => {
+  const entries = [
+    buildMockZfsEntry({ name: 'tank/imp/retired/r' }),
+    buildMockZfsEntry({ name: 'tank/imp/retired/r@cp-old', type: 'snapshot', deferDestroy: true }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/b', origin: 'tank/imp/retired/r@cp-old' }),
+    buildMockZfsEntry({
+      name: 'tank/imp/retired/r@bk-run-a',
+      type: 'snapshot',
+      deferDestroy: true,
+    }),
+    buildMockZfsEntry({ name: 'tank/imp/staging/bk-a', origin: 'tank/imp/retired/r@bk-run-a' }),
+    buildMockZfsEntry({ name: 'tank/imp/disks/c', origin: 'tank/imp/retired/r@bk-run-a' }),
+  ];
 
-  expect(planReclaimStep(withFork, ROOTS)).toEqual({ kind: 'promote', name: 'tank/imp/disks/c' });
+  expect(
+    planReclaimStep(entries, { retired: 'tank/imp/retired', staging: 'tank/imp/staging' }),
+  ).toStrictEqual({ kind: 'promote', name: 'tank/imp/disks/c' });
 });

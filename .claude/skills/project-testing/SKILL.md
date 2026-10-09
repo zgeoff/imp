@@ -101,6 +101,8 @@ Utils that take a caller's stack and register nothing themselves:
   releases it once `body` settles or throws.
 - `startStubEchoServer(stack)` in `test-utils/start-stub-echo-server.ts`: a tunnel's far end on
   loopback.
+- `createZfsTestDataset(stack, options)` in `test-utils/create-zfs-test-dataset.ts`: a real-pool
+  test's own dataset (see ZFS below).
 
 `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
 `packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source)`) runs one test file in a
@@ -259,11 +261,21 @@ this checkout whatever its `-C` says.
 - **The fake.** `packages/daemon/src/test-utils/build-stub-zfs.ts` (`buildStubZfs`) answers impd's
   `zfs` argv (`run`), send and receive streams (`streams`), and `/proc/self/mounts` (`readMounts`)
   in memory. It models datasets, snapshots, clones, promote, deferred destroy, legacy mounts, and
-  txg-based `creation`, with fixed space numbers. It exposes `blockBefore`, `failOnce`,
-  `crashBefore`, and `restart`. `zfs-backend.ts` takes it through those injected deps.
+  txg-based `creation` (`readCreatedAt`), with fixed space numbers, and answers `umount -R` and
+  `zfs destroy -R`. It exposes `blockBefore` (its `reached` resolves once a matching command waits;
+  `release` lets it run), `failOnce`, `crashBefore`, and `restart`. `zfs-backend.ts` takes it
+  through those injected deps, and `createStorageBackend` passes them through its `zfs` boundary. As
+  util-linux does, its `umount -R` refuses a dir that is not itself a mount.
+  `test-utils/build-stub-move-stream.ts` (`buildStubMoveStream`) is a peer's move stream: a source's
+  bytes, then an `onEnd` hook and a close, or a `failAtEnd` error.
 - **The real-pool tests.** `zfs-backend.real.test.ts`, `zfs-move.real.test.ts`, and
-  `zfs-move-flow.real.test.ts` skip unless `IMP_TEST_ZFS_ROOT` (a dataset) and `IMP_TEST_ZFS_DIR`
-  (its mount dir) are both set.
+  `zfs-move-flow.real.test.ts` skip unless `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`)
+  finds `IMP_TEST_ZFS_ROOT` (a dataset) and `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test
+  makes its own dataset with `createZfsTestDataset`: a new `mkdtemp` dir under the mount dir names
+  it, a dataset of that name that `zfs list` already shows is refused untouched, and the caller's
+  stack releases only what was made (`umount -R` of the dir, `zfs destroy -R`, then the empty dir).
+  Its tests run it against `buildStubZfs`. `test-utils/write-synced-file.ts` fsyncs a disk file
+  before a snapshot.
 - **`scripts/test-zfs.sh`** runs as root. It makes a sparse-file pool `imptest<pid>` of
   `IMP_ZFS_TEST_GIB` (default 4) under `IMP_ZFS_TEST_DIR` (default a new temp dir; a given dir may
   exist), mounts `<pool>/imp` with a legacy mount on `<dir>/mnt`, runs
@@ -350,6 +362,8 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Guest agent                  | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                                | The agent on the vsock socket: CONNECT and frames                                  |
 | Builder guest                | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                                | A builder's agent: output and exit per exec                                        |
 | zfs                          | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                                    | `zfs`, send and receive, and the mount table                                       |
+| FIEMAP                       | `test-utils/build-stub-fiemap.ts` (`buildStubFiemap`)                                              | `readFileExtents` of the XFS backend: extents, cuts, failures, removals per path   |
+| Loop device host             | Temp dirs as `procDir` and `sysDir` (`storage/loop-backing-file.ts`)                               | `/proc/self/mountinfo` and a loop device's `backing_file` in `/sys`                |
 | Docker engine                | `test-utils/start-stub-docker-engine.ts` (4)                                                       | The engine API on its unix socket                                                  |
 | Docker CLI                   | `test-utils/build-stub-docker-cli.ts` (`buildStubDockerCli`)                                       | The host's `docker` binary, first on `PATH`                                        |
 | Image builder                | `test-utils/build-stub-image-builder.ts` (`buildStubImageBuilder`)                                 | A builder's engine: pull, pin, build, create and export                            |

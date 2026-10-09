@@ -42,6 +42,17 @@ interface DiskUsageCacheDeps {
   readonly log: (message: string) => void;
   readonly now?: () => Date;
   readonly refreshDelayMs?: number;
+
+  // runs `fire` once `ms` is up and returns the cancel; setTimeout by default
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+}
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
 }
 
 // Usage is slow to measure on XFS (FIEMAP over every file), so `imp ls` and
@@ -49,11 +60,14 @@ interface DiskUsageCacheDeps {
 export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
   const now = deps.now ?? (() => new Date());
   const refreshDelayMs = deps.refreshDelayMs ?? REFRESH_DELAY_MS;
+  const startTimer = deps.startTimer ?? startRealTimer;
 
   const state = {
     usage: new Map<string, CachedDiskUsage>(),
     running: null as Promise<void> | null,
-    timer: null as ReturnType<typeof setTimeout> | null,
+
+    // the pending refresh's cancel
+    cancelRefresh: null as (() => void) | null,
 
     // set at shutdown: the sleeps that follow ask for passes nobody reads
     isStopped: false,
@@ -125,8 +139,8 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
         return;
       }
 
-      state.timer ??= setTimeout(() => {
-        state.timer = null;
+      state.cancelRefresh ??= startTimer(() => {
+        state.cancelRefresh = null;
         void runAfterCurrent();
       }, refreshDelayMs);
     },
@@ -136,10 +150,10 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
     stop: () => {
       state.isStopped = true;
 
-      if (state.timer !== null) {
-        clearTimeout(state.timer);
+      if (state.cancelRefresh !== null) {
+        state.cancelRefresh();
 
-        state.timer = null;
+        state.cancelRefresh = null;
       }
     },
   };

@@ -1,197 +1,190 @@
-import { afterEach, expect, test } from 'bun:test';
-import {
-  closeSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { runChecked, runCommand } from '../../process/run-command';
+import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
+import { readZfsTestPool } from '../../test-utils/read-zfs-test-pool';
+import { writeSyncedFile } from '../../test-utils/write-synced-file';
 import { createZfsBackend } from './zfs-backend';
-import type { ZfsBackend } from './zfs-backend';
 import type { CommandRunner } from './zfs-commands';
 
-// Against a real pool, as root: the `zfs` CI job sets these (.github/workflows/
-// ci.yml), and scripts/zfs-host-test.sh on a host. Skipped everywhere else.
-const POOL_ROOT = process.env['IMP_TEST_ZFS_ROOT'];
-const POOL_DIR = process.env['IMP_TEST_ZFS_DIR'];
-const DIGEST = 'sha256:real';
-const isReal = POOL_ROOT !== undefined && POOL_DIR !== undefined;
-const cleanups: (() => Promise<void>)[] = [];
+// Against a real pool, as root: scripts/test-zfs.sh sets the pool, in the
+// `zfs` CI job and on a host. Each test skips everywhere else.
 
-// zfs commands on a shared CI runner take seconds each: bun's default 5 s
-// kills a slow test's child processes with SIGTERM (exit 143)
-const REAL_TEST_TIMEOUT_MS = 120_000;
+// zfs commands on a shared CI runner take seconds each, so each test gets
+// 120 s: bun's default 5 s kills a slow test's children with SIGTERM.
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// fsync of the one file, not a `sync` of every filesystem on the runner
-function writeSyncedFile(path: string, text: string): void {
-  const fd = openSync(path, 'w');
+  onTestFinished(() => stack.disposeAsync());
 
-  try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
+  const pool = readZfsTestPool();
 
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) {
-    await cleanup();
-  }
-});
+  invariant(pool);
 
-// a fresh root dataset per test, mounted as setup-storage.sh mounts one
-async function setupPool(run: CommandRunner = runCommand) {
-  const name = `t${String(Date.now())}`;
-  const root = `${POOL_ROOT ?? ''}/${name}`;
-  const dataDir = join(POOL_DIR ?? '', name);
+  const dataset = await createZfsTestDataset(stack, pool);
 
-  await runChecked(['zfs', 'create', '-o', 'mountpoint=legacy', root]);
+  // a new impd on the same dataset; its reclaim ends before the dataset goes
+  const startBackend = (
+    run: CommandRunner = runCommand,
+    log: (message: string) => void = () => {},
+  ) => {
+    const backend = createZfsBackend({ dataDir: dataset.dataDir, root: dataset.root, run, log });
 
-  mkdirSync(dataDir, { recursive: true });
-
-  await runChecked(['mount', '-t', 'zfs', root, dataDir]);
-
-  const backends: ZfsBackend[] = [];
-
-  cleanups.push(async () => {
-    await Promise.all(backends.map((backend) => backend.waitForReclaim()));
-
-    await runCommand(['umount', '-R', dataDir]);
-    await runChecked(['zfs', 'destroy', '-R', root]);
-  });
-
-  const live = {
-    impIds: new Set(['a', 'b', 'c']),
-    checkpointIds: new Set(['cp-one', 'cp-two']),
-    imageDigests: new Set([DIGEST]),
-  };
-
-  const startBackend = async (runner: CommandRunner = run) => {
-    const backend = createZfsBackend({ dataDir, root, run: runner, log: () => {} });
-
-    backends.push(backend);
-
-    await backend.start(live);
+    stack.defer(() => backend.waitForReclaim());
 
     return backend;
   };
 
-  const backend = await startBackend();
-
-  await backend.createImage(DIGEST, (dir) => {
-    writeFileSync(join(dir, 'rootfs.ext4'), 'image');
-
-    return Promise.resolve();
-  });
-
-  return { root, dataDir, live, backend, startBackend };
+  // a backup tree the test opens closes into this stack, before the dataset goes
+  return {
+    stack,
+    root: dataset.root,
+    dataDir: dataset.dataDir,
+    backend: startBackend(),
+    startBackend,
+  };
 }
 
-test.skipIf(!isReal)(
-  'checkpoints, restores and forks keep their bytes',
+test.skipIf(readZfsTestPool() === null)(
+  'it keeps the bytes of each checkpoint, restore and fork',
   async () => {
-    const pool = await setupPool();
+    const ctx = await setupTest();
 
-    const backend = pool.backend;
-    const readDisk = (impId: string) => readFileSync(backend.resolveImpPaths(impId).disk, 'utf8');
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b', 'c']),
+      checkpointIds: new Set(['cp-one', 'cp-two']),
+      imageDigests: new Set(['sha256:real']),
+    });
 
-    const writeDisk = (impId: string, text: string) => {
-      writeSyncedFile(backend.resolveImpPaths(impId).disk, text);
-    };
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
 
-    await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+      return Promise.resolve();
+    });
 
-    expect(readDisk('a')).toBe('image');
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
 
-    writeDisk('a', 'one');
+    const cloned = readFileSync(ctx.backend.resolveImpPaths('a').disk, 'utf8');
 
-    await backend.createCheckpoint('a', 'cp-one');
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'one');
 
-    writeDisk('a', 'two');
+    await ctx.backend.createCheckpoint('a', 'cp-one');
 
-    await backend.createCheckpoint('a', 'cp-two');
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'two');
 
-    writeDisk('a', 'three');
+    await ctx.backend.createCheckpoint('a', 'cp-two');
 
-    await backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve());
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'three');
 
-    expect(readDisk('a')).toBe('one');
+    await ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve());
+
+    const restoredOld = readFileSync(ctx.backend.resolveImpPaths('a').disk, 'utf8');
 
     // the newer checkpoint survives the restore
-    await backend.restoreCheckpoint('a', 'cp-two', () => Promise.resolve());
+    await ctx.backend.restoreCheckpoint('a', 'cp-two', () => Promise.resolve());
 
-    expect(readDisk('a')).toBe('two');
+    const restoredNew = readFileSync(ctx.backend.resolveImpPaths('a').disk, 'utf8');
 
-    await backend.createImpDisk('b', { kind: 'imp', impId: 'a' });
-    await backend.createImpDisk('c', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-one' });
+    await ctx.backend.createImpDisk('b', { kind: 'imp', impId: 'a' });
 
-    expect(readDisk('b')).toBe('two');
-    expect(readDisk('c')).toBe('one');
+    await ctx.backend.createImpDisk('c', {
+      kind: 'checkpoint',
+      impId: 'a',
+      checkpointId: 'cp-one',
+    });
 
     // the source goes while both forks need its blocks
-    await backend.removeImpDisk('a', ['cp-one', 'cp-two']);
+    await ctx.backend.removeImpDisk('a', ['cp-one', 'cp-two']);
 
-    expect(readDisk('b')).toBe('two');
-    expect(readDisk('c')).toBe('one');
-
-    await backend.removeImpDisk('b', []);
-    await backend.removeImpDisk('c', []);
-    await backend.waitForReclaim();
-
-    const left = await runChecked([
-      'zfs',
-      'list',
-      '-H',
-      '-r',
-      '-t',
-      'all',
-      '-o',
-      'name',
-      pool.root,
-    ]);
-
-    // what start made, the image and its @base; nothing retired, staged or forked
-    expect(left.trim().split('\n').toSorted()).toEqual(
-      [
-        pool.root,
-        `${pool.root}/disks`,
-        `${pool.root}/images`,
-        `${pool.root}/images/real`,
-        `${pool.root}/images/real@base`,
-        `${pool.root}/mem`,
-        `${pool.root}/reserve`,
-        `${pool.root}/retired`,
-        `${pool.root}/staging`,
-      ].toSorted(),
-    );
+    expect(cloned).toBe('image');
+    expect(restoredOld).toBe('one');
+    expect(restoredNew).toBe('two');
+    expect(readFileSync(ctx.backend.resolveImpPaths('b').disk, 'utf8')).toBe('two');
+    expect(readFileSync(ctx.backend.resolveImpPaths('c').disk, 'utf8')).toBe('one');
   },
-  REAL_TEST_TIMEOUT_MS,
+  120_000,
 );
 
-// The chain #11's retire and reclaim must cover: a template's dataset is a
-// clone of its source's disk, and imps are clones of the template.
-test.skipIf(!isReal)(
-  'a template outlives its source, its imps outlive it, and all of it reclaims',
+test.skipIf(readZfsTestPool() === null)(
+  'it reclaims every fork and retired disk once the imps are gone',
   async () => {
-    const pool = await setupPool();
+    const ctx = await setupTest();
 
-    const backend = pool.backend;
-    const template = 'imp-0199a3b4-0000-7000-8000-000000000001';
-    const readDisk = (impId: string) => readFileSync(backend.resolveImpPaths(impId).disk, 'utf8');
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b', 'c']),
+      checkpointIds: new Set(['cp-one', 'cp-two']),
+      imageDigests: new Set(['sha256:real']),
+    });
 
-    await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
 
-    writeSyncedFile(backend.resolveImpPaths('a').disk, 'golden');
+      return Promise.resolve();
+    });
 
-    await backend.createCheckpoint('a', 'cp-one');
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createCheckpoint('a', 'cp-one');
+    await ctx.backend.createCheckpoint('a', 'cp-two');
+    await ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve());
+    await ctx.backend.createImpDisk('b', { kind: 'imp', impId: 'a' });
 
-    await backend.createImageFromImp(template, 'a', {
+    await ctx.backend.createImpDisk('c', {
+      kind: 'checkpoint',
+      impId: 'a',
+      checkpointId: 'cp-one',
+    });
+
+    await ctx.backend.removeImpDisk('a', ['cp-one', 'cp-two']);
+    await ctx.backend.removeImpDisk('b', []);
+    await ctx.backend.removeImpDisk('c', []);
+    await ctx.backend.waitForReclaim();
+
+    const left = await runChecked(['zfs', 'list', '-H', '-r', '-t', 'all', '-o', 'name', ctx.root]);
+
+    // what start made, the image and its @base; nothing retired, staged or forked
+    expect(left.trim().split('\n')).toIncludeSameMembers([
+      ctx.root,
+      `${ctx.root}/disks`,
+      `${ctx.root}/images`,
+      `${ctx.root}/images/real`,
+      `${ctx.root}/images/real@base`,
+      `${ctx.root}/mem`,
+      `${ctx.root}/reserve`,
+      `${ctx.root}/retired`,
+      `${ctx.root}/staging`,
+    ]);
+  },
+  120_000,
+);
+
+// The chain the retire and reclaim must cover: a template's dataset is a clone
+// of its source's disk, and imps are clones of the template.
+test.skipIf(readZfsTestPool() === null)(
+  'it keeps the imps of a template whole after the source and the template go',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b', 'c']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'golden');
+
+    await ctx.backend.createCheckpoint('a', 'cp-one');
+
+    await ctx.backend.createImageFromImp('imp-0199a3b4-0000-7000-8000-000000000001', 'a', {
       hold: (clone) => clone(),
       write: (dir) => {
         writeFileSync(join(dir, 'config.json'), '{}');
@@ -200,105 +193,188 @@ test.skipIf(!isReal)(
       },
     });
 
-    writeSyncedFile(backend.resolveImpPaths('a').disk, 'changed after');
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'changed after');
 
-    await backend.createImpDisk('b', { kind: 'image', digest: template });
-    await backend.createImpDisk('c', { kind: 'image', digest: template });
+    await ctx.backend.createImpDisk('b', {
+      kind: 'image',
+      digest: 'imp-0199a3b4-0000-7000-8000-000000000001',
+    });
 
-    expect(readDisk('b')).toBe('golden');
-    expect(readDisk('c')).toBe('golden');
+    await ctx.backend.createImpDisk('c', {
+      kind: 'image',
+      digest: 'imp-0199a3b4-0000-7000-8000-000000000001',
+    });
 
     // the source goes, then the template, while the imps need their blocks
-    await backend.removeImpDisk('a', ['cp-one']);
-    await backend.waitForReclaim();
-    await backend.removeImage(template);
-    await backend.waitForReclaim();
+    await ctx.backend.removeImpDisk('a', ['cp-one']);
+    await ctx.backend.waitForReclaim();
+    await ctx.backend.removeImage('imp-0199a3b4-0000-7000-8000-000000000001');
+    await ctx.backend.waitForReclaim();
 
-    expect(readDisk('b')).toBe('golden');
-    expect(readDisk('c')).toBe('golden');
-
-    await backend.removeImpDisk('b', []);
-    await backend.removeImpDisk('c', []);
-    await backend.waitForReclaim();
-
-    const left = await runChecked([
-      'zfs',
-      'list',
-      '-H',
-      '-r',
-      '-t',
-      'all',
-      '-o',
-      'name',
-      pool.root,
-    ]);
-
-    expect(left.trim().split('\n').toSorted()).toEqual(
-      [
-        pool.root,
-        `${pool.root}/disks`,
-        `${pool.root}/images`,
-        `${pool.root}/images/real`,
-        `${pool.root}/images/real@base`,
-        `${pool.root}/mem`,
-        `${pool.root}/reserve`,
-        `${pool.root}/retired`,
-        `${pool.root}/staging`,
-      ].toSorted(),
-    );
+    expect(readFileSync(ctx.backend.resolveImpPaths('b').disk, 'utf8')).toBe('golden');
+    expect(readFileSync(ctx.backend.resolveImpPaths('c').disk, 'utf8')).toBe('golden');
   },
-  REAL_TEST_TIMEOUT_MS,
+  120_000,
 );
 
-test.skipIf(!isReal)(
-  'a restore cut short is finished by the next start',
+test.skipIf(readZfsTestPool() === null)(
+  'it reclaims a template, its source and its imps once all of them go',
   async () => {
-    const pool = await setupPool();
+    const ctx = await setupTest();
 
-    await pool.backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b', 'c']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
 
-    writeSyncedFile(pool.backend.resolveImpPaths('a').disk, 'one');
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
 
-    await pool.backend.createCheckpoint('a', 'cp-one');
+      return Promise.resolve();
+    });
 
-    writeFileSync(pool.backend.resolveImpPaths('a').disk, 'two');
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createCheckpoint('a', 'cp-one');
+
+    await ctx.backend.createImageFromImp('imp-0199a3b4-0000-7000-8000-000000000001', 'a', {
+      hold: (clone) => clone(),
+      write: () => Promise.resolve(),
+    });
+
+    await ctx.backend.createImpDisk('b', {
+      kind: 'image',
+      digest: 'imp-0199a3b4-0000-7000-8000-000000000001',
+    });
+
+    await ctx.backend.createImpDisk('c', {
+      kind: 'image',
+      digest: 'imp-0199a3b4-0000-7000-8000-000000000001',
+    });
+
+    await ctx.backend.removeImpDisk('a', ['cp-one']);
+    await ctx.backend.waitForReclaim();
+    await ctx.backend.removeImage('imp-0199a3b4-0000-7000-8000-000000000001');
+    await ctx.backend.waitForReclaim();
+    await ctx.backend.removeImpDisk('b', []);
+    await ctx.backend.removeImpDisk('c', []);
+    await ctx.backend.waitForReclaim();
+
+    const left = await runChecked(['zfs', 'list', '-H', '-r', '-t', 'all', '-o', 'name', ctx.root]);
+
+    expect(left.trim().split('\n')).toIncludeSameMembers([
+      ctx.root,
+      `${ctx.root}/disks`,
+      `${ctx.root}/images`,
+      `${ctx.root}/images/real`,
+      `${ctx.root}/images/real@base`,
+      `${ctx.root}/mem`,
+      `${ctx.root}/reserve`,
+      `${ctx.root}/retired`,
+      `${ctx.root}/staging`,
+    ]);
+  },
+  120_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it finishes at the next start a restore that a crash cut short',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['a']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'one');
+
+    await ctx.backend.createCheckpoint('a', 'cp-one');
+
+    writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'two');
 
     // impd dies after the old disk is retired, before the clone takes its name
-    const dying = await pool.startBackend((argv) =>
-      argv.join(' ').startsWith(`zfs rename ${pool.root}/staging/`)
+    const dying = ctx.startBackend((argv) =>
+      argv.join(' ').startsWith(`zfs rename ${ctx.root}/staging/`)
         ? Promise.reject(new Error('impd died'))
         : runCommand(argv),
     );
 
-    const restore = dying.restoreCheckpoint('a', 'cp-one', () => Promise.resolve());
+    await dying.start({
+      impIds: new Set(['a']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
 
-    const failure = await restore.catch(String);
-
-    expect(failure).toContain('impd died');
+    expect(
+      dying.restoreCheckpoint('a', 'cp-one', () => Promise.resolve()),
+    ).rejects.toThrowWithMessage(Error, 'impd died');
 
     // a container restart drops every mount but the root
-    await runChecked(['umount', join(pool.dataDir, 'mem')]);
-    await runChecked(['umount', join(pool.dataDir, 'images', 'real')]);
+    await runChecked(['umount', join(ctx.dataDir, 'mem')]);
+    await runChecked(['umount', join(ctx.dataDir, 'images', 'real')]);
 
     await dying.waitForReclaim();
 
-    const restarted = await pool.startBackend();
+    const restarted = ctx.startBackend();
+
+    await restarted.start({
+      impIds: new Set(['a']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
 
     expect(readFileSync(restarted.resolveImpPaths('a').disk, 'utf8')).toBe('one');
   },
-  REAL_TEST_TIMEOUT_MS,
+  120_000,
 );
 
-test.skipIf(!isReal)(
-  'it reads the usage and real zfs list output parses',
+test.skipIf(readZfsTestPool() === null)(
+  'it reads a used and an available byte count of the pool',
   async () => {
-    const pool = await setupPool();
-    const usage = await pool.backend.readUsage();
+    const ctx = await setupTest();
 
-    expect(usage.usedBytes).toBeGreaterThan(0);
-    expect(usage.availableBytes).toBeGreaterThan(0);
+    await ctx.backend.start({
+      impIds: new Set(),
+      checkpointIds: new Set(),
+      imageDigests: new Set(),
+    });
 
-    // a record of the real format the unit tests' fixtures copy
+    const usage = await ctx.backend.readUsage();
+
+    expect(usage.usedBytes).toBePositive();
+    expect(usage.availableBytes).toBePositive();
+  },
+  120_000,
+);
+
+// a record of the real format that the stand-in's rows copy
+test.skipIf(readZfsTestPool() === null)(
+  'it gets zfs list rows in the format the stand-in gives',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(),
+      checkpointIds: new Set(),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
     const listed = await runChecked([
       'zfs',
       'list',
@@ -310,297 +386,473 @@ test.skipIf(!isReal)(
       'createtxg',
       '-o',
       'name,type,origin,defer_destroy',
-      pool.root,
+      ctx.root,
     ]);
 
-    console.log(listed);
-
-    expect(listed).toContain(`${pool.root}/images/real@base\tsnapshot\t-\toff`);
+    expect(listed).toInclude(`${ctx.root}/images/real@base\tsnapshot\t-\toff\n`);
   },
-  REAL_TEST_TIMEOUT_MS,
+  120_000,
 );
 
 // restic skips a file whose inode, mtime, ctime and size match its last run;
 // each run's tree is a new clone, so these must survive the clone
-test.skipIf(!isReal)(
-  'a backup tree file keeps its metadata from run to run',
+test.skipIf(readZfsTestPool() === null)(
+  'it keeps the metadata of a backup tree file from run to run',
   async () => {
-    const pool = await setupPool();
+    const ctx = await setupTest();
 
-    const backend = pool.backend;
-    const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
-
-    await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
-
-    writeFileSync(backend.resolveImpPaths('a').disk, 'one');
-
-    const readTreeDisk = async (runId: string) => {
-      await backend.createBackupCopy('a', runId, { isReusable: true });
-
-      const tree = await backend.openBackupTree({
-        runId,
-        imps: [{ impId: 'a', checkpointIds: [] }],
-        imageDigests: [DIGEST],
-      });
-
-      const stats = statSync(treeDisk, { bigint: true });
-      const text = readFileSync(treeDisk, 'utf8');
-
-      const touched = await runCommand(['touch', treeDisk]);
-
-      await tree.close();
-
-      return { stats, text, touchExit: touched.exitCode };
-    };
-
-    const first = await readTreeDisk('r1');
-    const second = await readTreeDisk('r2');
-
-    expect(first.text).toBe('one');
-    expect(first.touchExit).not.toBe(0);
-    expect(second.stats.ino).toBe(first.stats.ino);
-    expect(second.stats.mtimeNs).toBe(first.stats.mtimeNs);
-    expect(second.stats.ctimeNs).toBe(first.stats.ctimeNs);
-
-    writeFileSync(backend.resolveImpPaths('a').disk, 'two');
-
-    const third = await readTreeDisk('r3');
-
-    expect(third.text).toBe('two');
-    expect(third.stats.mtimeNs).not.toBe(first.stats.mtimeNs);
-
-    await backend.waitForReclaim();
-
-    const left = await runChecked([
-      'zfs',
-      'list',
-      '-H',
-      '-t',
-      'all',
-      '-o',
-      'name',
-      '-r',
-      pool.root,
-    ]);
-
-    expect(left).not.toContain('@bk-');
-    expect(left).not.toContain('/staging/bk');
-  },
-  REAL_TEST_TIMEOUT_MS,
-);
-
-test.skipIf(!isReal)(
-  'an imp destroyed while restic reads it goes once the tree closes',
-  async () => {
-    const pool = await setupPool();
-
-    const backend = pool.backend;
-
-    await backend.createImpDisk('b', { kind: 'image', digest: DIGEST });
-    await backend.createCheckpoint('b', 'cp-one');
-    await backend.createBackupCopy('b', 'r1', { isReusable: true });
-
-    const tree = await backend.openBackupTree({
-      runId: 'r1',
-      imps: [{ impId: 'b', checkpointIds: ['cp-one'] }],
-      imageDigests: [DIGEST],
+    await ctx.backend.start({
+      impIds: new Set(['a']),
+      checkpointIds: new Set(),
+      imageDigests: new Set(['sha256:real']),
     });
 
-    const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4');
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
 
-    await backend.removeImpDisk('b', ['cp-one']);
-    await backend.waitForReclaim();
+      return Promise.resolve();
+    });
 
-    // restic still reads the copy of the destroyed disk
-    expect(readFileSync(treeDisk, 'utf8')).toBe('image');
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
 
-    await tree.close();
-    await backend.waitForReclaim();
+    writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'one');
 
-    const left = await runChecked([
-      'zfs',
-      'list',
-      '-H',
-      '-t',
-      'all',
-      '-o',
-      'name',
-      '-r',
-      pool.root,
-    ]);
+    await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
 
-    expect(left).not.toContain('/retired/');
-    expect(left).not.toContain('/staging/');
-    expect(left).not.toContain('@bk-');
+    const firstTree = await ctx.backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    const treeDisk = join(ctx.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
+    const first = statSync(treeDisk, { bigint: true });
+    const firstText = readFileSync(treeDisk, 'utf8');
+
+    const touched = await runCommand(['touch', treeDisk]);
+
+    await firstTree.close();
+    await ctx.backend.createBackupCopy('a', 'r2', { isReusable: true });
+
+    const secondTree = await ctx.backend.openBackupTree({
+      runId: 'r2',
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    ctx.stack.defer(() => secondTree.close());
+
+    const second = statSync(treeDisk, { bigint: true });
+
+    expect(firstText).toBe('one');
+    expect(touched.exitCode).not.toBe(0);
+    expect(second.ino).toBe(first.ino);
+    expect(second.mtimeNs).toBe(first.mtimeNs);
+    expect(second.ctimeNs).toBe(first.ctimeNs);
   },
-  REAL_TEST_TIMEOUT_MS,
+  120_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it gives a backup tree file a new mtime once the disk changes',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['a']),
+      checkpointIds: new Set(),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+
+    writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'one');
+
+    await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+    const firstTree = await ctx.backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    const treeDisk = join(ctx.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
+    const first = statSync(treeDisk, { bigint: true });
+
+    await firstTree.close();
+
+    writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'two');
+
+    await ctx.backend.createBackupCopy('a', 'r2', { isReusable: true });
+
+    const secondTree = await ctx.backend.openBackupTree({
+      runId: 'r2',
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    ctx.stack.defer(() => secondTree.close());
+
+    expect(readFileSync(treeDisk, 'utf8')).toBe('two');
+    expect(statSync(treeDisk, { bigint: true }).mtimeNs).not.toBe(first.mtimeNs);
+  },
+  120_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it leaves no backup snapshot or clone once each run closes its tree',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['a']),
+      checkpointIds: new Set(),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+    const firstTree = await ctx.backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    await firstTree.close();
+    await ctx.backend.createBackupCopy('a', 'r2', { isReusable: true });
+
+    const secondTree = await ctx.backend.openBackupTree({
+      runId: 'r2',
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    await secondTree.close();
+    await ctx.backend.waitForReclaim();
+
+    const left = await runChecked(['zfs', 'list', '-H', '-t', 'all', '-o', 'name', '-r', ctx.root]);
+
+    expect(left).not.toInclude('@bk-');
+    expect(left).not.toInclude('/staging/bk');
+  },
+  120_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it keeps the copy of an imp destroyed while restic reads it',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['b']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createCheckpoint('b', 'cp-one');
+    await ctx.backend.createBackupCopy('b', 'r1', { isReusable: true });
+
+    const tree = await ctx.backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'b', checkpointIds: ['cp-one'] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    ctx.stack.defer(() => tree.close());
+
+    await ctx.backend.removeImpDisk('b', ['cp-one']);
+    await ctx.backend.waitForReclaim();
+
+    expect(
+      readFileSync(join(ctx.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4'), 'utf8'),
+    ).toBe('image');
+  },
+  120_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it reclaims an imp destroyed while restic reads it once the tree closes',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['b']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createCheckpoint('b', 'cp-one');
+    await ctx.backend.createBackupCopy('b', 'r1', { isReusable: true });
+
+    const tree = await ctx.backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'b', checkpointIds: ['cp-one'] }],
+      imageDigests: ['sha256:real'],
+    });
+
+    await ctx.backend.removeImpDisk('b', ['cp-one']);
+    await ctx.backend.waitForReclaim();
+    await tree.close();
+    await ctx.backend.waitForReclaim();
+
+    const left = await runChecked(['zfs', 'list', '-H', '-t', 'all', '-o', 'name', '-r', ctx.root]);
+
+    expect(left).not.toInclude('/retired/');
+    expect(left).not.toInclude('/staging/');
+    expect(left).not.toInclude('@bk-');
+  },
+  120_000,
 );
 
 // The GC's sweep with storage the database names only in part: what the
 // storage gate keeps from overlapping must still never break
-test.skipIf(!isReal)(
-  'a GC keeps a fork of a destroyed imp, an open backup tree, a staged restore and a build',
+test.skipIf(readZfsTestPool() === null)(
+  'it keeps a fork of a destroyed imp, an open backup tree, a staged restore and a build through a GC',
   async () => {
-    const pool = await setupPool();
+    const ctx = await setupTest();
 
-    const backend = pool.backend;
-    const readDisk = (impId: string) => readFileSync(backend.resolveImpPaths(impId).disk, 'utf8');
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b', 'c']),
+      checkpointIds: new Set(['cp-one', 'cp-two']),
+      imageDigests: new Set(['sha256:real']),
+    });
 
-    await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
 
-    writeSyncedFile(backend.resolveImpPaths('a').disk, 'from a');
+      return Promise.resolve();
+    });
 
-    await backend.createCheckpoint('a', 'cp-one');
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'from a');
+
+    await ctx.backend.createCheckpoint('a', 'cp-one');
 
     // b forks a's checkpoint, then a goes: b's origin now lives in retired/
-    await backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-one' });
-    await backend.removeImpDisk('a', ['cp-one']);
-    await backend.createBackupCopy('b', 'r1', { isReusable: true });
-
-    const tree = await backend.openBackupTree({
-      runId: 'r1',
-      imps: [{ impId: 'b', checkpointIds: [] }],
-      imageDigests: [DIGEST],
-    });
-
-    // a restore between its clone and its swap
-    await backend.createImpDisk('c', { kind: 'image', digest: DIGEST });
-    await backend.createCheckpoint('c', 'cp-two');
-
-    await runChecked([
-      'zfs',
-      'clone',
-      `${pool.root}/disks/c@cp-two`,
-      `${pool.root}/staging/restore-c`,
-    ]);
-
-    const live = {
-      impIds: new Set(['b', 'c']),
-      checkpointIds: new Set(['cp-two']),
-      imageDigests: new Set([DIGEST]),
-    };
-
-    // the sweep runs while an image build writes, before the image has a row
-    const swept: { dropped: readonly { kind: string; id: string }[] } = { dropped: [] };
-
-    await backend.createImage('sha256:building', async (dir) => {
-      writeFileSync(join(dir, 'rootfs.ext4'), 'new image');
-
-      const result = await backend.dropUnnamed(live, { isDryRun: false, isOrphans: false });
-
-      swept.dropped = result.dropped;
-    });
-
-    const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4');
-    const treeText = readFileSync(treeDisk, 'utf8');
-
-    await tree.close();
-    await backend.waitForReclaim();
-
-    const datasets = await runChecked(['zfs', 'list', '-H', '-o', 'name', '-r', pool.root]);
-
-    console.log(swept.dropped, datasets);
-
-    const droppedIds = swept.dropped.map((dropped) => dropped.id);
-
-    expect(droppedIds.filter((id) => ['b', 'c', 'cp-two'].includes(id))).toEqual([]);
-
-    expect(droppedIds.filter((id) => id.includes('staging') || id.includes('building'))).toEqual(
-      [],
-    );
-
-    expect(readDisk('b')).toBe('from a');
-    expect(treeText).toBe('from a');
-    expect(datasets).toContain(`${pool.root}/staging/restore-c\n`);
-    expect(datasets).toContain(`${pool.root}/images/building\n`);
-
-    expect(readFileSync(join(pool.dataDir, 'images', 'building', 'rootfs.ext4'), 'utf8')).toBe(
-      'new image',
-    );
-  },
-  REAL_TEST_TIMEOUT_MS,
-);
-
-// A database lost with the pool kept: a new impd keeps every disk, image and
-// checkpoint, and only `imp gc --orphans` retires them, for the reclaim to free
-test.skipIf(!isReal)(
-  'a start after a lost database keeps every dataset, and orphans retires them',
-  async () => {
-    const pool = await setupPool();
-
-    await pool.backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
-
-    writeSyncedFile(pool.backend.resolveImpPaths('a').disk, 'from a');
-
-    await pool.backend.createCheckpoint('a', 'cp-one');
-
-    await pool.backend.createImpDisk('b', {
+    await ctx.backend.createImpDisk('b', {
       kind: 'checkpoint',
       impId: 'a',
       checkpointId: 'cp-one',
     });
 
-    const noRows = {
-      impIds: new Set<string>(),
-      checkpointIds: new Set<string>(),
-      imageDigests: new Set<string>(),
-    };
+    await ctx.backend.removeImpDisk('a', ['cp-one']);
+    await ctx.backend.createBackupCopy('b', 'r1', { isReusable: true });
 
-    const logs: string[] = [];
-
-    const backend = createZfsBackend({
-      dataDir: pool.dataDir,
-      root: pool.root,
-      log: (message) => {
-        logs.push(message);
-      },
+    const tree = await ctx.backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'b', checkpointIds: [] }],
+      imageDigests: ['sha256:real'],
     });
 
-    await backend.start(noRows);
+    ctx.stack.defer(() => tree.close());
 
-    const listNames = async () => {
-      const stdout = await runChecked([
-        'zfs',
-        'list',
-        '-H',
-        '-o',
-        'name',
-        '-t',
-        'all',
-        '-r',
-        pool.root,
-      ]);
+    // a restore between its clone and its swap
+    await ctx.backend.createImpDisk('c', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createCheckpoint('c', 'cp-two');
 
-      return stdout
-        .split('\n')
-        .filter((name) => /\/(?:disks|images|retired)\//.test(name))
-        .toSorted();
-    };
+    await runChecked([
+      'zfs',
+      'clone',
+      `${ctx.root}/disks/c@cp-two`,
+      `${ctx.root}/staging/restore-c`,
+    ]);
 
-    const survivors = await listNames();
+    // the sweep runs while an image build writes, before the image has a row
+    const swept: { dropped: readonly { kind: string; id: string }[] } = { dropped: [] };
 
-    expect(survivors).toEqual(
-      [
-        `${pool.root}/disks/a`,
-        `${pool.root}/disks/a@cp-one`,
-        `${pool.root}/disks/b`,
-        `${pool.root}/images/real`,
-        `${pool.root}/images/real@base`,
-      ].toSorted(),
+    await ctx.backend.createImage('sha256:building', async (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'new image');
+
+      const result = await ctx.backend.dropUnnamed(
+        {
+          impIds: new Set(['b', 'c']),
+          checkpointIds: new Set(['cp-two']),
+          imageDigests: new Set(['sha256:real']),
+        },
+        { isDryRun: false, isOrphans: false },
+      );
+
+      swept.dropped = result.dropped;
+    });
+
+    const datasets = await runChecked(['zfs', 'list', '-H', '-o', 'name', '-r', ctx.root]);
+
+    expect(
+      swept.dropped
+        .map((dropped) => dropped.id)
+        .filter((id) => ['b', 'c', 'cp-two'].includes(id) || /staging|building/.test(id)),
+    ).toStrictEqual([]);
+
+    expect(readFileSync(ctx.backend.resolveImpPaths('b').disk, 'utf8')).toBe('from a');
+
+    expect(
+      readFileSync(join(ctx.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4'), 'utf8'),
+    ).toBe('from a');
+
+    expect(datasets).toInclude(`${ctx.root}/staging/restore-c\n`);
+    expect(datasets).toInclude(`${ctx.root}/images/building\n`);
+
+    expect(readFileSync(join(ctx.dataDir, 'images', 'building', 'rootfs.ext4'), 'utf8')).toBe(
+      'new image',
+    );
+  },
+  120_000,
+);
+
+// A database lost with the pool kept: a new impd keeps every disk, image and
+// checkpoint, and only `imp gc --orphans` retires them, for the reclaim to free
+test.skipIf(readZfsTestPool() === null)(
+  'it keeps every dataset at a start after a lost database',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+
+    writeSyncedFile(ctx.backend.resolveImpPaths('a').disk, 'from a');
+
+    await ctx.backend.createCheckpoint('a', 'cp-one');
+
+    await ctx.backend.createImpDisk('b', {
+      kind: 'checkpoint',
+      impId: 'a',
+      checkpointId: 'cp-one',
+    });
+
+    const log = mock<(message: string) => void>();
+    const restarted = ctx.startBackend(runCommand, log);
+
+    await restarted.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+    const names = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-o',
+      'name',
+      '-t',
+      'all',
+      '-r',
+      ctx.root,
+    ]);
+
+    expect(
+      log.mock.calls.map(([line]) => line).filter((line) => line.includes('kept orphan')),
+    ).toHaveLength(3);
+
+    expect(
+      names.split('\n').filter((name) => /\/(?:disks|images|retired)\//.test(name)),
+    ).toIncludeSameMembers([
+      `${ctx.root}/disks/a`,
+      `${ctx.root}/disks/a@cp-one`,
+      `${ctx.root}/disks/b`,
+      `${ctx.root}/images/real`,
+      `${ctx.root}/images/real@base`,
+    ]);
+
+    expect(readFileSync(restarted.resolveImpPaths('a').disk, 'utf8')).toBe('from a');
+  },
+  120_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it retires every orphan of a lost database for the reclaim to free',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(['a', 'b']),
+      checkpointIds: new Set(['cp-one']),
+      imageDigests: new Set(['sha256:real']),
+    });
+
+    await ctx.backend.createImage('sha256:real', (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'image');
+
+      return Promise.resolve();
+    });
+
+    await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:real' });
+    await ctx.backend.createCheckpoint('a', 'cp-one');
+
+    await ctx.backend.createImpDisk('b', {
+      kind: 'checkpoint',
+      impId: 'a',
+      checkpointId: 'cp-one',
+    });
+
+    const restarted = ctx.startBackend();
+
+    await restarted.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+    const retired = await restarted.dropUnnamed(
+      { impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() },
+      { isDryRun: false, isOrphans: true },
     );
 
-    expect(readFileSync(backend.resolveImpPaths('a').disk, 'utf8')).toBe('from a');
-    expect(logs.filter((line) => line.includes('kept orphan'))).toHaveLength(3);
+    await restarted.waitForReclaim();
 
-    const listed = await backend.dropUnnamed(noRows, { isDryRun: true, isOrphans: true });
-    const retired = await backend.dropUnnamed(noRows, { isDryRun: false, isOrphans: true });
+    const names = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-o',
+      'name',
+      '-t',
+      'all',
+      '-r',
+      ctx.root,
+    ]);
 
-    await backend.waitForReclaim();
+    expect(retired.dropped).toIncludeSameMembers([
+      { kind: 'checkpoint', id: 'cp-one' },
+      { kind: 'image', id: 'real' },
+      { kind: 'imp', id: 'a' },
+      { kind: 'imp', id: 'b' },
+    ]);
 
-    const left = await listNames();
-
-    expect(retired).toEqual(listed);
-    expect(left).toEqual([]);
+    expect(
+      names.split('\n').filter((name) => /\/(?:disks|images|retired)\//.test(name)),
+    ).toStrictEqual([]);
   },
-  REAL_TEST_TIMEOUT_MS,
+  120_000,
 );

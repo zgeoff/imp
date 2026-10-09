@@ -1,72 +1,120 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  statfsSync,
   writeFileSync,
 } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { buildStubFiemap } from '../test-utils/build-stub-fiemap';
 import { readExtents } from './fiemap';
 import { createXfsBackend } from './xfs-backend';
 
-function setupTest(parentDir = tmpdir()) {
-  const dataDir = mkdtempSync(`${parentDir}/impd-xfs-test-`);
-  const logs: string[] = [];
+interface SetupOptions {
+  // where the data dir goes; a temp dir by default
+  readonly parentDir?: string;
+  readonly reserveFileBytes?: number;
+  readonly readFileExtents?: typeof readExtents;
+}
 
-  return {
+async function setupTest(options: SetupOptions = {}) {
+  const dataDir = await mkdtemp(join(options.parentDir ?? tmpdir(), 'impd-xfs-test-'));
+
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+  const log = mock<(message: string) => void>();
+
+  const backend = createXfsBackend({
     dataDir,
-    logs,
-    backend: createXfsBackend({
-      dataDir,
-      log: (message) => {
-        logs.push(message);
-      },
+    log,
 
-      // tmpdir is rarely XFS
-      cloneFile: (source, target) => {
-        copyFileSync(source, target);
+    // a temp dir is rarely XFS, so a clone is a copy; written byte by byte,
+    // so it shares no extent even where the filesystem could reflink
+    cloneFile: (source, target) => {
+      writeFileSync(target, readFileSync(source));
 
-        return Promise.resolve();
-      },
-    }),
-    imageDir: join(dataDir, 'images', 'abc'),
-    [Symbol.dispose]: () => {
-      rmSync(dataDir, { recursive: true, force: true });
+      return Promise.resolve();
     },
-  };
+    reserveFileBytes: options.reserveFileBytes ?? 0,
+    readFileExtents: options.readFileExtents ?? readExtents,
+  });
+
+  return { dataDir, backend, log };
 }
 
-function writeImage(dir: string): Promise<void> {
-  writeFileSync(join(dir, 'rootfs.ext4'), 'rootfs');
-  writeFileSync(join(dir, 'config.json'), '{}');
-
-  return Promise.resolve();
-}
-
-test('an image replaces a directory a crash left with no rootfs', async () => {
-  using ctx = setupTest();
+test('#createImage replaces a directory a crash left with no rootfs', async () => {
+  const ctx = await setupTest();
 
   // what impd before the storage backends left when it died mid-build
-  mkdirSync(ctx.imageDir, { recursive: true });
-  writeFileSync(join(ctx.imageDir, 'config.json'), '{"old":true}');
+  mkdirSync(join(ctx.dataDir, 'images', 'abc'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'images', 'abc', 'config.json'), '{"old":true}');
 
-  await ctx.backend.createImage('sha256:abc', writeImage);
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+    await Bun.write(join(dir, 'config.json'), '{}');
+  });
 
-  expect(readFileSync(join(ctx.imageDir, 'rootfs.ext4'), 'utf8')).toBe('rootfs');
-  expect(readFileSync(join(ctx.imageDir, 'config.json'), 'utf8')).toBe('{}');
+  expect(readFileSync(join(ctx.dataDir, 'images', 'abc', 'rootfs.ext4'), 'utf8')).toBe('rootfs');
+  expect(readFileSync(join(ctx.dataDir, 'images', 'abc', 'config.json'), 'utf8')).toBe('{}');
 });
 
-test('start sweeps image builds a crash cut short', async () => {
-  using ctx = setupTest();
+test('#createImage removes its staging dir when the write fails', async () => {
+  const ctx = await setupTest();
+
+  const created = ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'half');
+
+    throw new Error('the export failed');
+  });
+
+  expect(created).rejects.toThrowWithMessage(Error, 'the export failed');
+  expect(readdirSync(join(ctx.dataDir, 'images'))).toStrictEqual([]);
+});
+
+test('#createImageFromImp makes a clone of the disk the rootfs of the image', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'template disk');
+
+  await ctx.backend.createImageFromImp('sha256:tpl', 'a', {
+    hold: (clone) => clone(),
+    write: async (dir) => {
+      await Bun.write(join(dir, 'config.json'), '{}');
+    },
+  });
+
+  expect(readFileSync(join(ctx.dataDir, 'images', 'tpl', 'rootfs.ext4'), 'utf8')).toBe(
+    'template disk',
+  );
+
+  expect(readFileSync(join(ctx.dataDir, 'images', 'tpl', 'config.json'), 'utf8')).toBe('{}');
+});
+
+test('#removeImage removes the image directory', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
+  await ctx.backend.removeImage('sha256:abc');
+
+  expect(existsSync(join(ctx.dataDir, 'images', 'abc'))).toBeFalse();
+});
+
+test('#start removes image builds a crash cut short', async () => {
+  const ctx = await setupTest();
 
   mkdirSync(join(ctx.dataDir, 'images', '.new-crashed'), { recursive: true });
-  mkdirSync(ctx.imageDir, { recursive: true });
+  mkdirSync(join(ctx.dataDir, 'images', 'abc'), { recursive: true });
 
   await ctx.backend.start({
     impIds: new Set(),
@@ -74,112 +122,232 @@ test('start sweeps image builds a crash cut short', async () => {
     imageDigests: new Set(['sha256:abc']),
   });
 
-  expect(readdirSync(join(ctx.dataDir, 'images'))).toEqual(['abc']);
-  expect(existsSync(ctx.imageDir)).toBeTrue();
+  expect(readdirSync(join(ctx.dataDir, 'images'))).toStrictEqual(['abc']);
 });
 
-const NO_ROWS = {
-  impIds: new Set<string>(),
-  checkpointIds: new Set<string>(),
-  imageDigests: new Set<string>(),
-};
+test('#start keeps every imp and image a lost database leaves', async () => {
+  const ctx = await setupTest();
 
-// What a lost database leaves: images abc and old, an image with no rootfs,
-// imps a (cp-1, cp-2, a memory file) and b, and the memory snapshot of an
-// imp with no disk
-async function setupSurvivors() {
-  const ctx = setupTest();
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
 
-  await ctx.backend.createImage('sha256:abc', writeImage);
-  await ctx.backend.createImage('sha256:old', writeImage);
+  await ctx.backend.createImage('sha256:old', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
   await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:old' });
   await ctx.backend.createCheckpoint('a', 'cp-1');
   await ctx.backend.createCheckpoint('a', 'cp-2');
 
-  const memFile = ctx.backend.resolveImpPaths('a').memFile;
-
-  mkdirSync(dirname(memFile), { recursive: true });
-  writeFileSync(memFile, 'memory');
+  // a's memory file, an image with no rootfs, and the memory snapshot of an
+  // imp with no disk
+  mkdirSync(dirname(ctx.backend.resolveImpPaths('a').memFile), { recursive: true });
+  writeFileSync(ctx.backend.resolveImpPaths('a').memFile, 'memory');
   mkdirSync(join(ctx.dataDir, 'images', 'half'), { recursive: true });
   writeFileSync(join(ctx.dataDir, 'images', 'half', 'config.json'), '{}');
-
-  const sleeper = ctx.backend.resolveImpPaths('sleeper');
-
-  mkdirSync(sleeper.snapshotDir, { recursive: true });
-  writeFileSync(sleeper.vmstate, 'vmstate');
-  writeFileSync(sleeper.snapshotMeta, '{}');
+  mkdirSync(ctx.backend.resolveImpPaths('sleeper').snapshotDir, { recursive: true });
+  writeFileSync(ctx.backend.resolveImpPaths('sleeper').vmstate, 'vmstate');
 
   // empty directories: provably nothing
-  mkdirSync(join(ctx.backend.resolveImpPaths('done').runDir), { recursive: true });
+  mkdirSync(ctx.backend.resolveImpPaths('done').runDir, { recursive: true });
   mkdirSync(join(ctx.dataDir, 'images', 'empty'), { recursive: true });
 
-  return ctx;
-}
+  const before = readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted();
 
-function listTree(dataDir: string): string[] {
-  return readdirSync(dataDir, { recursive: true, encoding: 'utf8' }).toSorted();
-}
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
-test('start keeps every imp and image a lost database leaves, and logs each', async () => {
-  using ctx = await setupSurvivors();
-
-  await ctx.backend.start(NO_ROWS);
-
-  expect(readdirSync(join(ctx.dataDir, 'imps')).toSorted()).toEqual(['a', 'b', 'sleeper']);
-  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['abc', 'half', 'old']);
-  expect(existsSync(ctx.backend.resolveImpPaths('sleeper').vmstate)).toBeTrue();
-
-  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir).toSorted()).toEqual([
-    'cp-1',
-    'cp-2',
-  ]);
-
-  expect(readFileSync(ctx.backend.resolveImpPaths('a').memFile, 'utf8')).toBe('memory');
-
-  const kept = ctx.logs.filter((line) => line.startsWith('impd: storage: kept orphan'));
-
-  expect(kept).toHaveLength(6);
-
-  expect(kept.find((line) => line.includes('orphan imp a '))).toMatch(
-    /^impd: storage: kept orphan imp a \(.+\/imps\/a\): \d+\.\d MiB, created \d{4}-\d\d-\d\dT.+Z, snapshots: cp-1, cp-2$/,
+  expect(readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted()).toStrictEqual(
+    before.filter((path) => !/^(?:imps\/done|images\/empty)(?:\/|$)/.test(path)),
   );
 
-  expect(ctx.logs).toContain('impd: storage: removed image empty');
-  expect(ctx.logs).toContain('impd: storage: removed imp done');
-  expect(ctx.logs.at(-1)).toContain('kept 6 orphans the database does not name');
+  expect(readFileSync(ctx.backend.resolveImpPaths('a').memFile, 'utf8')).toBe('memory');
+  expect(readFileSync(ctx.backend.resolveImpPaths('sleeper').vmstate, 'utf8')).toBe('vmstate');
 });
 
-test('a sweep keeps the orphans, a dry run with orphans lists them, and orphans removes them', async () => {
-  using ctx = await setupSurvivors();
+test('#start logs each orphan it keeps and each leftover it removes', async () => {
+  const ctx = await setupTest();
 
-  const before = listTree(ctx.dataDir);
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
 
-  const swept = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: false, isOrphans: false });
+  await ctx.backend.createImage('sha256:old', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
 
-  expect(swept.dropped).toEqual([
-    { kind: 'image', id: 'empty' },
-    { kind: 'imp', id: 'done' },
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:old' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createCheckpoint('a', 'cp-2');
+
+  // an image with no rootfs, and the memory snapshot of an imp with no disk
+  mkdirSync(join(ctx.dataDir, 'images', 'half'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'images', 'half', 'config.json'), '{}');
+  mkdirSync(ctx.backend.resolveImpPaths('sleeper').snapshotDir, { recursive: true });
+  writeFileSync(ctx.backend.resolveImpPaths('sleeper').vmstate, 'vmstate');
+
+  // empty directories: provably nothing
+  mkdirSync(ctx.backend.resolveImpPaths('done').runDir, { recursive: true });
+  mkdirSync(join(ctx.dataDir, 'images', 'empty'), { recursive: true });
+
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  const lines = ctx.log.mock.calls.map(([line]) => line);
+
+  expect(lines).toIncludeAllMembers([
+    'impd: storage: removed image empty',
+    'impd: storage: removed imp done',
   ]);
 
-  expect(swept.kept.map((orphan) => [orphan.kind, orphan.id, orphan.snapshots])).toEqual([
-    ['image', 'abc', []],
-    ['image', 'half', []],
-    ['image', 'old', []],
-    ['imp', 'a', ['cp-1', 'cp-2']],
-    ['imp', 'b', []],
-    ['imp', 'sleeper', []],
+  // one line per orphan, none twice
+  expect(
+    lines
+      .filter((line) => line.startsWith('impd: storage: kept orphan '))
+      .map((line) => line.split(' (')[0]),
+  ).toIncludeSameMembers([
+    'impd: storage: kept orphan image abc',
+    'impd: storage: kept orphan image half',
+    'impd: storage: kept orphan image old',
+    'impd: storage: kept orphan imp a',
+    'impd: storage: kept orphan imp b',
+    'impd: storage: kept orphan imp sleeper',
   ]);
 
-  expect(swept.kept.every((orphan) => orphan.bytes > 0 && orphan.createdAt !== null)).toBeTrue();
+  expect(lines).toSatisfyAny((line: string) =>
+    /^impd: storage: kept orphan imp a \(.+\/imps\/a\): \d+\.\d MiB, created \d{4}-\d\d-\d\dT.+Z, snapshots: cp-1, cp-2$/.test(
+      line,
+    ),
+  );
 
-  const kept = listTree(ctx.dataDir);
+  expect(lines.at(-1)).toInclude('kept 6 orphans the database does not name');
+});
 
-  expect(kept).toEqual(before.filter((path) => !/^(?:imps\/done|images\/empty)/.test(path)));
+test('#dropUnnamed removes what is provably nothing and keeps each orphan with its size and age', async () => {
+  const ctx = await setupTest();
 
-  const listed = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: true, isOrphans: true });
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
 
-  expect(listed).toEqual({
+  await ctx.backend.createImage('sha256:old', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:old' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createCheckpoint('a', 'cp-2');
+
+  // an image with no rootfs, and the memory snapshot of an imp with no disk
+  mkdirSync(join(ctx.dataDir, 'images', 'half'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'images', 'half', 'config.json'), '{}');
+  mkdirSync(ctx.backend.resolveImpPaths('sleeper').snapshotDir, { recursive: true });
+  writeFileSync(ctx.backend.resolveImpPaths('sleeper').vmstate, 'vmstate');
+
+  // empty directories: provably nothing
+  mkdirSync(ctx.backend.resolveImpPaths('done').runDir, { recursive: true });
+  mkdirSync(join(ctx.dataDir, 'images', 'empty'), { recursive: true });
+
+  const before = readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted();
+
+  const swept = await ctx.backend.dropUnnamed(
+    { impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() },
+    { isDryRun: false, isOrphans: false },
+  );
+
+  expect(swept).toStrictEqual({
+    dropped: [
+      { kind: 'image', id: 'empty' },
+      { kind: 'imp', id: 'done' },
+    ],
+    kept: [
+      {
+        kind: 'image',
+        id: 'abc',
+        location: join(ctx.dataDir, 'images', 'abc'),
+        bytes: expect.toBePositive(),
+        createdAt: expect.toBeValidDate(),
+        snapshots: [],
+      },
+      {
+        kind: 'image',
+        id: 'half',
+        location: join(ctx.dataDir, 'images', 'half'),
+        bytes: expect.toBePositive(),
+        createdAt: expect.toBeValidDate(),
+        snapshots: [],
+      },
+      {
+        kind: 'image',
+        id: 'old',
+        location: join(ctx.dataDir, 'images', 'old'),
+        bytes: expect.toBePositive(),
+        createdAt: expect.toBeValidDate(),
+        snapshots: [],
+      },
+      {
+        kind: 'imp',
+        id: 'a',
+        location: join(ctx.dataDir, 'imps', 'a'),
+        bytes: expect.toBePositive(),
+        createdAt: expect.toBeValidDate(),
+        snapshots: ['cp-1', 'cp-2'],
+      },
+      {
+        kind: 'imp',
+        id: 'b',
+        location: join(ctx.dataDir, 'imps', 'b'),
+        bytes: expect.toBePositive(),
+        createdAt: expect.toBeValidDate(),
+        snapshots: [],
+      },
+      {
+        kind: 'imp',
+        id: 'sleeper',
+        location: join(ctx.dataDir, 'imps', 'sleeper'),
+        bytes: expect.toBePositive(),
+        createdAt: expect.toBeValidDate(),
+        snapshots: [],
+      },
+    ],
+  });
+
+  expect(readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted()).toStrictEqual(
+    before.filter((path) => !/^(?:imps\/done|images\/empty)(?:\/|$)/.test(path)),
+  );
+});
+
+test('#dropUnnamed lists each orphan as dropped in a dry run with orphans, and removes nothing', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
+  await ctx.backend.createImage('sha256:old', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:old' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  // an image with no rootfs, and the memory snapshot of an imp with no disk
+  mkdirSync(join(ctx.dataDir, 'images', 'half'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'images', 'half', 'config.json'), '{}');
+  mkdirSync(ctx.backend.resolveImpPaths('sleeper').snapshotDir, { recursive: true });
+  writeFileSync(ctx.backend.resolveImpPaths('sleeper').vmstate, 'vmstate');
+
+  const before = readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted();
+
+  const listed = await ctx.backend.dropUnnamed(
+    { impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() },
+    { isDryRun: true, isOrphans: true },
+  );
+
+  expect(listed).toStrictEqual({
     dropped: [
       { kind: 'image', id: 'abc' },
       { kind: 'image', id: 'half' },
@@ -191,117 +359,362 @@ test('a sweep keeps the orphans, a dry run with orphans lists them, and orphans 
     kept: [],
   });
 
-  expect(listTree(ctx.dataDir)).toEqual(kept);
-
-  const removed = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: false, isOrphans: true });
-
-  expect(removed).toEqual(listed);
-  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual([]);
-  expect(readdirSync(join(ctx.dataDir, 'images'))).toEqual([]);
+  expect(readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted()).toStrictEqual(
+    before,
+  );
 });
 
-test('dropUnnamed keeps the checkpoints and imps no row names until asked for orphans', async () => {
-  using ctx = setupTest();
+test('#dropUnnamed removes each orphan when asked for orphans', async () => {
+  const ctx = await setupTest();
 
-  await ctx.backend.createImage('sha256:abc', writeImage);
-  await ctx.backend.createImage('sha256:old', writeImage);
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  // an image with no rootfs, and the memory snapshot of an imp with no disk
+  mkdirSync(join(ctx.dataDir, 'images', 'half'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'images', 'half', 'config.json'), '{}');
+  mkdirSync(ctx.backend.resolveImpPaths('sleeper').snapshotDir, { recursive: true });
+  writeFileSync(ctx.backend.resolveImpPaths('sleeper').vmstate, 'vmstate');
+
+  const removed = await ctx.backend.dropUnnamed(
+    { impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() },
+    { isDryRun: false, isOrphans: true },
+  );
+
+  expect(removed).toStrictEqual({
+    dropped: [
+      { kind: 'image', id: 'abc' },
+      { kind: 'image', id: 'half' },
+      { kind: 'imp', id: 'a' },
+      { kind: 'imp', id: 'sleeper' },
+    ],
+    kept: [],
+  });
+
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toStrictEqual([]);
+  expect(readdirSync(join(ctx.dataDir, 'images'))).toStrictEqual([]);
+});
+
+test('#dropUnnamed keeps the checkpoints and imps an older database does not name', async () => {
+  const ctx = await setupTest();
+
+  for (const digest of ['sha256:abc', 'sha256:old']) {
+    await ctx.backend.createImage(digest, async (dir) => {
+      await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+    });
+  }
+
   await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createImpDisk('gone', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createCheckpoint('a', 'cp-1');
   await ctx.backend.createCheckpoint('a', 'cp-new');
   await ctx.backend.createCheckpoint('gone', 'cp-gone');
 
-  // an image build in flight keeps its hidden directory
-  mkdirSync(join(ctx.dataDir, 'images', '.build-now'), { recursive: true });
+  // it names a and cp-1, not cp-new
+  const swept = await ctx.backend.dropUnnamed(
+    {
+      impIds: new Set(['a']),
+      checkpointIds: new Set(['cp-1']),
+      imageDigests: new Set(['sha256:abc']),
+    },
+    { isDryRun: false, isOrphans: false },
+  );
 
-  // an older database: it names a and cp-1, not cp-new
-  const live = {
-    impIds: new Set(['a']),
-    checkpointIds: new Set(['cp-1']),
-    imageDigests: new Set(['sha256:abc']),
-  };
+  expect(swept.dropped).toStrictEqual([]);
 
-  const swept = await ctx.backend.dropUnnamed(live, { isDryRun: false, isOrphans: false });
-
-  expect(swept.dropped).toEqual([]);
-
-  expect(swept.kept.map((orphan) => `${orphan.kind} ${orphan.id}`)).toEqual([
+  expect(swept.kept.map((orphan) => `${orphan.kind} ${orphan.id}`)).toStrictEqual([
     'image old',
     'imp gone',
     'checkpoint cp-new',
   ]);
 
-  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['.build-now', 'abc', 'old']);
-  expect(readdirSync(join(ctx.dataDir, 'imps')).toSorted()).toEqual(['a', 'gone']);
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toIncludeSameMembers(['a', 'gone']);
 
-  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir).toSorted()).toEqual([
+  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toIncludeSameMembers([
     'cp-1',
     'cp-new',
   ]);
-
-  const listed = await ctx.backend.dropUnnamed(live, { isDryRun: true, isOrphans: true });
-  const removed = await ctx.backend.dropUnnamed(live, { isDryRun: false, isOrphans: true });
-
-  expect(removed).toEqual(listed);
-
-  expect(removed.dropped.map((dropped) => `${dropped.kind} ${dropped.id}`)).toEqual([
-    'image old',
-    'imp gone',
-    'checkpoint cp-new',
-  ]);
-
-  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['.build-now', 'abc']);
-  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual(['a']);
-  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toEqual(['cp-1']);
 });
 
-// imp a cloned from the image, with checkpoint cp-1
-async function setupBackupTest() {
-  const ctx = setupTest();
+test('#dropUnnamed removes what an older database does not name when asked for orphans, and never an image build in flight', async () => {
+  const ctx = await setupTest();
 
-  await ctx.backend.createImage('sha256:abc', writeImage);
+  for (const digest of ['sha256:abc', 'sha256:old']) {
+    await ctx.backend.createImage(digest, async (dir) => {
+      await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+    });
+  }
+
   await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('gone', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createCheckpoint('a', 'cp-new');
+
+  // an image build in flight keeps its hidden directory
+  mkdirSync(join(ctx.dataDir, 'images', '.build-now'), { recursive: true });
+
+  const removed = await ctx.backend.dropUnnamed(
+    {
+      impIds: new Set(['a']),
+      checkpointIds: new Set(['cp-1']),
+      imageDigests: new Set(['sha256:abc']),
+    },
+    { isDryRun: false, isOrphans: true },
+  );
+
+  expect(removed.dropped).toStrictEqual([
+    { kind: 'image', id: 'old' },
+    { kind: 'imp', id: 'gone' },
+    { kind: 'checkpoint', id: 'cp-new' },
+  ]);
+
+  expect(readdirSync(join(ctx.dataDir, 'images'))).toIncludeSameMembers(['.build-now', 'abc']);
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toStrictEqual(['a']);
+  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toStrictEqual(['cp-1']);
+});
+
+test('#createImpDisk makes an empty disk a zero-length file', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('b', { kind: 'empty' });
+
+  expect(statSync(ctx.backend.resolveImpPaths('b').disk).size).toBe(0);
+});
+
+test('#createImpDisk clones the disk of another imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'disk of a');
+
+  await ctx.backend.createImpDisk('fork', { kind: 'imp', impId: 'a' });
+
+  expect(readFileSync(ctx.backend.resolveImpPaths('fork').disk, 'utf8')).toBe('disk of a');
+});
+
+test('#createImpDisk clones a checkpoint of another imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'at cp-1');
+
   await ctx.backend.createCheckpoint('a', 'cp-1');
 
-  return { ...ctx, treeDir: join(ctx.dataDir, 'backup', 'tree') };
-}
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'since cp-1');
 
-test('a backup copy of an unchanged disk is kept only when it may be reused', async () => {
-  using ctx = await setupBackupTest();
+  await ctx.backend.createImpDisk('fork', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-1' });
 
-  const treeDisk = join(ctx.treeDir, 'imps', 'a', 'disk', 'rootfs.ext4');
+  expect(readFileSync(ctx.backend.resolveImpPaths('fork').disk, 'utf8')).toBe('at cp-1');
+});
+
+test('#removeImpDisk removes the disk and its checkpoints', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.removeImpDisk('a', ['cp-1']);
+
+  expect(existsSync(ctx.backend.resolveImpPaths('a').disk)).toBeFalse();
+  expect(existsSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toBeFalse();
+});
+
+test('#createCheckpoint returns the bytes its clone holds', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, Buffer.alloc(65_536, 1));
+
+  const bytes = await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  const clone = join(ctx.backend.resolveImpPaths('a').checkpointsDir, 'cp-1', 'disk.ext4');
+
+  expect(bytes).toBe(statSync(clone).blocks * 512);
+});
+
+test('#createCheckpoint removes the half-made checkpoint when its clone fails', async () => {
+  const ctx = await setupTest();
+
+  // no disk to clone: the copy fails
+  const created = ctx.backend.createCheckpoint('a', 'cp-1');
+  const checkpointsDir = ctx.backend.resolveImpPaths('a').checkpointsDir;
+
+  expect(created).rejects.toThrow(/ENOENT/);
+  expect(existsSync(join(checkpointsDir, 'cp-1'))).toBeFalse();
+});
+
+test('#removeCheckpoint removes the checkpoint and leaves the disk', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.removeCheckpoint('a', 'cp-1');
+
+  const checkpointsDir = ctx.backend.resolveImpPaths('a').checkpointsDir;
+
+  expect(existsSync(join(checkpointsDir, 'cp-1'))).toBeFalse();
+  expect(existsSync(ctx.backend.resolveImpPaths('a').disk)).toBeTrue();
+});
+
+test('#restoreCheckpoint swaps the checkpoint in once halt returns, and returns what halt did', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'at cp-1');
+
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'since cp-1');
+
+  const seen: string[] = [];
+
+  const halted = await ctx.backend.restoreCheckpoint('a', 'cp-1', () => {
+    seen.push(readFileSync(ctx.backend.resolveImpPaths('a').disk, 'utf8'));
+
+    return Promise.resolve('stopped');
+  });
+
+  expect(halted).toBe('stopped');
+  expect(seen).toStrictEqual(['since cp-1']);
+  expect(readFileSync(ctx.backend.resolveImpPaths('a').disk, 'utf8')).toBe('at cp-1');
+  expect(existsSync(`${ctx.backend.resolveImpPaths('a').disk}.new`)).toBeFalse();
+});
+
+test('#restoreCheckpoint keeps the disk and removes the staged copy when halt fails', async () => {
+  const ctx = await setupTest();
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'at cp-1');
+
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'since cp-1');
+
+  const restored = ctx.backend.restoreCheckpoint('a', 'cp-1', () =>
+    Promise.reject(new Error('the VM would not stop')),
+  );
+
+  expect(restored).rejects.toThrowWithMessage(Error, 'the VM would not stop');
+  expect(readFileSync(ctx.backend.resolveImpPaths('a').disk, 'utf8')).toBe('since cp-1');
+  expect(existsSync(`${ctx.backend.resolveImpPaths('a').disk}.new`)).toBeFalse();
+});
+
+test('#openMoveSource names the disk and the checkpoints a files move sends', async () => {
+  const ctx = await setupTest();
+  const source = await ctx.backend.openMoveSource('a', ['cp-1', 'cp-2'], 'files');
+
+  expect(source).toStrictEqual({
+    kind: 'files',
+    checkpointPaths: [
+      join(ctx.dataDir, 'imps', 'a', 'checkpoints', 'cp-1', 'disk.ext4'),
+      join(ctx.dataDir, 'imps', 'a', 'checkpoints', 'cp-2', 'disk.ext4'),
+    ],
+    diskPath: join(ctx.dataDir, 'imps', 'a', 'disk.ext4'),
+    close: expect.toBeFunction(),
+  });
+});
+
+test('#openMoveSource refuses a zfs move from an XFS host', async () => {
+  const ctx = await setupTest();
+
+  expect(ctx.backend.openMoveSource('a', [], 'zfs')).rejects.toThrowWithMessage(
+    Error,
+    'xfs: a move from an XFS host sends files',
+  );
+});
+
+test('#receiveMoveSnapshots refuses ZFS streams on an XFS host', async () => {
+  const ctx = await setupTest();
+
+  expect(
+    ctx.backend.receiveMoveSnapshots(
+      'a',
+      [],
+      () => new ReadableStream(),
+      () => 'cp-1',
+    ),
+  ).rejects.toThrowWithMessage(Error, 'xfs: only a ZFS host receives ZFS streams');
+});
+
+test('#createBackupCopy keeps the copy of an unchanged disk when it may be reused', async () => {
+  const ctx = await setupTest();
+
+  const copy = join(ctx.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'disk');
 
   await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
 
-  const first = statSync(treeDisk).ino;
+  const first = statSync(copy).ino;
 
   await ctx.backend.createBackupCopy('a', 'r2', { isReusable: true });
 
-  expect(statSync(treeDisk).ino).toBe(first);
-
-  await ctx.backend.createBackupCopy('a', 'r3', { isReusable: false });
-
-  const recopied = statSync(treeDisk).ino;
-
-  expect(recopied).not.toBe(first);
-
-  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'written');
-
-  await ctx.backend.createBackupCopy('a', 'r4', { isReusable: true });
-
-  expect(readFileSync(treeDisk, 'utf8')).toBe('written');
+  expect(statSync(copy).ino).toBe(first);
 });
 
-test('a backup tree clones checkpoints and images once and drops what is gone', async () => {
-  using ctx = await setupBackupTest();
+test('#createBackupCopy copies an unchanged disk again when the copy may not be reused', async () => {
+  const ctx = await setupTest();
 
-  const treeDir = ctx.treeDir;
+  const copy = join(ctx.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'disk');
 
   await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
 
-  mkdirSync(join(treeDir, 'imps', 'destroyed', 'disk'), { recursive: true });
+  const first = statSync(copy).ino;
 
-  const tree = await ctx.backend.openBackupTree({
+  await ctx.backend.createBackupCopy('a', 'r2', { isReusable: false });
+
+  expect(statSync(copy).ino).not.toBe(first);
+});
+
+test('#createBackupCopy copies a disk written since its last copy', async () => {
+  const ctx = await setupTest();
+
+  const copy = join(ctx.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'disk');
+
+  await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, 'written');
+
+  await ctx.backend.createBackupCopy('a', 'r2', { isReusable: true });
+
+  expect(readFileSync(copy, 'utf8')).toBe('written');
+});
+
+test('#openBackupTree clones the checkpoints and images it names and drops what is gone', async () => {
+  const ctx = await setupTest();
+
+  const tree = join(ctx.dataDir, 'backup', 'tree');
+
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+    await Bun.write(join(dir, 'config.json'), '{}');
+  });
+
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+  mkdirSync(join(tree, 'imps', 'destroyed', 'disk'), { recursive: true });
+
+  const opened = await ctx.backend.openBackupTree({
     runId: 'r1',
     imps: [
       { impId: 'a', checkpointIds: ['cp-1', 'cp-deleted'] },
@@ -310,16 +723,38 @@ test('a backup tree clones checkpoints and images once and drops what is gone', 
     imageDigests: ['sha256:abc', 'sha256:removed'],
   });
 
-  expect([...tree.impIds]).toEqual(['a']);
-  expect([...tree.checkpointIds]).toEqual(['cp-1']);
-  expect([...tree.imageDigests]).toEqual(['sha256:abc']);
-  expect(readdirSync(join(treeDir, 'imps'))).toEqual(['a']);
-  expect(readFileSync(join(treeDir, 'images', 'abc', 'rootfs.ext4'), 'utf8')).toBe('rootfs');
+  expect(opened.impIds).toStrictEqual(new Set(['a']));
+  expect(opened.checkpointIds).toStrictEqual(new Set(['cp-1']));
+  expect(opened.imageDigests).toStrictEqual(new Set(['sha256:abc']));
+  expect(readdirSync(join(tree, 'imps'))).toStrictEqual(['a']);
+  expect(readFileSync(join(tree, 'images', 'abc', 'rootfs.ext4'), 'utf8')).toBe('rootfs');
+  expect(existsSync(join(tree, 'imps', 'a', 'checkpoints', 'cp-1', 'rootfs.ext4'))).toBeTrue();
+});
 
-  const checkpoint = join(treeDir, 'imps', 'a', 'checkpoints', 'cp-1', 'rootfs.ext4');
+test('#openBackupTree keeps a clone it made in an earlier run, and drops an image no longer named', async () => {
+  const ctx = await setupTest();
+
+  const tree = join(ctx.dataDir, 'backup', 'tree');
+  const checkpoint = join(tree, 'imps', 'a', 'checkpoints', 'cp-1', 'rootfs.ext4');
+
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+    await Bun.write(join(dir, 'config.json'), '{}');
+  });
+
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+  const earlier = await ctx.backend.openBackupTree({
+    runId: 'r1',
+    imps: [{ impId: 'a', checkpointIds: ['cp-1'] }],
+    imageDigests: ['sha256:abc'],
+  });
+
+  await earlier.close();
+
   const first = statSync(checkpoint).ino;
-
-  await tree.close();
 
   await ctx.backend.openBackupTree({
     runId: 'r2',
@@ -328,26 +763,20 @@ test('a backup tree clones checkpoints and images once and drops what is gone', 
   });
 
   expect(statSync(checkpoint).ino).toBe(first);
-  expect(existsSync(join(treeDir, 'images'))).toBeTrue();
-  expect(readdirSync(join(treeDir, 'images'))).toEqual([]);
+  expect(readdirSync(join(tree, 'images'))).toStrictEqual([]);
 });
 
-test('an empty disk is a zero-length file', async () => {
-  using ctx = setupTest();
+test("#openBackupTree removes a running disk's copy when it closes, and keeps a reusable one", async () => {
+  const ctx = await setupTest();
 
+  const tree = join(ctx.dataDir, 'backup', 'tree');
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
   await ctx.backend.createImpDisk('b', { kind: 'empty' });
-
-  expect(statSync(ctx.backend.resolveImpPaths('b').disk).size).toBe(0);
-});
-
-test("a running disk's copy goes when the tree closes; a reusable one stays", async () => {
-  using ctx = await setupBackupTest();
-
-  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createBackupCopy('a', 'r1', { isReusable: false });
   await ctx.backend.createBackupCopy('b', 'r1', { isReusable: true });
 
-  const tree = await ctx.backend.openBackupTree({
+  const opened = await ctx.backend.openBackupTree({
     runId: 'r1',
     imps: [
       { impId: 'a', checkpointIds: [] },
@@ -356,61 +785,68 @@ test("a running disk's copy goes when the tree closes; a reusable one stays", as
     imageDigests: [],
   });
 
-  const running = join(ctx.treeDir, 'imps', 'a', 'disk', 'rootfs.ext4');
-  const stopped = join(ctx.treeDir, 'imps', 'b', 'disk', 'rootfs.ext4');
+  const whileOpen = existsSync(join(tree, 'imps', 'a', 'disk', 'rootfs.ext4'));
 
-  expect([...tree.impIds].toSorted()).toEqual(['a', 'b']);
-  expect(existsSync(running)).toBeTrue();
+  await opened.close();
 
-  await tree.close();
-
-  expect(existsSync(running)).toBeFalse();
-  expect(existsSync(stopped)).toBeTrue();
+  expect([...opened.impIds]).toIncludeSameMembers(['a', 'b']);
+  expect(whileOpen).toBeTrue();
+  expect(existsSync(join(tree, 'imps', 'a', 'disk', 'rootfs.ext4'))).toBeFalse();
+  expect(existsSync(join(tree, 'imps', 'b', 'disk', 'rootfs.ext4'))).toBeTrue();
 });
 
-test('start allocates the reserve file once, and again after it was removed', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
-  const reserve = join(dataDir, 'reserve');
+test('#start allocates the reserve file', async () => {
+  const ctx = await setupTest({ reserveFileBytes: 65_536 });
 
-  const live = {
-    impIds: new Set<string>(),
-    checkpointIds: new Set<string>(),
-    imageDigests: new Set<string>(),
-  };
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
-  try {
-    const backend = createXfsBackend({ dataDir, reserveFileBytes: 65_536, log: () => {} });
-
-    await backend.start(live);
-
-    expect(statSync(reserve).blocks * 512).toBeGreaterThanOrEqual(65_536);
-
-    rmSync(reserve);
-
-    await backend.start(live);
-
-    expect(existsSync(reserve)).toBeTrue();
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
+  expect(statSync(join(ctx.dataDir, 'reserve')).blocks * 512).toBeGreaterThanOrEqual(65_536);
 });
 
-// tmpfs has no FIEMAP; the checkout's own filesystem usually does
-const USAGE_DIR = join(import.meta.dir, '../../../../.cache');
+test('#start allocates the reserve file again after someone removed it', async () => {
+  const ctx = await setupTest({ reserveFileBytes: 65_536 });
 
-mkdirSync(USAGE_DIR, { recursive: true });
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
-const hasFiemap = await readExtents(import.meta.path, Number.POSITIVE_INFINITY).then(
-  () => true,
-  () => false,
-);
+  await rm(join(ctx.dataDir, 'reserve'));
 
-test.skipIf(!hasFiemap)('usage counts the blocks of each imp and its checkpoints', async () => {
-  using ctx = setupTest(USAGE_DIR);
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
-  mkdirSync(ctx.imageDir, { recursive: true });
+  expect(existsSync(join(ctx.dataDir, 'reserve'))).toBeTrue();
+});
 
-  await ctx.backend.createImage('sha256:abc', writeImage);
+test('#start logs and skips a reserve file that would take more than half the free space', async () => {
+  const ctx = await setupTest({ reserveFileBytes: Number.MAX_SAFE_INTEGER });
+
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  expect(existsSync(join(ctx.dataDir, 'reserve'))).toBeFalse();
+
+  expect(ctx.log).toHaveBeenCalledWith(
+    `impd: xfs: too little free space for the ${String(Number.MAX_SAFE_INTEGER)}-byte reserve file`,
+  );
+});
+
+test('#measureUsage counts the blocks of each imp and its checkpoints through FIEMAP', async () => {
+  // FIEMAP needs a real filesystem, which a tmpfs temp dir is not: the
+  // checkout's own ignored .cache is one
+  const parentDir = join(import.meta.dir, '..', '..', '..', '..', '.cache');
+
+  // the first dir this made, when .cache was not there yet
+  const made = mkdirSync(parentDir, { recursive: true });
+
+  onTestFinished(() => {
+    if (made !== undefined) {
+      rmSync(made, { recursive: true, force: true });
+    }
+  });
+
+  const ctx = await setupTest({ parentDir });
+
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
   await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
 
@@ -423,70 +859,152 @@ test.skipIf(!hasFiemap)('usage counts the blocks of each imp and its checkpoints
     { impId: 'b', checkpointIds: [] },
   ]);
 
-  // copies here, so nothing is shared; the disk and its checkpoint are 1 MiB each
+  // copies here, so nothing is shared; the disk and its checkpoint are 1 MiB
+  // each, and b's copy of the image takes what its filesystem allocated
   expect(report.isPartial).toBeFalse();
 
-  expect(report.imps.get('a')).toEqual({
-    exclusiveBytes: 2 * 1_048_576,
+  expect(report.imps.get('a')).toStrictEqual({
+    exclusiveBytes: 2_097_152,
     sharedBytes: 0,
     isUpperBound: false,
   });
 
-  expect(report.imps.get('b')?.exclusiveBytes).toBe(4096);
+  expect(report.imps.get('b')).toStrictEqual({
+    exclusiveBytes: statSync(ctx.backend.resolveImpPaths('b').disk).blocks * 512,
+    sharedBytes: 0,
+    isUpperBound: false,
+  });
 });
 
-test('a pass cut short leaves out the imp it stopped at, and the next starts there', async () => {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
-  const read: string[] = [];
-  const state = { cutAt: 'b' as string | null };
+test('#measureUsage leaves out the imp a pass cut short at, and the imps after it', async () => {
+  const fiemap = buildStubFiemap();
 
-  const backend = createXfsBackend({
-    dataDir,
-    cloneFile: (source, target) => {
-      copyFileSync(source, target);
+  const ctx = await setupTest({ readFileExtents: fiemap.readFileExtents });
 
-      return Promise.resolve();
-    },
-    readFileExtents: (path) => {
-      const owner = path.includes('/imps/')
-        ? (path.split('/imps/')[1]?.split('/')[0] ?? '')
-        : 'image';
-
-      read.push(owner);
-
-      const isCut = owner === state.cutAt;
-      const extent = { logical: 0, physical: read.length * 4096, length: 4096, flags: 1 };
-
-      return Promise.resolve({ extents: [extent], isComplete: !isCut });
-    },
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
   });
 
-  try {
-    mkdirSync(join(dataDir, 'images', 'abc'), { recursive: true });
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('c', { kind: 'image', digest: 'sha256:abc' });
 
-    await backend.createImage('sha256:abc', writeImage);
+  fiemap.setCut(ctx.backend.resolveImpPaths('b').disk, true);
 
-    for (const impId of ['a', 'b', 'c']) {
-      await backend.createImpDisk(impId, { kind: 'image', digest: 'sha256:abc' });
-    }
+  const report = await ctx.backend.measureUsage([
+    { impId: 'a', checkpointIds: [] },
+    { impId: 'b', checkpointIds: [] },
+    { impId: 'c', checkpointIds: [] },
+  ]);
 
-    const imps = ['a', 'b', 'c'].map((impId) => ({ impId, checkpointIds: [] }));
+  expect(fiemap.reads).toStrictEqual([
+    join(ctx.dataDir, 'images', 'abc', 'rootfs.ext4'),
+    ctx.backend.resolveImpPaths('a').disk,
+    ctx.backend.resolveImpPaths('b').disk,
+  ]);
 
-    const first = await backend.measureUsage(imps);
+  expect(report.isPartial).toBeTrue();
+  expect([...report.imps.keys()]).toStrictEqual(['a']);
+});
 
-    expect(read).toEqual(['image', 'a', 'b']);
-    expect(first.isPartial).toBeTrue();
-    expect([...first.imps.keys()]).toEqual(['a']);
+test('#measureUsage starts the next pass at the imp the last one cut short at', async () => {
+  const fiemap = buildStubFiemap();
 
-    read.length = 0;
-    state.cutAt = null;
+  const ctx = await setupTest({ readFileExtents: fiemap.readFileExtents });
 
-    const second = await backend.measureUsage(imps);
+  await ctx.backend.createImage('sha256:abc', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
 
-    expect(read).toEqual(['image', 'b', 'c', 'a']);
-    expect(second.isPartial).toBeFalse();
-    expect([...second.imps.keys()]).toEqual(['b', 'c', 'a']);
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('c', { kind: 'image', digest: 'sha256:abc' });
+
+  fiemap.setCut(ctx.backend.resolveImpPaths('b').disk, true);
+
+  const imps = [
+    { impId: 'a', checkpointIds: [] },
+    { impId: 'b', checkpointIds: [] },
+    { impId: 'c', checkpointIds: [] },
+  ];
+
+  await ctx.backend.measureUsage(imps);
+
+  fiemap.setCut(ctx.backend.resolveImpPaths('b').disk, false);
+
+  fiemap.reads.length = 0;
+
+  const report = await ctx.backend.measureUsage(imps);
+
+  expect(fiemap.reads).toStrictEqual([
+    join(ctx.dataDir, 'images', 'abc', 'rootfs.ext4'),
+    ctx.backend.resolveImpPaths('b').disk,
+    ctx.backend.resolveImpPaths('c').disk,
+    ctx.backend.resolveImpPaths('a').disk,
+  ]);
+
+  expect(report.isPartial).toBeFalse();
+  expect([...report.imps.keys()]).toStrictEqual(['b', 'c', 'a']);
+});
+
+test('#measureUsage counts a checkpoint removed during the pass as empty', async () => {
+  const fiemap = buildStubFiemap();
+
+  const ctx = await setupTest({ readFileExtents: fiemap.readFileExtents });
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  fiemap.setExtents(ctx.backend.resolveImpPaths('a').disk, [
+    { logical: 0, physical: 1_048_576, length: 4096, flags: 0 },
+  ]);
+
+  fiemap.setExtents(join(ctx.backend.resolveImpPaths('a').checkpointsDir, 'cp-1', 'disk.ext4'), [
+    { logical: 0, physical: 2_097_152, length: 8192, flags: 0 },
+  ]);
+
+  fiemap.removeBefore(join(ctx.backend.resolveImpPaths('a').checkpointsDir, 'cp-1', 'disk.ext4'));
+
+  const report = await ctx.backend.measureUsage([{ impId: 'a', checkpointIds: ['cp-1'] }]);
+
+  expect(report.isPartial).toBeFalse();
+
+  expect(report.imps.get('a')).toStrictEqual({
+    exclusiveBytes: 4096,
+    sharedBytes: 0,
+    isUpperBound: false,
+  });
+});
+
+test('#measureUsage rethrows a FIEMAP failure on a file that still exists', async () => {
+  const fiemap = buildStubFiemap();
+
+  const ctx = await setupTest({ readFileExtents: fiemap.readFileExtents });
+
+  await ctx.backend.createImpDisk('a', { kind: 'empty' });
+
+  fiemap.failAt(ctx.backend.resolveImpPaths('a').disk, new Error('EIO: i/o error'));
+
+  expect(ctx.backend.measureUsage([{ impId: 'a', checkpointIds: [] }])).rejects.toThrowWithMessage(
+    Error,
+    'EIO: i/o error',
+  );
+});
+
+test('#readUsage reports the used and available bytes of the data dir', async () => {
+  const ctx = await setupTest();
+  const usage = await ctx.backend.readUsage();
+
+  const stats = statfsSync(ctx.dataDir);
+
+  // other writers share the temp dir's filesystem, so its counts may move a little
+  expect(usage.usedBytes).toBeWithin(
+    (stats.blocks - stats.bfree) * stats.bsize - 64 * 1024 ** 2,
+    (stats.blocks - stats.bfree) * stats.bsize + 64 * 1024 ** 2,
+  );
+
+  expect(usage.availableBytes).toBeWithin(
+    stats.bavail * stats.bsize - 64 * 1024 ** 2,
+    stats.bavail * stats.bsize + 64 * 1024 ** 2,
+  );
 });
