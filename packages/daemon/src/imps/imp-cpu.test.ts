@@ -180,7 +180,7 @@ test('it counts a wake and opens an awake span', async () => {
   expect(awake?.awakeSince).toBeValidDate();
 });
 
-test('it keeps the awake span open when impd re-adopts a running VM', async () => {
+test('it keeps the awake span of a running record set running again as adopted', async () => {
   const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev' });
   const running = await findImpByName(ctx.db, 'dev');
@@ -224,7 +224,7 @@ test('it ends the awake span of a VM found dead at its last activity', async () 
   expect(api.resources).toMatchObject({ wakeCount: 1, awakeMs: awake.awakeMs + 2000 });
 });
 
-test('it counts no awake time for a span whose end comes before its start', async () => {
+test('it adds no awake time when a repair of the record ends the span before its start', async () => {
   const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev' });
   const running = await findImpByName(ctx.db, 'dev');
