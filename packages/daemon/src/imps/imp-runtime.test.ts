@@ -11,11 +11,7 @@ import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { createImpTest } from './test-imps';
 
-interface SetupOptions {
-  readonly env?: Readonly<Record<string, string>>;
-}
-
-async function setupTest(options: SetupOptions = {}) {
+async function setupTest(options: Readonly<{ env?: Readonly<Record<string, string>> }> = {}) {
   // one stack: an agent a test starts closes before the harness
   const stack = new AsyncDisposableStack();
 

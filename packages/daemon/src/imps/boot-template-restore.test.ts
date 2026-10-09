@@ -13,12 +13,12 @@ import { buildTestApp, createImpTest, findBrokenInvariants } from './test-imps';
 // of a shape boots the kernel and builds the template beside it; later ones
 // restore it (docs/architecture/boot-templates.md).
 
-interface RestoreTestConfig {
-  // every VM runs under the jailer, in a cgroup of its own
-  readonly isJailed?: boolean;
-}
-
-async function setupTest(config: RestoreTestConfig = {}) {
+async function setupTest(
+  config: Readonly<{
+    // every VM runs under the jailer, in a cgroup of its own
+    isJailed?: boolean;
+  }> = {},
+) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
