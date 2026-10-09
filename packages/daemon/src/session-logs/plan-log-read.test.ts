@@ -1,69 +1,168 @@
 import { expect, test } from 'bun:test';
 import { planLogRead, readLogBounds } from './plan-log-read';
 
-// [100, 150) and [200, 260): the oldest 100 bytes went, and a tap gap left
-// [150, 200) out
-const SEGMENTS = [
-  { start: 100, length: 50 },
-  { start: 200, length: 60 },
-];
-
-test('the bounds run from the first segment to the end of the last', () => {
-  expect(readLogBounds(SEGMENTS, 0)).toEqual({ logStart: 100, logEnd: 260 });
-  expect(readLogBounds([], 42)).toEqual({ logStart: 42, logEnd: 42 });
+test('#readLogBounds runs from the start of the first segment to the end of the last', () => {
+  expect(
+    readLogBounds(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+    ),
+  ).toStrictEqual({ logStart: 100, logEnd: 260 });
 });
 
-test('a read inside a segment is exact and stops at its end', () => {
-  expect(planLogRead(SEGMENTS, 0, 120, 1000)).toMatchObject({
+test('#readLogBounds puts both bounds of an empty log at its origin', () => {
+  expect(readLogBounds([], 42)).toStrictEqual({ logStart: 42, logEnd: 42 });
+});
+
+test('#planLogRead reads from the offset inside a segment up to that segment end', () => {
+  expect(
+    planLogRead(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+      120,
+      1000,
+    ),
+  ).toStrictEqual({
     kind: 'read',
     offset: 120,
     gap: null,
-    segment: SEGMENTS[0],
+    segment: { start: 100, length: 50 },
     skip: 20,
     length: 30,
-  });
-
-  expect(planLogRead(SEGMENTS, 0, 210, 5)).toMatchObject({ offset: 210, skip: 10, length: 5 });
-});
-
-test('a read below the log, or in a hole, is a gap before the data', () => {
-  expect(planLogRead(SEGMENTS, 0, 0, 10)).toMatchObject({
-    offset: 100,
-    gap: { from: 0, to: 100 },
-    skip: 0,
-    length: 10,
-  });
-
-  expect(planLogRead(SEGMENTS, 0, 160, 1000)).toMatchObject({
-    offset: 200,
-    gap: { from: 160, to: 200 },
-    segment: SEGMENTS[1],
-    length: 60,
-  });
-});
-
-test('a read at the end gets nothing, and past it is refused', () => {
-  expect(planLogRead(SEGMENTS, 0, 260, 10)).toMatchObject({
-    kind: 'read',
-    offset: 260,
-    gap: null,
-    segment: null,
-    length: 0,
-  });
-
-  expect(planLogRead(SEGMENTS, 0, 261, 10)).toEqual({
-    kind: 'past_end',
     logStart: 100,
     logEnd: 260,
   });
 });
 
-test('an empty log that began past the read is a gap to its origin', () => {
-  expect(planLogRead([], 300, 10, 10)).toMatchObject({
+test('#planLogRead reads no more than the limit', () => {
+  expect(
+    planLogRead(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+      210,
+      5,
+    ),
+  ).toStrictEqual({
+    kind: 'read',
+    offset: 210,
+    gap: null,
+    segment: { start: 200, length: 60 },
+    skip: 10,
+    length: 5,
+    logStart: 100,
+    logEnd: 260,
+  });
+});
+
+test('#planLogRead reports a gap before the first segment for a read below the log', () => {
+  expect(
+    planLogRead(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+      0,
+      10,
+    ),
+  ).toStrictEqual({
+    kind: 'read',
+    offset: 100,
+    gap: { from: 0, to: 100 },
+    segment: { start: 100, length: 50 },
+    skip: 0,
+    length: 10,
+    logStart: 100,
+    logEnd: 260,
+  });
+});
+
+test('#planLogRead reports a gap up to the next segment for a read in a hole', () => {
+  expect(
+    planLogRead(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+      160,
+      1000,
+    ),
+  ).toStrictEqual({
+    kind: 'read',
+    offset: 200,
+    gap: { from: 160, to: 200 },
+    segment: { start: 200, length: 60 },
+    skip: 0,
+    length: 60,
+    logStart: 100,
+    logEnd: 260,
+  });
+});
+
+test('#planLogRead reads nothing at the end of the log', () => {
+  expect(
+    planLogRead(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+      260,
+      10,
+    ),
+  ).toStrictEqual({
+    kind: 'read',
+    offset: 260,
+    gap: null,
+    segment: null,
+    skip: 0,
+    length: 0,
+    logStart: 100,
+    logEnd: 260,
+  });
+});
+
+test('#planLogRead refuses a read past the end of the log', () => {
+  expect(
+    planLogRead(
+      [
+        { start: 100, length: 50 },
+        { start: 200, length: 60 },
+      ],
+      0,
+      261,
+      10,
+    ),
+  ).toStrictEqual({ kind: 'past_end', logStart: 100, logEnd: 260 });
+});
+
+test('#planLogRead reports a gap to the origin of an empty log that began past the read', () => {
+  expect(planLogRead([], 300, 10, 10)).toStrictEqual({
+    kind: 'read',
     offset: 300,
     gap: { from: 10, to: 300 },
+    segment: null,
+    skip: 0,
     length: 0,
+    logStart: 300,
+    logEnd: 300,
   });
+});
 
-  expect(planLogRead([], 300, 301, 10).kind).toBe('past_end');
+test('#planLogRead refuses a read past the origin of an empty log', () => {
+  expect(planLogRead([], 300, 301, 10)).toStrictEqual({
+    kind: 'past_end',
+    logStart: 300,
+    logEnd: 300,
+  });
 });

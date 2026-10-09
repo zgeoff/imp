@@ -1,104 +1,93 @@
-import { afterEach, expect, test } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import { appendFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
+import { buildStubTimers } from '../test-utils/build-stub-timers';
 import {
-  createGenerationLog as createLog,
-  findSegmentPath,
-  loadGenerationLog as loadLog,
+  createGenerationLog,
+  loadGenerationLog,
   readGenerationBounds,
   readGenerationMeta,
 } from './generation-log';
-import type { GenerationLog, GenerationLogOptions, GenerationMeta } from './generation-log';
 
-const GENERATION = 'a'.repeat(32);
-const dirs: string[] = [];
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// each test's logs: their open files close before the directories go
-const logs: GenerationLog[] = [];
+  onTestFinished(() => stack.disposeAsync());
 
-afterEach(() => {
-  for (const log of logs.splice(0)) {
+  const root = await mkdtemp(join(tmpdir(), 'imp-generation-log-'));
+
+  stack.defer(() => rm(root, { recursive: true, force: true }));
+
+  // the log's own directory, which making the log creates
+  return { stack, dir: join(root, 'a'.repeat(32)) };
+}
+
+test('it keeps appended output in segments and drops the oldest past the bound', async () => {
+  const ctx = await setupTest();
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 10,
+      maxBytes: 20,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
     log.abandon();
-  }
+  });
 
-  for (const dir of dirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function setupOptions(overrides: Partial<GenerationLogOptions> = {}): GenerationLogOptions {
-  const root = mkdtempSync(join(tmpdir(), 'imp-generation-log-'));
-
-  dirs.push(root);
-
-  return {
-    dir: join(root, GENERATION),
-    segmentBytes: 10,
-    maxBytes: 20,
-    requireRoom: () => Promise.resolve(),
-    now: () => 1000,
-    log: () => {},
-    ...overrides,
-  };
-}
-
-async function createGenerationLog(
-  options: GenerationLogOptions,
-  identity: Readonly<typeof IDENTITY>,
-) {
-  const log = await createLog(options, identity);
-
-  logs.push(log);
-
-  return log;
-}
-
-async function loadGenerationLog(options: GenerationLogOptions, meta: GenerationMeta) {
-  const log = await loadLog(options, meta);
-
-  logs.push(log);
-
-  return log;
-}
-
-const IDENTITY = {
-  session: 'main',
-  executionGeneration: GENERATION,
-  bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-};
-
-function readSegment(dir: string, start: number): string {
-  return readFileSync(findSegmentPath(dir, start), 'utf8');
-}
-
-test('appends fill segments and the oldest go past the bound', async () => {
-  const options = setupOptions();
-
-  const log = await createGenerationLog(options, IDENTITY);
-
+  // 25 bytes in segments of 10, at most 20 kept: [10, 20) and [20, 25)
   await log.append(new TextEncoder().encode('0123456789abcdefghijKLMNO'));
   await log.commit();
 
-  // 25 bytes in segments of 10, at most 20 kept: [10, 20) and [20, 25)
-  const meta = readGenerationMeta(options.dir);
-
-  expect(meta?.segments).toEqual([
+  expect(readGenerationMeta(ctx.dir)?.segments).toStrictEqual([
     { start: 10, length: 10 },
     { start: 20, length: 5 },
   ]);
 
-  expect(readSegment(options.dir, 10)).toBe('abcdefghij');
-  expect(readSegment(options.dir, 20)).toBe('KLMNO');
-  expect(readdirSync(options.dir).toSorted()).toEqual(['10.seg', '20.seg', 'meta.json']);
+  expect(readFileSync(join(ctx.dir, '10.seg'), 'utf8')).toBe('abcdefghij');
+  expect(readFileSync(join(ctx.dir, '20.seg'), 'utf8')).toBe('KLMNO');
+  expect(readdirSync(ctx.dir).toSorted()).toStrictEqual(['10.seg', '20.seg', 'meta.json']);
 });
 
-test('a skip starts a new segment past a hole, and an empty log moves its origin', async () => {
-  const options = setupOptions({ segmentBytes: 100, maxBytes: 200 });
+test('it starts each offset a skip names as a new segment', async () => {
+  const ctx = await setupTest();
 
-  const log = await createGenerationLog(options, IDENTITY);
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
 
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  // the first skip moves an empty log's origin; the second leaves a hole
   log.skipTo(500);
 
   await log.append(new TextEncoder().encode('abc'));
@@ -107,111 +96,473 @@ test('a skip starts a new segment past a hole, and an empty log moves its origin
 
   await log.append(new TextEncoder().encode('xyz'));
 
-  expect(log.readMeta().segments).toEqual([
+  expect(log.readMeta().segments).toStrictEqual([
     { start: 500, length: 3 },
     { start: 900, length: 3 },
   ]);
 
-  expect(readGenerationBounds(log.readMeta())).toEqual({ logStart: 500, logEnd: 903 });
+  expect(readGenerationBounds(log.readMeta())).toStrictEqual({ logStart: 500, logEnd: 903 });
 });
 
-test('a reload cuts a torn tail back to what the meta counted', async () => {
-  const options = setupOptions({ segmentBytes: 100, maxBytes: 200 });
+test('it cuts a torn tail back to what the meta counted when it loads a log', async () => {
+  const ctx = await setupTest();
 
-  const log = await createGenerationLog(options, IDENTITY);
+  const written = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
 
-  await log.append(new TextEncoder().encode('counted'));
-  await log.commit();
+  ctx.stack.defer(() => {
+    written.abandon();
+  });
+
+  await written.append(new TextEncoder().encode('counted'));
+  await written.commit();
 
   // after the commit: bytes the meta never counted, as a crash leaves them,
   // and a segment it never named
-  appendFileSync(findSegmentPath(options.dir, 0), '\0\0garbage');
-  appendFileSync(findSegmentPath(options.dir, 7), 'stray');
+  appendFileSync(join(ctx.dir, '0.seg'), '\0\0garbage');
+  appendFileSync(join(ctx.dir, '7.seg'), 'stray');
 
-  log.abandon();
+  written.abandon();
 
-  const meta = readGenerationMeta(options.dir);
+  const meta = readGenerationMeta(ctx.dir);
 
-  expect(meta?.segments).toEqual([{ start: 0, length: 7 }]);
+  invariant(meta);
 
-  if (meta === null) {
-    throw new Error('no meta');
-  }
+  const reopened = await loadGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    meta,
+  );
 
-  const reopened = await loadGenerationLog(options, meta);
+  ctx.stack.defer(() => {
+    reopened.abandon();
+  });
 
-  expect(readSegment(options.dir, 0)).toBe('counted');
-  expect(readdirSync(options.dir).toSorted()).toEqual(['0.seg', 'meta.json']);
+  expect(reopened.readMeta().segments).toStrictEqual([{ start: 0, length: 7 }]);
+  expect(readFileSync(join(ctx.dir, '0.seg'), 'utf8')).toBe('counted');
+  expect(readdirSync(ctx.dir).toSorted()).toStrictEqual(['0.seg', 'meta.json']);
+});
 
-  // the reopened log goes on in a new segment at its end
+test('it goes on in a new segment at the end of a loaded log', async () => {
+  const ctx = await setupTest();
+
+  const written = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    written.abandon();
+  });
+
+  await written.append(new TextEncoder().encode('counted'));
+  await written.commit();
+
+  written.abandon();
+
+  const meta = readGenerationMeta(ctx.dir);
+
+  invariant(meta);
+
+  const reopened = await loadGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    meta,
+  );
+
+  ctx.stack.defer(() => {
+    reopened.abandon();
+  });
+
   await reopened.append(new TextEncoder().encode('+more'));
   await reopened.commit();
 
-  expect(readSegment(options.dir, 7)).toBe('+more');
-  expect(readGenerationBounds(reopened.readMeta())).toEqual({ logStart: 0, logEnd: 12 });
+  expect(readFileSync(join(ctx.dir, '7.seg'), 'utf8')).toBe('+more');
+  expect(readGenerationBounds(reopened.readMeta())).toStrictEqual({ logStart: 0, logEnd: 12 });
 });
 
-test('finish records the end and the exit, and later output is not kept', async () => {
-  const options = setupOptions({ segmentBytes: 100, maxBytes: 200 });
+test('it records the end, the exit code and the end time when the log finishes', async () => {
+  const ctx = await setupTest();
 
-  const log = await createGenerationLog(options, IDENTITY);
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  await log.append(new TextEncoder().encode('bye'));
+  await log.finish({ end: 3, exitCode: 0 });
+
+  expect(readGenerationMeta(ctx.dir)).toStrictEqual({
+    version: 1,
+    session: 'main',
+    executionGeneration: 'a'.repeat(32),
+    bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    startedAt: 1000,
+    origin: 0,
+    segments: [{ start: 0, length: 3 }],
+    state: 'ended',
+    endedAt: 1000,
+    end: 3,
+    exitCode: 0,
+  });
+});
+
+test('it keeps no output that comes after the log finished', async () => {
+  const ctx = await setupTest();
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
 
   await log.append(new TextEncoder().encode('bye'));
   await log.finish({ end: 3, exitCode: 0 });
   await log.append(new TextEncoder().encode('late'));
 
-  expect(readGenerationMeta(options.dir)).toMatchObject({
-    state: 'ended',
-    end: 3,
-    exitCode: 0,
-    endedAt: 1000,
-    segments: [{ start: 0, length: 3 }],
-  });
+  expect(readGenerationMeta(ctx.dir)?.segments).toStrictEqual([{ start: 0, length: 3 }]);
+  expect(readFileSync(join(ctx.dir, '0.seg'), 'utf8')).toBe('bye');
 });
 
-test('a full disk refuses the next segment, and the log stops', async () => {
+test('it rejects an append whose new segment would reach the disk reserve', async () => {
+  const ctx = await setupTest();
+
   const full = new ORPCError('DISK_FULL', { message: 'full' });
 
+  // room for the first segment only
   const room = { left: 1 };
 
-  const options = setupOptions({
-    requireRoom: () => {
-      room.left -= 1;
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 10,
+      maxBytes: 20,
+      requireRoom: () => {
+        room.left -= 1;
 
-      return room.left < 0 ? Promise.reject(full) : Promise.resolve();
+        return room.left < 0 ? Promise.reject(full) : Promise.resolve();
+      },
+      now: () => 1000,
+      log: () => {},
     },
-  });
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
 
-  const log = await createGenerationLog(options, IDENTITY);
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
 
   await log.append(new TextEncoder().encode('0123456789'));
 
-  const refused = await log
-    .append(new TextEncoder().encode('more'))
-    .catch((error: unknown) => error);
+  expect(log.append(new TextEncoder().encode('more'))).rejects.toBe(full);
+});
 
-  expect(refused).toBe(full);
+test('it records the stop and keeps the written segments when the log stops for a full disk', async () => {
+  const ctx = await setupTest();
 
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 10,
+      maxBytes: 20,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  await log.append(new TextEncoder().encode('0123456789'));
   await log.stop('disk_full');
 
-  expect(readGenerationMeta(options.dir)).toMatchObject({
+  expect(readGenerationMeta(ctx.dir)).toStrictEqual({
+    version: 1,
+    session: 'main',
+    executionGeneration: 'a'.repeat(32),
+    bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    startedAt: 1000,
+    origin: 0,
+    segments: [{ start: 0, length: 10 }],
     state: 'live',
     stopped: 'disk_full',
-    segments: [{ start: 0, length: 10 }],
   });
 });
 
-test('removeOldestSegment keeps the last one', async () => {
-  const options = setupOptions({ segmentBytes: 4, maxBytes: 100 });
+test('it removes the oldest segment and its file', async () => {
+  const ctx = await setupTest();
 
-  const log = await createGenerationLog(options, IDENTITY);
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 4,
+      maxBytes: 100,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
 
   await log.append(new TextEncoder().encode('aaaabbbb'));
 
-  const first = await log.removeOldestSegment();
-  const second = await log.removeOldestSegment();
+  const isRemoved = await log.removeOldestSegment();
 
-  expect(first).toBe(true);
-  expect(second).toBe(false);
-  expect(readGenerationMeta(options.dir)?.segments).toEqual([{ start: 4, length: 4 }]);
+  expect(isRemoved).toBe(true);
+  expect(readGenerationMeta(ctx.dir)?.segments).toStrictEqual([{ start: 4, length: 4 }]);
+  expect(existsSync(join(ctx.dir, '0.seg'))).toBe(false);
+});
+
+test('it keeps the last segment when asked to remove the oldest', async () => {
+  const ctx = await setupTest();
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 4,
+      maxBytes: 100,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  await log.append(new TextEncoder().encode('aaaa'));
+
+  const isRemoved = await log.removeOldestSegment();
+
+  expect(isRemoved).toBe(false);
+  expect(log.readMeta().segments).toStrictEqual([{ start: 0, length: 4 }]);
+});
+
+test('it starts a commit one second after an append', async () => {
+  const ctx = await setupTest();
+
+  const timers = buildStubTimers();
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+      startTimer: timers.startTimer,
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  await log.append(new TextEncoder().encode('abc'));
+
+  expect(timers.readPendingMs()).toStrictEqual([1000]);
+  expect(readGenerationMeta(ctx.dir)?.segments).toStrictEqual([]);
+});
+
+test('it writes the appended bytes into the meta when the commit timer fires', async () => {
+  const ctx = await setupTest();
+
+  const timers = buildStubTimers();
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+      startTimer: timers.startTimer,
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  await log.append(new TextEncoder().encode('abc'));
+
+  timers.firePending();
+
+  await waitFor(() => {
+    expect(readGenerationMeta(ctx.dir)?.segments).toStrictEqual([{ start: 0, length: 3 }]);
+  });
+});
+
+test('it cancels the pending commit when the log is abandoned', async () => {
+  const ctx = await setupTest();
+
+  const timers = buildStubTimers();
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom: () => Promise.resolve(),
+      now: () => 1000,
+      log: () => {},
+      startTimer: timers.startTimer,
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  await log.append(new TextEncoder().encode('abc'));
+
+  log.abandon();
+
+  expect(timers.readPendingMs()).toStrictEqual([]);
+});
+
+test('it rejects an append whose segment opened while the log was abandoned', async () => {
+  const ctx = await setupTest();
+
+  const room = Promise.withResolvers<undefined>();
+  const requireRoom = mock(() => room.promise);
+
+  const log = await createGenerationLog(
+    {
+      dir: ctx.dir,
+      segmentBytes: 100,
+      maxBytes: 200,
+      requireRoom,
+      now: () => 1000,
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  ctx.stack.defer(() => {
+    log.abandon();
+  });
+
+  // the append waits for room for its first segment while the log is abandoned
+  const appending = log.append(new TextEncoder().encode('abc'));
+
+  await waitFor(() => {
+    expect(requireRoom).toHaveBeenCalledOnce();
+  });
+
+  log.abandon();
+  room.resolve(undefined);
+
+  expect(appending).rejects.toThrowWithMessage(Error, 'session log: abandoned');
 });

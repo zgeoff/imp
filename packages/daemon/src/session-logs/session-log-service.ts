@@ -97,8 +97,12 @@ interface SessionLogDeps {
   readonly now: () => number;
   readonly log: (message: string) => void;
 
-  // how long appended bytes wait for their flush; a test shortens it
-  readonly commitDelayMs?: number;
+  // starts each log's commit timer; setTimeout by default, a test fires it
+  readonly startTimer?: GenerationLogOptions['startTimer'];
+
+  // called once each look (observe, tapNow) has opened or refused every tap
+  // it tried; a test waits on it
+  readonly onLookDone?: () => void;
   readonly openTap?: (
     vsockPath: string,
     session: string,
@@ -216,7 +220,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     requireRoom: deps.requireRoom,
     now: deps.now,
     log: deps.log,
-    ...(deps.commitDelayMs !== undefined && { commitDelayMs: deps.commitDelayMs }),
+    ...(deps.startTimer !== undefined && { startTimer: deps.startTimer }),
   });
 
   const readLive = (impId: string) => (generation: string) =>
@@ -511,6 +515,22 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     }
   };
 
+  // the pump runs on its own, so a look is done once its taps are open
+  const startPump = (
+    imp: SessionLogImp,
+    entry: LiveLog,
+    tap: Readonly<ExecStream>,
+    life: number,
+  ): void => {
+    void (async () => {
+      try {
+        await runTap(imp, entry, tap, life);
+      } catch (error) {
+        printError(imp, error);
+      }
+    })();
+  };
+
   // generation_changed: the named generation is gone, and the tap carries
   // the one that runs now under the name, from its first offset
   const startNextGeneration = async (
@@ -587,7 +607,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     next.log.setOrigin(output.offset);
 
-    await runTap(imp, next, tap, life);
+    startPump(imp, next, tap, life);
   };
 
   // NO_SESSION or BAD_REQUEST (no longer logged): the generation ended
@@ -664,7 +684,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     taps.set(entry.key, tap);
 
-    await runTap(imp, entry, tap, life);
+    startPump(imp, entry, tap, life);
   };
 
   const startTap = async (
@@ -734,6 +754,8 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
         await task();
       } catch (error) {
         printError(imp, error);
+      } finally {
+        deps.onLookDone?.();
       }
     })();
   };
