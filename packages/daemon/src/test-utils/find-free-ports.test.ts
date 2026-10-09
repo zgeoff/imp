@@ -121,13 +121,16 @@ test('it skips a port that an earlier picker in this process claimed', () => {
     Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } }),
   );
 
-  const candidates = probes.map((probe) => probe.port);
+  const [claimed, next] = probes.map((probe) => probe.port);
 
   for (const probe of probes) {
     probe.stop(true);
   }
 
-  const earlierPicks = [...candidates];
+  invariant(claimed);
+  invariant(next);
+
+  const earlierPicks = [claimed];
 
   findFreePorts(1, {
     pick: () => {
@@ -139,7 +142,7 @@ test('it skips a port that an earlier picker in this process claimed', () => {
     },
   });
 
-  const picks = [...candidates];
+  const picks = [claimed, next];
 
   const free = findFreePorts(1, {
     pick: () => {
@@ -151,7 +154,7 @@ test('it skips a port that an earlier picker in this process claimed', () => {
     },
   });
 
-  expect(free.take()).toBe(candidates[1]);
+  expect(free.take()).toBe(next);
 });
 
 test('it releases its claim on each port when the test ends', () => {
@@ -229,10 +232,10 @@ test('it picks two ports and holds them until released', async () => {
     first.kill();
   });
 
-  const firstPorts: unknown = await waitFor(async () => {
+  const firstPorts = await waitFor(async (): Promise<unknown> => {
     const picked = await readFile(join(dir, 'first.json'), 'utf8');
 
-    return JSON.parse(picked);
+    return JSON.parse(picked) as unknown;
   });
 
   const second = Bun.spawn([process.execPath, 'test', './picker.test.ts'], {
@@ -246,10 +249,10 @@ test('it picks two ports and holds them until released', async () => {
     second.kill();
   });
 
-  const secondPorts: unknown = await waitFor(async () => {
+  const secondPorts = await waitFor(async (): Promise<unknown> => {
     const picked = await readFile(join(dir, 'second.json'), 'utf8');
 
-    return JSON.parse(picked);
+    return JSON.parse(picked) as unknown;
   });
 
   await writeFile(join(dir, 'release'), '');
