@@ -1,5 +1,13 @@
-import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
@@ -224,6 +232,74 @@ test('#remove logs a cgroup that still holds a VM and keeps it', async () => {
   expect(ctx.logs).toHaveLength(1);
   expect(ctx.logs[0]).toStartWith('impd: cgroup busy: remove:');
   expect(existsSync(join(ctx.root, 'imps', 'busy'))).toBeTrue();
+});
+
+test('#remove tries a busy cgroup again until the kernel lets it go', async () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const sleeps: number[] = [];
+
+  // the first rmdir finds the exited VM still held, as the kernel answers
+  const rmdir = mock(rmdirSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' });
+  });
+
+  const cgroups = createCpuCgroups({
+    root: ctx.root,
+    procRoot: ctx.proc,
+    log: ctx.log,
+    rmdir,
+    sleep: (ms) => {
+      sleeps.push(ms);
+
+      return Promise.resolve();
+    },
+  });
+
+  mkdirSync(join(ctx.root, 'imps', 'held'));
+
+  await cgroups.remove('held');
+
+  expect(existsSync(join(ctx.root, 'imps', 'held'))).toBeFalse();
+  expect(sleeps).toStrictEqual([50]);
+  expect(ctx.logs).toStrictEqual([]);
+});
+
+test('#remove logs a cgroup that stays busy past the last try and keeps it', async () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const sleeps: number[] = [];
+
+  const cgroups = createCpuCgroups({
+    root: ctx.root,
+    procRoot: ctx.proc,
+    log: ctx.log,
+    rmdir: () => {
+      throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' });
+    },
+    sleep: (ms) => {
+      sleeps.push(ms);
+
+      return Promise.resolve();
+    },
+  });
+
+  mkdirSync(join(ctx.root, 'imps', 'held'));
+
+  await cgroups.remove('held');
+
+  // 40 tries, with a 50 ms wait between each two
+  expect(sleeps).toHaveLength(39);
+
+  expect(ctx.logs).toStrictEqual([
+    'impd: cgroup held: remove: EBUSY: resource busy or locked, rmdir',
+  ]);
+
+  expect(existsSync(join(ctx.root, 'imps', 'held'))).toBeTrue();
 });
 
 test('#removeOrphans takes the empty cgroups of imps it does not know', () => {
