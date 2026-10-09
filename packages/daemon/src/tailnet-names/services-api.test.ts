@@ -1,177 +1,398 @@
-import { expect, test } from 'bun:test';
-import * as z from 'zod';
-import { readRejection } from '../read-rejection';
+import { expect, mock, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
+import { server } from '@imp/test-utils/mock-server';
+import { HttpResponse, http } from 'msw';
+import { buildStubTailscaleApi } from '../test-utils/build-stub-tailscale-api';
 import { createServicesApi } from './services-api';
-import type { TailnetService } from './services-api';
 
-const ServiceBodySchema = z.object({
-  name: z.string(),
-  comment: z.string(),
-  ports: z.array(z.string()),
-  tags: z.array(z.string()),
-});
+test('it asks for a token by client credentials, with the services scope only', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
 
-const SECRET = 'tskey-client-kExample-SECRETVALUE';
+  server.use(...stub.handlers);
 
-interface SeenRequest {
-  readonly method: string;
-  readonly path: string;
-  readonly authorization: string | null;
-  readonly body: string;
-}
-
-// a fake Tailscale API: an OAuth token endpoint and a services store
-function startFakeApi() {
-  const seen: SeenRequest[] = [];
-
-  const services = new Map<string, TailnetService>();
-
-  const state = { tokens: 0, failNext: 0 };
-
-  const server = Bun.serve({
-    port: 0,
-    hostname: '127.0.0.1',
-    fetch: async (request) => {
-      const url = new URL(request.url);
-
-      const body = await request.text();
-
-      seen.push({
-        method: request.method,
-        path: url.pathname,
-        authorization: request.headers.get('authorization'),
-        body,
-      });
-
-      if (url.pathname === '/api/v2/oauth/token') {
-        state.tokens += 1;
-
-        return Response.json({ access_token: `token-${String(state.tokens)}`, expires_in: 3600 });
-      }
-
-      if (state.failNext > 0) {
-        const status = state.failNext;
-
-        state.failNext = 0;
-
-        return Response.json({ message: 'name already in use by a machine' }, { status });
-      }
-
-      const name = decodeURIComponent(url.pathname.split('/').at(-1) ?? '');
-
-      if (url.pathname === '/api/v2/tailnet/-/services') {
-        return Response.json({ vipServices: [...services.values()] });
-      }
-
-      const found = services.get(name);
-
-      if (request.method === 'PUT') {
-        services.set(name, ServiceBodySchema.parse(JSON.parse(body)));
-
-        return Response.json(services.get(name));
-      }
-
-      if (found === undefined) {
-        return Response.json({ message: 'not found' }, { status: 404 });
-      }
-
-      if (request.method === 'DELETE') {
-        services.delete(name);
-
-        return new Response(null);
-      }
-
-      return Response.json(found);
-    },
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
   });
 
-  return {
-    seen,
-    services,
-    state,
-    apiUrl: `http://127.0.0.1:${String(server.port)}/api/v2`,
-    [Symbol.dispose]: () => {
-      void server.stop(true);
-    },
-  };
-}
+  await api.listServices();
 
-function setupApi() {
-  const fake = startFakeApi();
+  expect(Object.fromEntries(new URLSearchParams(stub.requests[0]?.body))).toStrictEqual({
+    client_id: 'kExample',
+    client_secret: 'secret',
+    grant_type: 'client_credentials',
+    scope: 'services',
+  });
+});
+
+test('it sends the token it was given as a bearer token', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await api.listServices();
+
+  expect(stub.requests.at(-1)?.authorization).toMatch(/^Bearer tskey-api-\w+$/v);
+});
+
+test('it keeps one token for calls before its last minute', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
   const clock = { now: 0 };
 
   const api = createServicesApi({
-    readCredential: () => ({ clientId: 'kExample', clientSecret: SECRET }),
-    apiUrl: fake.apiUrl,
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
     now: () => clock.now,
   });
 
-  return { api, fake, clock, [Symbol.dispose]: fake[Symbol.dispose] };
-}
+  await api.listServices();
 
-test('it asks for the services scope only, and keeps the token until near its end', async () => {
-  using ctx = setupApi();
+  clock.now = 3_600_000 - 60_001;
 
-  await ctx.api.listServices();
-  await ctx.api.listServices();
+  await api.listServices();
 
-  const form = new URLSearchParams(ctx.fake.seen[0]?.body ?? '');
-
-  expect(form.get('grant_type')).toBe('client_credentials');
-  expect(form.get('scope')).toBe('services');
-  expect(ctx.fake.state.tokens).toBe(1);
-  expect(ctx.fake.seen.at(-1)?.authorization).toBe('Bearer token-1');
-
-  ctx.clock.now = 3_600_000 - 30_000;
-
-  await ctx.api.listServices();
-
-  expect(ctx.fake.state.tokens).toBe(2);
+  expect(stub.requests.filter((request) => request.path === '/oauth/token')).toHaveLength(1);
 });
 
-test('it writes, reads and deletes a service by name', async () => {
-  using ctx = setupApi();
+test('it asks for a new token in the old one’s last minute', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
 
-  const missing = await ctx.api.readService('svc:box');
+  server.use(...stub.handlers);
 
-  await ctx.api.writeService({
+  const clock = { now: 0 };
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+    now: () => clock.now,
+  });
+
+  await api.listServices();
+
+  clock.now = 3_600_000 - 30_000;
+
+  await api.listServices();
+
+  expect(stub.requests.filter((request) => request.path === '/oauth/token')).toHaveLength(2);
+});
+
+test('it rejects with the token endpoint’s status and message when the client is refused', () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'rotated-away' }),
+  });
+
+  expect(api.listServices()).rejects.toMatchObject({
+    name: 'TailscaleApiError',
+    status: 401,
+    message: 'Tailscale OAuth token: 401 invalid client credentials',
+  });
+});
+
+test('it lists the tailnet’s services', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  await stub.services.create({
     name: 'svc:box',
     comment: 'imp host abc',
     ports: ['tcp:80', 'tcp:443'],
     tags: ['tag:imp-svc'],
   });
 
-  const written = await ctx.api.readService('svc:box');
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
 
-  await ctx.api.deleteService('svc:box');
-  await ctx.api.deleteService('svc:box');
+  const listed = await api.listServices();
 
-  expect(missing).toBeNull();
+  expect(listed).toStrictEqual([
+    {
+      name: 'svc:box',
+      comment: 'imp host abc',
+      ports: ['tcp:80', 'tcp:443'],
+      tags: ['tag:imp-svc'],
+    },
+  ]);
+});
 
-  expect(written).toEqual({
+test('it lists no services when the API answers a null list', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(
+    http.get('https://api.tailscale.com/api/v2/tailnet/-/services', () =>
+      HttpResponse.json({ vipServices: null }),
+    ),
+    ...stub.handlers,
+  );
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  const listed = await api.listServices();
+
+  expect(listed).toStrictEqual([]);
+});
+
+test('it writes a service under its encoded name', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await api.writeService({
     name: 'svc:box',
     comment: 'imp host abc',
     ports: ['tcp:80', 'tcp:443'],
     tags: ['tag:imp-svc'],
   });
 
-  expect(ctx.fake.services.size).toBe(0);
+  const stored: unknown[] = stub.services.all();
 
-  expect(ctx.fake.seen.map((request) => `${request.method} ${request.path}`)).toContain(
-    'PUT /api/v2/tailnet/-/services/svc%3Abox',
-  );
+  expect(stored).toStrictEqual([
+    {
+      name: 'svc:box',
+      comment: 'imp host abc',
+      ports: ['tcp:80', 'tcp:443'],
+      tags: ['tag:imp-svc'],
+    },
+  ]);
 });
 
-test('an API error carries Tailscale’s message and no secret or token', async () => {
-  using ctx = setupApi();
+test('it sends a write to the encoded service path', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
 
-  ctx.fake.state.failNext = 400;
+  server.use(...stub.handlers);
 
-  const error = await readRejection(
-    ctx.api.writeService({ name: 'svc:box', comment: '', ports: [], tags: [] }),
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await api.writeService({ name: 'svc:box', comment: '', ports: [], tags: [] });
+
+  expect(stub.requests.at(-1)).toMatchObject({
+    method: 'PUT',
+    path: '/tailnet/-/services/svc%3Abox',
+  });
+});
+
+test('it reads a service by name', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  await stub.services.create({ name: 'svc:box', comment: 'imp host abc', tags: ['tag:imp-svc'] });
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  const read = await api.readService('svc:box');
+
+  expect(read).toStrictEqual({
+    name: 'svc:box',
+    comment: 'imp host abc',
+    ports: ['tcp:80', 'tcp:443'],
+    tags: ['tag:imp-svc'],
+  });
+});
+
+test('it reads a service the API does not have as null', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  const read = await api.readService('svc:box');
+
+  expect(read).toBeNull();
+});
+
+test('it rejects a read the API fails with anything but 404', () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(
+    http.get('https://api.tailscale.com/api/v2/tailnet/-/services/:name', () =>
+      HttpResponse.json({ message: 'internal error' }, { status: 500 }),
+    ),
+    ...stub.handlers,
   );
 
-  expect(String(error)).toContain('400 name already in use by a machine');
-  expect(String(error)).not.toContain(SECRET);
-  expect(String(error)).not.toContain('token-1');
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  expect(api.readService('svc:box')).rejects.toMatchObject({
+    name: 'TailscaleApiError',
+    status: 500,
+    message: 'Tailscale GET /tailnet/-/services/svc%3Abox: 500 internal error',
+  });
+});
+
+test('it deletes a service by name', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  await stub.services.create({ name: 'svc:box' });
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await api.deleteService('svc:box');
+
+  expect(stub.services.count()).toBe(0);
+});
+
+test('it counts a delete of a service that is already gone as done', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await expect(api.deleteService('svc:box')).toResolve();
+});
+
+test('it rejects a delete the API fails with anything but 404', () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(
+    http.delete('https://api.tailscale.com/api/v2/tailnet/-/services/:name', () =>
+      HttpResponse.json({ message: 'forbidden' }, { status: 403 }),
+    ),
+    ...stub.handlers,
+  );
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  expect(api.deleteService('svc:box')).rejects.toMatchObject({
+    name: 'TailscaleApiError',
+    status: 403,
+    message: 'Tailscale DELETE /tailnet/-/services/svc%3Abox: 403 forbidden',
+  });
+});
+
+test('it rejects a call whose token the API refuses with a 401', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await api.listServices();
+
+  stub.revokeTokens();
+
+  expect(api.listServices()).rejects.toMatchObject({
+    name: 'TailscaleApiError',
+    status: 401,
+    message: 'Tailscale GET /tailnet/-/services: 401 invalid token',
+  });
+});
+
+test('it asks for a new token on the call after a 401', async () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...stub.handlers);
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  await api.listServices();
+
+  stub.revokeTokens();
+
+  const refused = await Promise.allSettled([api.listServices()]);
+  const listed = await api.listServices();
+
+  expect(refused).toMatchObject([{ status: 'rejected', reason: { status: 401 } }]);
+  expect(listed).toStrictEqual([]);
+  expect(stub.requests.filter((request) => request.path === '/oauth/token')).toHaveLength(2);
+});
+
+test('it keeps the client secret and the token out of an API error', async () => {
+  const stub = buildStubTailscaleApi({
+    client: { clientId: 'kExample', clientSecret: 'tskey-client-kExample-SECRETVALUE' },
+  });
+
+  const authorized = mock<(authorization: string | null) => void>();
+
+  server.use(
+    http.put('https://api.tailscale.com/api/v2/tailnet/-/services/:name', (info) => {
+      authorized(info.request.headers.get('authorization'));
+
+      return HttpResponse.json({ message: 'name already in use by a machine' }, { status: 400 });
+    }),
+    ...stub.handlers,
+  );
+
+  const api = createServicesApi({
+    readCredential: () => ({
+      clientId: 'kExample',
+      clientSecret: 'tskey-client-kExample-SECRETVALUE',
+    }),
+  });
+
+  const [settled] = await Promise.allSettled([
+    api.writeService({ name: 'svc:box', comment: '', ports: [], tags: [] }),
+  ]);
+
+  const token = authorized.mock.calls[0]?.[0]?.replace('Bearer ', '');
+
+  if (settled?.status !== 'rejected') {
+    throw new Error('the write was not refused');
+  }
+
+  invariant(token);
+
+  expect(String(settled.reason)).toBe(
+    'TailscaleApiError: Tailscale PUT /tailnet/-/services/svc%3Abox: 400 name already in use by a machine',
+  );
+
+  expect(String(settled.reason)).not.toInclude('SECRETVALUE');
+  expect(String(settled.reason)).not.toInclude(token);
+});
+
+test('it puts the start of a body that is not Tailscale’s JSON into the error', () => {
+  const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(
+    http.get('https://api.tailscale.com/api/v2/tailnet/-/services', () =>
+      HttpResponse.text(`<html>${'x'.repeat(300)}</html>`, { status: 502 }),
+    ),
+    ...stub.handlers,
+  );
+
+  const api = createServicesApi({
+    readCredential: () => ({ clientId: 'kExample', clientSecret: 'secret' }),
+  });
+
+  expect(api.listServices()).rejects.toThrowWithMessage(
+    Error,
+    `Tailscale GET /tailnet/-/services: 502 <html>${'x'.repeat(194)}`,
+  );
 });
