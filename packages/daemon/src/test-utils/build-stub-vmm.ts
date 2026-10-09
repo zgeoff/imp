@@ -135,6 +135,10 @@ export function buildStubVmm() {
 
   const hangs = { gate: Promise.withResolvers<void>() };
 
+  // calls waiting on a hang now, and calls of replaced runners that never
+  // settle: what a test waits for before it reads a call as pending
+  const waiting = { hung: 0, parked: 0 };
+
   // runs between the steps of every call; a property test hands it to its
   // scheduler to order the steps of concurrent calls
   const pacer: { pace: (step: VmStep) => Promise<void> } = { pace: () => Promise.resolve() };
@@ -156,7 +160,11 @@ export function buildStubVmm() {
       return outcome;
     }
 
+    waiting.hung += 1;
+
     await hangs.gate.promise;
+
+    waiting.hung -= 1;
 
     return 'ok';
   };
@@ -188,14 +196,20 @@ export function buildStubVmm() {
 
   const buildRunner = (generation: number): VmRunner => {
     // a replaced impd: every later call waits forever
+    const waitForever = <T>(): Promise<T> => {
+      waiting.parked += 1;
+
+      return new Promise<T>(() => {});
+    };
+
     const runInGeneration = async <T>(call: () => Promise<T>): Promise<T> => {
       if (generation !== counter.generation) {
-        return new Promise<T>(() => {});
+        return waitForever();
       }
 
       const result = await call();
 
-      return generation === counter.generation ? result : new Promise<T>(() => {});
+      return generation === counter.generation ? result : waitForever();
     };
 
     // fail leaves no VM; die returns a pid whose VM is already gone
@@ -497,6 +511,9 @@ export function buildStubVmm() {
         },
       };
     },
+
+    countHungCalls: (): number => waiting.hung,
+    countParkedCalls: (): number => waiting.parked,
 
     releaseHangs: () => {
       hangs.gate.resolve();
