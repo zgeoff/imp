@@ -587,15 +587,16 @@ test('it leaves the next impd an error record when impd dies mid-create', async 
   await impd.imps.reconcileImps();
 
   // the old boot finishes into a dead process: its VM starts, and the call
-  // never comes back to write its record
+  // parks without coming back to write its record
   bootGate.release();
 
   await waitFor(() => {
-    expect(ctx.fake.alive.size).toBe(1);
+    expect(ctx.fake.countParkedCalls()).toBe(1);
   });
 
   const imp = await findImpByName(ctx.db, 'dev');
 
+  expect(ctx.fake.alive.size).toBe(1);
   expect(Bun.peek.status(creating)).toBe('pending');
   expect(imp).toMatchObject({ state: 'error', pid: null });
 });
