@@ -461,11 +461,17 @@ answer. The progress and keepalive timers of `createMcpServer` and `createHttpTr
 `repeat`, and the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`),
 which ticks only when the test says so.
 
-In `mcp/mcp-endpoint.test.ts` and `mcp/stdio.test.ts`, an exec through impd's real app reaches the
-guest through `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path,
-which runs each command on `buildStubExecGuest`. The other `mcp/*.test.ts` files still reach it
-through `test-mcp.ts`'s `openExec` override. `imp mcp` runs as a subprocess against impd's app on a
-loopback port.
+In the `mcp/*.test.ts` files, an exec through impd's real app reaches the guest through
+`test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path, which runs
+each command on `buildStubExecGuest`; the agent keeps its socket through a sleep or stop and wake.
+The tool tests drive `createMcpServer` in process with `buildStubRepeat` as its progress timer.
+`imp mcp` runs as a subprocess against impd's app on a loopback port. A tool call's `timeoutSeconds`
+and kill grace in `packages/mcp/src/exec/run-capped.ts` run on real timers, so the exec tool's
+timeout tests each wait about a second.
+
+The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
+grant call's access check and its transaction, as `afterRuleRead` runs between a request's rule read
+and its value read; `build-app-grants.test.ts` and `build-app-token-update.test.ts` act there.
 
 impd's API listens with `buildApiListenOptions(config, idleTimeoutS)` (`api-listen-options.ts`),
 whose idle timeout defaults to Elysia's 30 seconds. `mcp/mcp-endpoint.test.ts` listens with 1

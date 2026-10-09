@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import { impContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { createSecret, findSecret } from '../db/secrets';
 import { removeTokenRecord, writeTokenRecord } from '../db/tokens';
@@ -744,27 +743,6 @@ test('#loadTokenStore offers no change to a token’s scope or imps in place', a
     'findSshKey',
     'authenticate',
     'findById',
-  ]);
-});
-
-// the contract half of the same guard; it belongs beside @imp/api's
-// contract, which this package does not own
-test('#impContract offers no token procedure beyond the known ones', () => {
-  expect(Object.keys(impContract.tokens).toSorted()).toStrictEqual([
-    'addKey',
-    'create',
-    'delete',
-    'list',
-    'removeKey',
-    'update',
-    'whoami',
-  ]);
-});
-
-test('#impContract lets a token update change only its grantable list', () => {
-  expect(Object.keys(impContract.tokens.update['~orpc'].inputSchema?.shape ?? {})).toStrictEqual([
-    'name',
-    'grantable',
   ]);
 });
 

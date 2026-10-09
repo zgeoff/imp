@@ -1,215 +1,398 @@
-import { expect, test } from 'bun:test';
-import type { ImpContract, Scope } from '@imp/api';
-import { createORPCClient } from '@orpc/client';
-import { RPCLink } from '@orpc/client/fetch';
-import type { ContractRouterClient } from '@orpc/contract';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ApiCall, ImpEvent, Scope } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createImpClient } from '@zgeoff/imp-client';
+import * as z from 'zod';
+import { buildApiListenOptions } from './api-listen-options';
 import { PROCEDURE_ACCESS } from './auth/access-policy';
-import { createKnownHosts } from './auth/ambient-request';
-import { createTailnetIdentities } from './auth/tailnet-identity';
 import type { TailnetPeer } from './auth/tailnet-identity';
+import { loadConfig } from './config';
+import { createImpd } from './create-impd';
 import { listApiCalls } from './db/api-audit';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
-import type { ImpTest } from './imps/test-imps';
-import type { TailscaleStatus } from './net/tailscale-status';
+import { createImage } from './db/images';
+import { openDatabase } from './db/open-database';
 import { PEER_HEADER } from './proxy/forwarded-peers';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { createXfsBackend } from './storage/xfs-backend';
+import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from './test-utils/build-stub-exec-guest';
+import { buildStubVmm } from './test-utils/build-stub-vmm';
+import { findFreePorts } from './test-utils/find-free-ports';
+import { startStubExecAgent } from './test-utils/start-stub-exec-agent';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 
-const SCOPES: readonly Scope[] = ['read', 'exec', 'manage'];
-const TAILNET_PEER = '100.101.102.103';
+interface SetupOptions {
+  // impd's environment past what every test boots with
+  readonly env?: Readonly<Record<string, string>>;
 
-interface TestApp {
-  readonly handle: (request: Request) => Promise<Response>;
+  // `tailscale whois`; nobody on the tailnet by default
+  readonly whois?: (address: string) => Promise<TailnetPeer | null>;
 }
 
-// alice's laptop is the one tailnet peer
-function readFakeWhois(address: string): Promise<TailnetPeer | null> {
-  const peer = address === TAILNET_PEER ? ALICE : null;
+// impd's real app on stub VMs, reached in process and on a loopback port
+// for its sockets, with a root client for the scenario
+async function setupTest(options: SetupOptions = {}) {
+  const stack = new AsyncDisposableStack();
 
-  return Promise.resolve(peer);
-}
+  onTestFinished(() => stack.disposeAsync());
 
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
+  const dataDir = await mkdtemp(join(tmpdir(), 'build-app-tokens-'));
 
-function readNoNode(): Promise<TailscaleStatus> {
-  return Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] });
-}
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-function buildBearer(secret: string): Record<string, string> {
-  return { authorization: `Bearer ${secret}` };
-}
+  const db = await openDatabase(':memory:');
 
-interface TestOptions {
-  // with a rule giving alice exec on dev-* imps
-  readonly tailnet?: boolean;
-}
+  stack.defer(() => db.destroy());
 
-async function setupTest(options: TestOptions = {}) {
-  const harness = await setupImpTest();
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = {
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_JAILER: 'false',
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+      ...options.env,
+    }),
 
-  const tailnet =
-    options.tailnet === true
-      ? {
-          identities: createTailnetIdentities({
-            rules: [{ match: 'user:alice@example.com', scope: 'exec' as const, imps: ['dev-*'] }],
-            whois: readFakeWhois,
-            readTailscale: readNoNode,
-            now: harness.now,
-          }),
-          knownHosts: createKnownHosts({
-            readTailscale: readNoNode,
-            domain: null,
-          }),
-        }
-      : null;
-
-  const root = buildTestApp(harness, harness, TEST_TOKEN, {}, tailnet);
-
-  // a client for a token made with this scope and these imps
-  const createTokenClient = async (
-    name: string,
-    scope: Scope,
-    imps: readonly string[] | null = null,
-  ) => {
-    const made = await root.client.tokens.create({
-      name,
-      scope,
-      ...(imps !== null && { imps: [...imps] }),
-    });
-
-    return { secret: made.secret, client: buildClient(root.app, made.secret) };
+    // a new disk stays the size of its image, since a template's clone
+    // copies every byte of the disk
+    defaultDiskBytes: 0,
   };
 
-  await harness.createTestImage('ubuntu');
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-  return { ...harness, ...root, createTokenClient };
-}
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-function buildClient(app: TestApp, secret: string) {
-  const link = new RPCLink({
-    url: 'http://impd.test/rpc',
-    headers: { authorization: `Bearer ${secret}` },
-    fetch: (request) => app.handle(request),
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the root client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+
+    // this host is no tailnet node
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    whois: options.whois ?? (() => Promise.resolve(null)),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
 
-  return createORPCClient<ContractRouterClient<ImpContract>>(link);
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // as main.ts listens, on a free loopback port: /exec and /tunnel need a socket
+  const server = impd.api.app.listen({
+    ...buildApiListenOptions(config),
+    port: 0,
+    hostname: '127.0.0.1',
+  });
+
+  stack.defer(async () => {
+    await server.stop(true);
+  });
+
+  // the image every imps.create boots when it names none
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const sendToImpd = (request: Request) => impd.api.app.handle(request);
+
+  return {
+    db,
+    dataDir,
+    impd,
+    stack,
+    port: String(server.server?.port),
+    sendToImpd,
+    client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendToImpd }),
+  };
 }
 
-// calls a procedure by its path with an empty input: the access check runs
-// before input validation, so a refusal is FORBIDDEN, not BAD_REQUEST
-function runByPath(client: object, path: string): Promise<unknown> {
-  const procedure: unknown = path
-    .split('.')
-    .reduce<unknown>(
-      (node, key) =>
-        typeof node === 'object' || typeof node === 'function'
-          ? Reflect.get(node ?? {}, key)
-          : undefined,
-      client,
-    );
-
-  if (typeof procedure !== 'function') {
-    throw new TypeError(`no client procedure at ${path}`);
-  }
-
-  return Promise.resolve(Reflect.apply(procedure, undefined, [{}]));
-}
-
-async function readErrorCode(call: Promise<unknown>): Promise<string | null> {
-  try {
-    await call;
-
-    return null;
-  } catch (error) {
-    return typeof error === 'object' && error !== null && 'code' in error
-      ? String(error.code)
-      : 'thrown';
-  }
-}
-
-test('every procedure refuses a token whose scope is below what it needs', async () => {
+// The access check runs before input validation, so each procedure is called
+// with an empty input and a refusal is FORBIDDEN, not BAD_REQUEST.
+test('it refuses every procedure to a token whose scope is below what it needs', async () => {
   const ctx = await setupTest();
 
-  const clients = new Map<Scope, ContractRouterClient<ImpContract>>();
+  const scopes: readonly Scope[] = ['read', 'exec', 'manage'];
 
-  for (const scope of SCOPES) {
-    const connected = await ctx.createTokenClient(`scope-${scope}`, scope);
+  const clients = await Promise.all(
+    scopes.map(async (scope) => {
+      const made = await ctx.client.tokens.create({ name: `scope-${scope}`, scope });
 
-    clients.set(scope, connected.client);
-  }
+      return createImpClient({
+        url: 'http://impd.test',
+        token: made.secret,
+        fetch: ctx.sendToImpd,
+      });
+    }),
+  );
 
-  const refusals: string[] = [];
+  // each procedure with each scope below the one it needs
+  const cases = Object.entries(PROCEDURE_ACCESS).flatMap(([path, access]) =>
+    scopes.slice(0, scopes.indexOf(access.scope)).map((scope) => ({ path, scope })),
+  );
 
-  for (const [path, access] of Object.entries(PROCEDURE_ACCESS)) {
-    const needed = SCOPES.indexOf(access.scope);
+  const outcomes = await Promise.allSettled(
+    cases.map(async (entry) => {
+      const procedure = z
+        .function()
+        .parse(
+          entry.path
+            .split('.')
+            .reduce<unknown>(
+              (node, key) => Reflect.get(new Object(node), key),
+              clients[scopes.indexOf(entry.scope)],
+            ),
+        );
 
-    for (const scope of SCOPES.slice(0, needed)) {
-      const code = await readErrorCode(runByPath(clients.get(scope) ?? {}, path));
+      const answer: unknown = await Reflect.apply(procedure, undefined, [{}]);
 
-      refusals.push(`${path} ${scope} ${String(code)}`);
-    }
-  }
+      return answer;
+    }),
+  );
 
-  expect(refusals.length).toBeGreaterThan(30);
-  expect(refusals.filter((line) => !line.endsWith('FORBIDDEN'))).toEqual([]);
+  expect(cases.length).toBeGreaterThan(30);
+
+  expect(cases.map((entry, index) => [entry.path, entry.scope, outcomes[index]])).toMatchObject(
+    cases.map((entry) => [
+      entry.path,
+      entry.scope,
+      { status: 'rejected', reason: { code: 'FORBIDDEN' } },
+    ]),
+  );
 });
 
-test('every host-wide procedure refuses a manage token limited to some imps', async () => {
+test('it refuses every host-wide procedure to a manage token limited to some imps', async () => {
   const ctx = await setupTest();
-  const limited = await ctx.createTokenClient('limited', 'manage', ['dev-*']);
+
+  const made = await ctx.client.tokens.create({
+    name: 'limited',
+    scope: 'manage',
+    imps: ['dev-*'],
+  });
+
+  const limited = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
 
   const hostPaths = Object.entries(PROCEDURE_ACCESS)
     .filter(([, access]) => access.on === 'host')
     .map(([path]) => path);
 
-  const codes = await Promise.all(
-    hostPaths.map((path) => readErrorCode(runByPath(limited.client, path))),
+  const outcomes = await Promise.allSettled(
+    hostPaths.map(async (path) => {
+      const procedure = z
+        .function()
+        .parse(
+          path
+            .split('.')
+            .reduce<unknown>((node, key) => Reflect.get(new Object(node), key), limited),
+        );
+
+      const answer: unknown = await Reflect.apply(procedure, undefined, [{}]);
+
+      return answer;
+    }),
   );
 
   expect(hostPaths).toContain('secrets.add');
-  expect(codes).toEqual(hostPaths.map(() => 'FORBIDDEN'));
+
+  expect(hostPaths.map((path, index) => [path, outcomes[index]])).toMatchObject(
+    hostPaths.map((path) => [path, { status: 'rejected', reason: { code: 'FORBIDDEN' } }]),
+  );
 });
 
-test('the root token makes, lists and removes tokens; the secret shows once', async () => {
+test('it answers a create with the token and a secret in the token format', async () => {
+  const ctx = await setupTest();
+
+  const made: unknown = await ctx.client.tokens.create({
+    name: 'ci',
+    scope: 'exec',
+    imps: ['dev-*'],
+  });
+
+  expect(made).toStrictEqual({
+    secret: expect.stringMatching(/^imp_[\w-]{16}\.[\w-]{43}$/) as unknown,
+    token: {
+      name: 'ci',
+      scope: 'exec',
+      imps: ['dev-*'],
+      sshKeys: [],
+      grantable: [],
+      createdAt: expect.any(Date) as unknown,
+    },
+  });
+});
+
+test('it lists a token without its secret', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
+  const listed = await ctx.client.tokens.list();
+
+  expect(listed).toStrictEqual([made.token]);
+  expect(JSON.stringify(listed)).not.toContain(made.secret.split('.')[1]);
+});
+
+test('it tells a token who it is', async () => {
   const ctx = await setupTest();
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
 
-  expect(made.secret).toMatch(/^imp_[\w-]{16}\.[\w-]{43}$/);
-  expect(made.token).toMatchObject({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
-
-  const listed = await ctx.client.tokens.list();
-
-  expect(listed).toEqual([made.token]);
-  expect(JSON.stringify(listed)).not.toContain(made.secret.split('.')[1] ?? 'none');
-
-  const ci = buildClient(ctx.app, made.secret);
+  const ci = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
 
   const identity = await ci.tokens.whoami();
 
-  expect(identity).toEqual({
+  expect(identity).toStrictEqual({
     kind: 'token',
     name: 'ci',
     scope: 'exec',
     imps: ['dev-*'],
     grantable: [],
   });
+});
 
-  const conflicts = await Promise.all([
-    readErrorCode(ctx.client.tokens.create({ name: 'ci', scope: 'read' })),
-    readErrorCode(ctx.client.tokens.create({ name: 'root', scope: 'read' })),
-  ]);
+test('it refuses a token with the name of another with a conflict', async () => {
+  const ctx = await setupTest();
 
-  expect(conflicts).toEqual(['CONFLICT', 'CONFLICT']);
+  await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
+
+  expect(ctx.client.tokens.create({ name: 'ci', scope: 'read' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
+});
+
+test('it refuses a token named root with a conflict', async () => {
+  const ctx = await setupTest();
+
+  expect(ctx.client.tokens.create({ name: 'root', scope: 'read' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
+});
+
+test('it refuses a removed token', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
+
+  const ci = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
 
   await ctx.client.tokens.delete({ name: 'ci' });
 
-  const removed = await readErrorCode(ci.system.info());
-  const left = await ctx.client.tokens.list();
-
-  expect(removed).toBe('UNAUTHORIZED');
-  expect(left).toEqual([]);
+  expect(ci.system.info()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
 });
 
-test('a token limited to dev-* sees and touches only its imps', async () => {
+test('it lists no token once the only one is removed', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
+  await ctx.client.tokens.delete({ name: 'ci' });
+
+  const left = await ctx.client.tokens.list();
+
+  expect(left).toStrictEqual([]);
+});
+
+test('it lists a token limited to dev-* only its imps', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'prod' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  const imps = await dev.imps.list();
+
+  expect(imps.map((imp) => imp.name)).toStrictEqual(['dev-a']);
+});
+
+test('it lists a token limited to dev-* a secret’s grants on its imps only', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
@@ -218,41 +401,192 @@ test('a token limited to dev-* sees and touches only its imps', async () => {
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'prod', secret: 'gh' });
 
-  const dev = await ctx.createTokenClient('dev', 'manage', ['dev-*']);
-  const imps = await dev.client.imps.list();
-  const secrets = await dev.client.secrets.list();
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
 
-  expect(imps.map((imp) => imp.name)).toEqual(['dev-a']);
-  expect(secrets.map((secret) => secret.imps)).toEqual([['dev-a']]);
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
 
-  // another imp, a create that leaves the name to impd, a grant of a host
-  // secret, and another imp's audit rows
-  const refusals = await Promise.all([
-    readErrorCode(dev.client.imps.stop({ name: 'prod' })),
-    readErrorCode(dev.client.imps.create({})),
-    readErrorCode(dev.client.imps.create({ name: 'prod-2' })),
-    readErrorCode(dev.client.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readErrorCode(dev.client.audit.list({ name: 'prod' })),
-    readErrorCode(dev.client.audit.calls({ name: 'prod' })),
-  ]);
+  const secrets = await dev.secrets.list();
 
-  expect(new Set(refusals)).toEqual(new Set(['FORBIDDEN']));
-
-  await dev.client.imps.stop({ name: 'dev-a' });
-
-  const calls = await waitForCalls(ctx, 6);
-  const seen = await dev.client.audit.calls({});
-
-  expect(calls.some((call) => call.imp === undefined)).toBeTrue();
-  expect(seen.length).toBeGreaterThan(0);
-  expect(seen.every((call) => call.imp?.startsWith('dev-') === true)).toBeTrue();
-
-  const stop = seen.find((call) => call.procedure === 'imps.stop' && call.outcome === 'ok');
-
-  expect(stop).toMatchObject({ actor: 'token', actorName: 'dev', imp: 'dev-a' });
+  expect(secrets.map((secret) => secret.imps)).toStrictEqual([['dev-a']]);
 });
 
-test('a token limited to dev-* cannot copy another imp through its template', async () => {
+test('it refuses a token limited to dev-* a stop of another imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.imps.stop({ name: 'prod' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it refuses a token limited to dev-* a create that leaves the name to impd', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.imps.create({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it refuses a token limited to dev-* a create of an imp outside its pattern', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.imps.create({ name: 'prod-2' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it refuses a token limited to dev-* a grant of a host secret', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+  });
+});
+
+test('it refuses a token limited to dev-* another imp’s audit events', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.audit.list({ name: 'prod' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it refuses a token limited to dev-* another imp’s API calls', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.audit.calls({ name: 'prod' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it lists a token limited to dev-* only the API calls on its imps', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  await dev.imps.stop({ name: 'dev-a' });
+
+  // each audit row lands after its answer; root's calls include host-wide
+  // ones, on no imp
+  const calls = await waitFor(async () => {
+    const listed = await listApiCalls(ctx.db, null, 100, null);
+
+    expect(listed).toPartiallyContain({ procedure: 'imps.stop', actorName: 'dev' });
+
+    return listed;
+  });
+
+  const seen = await dev.audit.calls({});
+
+  expect(calls).toSatisfyAny((call: Readonly<ApiCall>) => call.imp === undefined);
+  expect(seen).toSatisfyAll((call: Readonly<ApiCall>) => call.imp?.startsWith('dev-') === true);
+
+  expect(seen).toPartiallyContain({
+    procedure: 'imps.stop',
+    outcome: 'ok',
+    actor: 'token',
+    actorName: 'dev',
+    imp: 'dev-a',
+  });
+});
+
+test('it refuses a token limited to dev-* an imp from another imp’s template', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.images.add({ imp: 'prod', name: 'prod-tpl' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.imps.create({ name: 'dev-copy', image: 'prod-tpl' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+  });
+});
+
+test('it lets a token limited to dev-* make an imp from its own imp’s template', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-src' });
+  await ctx.client.images.add({ imp: 'dev-src', name: 'dev-tpl' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  const allowed = await dev.imps.create({ name: 'dev-copy', image: 'dev-tpl' });
+
+  expect(allowed.image).toBe('dev-tpl');
+});
+
+test('it names in each template’s audit row the imp whose disk it copied', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'prod' });
@@ -260,282 +594,411 @@ test('a token limited to dev-* cannot copy another imp through its template', as
   await ctx.client.images.add({ imp: 'prod', name: 'prod-tpl' });
   await ctx.client.images.add({ imp: 'dev-src', name: 'dev-tpl' });
 
-  const dev = await ctx.createTokenClient('dev', 'manage', ['dev-*']);
+  // each audit row lands after its answer
+  const adds = await waitFor(async () => {
+    const calls = await listApiCalls(ctx.db, null, 100, null);
 
-  const refused = await readErrorCode(
-    dev.client.imps.create({ name: 'dev-copy', image: 'prod-tpl' }),
-  );
+    const found = calls.filter((call) => call.procedure === 'images.add');
 
-  expect(refused).toBe('FORBIDDEN');
+    expect(found).toHaveLength(2);
 
-  const allowed = await dev.client.imps.create({ name: 'dev-copy', image: 'dev-tpl' });
+    return found;
+  });
 
-  expect(allowed.image).toBe('dev-tpl');
-
-  // the root token's images.add rows name the imp whose disk each copied
-  const calls = await waitForCalls(ctx, 6);
-
-  const adds = calls
-    .filter((call) => call.procedure === 'images.add')
-    .map((call) => call.imp ?? '')
-    .toSorted((a, b) => a.localeCompare(b));
-
-  expect(adds).toEqual(['dev-src', 'prod']);
+  expect(adds.map((call) => call.imp)).toIncludeSameMembers(['dev-src', 'prod']);
 });
 
-test('a limited token’s event stream holds only its imps', async () => {
+test('it streams a limited token the events of its imps only', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
 
-  const dev = await ctx.createTokenClient('dev', 'read', ['dev-*']);
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'read', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
 
   const controller = new AbortController();
 
-  const stream = await dev.client.events.stream(undefined, { signal: controller.signal });
+  onTestFinished(() => {
+    controller.abort();
+  });
 
-  const seen: string[] = [];
+  const stream = await dev.events.stream(undefined, { signal: controller.signal });
+
+  const seen: ImpEvent[] = [];
+
+  // reads until the stream ends, when the test aborts it
+  const reading = Array.fromAsync(stream, (event) => {
+    seen.push(event);
+
+    return event;
+  });
 
   await ctx.client.imps.stop({ name: 'prod' });
   await ctx.client.imps.stop({ name: 'dev-a' });
 
-  for await (const event of stream) {
-    seen.push(`${event.ev} ${'imp' in event ? event.imp.name : event.name}`);
-
-    if (event.ev === 'ImpChanged' && event.imp.name === 'dev-a') {
-      break;
-    }
-  }
+  // the stream's last event for this test: dev-a's stop, after prod's
+  await waitFor(() => {
+    expect(seen).toSatisfyAny(
+      (event: Readonly<ImpEvent>) =>
+        event.ev === 'ImpChanged' && event.imp.name === 'dev-a' && event.imp.state === 'stopped',
+    );
+  });
 
   controller.abort();
 
-  expect(seen[0]).toBe('ImpAdded dev-a');
-  expect(seen.filter((line) => line.endsWith('prod'))).toEqual([]);
+  await reading;
+
+  expect(seen[0]).toMatchObject({ ev: 'ImpAdded', imp: { name: 'dev-a' } });
+
+  expect(seen).toSatisfyAll(
+    (event: Readonly<ImpEvent>) => !JSON.stringify(event).includes('"prod"'),
+  );
 });
 
-test('a read token cannot exec, and an exec token for dev-* cannot reach another imp', async () => {
+test('it refuses an exec socket to a read token', async () => {
   const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await ctx.client.imps.create({ name: 'dev-a' });
 
-  try {
-    const port = String(server.server?.port);
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
 
-    await ctx.client.imps.create({ name: 'dev-a' });
-    await ctx.client.imps.create({ name: 'prod' });
+  const outcome = await tryExecSocket(ctx.port, '', 'dev-a', {
+    authorization: `Bearer ${made.secret}`,
+  });
 
-    const reader = await ctx.createTokenClient('reader', 'read');
-    const dev = await ctx.createTokenClient('dev', 'exec', ['dev-*']);
-    const readExec = await tryExecSocket(port, '', 'dev-a', buildBearer(reader.secret));
-    const otherExec = await tryExecSocket(port, '', 'prod', buildBearer(dev.secret));
-    const otherTunnel = await tryTunnelSocket(port, '', buildBearer(dev.secret), 'prod');
-
-    expect(JSON.parse(readExec)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
-    expect(JSON.parse(otherExec)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
-    expect(JSON.parse(otherTunnel)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
-
-    const tickets = await Promise.all([
-      readErrorCode(reader.client.exec.ticket({ name: 'dev-a' })),
-      readErrorCode(dev.client.exec.ticket({ name: 'prod' })),
-    ]);
-
-    expect(tickets).toEqual(['FORBIDDEN', 'FORBIDDEN']);
-  } finally {
-    await server.stop(true);
-  }
+  expect(JSON.parse(outcome)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
 });
 
-test('a ticket opens nothing once its token is removed', async () => {
+test('it refuses an exec socket to an exec token for dev-* on another imp', async () => {
   const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await ctx.client.imps.create({ name: 'prod' });
 
-  try {
-    const port = String(server.server?.port);
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'] });
 
-    await ctx.client.imps.create({ name: 'dev' });
+  const outcome = await tryExecSocket(ctx.port, '', 'prod', {
+    authorization: `Bearer ${made.secret}`,
+  });
 
-    const ci = await ctx.createTokenClient('ci', 'exec');
-    const issued = await ci.client.exec.ticket({ name: 'dev' });
-
-    await ctx.client.tokens.delete({ name: 'ci' });
-
-    const outcome = await tryExecSocket(port, `ticket=${issued.ticket}`);
-
-    expect(outcome).toBe('rejected');
-  } finally {
-    await server.stop(true);
-  }
+  expect(JSON.parse(outcome)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
 });
 
-test('removing a token closes its open sockets', async () => {
+test('it refuses a tunnel to an exec token for dev-* on another imp', async () => {
   const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await ctx.client.imps.create({ name: 'prod' });
 
-  try {
-    const port = String(server.server?.port);
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'] });
 
-    const ci = await ctx.createTokenClient('ci', 'exec');
+  const outcome = await tryTunnelSocket(
+    ctx.port,
+    '',
+    { authorization: `Bearer ${made.secret}` },
+    'prod',
+  );
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
-      headers: { authorization: `Bearer ${ci.secret}` },
-    });
+  expect(JSON.parse(outcome)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
+});
 
-    const opened = Promise.withResolvers<undefined>();
-    const closed = Promise.withResolvers<CloseEvent>();
+test('it refuses an exec ticket to a read token', async () => {
+  const ctx = await setupTest();
 
-    socket.addEventListener('open', () => {
-      opened.resolve(undefined);
-    });
+  await ctx.client.imps.create({ name: 'dev-a' });
 
-    socket.addEventListener('close', closed.resolve);
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
 
-    await opened.promise;
+  const reader = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
 
-    await ctx.client.tokens.delete({ name: 'ci' });
+  expect(reader.exec.ticket({ name: 'dev-a' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
 
-    const event = await closed.promise;
+test('it refuses an exec ticket to an exec token for dev-* on another imp', async () => {
+  const ctx = await setupTest();
 
-    expect(event.code).toBe(1008);
-  } finally {
-    await server.stop(true);
-  }
+  await ctx.client.imps.create({ name: 'prod' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.exec.ticket({ name: 'prod' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it opens nothing for a ticket once its token is removed', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
+
+  const ci = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  const issued = await ci.exec.ticket({ name: 'dev' });
+
+  await ctx.client.tokens.delete({ name: 'ci' });
+
+  const outcome = await tryExecSocket(ctx.port, `ticket=${issued.ticket}`);
+
+  expect(outcome).toBe('rejected');
+});
+
+test('it closes a token’s open sockets when the token is removed', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
+
+  const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/tunnel`, {
+    headers: { authorization: `Bearer ${made.secret}` },
+  });
+
+  onTestFinished(() => {
+    socket.close();
+  });
+
+  const opened = Promise.withResolvers<undefined>();
+  const closed = Promise.withResolvers<CloseEvent>();
+
+  socket.addEventListener('open', () => {
+    opened.resolve(undefined);
+  });
+
+  socket.addEventListener('close', closed.resolve);
+
+  await opened.promise;
+
+  await ctx.client.tokens.delete({ name: 'ci' });
+
+  const event = await closed.promise;
+
+  // policy violation
+  expect(event.code).toBe(1008);
 });
 
 // A removal that lands after the token passed its check but before the
 // socket opened: the socket must close all the same.
-test('a socket that opens after its token is revoked closes at once', async () => {
+test('it closes at once a socket that opens after its token is revoked', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
+
+  const tokenId = /^imp_(?<id>[^.]+)\./v.exec(made.secret)?.groups?.['id'];
+
+  invariant(tokenId);
+
+  ctx.impd.revocations.revoke(tokenId);
+
+  const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/tunnel`, {
+    headers: { authorization: `Bearer ${made.secret}` },
+  });
+
+  onTestFinished(() => {
+    socket.close();
+  });
+
+  const closed = Promise.withResolvers<CloseEvent>();
+
+  socket.addEventListener('close', closed.resolve);
+
+  const event = await closed.promise;
+
+  // policy violation
+  expect(event.code).toBe(1008);
+});
+
+test('it refuses a token limited to no imps at all', async () => {
   const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
-
-  try {
-    const port = String(server.server?.port);
-
-    const ci = await ctx.createTokenClient('ci', 'exec');
-
-    const tokenId = /^imp_(?<id>[^.]+)\./v.exec(ci.secret)?.groups?.['id'] ?? '';
-
-    expect(tokenId).not.toBe('');
-
-    ctx.revocations.revoke(tokenId);
-
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
-      headers: { authorization: `Bearer ${ci.secret}` },
-    });
-
-    const closed = Promise.withResolvers<CloseEvent>();
-
-    socket.addEventListener('close', closed.resolve);
-
-    const event = await closed.promise;
-
-    expect(event.code).toBe(1008);
-  } finally {
-    await server.stop(true);
-  }
+  expect(ctx.client.tokens.create({ name: 'none', scope: 'read', imps: [] })).rejects.toMatchObject(
+    { code: 'BAD_REQUEST' },
+  );
 });
 
-test('a token limited to no imps at all is refused', async () => {
-  const ctx = await setupTest();
+test('it refuses a loopback client that names a tailnet address itself', async () => {
+  const ctx = await setupTest({
+    // alice may exec on dev-* imps
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
 
-  const made = ctx.client.tokens.create({ name: 'none', scope: 'read', imps: [] });
+    // alice's laptop is the one tailnet peer
+    whois: (address) =>
+      Promise.resolve(
+        new Map([
+          [
+            '100.101.102.103',
+            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
+          ],
+        ]).get(address) ?? null,
+      ),
+  });
 
-  const code = await readErrorCode(made);
+  const response = await fetch(`http://127.0.0.1:${ctx.port}/rpc/tokens/whoami`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      [PEER_HEADER]: '100.101.102.103',
+      'x-forwarded-for': '100.101.102.103',
+    },
+  });
 
-  expect(code).toBe('BAD_REQUEST');
+  expect(response.status).toBe(401);
 });
 
-test('a tailnet identity reaches the API only through a peer handle impd made', async () => {
-  const ctx = await setupTest({ tailnet: true });
+test('it serves a tailnet identity through a peer handle the wake proxy registered', async () => {
+  const ctx = await setupTest({
+    // alice may exec on dev-* imps
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
 
-  const server = ctx.app.listen(0);
+    // alice's laptop is the one tailnet peer
+    whois: (address) =>
+      Promise.resolve(
+        new Map([
+          [
+            '100.101.102.103',
+            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
+          ],
+        ]).get(address) ?? null,
+      ),
+  });
 
-  try {
-    const url = `http://127.0.0.1:${String(server.server?.port)}/rpc/tokens/whoami`;
+  const response = await fetch(`http://127.0.0.1:${ctx.port}/rpc/tokens/whoami`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
+    },
+  });
 
-    const sendWhoami = (headers: Readonly<Record<string, string>>) =>
-      fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers } });
+  const body: unknown = await response.json();
 
-    // a client on loopback names a tailnet address itself
-    const forged = await sendWhoami({
-      [PEER_HEADER]: TAILNET_PEER,
-      'x-forwarded-for': TAILNET_PEER,
-    });
+  expect(response.status).toBe(200);
 
-    // the wake proxy registered this client's address
-    const handed = await sendWhoami({ [PEER_HEADER]: ctx.peers.register(TAILNET_PEER) });
-
-    expect(forged.status).toBe(401);
-    expect(handed.status).toBe(200);
-
-    const body: unknown = await handed.json();
-
-    expect(body).toMatchObject({ json: { kind: 'tailnet', name: 'alice@example.com' } });
-  } finally {
-    await server.stop(true);
-  }
+  expect(body).toMatchObject({
+    json: { kind: 'tailnet', name: 'alice@example.com' },
+  });
 });
 
-test('a tailnet identity opens no socket for a page on an imp’s port', async () => {
-  const ctx = await setupTest({ tailnet: true });
+test('it refuses a tailnet identity an exec socket from a page on an imp’s port', async () => {
+  const ctx = await setupTest({
+    // alice may exec on dev-* imps
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
 
-  const server = ctx.app.listen(0);
+    // alice's laptop is the one tailnet peer
+    whois: (address) =>
+      Promise.resolve(
+        new Map([
+          [
+            '100.101.102.103',
+            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
+          ],
+        ]).get(address) ?? null,
+      ),
+  });
 
-  try {
-    const port = String(server.server?.port);
+  await ctx.client.imps.create({ name: 'dev-a' });
 
-    await ctx.client.imps.create({ name: 'dev-a' });
+  const outcome = await tryExecSocket(ctx.port, '', 'dev-a', {
+    [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
+    origin: 'http://127.0.0.1:20000',
+  });
 
-    const buildPeerHeaders = (origin: string) => ({
-      [PEER_HEADER]: ctx.peers.register(TAILNET_PEER),
-      origin,
-    });
-
-    const fromImp = await tryExecSocket(
-      port,
-      '',
-      'dev-a',
-      buildPeerHeaders('http://127.0.0.1:20000'),
-    );
-
-    const fromImpTunnel = await tryTunnelSocket(
-      port,
-      '',
-      buildPeerHeaders('http://127.0.0.1:20000'),
-      'dev-a',
-    );
-
-    const fromDashboard = await tryExecSocket(
-      port,
-      '',
-      'dev-a',
-      buildPeerHeaders(`http://127.0.0.1:${port}`),
-    );
-
-    expect(fromImp).toBe('rejected');
-    expect(fromImpTunnel).toBe('rejected');
-
-    // past the auth: the fake VM has no agent to start the exec
-    expect(fromDashboard).not.toBe('rejected');
-  } finally {
-    await server.stop(true);
-  }
+  expect(outcome).toBe('rejected');
 });
 
-// the audit log once it holds `count` rows; each lands after its answer
-async function waitForCalls(ctx: Readonly<Pick<ImpTest, 'db'>>, count: number) {
-  const deadline = Date.now() + 5000;
+test('it refuses a tailnet identity a tunnel from a page on an imp’s port', async () => {
+  const ctx = await setupTest({
+    // alice may exec on dev-* imps
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
 
-  for (;;) {
-    const calls = await listApiCalls(ctx.db, null, 100, null);
+    // alice's laptop is the one tailnet peer
+    whois: (address) =>
+      Promise.resolve(
+        new Map([
+          [
+            '100.101.102.103',
+            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
+          ],
+        ]).get(address) ?? null,
+      ),
+  });
 
-    if (calls.length >= count || Date.now() > deadline) {
-      return calls;
-    }
+  await ctx.client.imps.create({ name: 'dev-a' });
 
-    await Bun.sleep(5);
-  }
-}
+  const outcome = await tryTunnelSocket(
+    ctx.port,
+    '',
+    {
+      [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
+      origin: 'http://127.0.0.1:20000',
+    },
+    'dev-a',
+  );
+
+  expect(outcome).toBe('rejected');
+});
+
+test('it opens an exec socket for a tailnet identity from impd’s own page', async () => {
+  const ctx = await setupTest({
+    // alice may exec on dev-* imps
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
+
+    // alice's laptop is the one tailnet peer
+    whois: (address) =>
+      Promise.resolve(
+        new Map([
+          [
+            '100.101.102.103',
+            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
+          ],
+        ]).get(address) ?? null,
+      ),
+  });
+
+  const created = await ctx.client.imps.create({ name: 'dev-a' });
+
+  // the imp's agent, which runs the exec; it closes before impd stops
+  const agent = await startStubExecAgent(
+    buildImpPaths(ctx.dataDir, created.id).vsockSocket,
+    buildStubExecGuest(),
+  );
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const outcome = await tryExecSocket(ctx.port, '', 'dev-a', {
+    [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
+    origin: `http://127.0.0.1:${ctx.port}`,
+  });
+
+  expect(JSON.parse(outcome)).toMatchObject({ type: 'started' });
+});

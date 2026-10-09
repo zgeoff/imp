@@ -90,6 +90,7 @@ type BrokerBoundaries = Pick<
   | 'resolveTunnelTarget'
   | 'dialTunnel'
   | 'afterRuleRead'
+  | 'beforeGrantWrite'
 >;
 
 // The firewall's reach past impd: nft, conntrack, iptables, the routes and

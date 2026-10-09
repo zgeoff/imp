@@ -1,141 +1,844 @@
-import { expect, test } from 'bun:test';
-import { setupMcpTest } from './test-mcp';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createImpGuard, createMcpServer } from '@imp/mcp';
+import { invariant } from '@imp/test-utils/invariant';
+import { createImpClient } from '@zgeoff/imp-client';
+import { buildApiListenOptions } from '../api-listen-options';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import { createImage } from '../db/images';
+import { findImpByName } from '../db/imps';
+import { openDatabase } from '../db/open-database';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
 
-test('imp_write_file then imp_read_file round-trips text, the path passed as one argument', async () => {
-  const ctx = await setupMcpTest();
+// impd's real app on a loopback port for an exec's socket, a root client,
+// `stack`, whose releases run before impd stops, and an MCP server whose
+// messages land parsed in `sent` through `reply`
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  onTestFinished(() => stack.disposeAsync());
 
-  const path = '/root/-odd dir/$(x) file.txt';
+  const dataDir = await mkdtemp(join(tmpdir(), 'mcp-file-tools-'));
 
-  const written = await ctx.runTool('imp_write_file', { name: 'dev', path, content: 'héllo\n' });
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  expect(written.isError).toBe(false);
-  expect(written.structuredContent).toEqual({ path, bytes: 7 });
+  const db = await openDatabase(':memory:');
 
-  // the script reads the path as "$1"; it never enters the script text
-  const [request] = ctx.guest.requests;
+  stack.defer(() => db.destroy());
 
-  expect(request?.argv.slice(0, 2)).toEqual(['/bin/sh', '-c']);
-  expect(request?.argv.slice(3)).toEqual(['sh', path]);
-  expect(request?.argv[2]).not.toContain(path);
-
-  const read = await ctx.runTool('imp_read_file', { name: 'dev', path });
-
-  expect(read.structuredContent).toEqual({ path, encoding: 'utf8', bytes: 7, content: 'héllo\n' });
-  expect(ctx.guest.requests[1]?.argv).toEqual(['head', '-c', String(256 * 1024 + 1), path]);
-});
-
-test('base64 carries bytes that are not UTF-8, and utf8 refuses them', async () => {
-  const ctx = await setupMcpTest();
-
-  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
-
-  const content = Buffer.from([0, 255, 254, 10]).toString('base64');
-
-  await ctx.runTool('imp_write_file', {
-    name: 'dev',
-    path: '/bin.dat',
-    content,
-    encoding: 'base64',
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
-  expect([...(ctx.guest.files.get('/bin.dat') ?? [])]).toEqual([0, 255, 254, 10]);
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-  const asText = await ctx.runTool('imp_read_file', { name: 'dev', path: '/bin.dat' });
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-  expect(asText.isError).toBe(true);
+  const vmm = buildStubVmm();
 
-  expect(asText.content[0].text).toStartWith(
-    '/bin.dat is not valid UTF-8; read it with encoding base64',
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the root client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // as main.ts listens, on a free loopback port
+  const server = impd.api.app.listen({
+    ...buildApiListenOptions(config),
+    port: 0,
+    hostname: '127.0.0.1',
+  });
+
+  stack.defer(async () => {
+    await server.stop(true);
+  });
+
+  // the image every imps.create boots when it names none
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const url = `http://127.0.0.1:${String(server.server?.port)}`;
+
+  // a short kill grace, so a stopped command's SIGKILL comes soon
+  const mcp = createMcpServer({ version: '1.2.3', killGraceMs: 50 });
+
+  // its calls in flight end before impd's app closes
+  stack.defer(() => mcp.close());
+
+  const sent: unknown[] = [];
+
+  return {
+    db,
+    dataDir,
+    stack,
+    url,
+    rootClient: createImpClient({ url, token: 'root-token' }),
+    mcp,
+    sent,
+    reply: (message: string) => {
+      sent.push(JSON.parse(message));
+    },
+  };
+}
+
+test('it writes a file with the path as one argument of the write script', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_write_file',
+        arguments: { name: 'dev', path: '/root/-odd dir/$(x) file.txt', content: 'héllo\n' },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
   );
 
-  const asBase64 = await ctx.runTool('imp_read_file', {
-    name: 'dev',
-    path: '/bin.dat',
-    encoding: 'base64',
-  });
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: { path: '/root/-odd dir/$(x) file.txt', bytes: 7 },
+        isError: false,
+      },
+    },
+  ]);
 
-  expect(asBase64.structuredContent).toMatchObject({ bytes: 4, content });
+  expect(guest.requests).toMatchObject([
+    {
+      argv: [
+        '/bin/sh',
+        '-c',
 
-  const broken = await ctx.runTool('imp_write_file', {
-    name: 'dev',
-    path: '/x',
-    content: 'not base64!',
-    encoding: 'base64',
-  });
+        // the script reads the path as "$1"; it never enters the script text
+        expect.not.stringContaining('/root/-odd dir/$(x) file.txt'),
+        'sh',
+        '/root/-odd dir/$(x) file.txt',
+      ],
+    },
+  ]);
 
-  expect(broken).toMatchObject({ isError: true });
-  expect(broken.content[0].text).toBe('content is not valid base64');
+  expect(new TextDecoder().decode(guest.files.get('/root/-odd dir/$(x) file.txt'))).toBe('héllo\n');
 });
 
-test('a file larger than maxBytes fails instead of coming back cut', async () => {
-  const ctx = await setupMcpTest();
+test('it reads a file with head, asking for one byte past maxBytes', async () => {
+  const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  const guest = buildStubExecGuest();
 
-  ctx.guest.files.set('/big', new Uint8Array(100).fill(97));
+  await ctx.rootClient.imps.create({ name: 'dev' });
 
-  const atLimit = await ctx.runTool('imp_read_file', { name: 'dev', path: '/big', maxBytes: 100 });
+  const record = await findImpByName(ctx.db, 'dev');
 
-  expect(atLimit.structuredContent).toMatchObject({ bytes: 100 });
+  invariant(record);
 
-  const over = await ctx.runTool('imp_read_file', { name: 'dev', path: '/big', maxBytes: 99 });
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
 
-  expect(over.isError).toBe(true);
-  expect(over.content[0].text).toStartWith('/big is larger than maxBytes (99)');
-});
+  ctx.stack.defer(() => {
+    agent.close();
+  });
 
-test("a read or write that fails in the guest is an isError result with the command's stderr", async () => {
-  const ctx = await setupMcpTest();
+  guest.files.set('/root/-odd dir/$(x) file.txt', new TextEncoder().encode('héllo\n'));
 
-  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
-
-  const missing = await ctx.runTool('imp_read_file', { name: 'dev', path: '/nope' });
-
-  expect(missing.isError).toBe(true);
-
-  expect(missing.content[0].text).toStartWith(
-    "could not read /nope (exit 1): head: cannot open '/nope' for reading: No such file or directory",
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_read_file',
+        arguments: { name: 'dev', path: '/root/-odd dir/$(x) file.txt' },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
   );
 
-  const denied = await ctx.runTool('imp_write_file', {
-    name: 'dev',
-    path: '/readonly/f',
-    content: 'x',
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: {
+          path: '/root/-odd dir/$(x) file.txt',
+          encoding: 'utf8',
+          bytes: 7,
+          content: 'héllo\n',
+        },
+        isError: false,
+      },
+    },
+  ]);
+
+  // the default maxBytes is 256 KiB
+  expect(guest.requests).toMatchObject([
+    { argv: ['head', '-c', String(256 * 1024 + 1), '/root/-odd dir/$(x) file.txt'] },
+  ]);
+});
+
+test('it writes bytes given as base64', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
   });
 
-  expect(denied.isError).toBe(true);
-  expect(denied.content[0].text).toContain('could not write /readonly/f (exit 1)');
-  expect(denied.content[0].text).toContain('Read-only file system');
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_write_file',
+        arguments: { name: 'dev', path: '/bin.dat', content: 'AP/+Cg==', encoding: 'base64' },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: { path: '/bin.dat', bytes: 4 },
+        isError: false,
+      },
+    },
+  ]);
+
+  expect(guest.files.get('/bin.dat')).toStrictEqual(new Uint8Array([0, 255, 254, 10]));
 });
 
-test('a relative path is refused before anything runs', async () => {
-  const ctx = await setupMcpTest();
-  const read = await ctx.runTool('imp_read_file', { name: 'dev', path: '-rf' });
+test('it refuses to read bytes that are not UTF-8 as utf8', async () => {
+  const ctx = await setupTest();
 
-  expect(read.isError).toBe(true);
-  expect(read.content[0].text).toContain('must be an absolute path');
-  expect(ctx.guest.requests).toEqual([]);
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  guest.files.set('/bin.dat', new Uint8Array([0, 255, 254, 10]));
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '/bin.dat' } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: '/bin.dat is not valid UTF-8; read it with encoding base64\n{\n  "path": "/bin.dat",\n  "bytes": 4\n}',
+          },
+        ],
+        structuredContent: { path: '/bin.dat', bytes: 4 },
+        isError: true,
+      },
+    },
+  ]);
 });
 
-test('imp_read_file works on a sleeping and on a stopped imp', async () => {
-  const ctx = await setupMcpTest();
+test('it reads bytes that are not UTF-8 as base64', async () => {
+  const ctx = await setupTest();
 
-  ctx.guest.files.set('/etc/hostname', new TextEncoder().encode('box\n'));
+  const guest = buildStubExecGuest();
 
-  await ctx.client.imps.create({ name: 'asleep', image: 'ubuntu' });
-  await ctx.client.imps.create({ name: 'off', image: 'ubuntu' });
-  await ctx.client.imps.sleep({ name: 'asleep' });
-  await ctx.client.imps.stop({ name: 'off' });
+  await ctx.rootClient.imps.create({ name: 'dev' });
 
-  for (const name of ['asleep', 'off']) {
-    const read = await ctx.runTool('imp_read_file', { name, path: '/etc/hostname' });
+  const record = await findImpByName(ctx.db, 'dev');
 
-    expect(read.structuredContent).toMatchObject({ content: 'box\n' });
+  invariant(record);
 
-    const imp = await ctx.client.imps.get({ name });
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
 
-    expect(imp.state).toBe('running');
-  }
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  guest.files.set('/bin.dat', new Uint8Array([0, 255, 254, 10]));
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_read_file',
+        arguments: { name: 'dev', path: '/bin.dat', encoding: 'base64' },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: { path: '/bin.dat', encoding: 'base64', bytes: 4, content: 'AP/+Cg==' },
+        isError: false,
+      },
+    },
+  ]);
+});
+
+test('it refuses base64 content that does not decode, before anything runs', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_write_file',
+        arguments: { name: 'dev', path: '/x', content: 'not base64!', encoding: 'base64' },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: 'content is not valid base64' }],
+        isError: true,
+      },
+    },
+  ]);
+
+  expect(guest.requests).toStrictEqual([]);
+});
+
+test('it reads a file exactly maxBytes long', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  guest.files.set('/big', new Uint8Array(100).fill(97));
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '/big', maxBytes: 100 } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: { path: '/big', encoding: 'utf8', bytes: 100, content: 'a'.repeat(100) },
+        isError: false,
+      },
+    },
+  ]);
+});
+
+test('it fails a file larger than maxBytes instead of cutting it', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  guest.files.set('/big', new Uint8Array(100).fill(97));
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '/big', maxBytes: 99 } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: '/big is larger than maxBytes (99); read a part of it with imp_exec\n{\n  "path": "/big"\n}',
+          },
+        ],
+        structuredContent: { path: '/big' },
+        isError: true,
+      },
+    },
+  ]);
+});
+
+test("it answers a read that fails in the guest with an isError result holding the command's stderr", async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '/nope' } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: 'could not read /nope (exit 1): head: cannot open \'/nope\' for reading: No such file or directory\n{\n  "path": "/nope"\n}',
+          },
+        ],
+        structuredContent: { path: '/nope' },
+        isError: true,
+      },
+    },
+  ]);
+});
+
+test("it answers a write that fails in the guest with an isError result holding the command's stderr", async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_write_file',
+        arguments: { name: 'dev', path: '/readonly/f', content: 'x' },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: 'could not write /readonly/f (exit 1): mkdir: can\'t create directory \'/readonly\': Read-only file system\n{\n  "path": "/readonly/f"\n}',
+          },
+        ],
+        structuredContent: { path: '/readonly/f' },
+        isError: true,
+      },
+    },
+  ]);
+});
+
+test('it refuses a relative path before anything runs', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '-rf' } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: expect.stringContaining('must be an absolute path') as unknown,
+          },
+        ],
+        isError: true,
+      },
+    },
+  ]);
+
+  expect(guest.requests).toStrictEqual([]);
+});
+
+test.each([
+  ['a sleeping', 'sleep'],
+  ['a stopped', 'stop'],
+] as const)('it reads a file of %s imp', async (_state, transition) => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  guest.files.set('/etc/hostname', new TextEncoder().encode('box\n'));
+
+  await ctx.rootClient.imps[transition]({ name: 'dev' });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '/etc/hostname' } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: { path: '/etc/hostname', encoding: 'utf8', bytes: 4, content: 'box\n' },
+        isError: false,
+      },
+    },
+  ]);
+});
+
+test.each([
+  ['a sleeping', 'sleep'],
+  ['a stopped', 'stop'],
+] as const)('it leaves %s imp running after a read', async (_state, transition) => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  guest.files.set('/etc/hostname', new TextEncoder().encode('box\n'));
+
+  await ctx.rootClient.imps[transition]({ name: 'dev' });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_read_file', arguments: { name: 'dev', path: '/etc/hostname' } },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  const imp = await ctx.rootClient.imps.get({ name: 'dev' });
+
+  expect(imp.state).toBe('running');
 });

@@ -1,286 +1,518 @@
-import { expect, spyOn, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ImpSchema } from '@imp/api';
-import type { ImpContract, Scope } from '@imp/api';
+import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { utils } from 'ssh2';
 import { checkAccess, findAccess } from './auth/access-policy';
-import { buildTestCaller } from './auth/test-callers';
-import { loadTokenStore } from './auth/token-store';
-import type { Broker } from './broker/broker-service';
+import { loadConfig } from './config';
+import { createImpd } from './create-impd';
+import type { ImpdDeps } from './create-impd';
 import { listApiCalls } from './db/api-audit';
+import { createImage } from './db/images';
 import { findImpByName } from './db/imps';
+import { openDatabase } from './db/open-database';
 import { createForkGrants } from './db/secrets';
-import type { ForkAuthority } from './db/secrets';
 import { listTokenRecords } from './db/tokens';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 import { createEd25519Key } from './ssh/host-key';
+import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { createXfsBackend } from './storage/xfs-backend';
+import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from './test-utils/build-stub-vmm';
+import { findFreePorts } from './test-utils/find-free-ports';
 
 // Scoped tokens that may grant selected secrets (docs/guides/tokens.md#granting-secrets),
 // through the API as a client calls it.
 
-const ORIGIN = 'http://impd.test';
-const VALUE = 'sk-synthetic-126-0123456789abcdef';
+// impd's real app on stub VMs with its log lines and RPC failures; `gap.once`
+// runs in the next grant write or fork copy, between the access check and
+// the transaction
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-interface RequestHandler {
-  readonly handle: (request: Request) => Promise<Response>;
-}
+  onTestFinished(() => stack.disposeAsync());
 
-interface TokenOptions {
-  readonly scope?: Scope;
+  const dataDir = await mkdtemp(join(tmpdir(), 'build-app-grants-'));
 
-  // null: host-wide
-  readonly imps?: readonly string[] | null;
-  readonly grantable?: readonly string[];
-}
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-type Client = ContractRouterClient<ImpContract>;
+  const db = await openDatabase(':memory:');
 
-function buildClient(app: RequestHandler, headers: Readonly<Record<string, string>>): Client {
-  const link = new RPCLink({
-    url: `${ORIGIN}/rpc`,
-    headers,
-    fetch: (request) => app.handle(request),
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one; a new
+  // disk stays the size of its image, since a fork copies every byte
+  const config = {
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_JAILER: 'false',
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    }),
+    defaultDiskBytes: 0,
+  };
+
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+  const logs: string[] = [];
+  const rpcFailures: string[] = [];
+  const gap = { once: (): Promise<void> => Promise.resolve() };
+
+  const deps: ImpdDeps = {
+    db,
+
+    // the bearer the root client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: (line) => {
+      logs.push(line);
+    },
+    logRpcFailure: (failure) => {
+      rpcFailures.push(Bun.inspect(failure));
+    },
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+
+      // the race window: what a test sets runs once, then writes run on
+      beforeGrantWrite: () => {
+        const run = gap.once;
+
+        gap.once = () => Promise.resolve();
+
+        return run();
+      },
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  };
+
+  const impd = await createImpd(config, deps);
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
   });
 
-  return createORPCClient(link);
+  // the default image, which every imps.create boots when it names none
+  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+
+  const sendToImpd = (request: Request) => impd.api.app.handle(request);
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: sendToImpd,
+    }),
+  );
+
+  return { db, config, deps, vmm, stack, impd, client, sendToImpd, logs, rpcFailures, gap };
 }
 
-async function setupTest() {
-  const harness = await setupImpTest();
+test('it lets a token grant a listed secret on its imps', async () => {
+  const ctx = await setupTest();
 
-  const root = buildTestApp(harness, harness);
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-  await harness.createTestImage('base');
-  await root.client.imps.create({ name: 'dev-a' });
-  await root.client.imps.create({ name: 'prod' });
-  await root.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
-  await root.client.secrets.add({ name: 'npm', kind: 'npm', value: VALUE });
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
-  // a manage token for dev-* that may grant gh
-  const createToken = async (name: string, options: TokenOptions = {}) => {
-    const made = await root.client.tokens.create({
-      name,
-      scope: options.scope ?? 'manage',
-      ...(options.imps !== null && { imps: [...(options.imps ?? ['dev-*'])] }),
-      ...(options.grantable !== undefined && { grantable: [...options.grantable] }),
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual(['gh']);
+});
+
+test.each([
+  ['an unlisted secret on its imp', 'dev-a', 'npm', 'not_grantable'],
+  ['a listed secret on another imp', 'prod', 'gh', 'imp_out_of_scope'],
+  ['an unlisted secret on another imp', 'prod', 'npm', 'imp_out_of_scope'],
+])('it refuses a token’s grant of %s', async (_label, name, secret, reason) => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name, secret })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason },
+  });
+
+  const grants = await ctx.client.grants.list({ name });
+
+  expect(grants).toStrictEqual([]);
+});
+
+test('it lets a token revoke a listed secret on its imps', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.delete({ name: 'dev-a', secret: 'gh' });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual([]);
+});
+
+test.each([
+  ['an unlisted secret on its imp', 'dev-a', 'npm', 'not_grantable'],
+  ['a listed secret on another imp', 'prod', 'gh', 'imp_out_of_scope'],
+  ['an unlisted secret on another imp', 'prod', 'npm', 'imp_out_of_scope'],
+])(
+  'it refuses a token’s revoke of %s and keeps the grant',
+  async (_label, name, secret, reason) => {
+    const ctx = await setupTest();
+
+    await ctx.client.imps.create({ name: 'dev-a' });
+    await ctx.client.imps.create({ name: 'prod' });
+    await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+    await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+    // the root token grants everything, so each revoke finds a grant
+    await ctx.client.grants.add({ name, secret });
+
+    const made = await ctx.client.tokens.create({
+      name: 'agent',
+      scope: 'manage',
+      imps: ['dev-*'],
+      grantable: ['gh'],
     });
 
-    return {
-      secret: made.secret,
-      client: buildClient(root.app, { authorization: `Bearer ${made.secret}` }),
-    };
-  };
-
-  // the token's dashboard session, as a browser on impd's page sends it
-  const createSession = async (secret: string, app: RequestHandler = root.app): Promise<Client> => {
-    const response = await app.handle(
-      new Request(`${ORIGIN}/auth/login`, {
-        method: 'POST',
-        headers: { origin: ORIGIN, 'content-type': 'application/json' },
-        body: JSON.stringify({ token: secret }),
+    const agent: ContractRouterClient<ImpContract> = createORPCClient(
+      new RPCLink({
+        url: 'http://impd.test/rpc',
+        headers: { authorization: `Bearer ${made.secret}` },
+        fetch: ctx.sendToImpd,
       }),
     );
 
-    const cookie = response.headers.get('set-cookie')?.split(';')[0] ?? '';
-
-    expect(cookie).toStartWith('imp_session=');
-
-    return buildClient(app, { cookie, 'sec-fetch-site': 'same-origin' });
-  };
-
-  // impd restarted on the same database: a new imp service, token store and app
-  const startAgain = async () => {
-    const tokens = await loadTokenStore({
-      db: harness.db,
-      rootToken: TEST_TOKEN,
-      now: harness.now,
-      onRemove: harness.revocations.revoke,
-      isFileKey: () => false,
+    expect(agent.grants.delete({ name, secret })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      data: { reason },
     });
 
-    return buildTestApp({ ...harness, tokens }, harness.restartImpd());
-  };
+    const kept = await ctx.client.grants.list({ name });
 
-  // an app whose grants and revokes run `between` after the access check
-  // and before their transaction, and whose forks run it after the fork is
-  // made and before its grants are copied
-  const buildAppWithGap = (between: () => Promise<void>) => {
-    const broker: Broker = {
-      ...harness.broker,
-      addGrant: async (...args) => {
-        await between();
+    expect(kept).toStrictEqual([secret]);
+  },
+);
 
-        return harness.broker.addGrant(...args);
-      },
-      removeGrant: async (...args) => {
-        await between();
-
-        return harness.broker.removeGrant(...args);
-      },
-      createForkGrants: async (...args) => {
-        await between();
-
-        return harness.broker.createForkGrants(...args);
-      },
-    };
-
-    return buildTestApp({ ...harness, broker }, harness);
-  };
-
-  return { ...harness, ...root, createToken, createSession, startAgain, buildAppWithGap };
-}
-
-// no secret exists
-function readNoGeneration(): Promise<null> {
-  return Promise.resolve(null);
-}
-
-// the code and reason of a failed call, or 'ok'
-async function readFailure(call: Promise<unknown>): Promise<string> {
-  try {
-    await call;
-
-    return 'ok';
-  } catch (error) {
-    if (typeof error !== 'object' || error === null || !('code' in error)) {
-      return 'thrown';
-    }
-
-    const data: unknown = 'data' in error ? error.data : undefined;
-
-    const reason: unknown =
-      typeof data === 'object' && data !== null && 'reason' in data ? data.reason : undefined;
-
-    return typeof reason === 'string' ? `${String(error.code)} ${reason}` : String(error.code);
-  }
-}
-
-test('a token may grant and revoke a listed secret on its imps, and nothing past either', async () => {
+test('it lets a token list every grant on its imp, listed or not', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
-  const outcomes: string[] = [];
-
-  for (const name of ['dev-a', 'prod']) {
-    for (const secret of ['gh', 'npm']) {
-      const added = await readFailure(agent.client.grants.add({ name, secret }));
-
-      outcomes.push(`add ${name} ${secret}: ${added}`);
-    }
-  }
-
-  // the root token grants everything, so each delete finds a grant
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
-  await ctx.client.grants.add({ name: 'prod', secret: 'gh' });
-  await ctx.client.grants.add({ name: 'prod', secret: 'npm' });
 
-  const listed = await agent.client.grants.list({ name: 'dev-a' });
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
-  for (const name of ['dev-a', 'prod']) {
-    for (const secret of ['gh', 'npm']) {
-      const removed = await readFailure(agent.client.grants.delete({ name, secret }));
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
-      outcomes.push(`delete ${name} ${secret}: ${removed}`);
-    }
-  }
+  const listed = await agent.grants.list({ name: 'dev-a' });
 
-  expect(outcomes).toEqual([
-    'add dev-a gh: ok',
-    'add dev-a npm: FORBIDDEN not_grantable',
-    'add prod gh: FORBIDDEN imp_out_of_scope',
-    'add prod npm: FORBIDDEN imp_out_of_scope',
-    'delete dev-a gh: ok',
-    'delete dev-a npm: FORBIDDEN not_grantable',
-    'delete prod gh: FORBIDDEN imp_out_of_scope',
-    'delete prod npm: FORBIDDEN imp_out_of_scope',
-  ]);
-
-  const left = await Promise.all([
-    ctx.client.grants.list({ name: 'dev-a' }),
-    ctx.client.grants.list({ name: 'prod' }),
-  ]);
-
-  expect(listed).toEqual(['gh', 'npm']);
-  expect(left).toEqual([['npm'], ['gh', 'npm']]);
+  expect(listed).toStrictEqual(['gh', 'npm']);
 });
 
-test('a grant is refused without manage, without a list, and for a secret it cannot name', async () => {
+// checked before any lookup: an unknown secret is refused, not missing
+test.each([
+  [
+    'a token without manage',
+    { scope: 'exec' as const, imps: ['dev-*'] },
+    'gh',
+    { code: 'FORBIDDEN', data: { reason: 'scope' } },
+  ],
+  [
+    'a token without a list',
+    { scope: 'manage' as const, imps: ['dev-*'] },
+    'gh',
+    { code: 'FORBIDDEN', data: { reason: 'not_grantable' } },
+  ],
+  [
+    'a secret that does not exist',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['gh'] },
+    'nope',
+    { code: 'FORBIDDEN', data: { reason: 'not_grantable' } },
+  ],
+  [
+    'a secret that is not a name',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['gh'] },
+    'Not A Name',
+    { code: 'FORBIDDEN', data: { reason: 'not_grantable' } },
+  ],
+])('it refuses a grant by %s', async (_label, options, secret, refusal) => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-  const plain = await ctx.createToken('plain');
-  const reader = await ctx.createToken('reader', { scope: 'exec' });
 
-  const outcomes = await Promise.all([
-    readFailure(reader.client.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readFailure(plain.client.grants.add({ name: 'dev-a', secret: 'gh' })),
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-    // checked before any lookup: an unknown secret is refused, not missing
-    readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'nope' })),
-    readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'Not A Name' })),
-    readFailure(agent.client.grants.delete({ name: 'dev-a', secret: 'nope' })),
+  const made = await ctx.client.tokens.create({ name: 'caller', ...options });
 
-    // past the check, the usual errors
-    readFailure(agent.client.grants.add({ name: 'dev-gone', secret: 'gh' })),
-    readFailure(agent.client.grants.delete({ name: 'dev-a', secret: 'gh' })),
-  ]);
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
-  expect(outcomes).toEqual([
-    'FORBIDDEN scope',
-    'FORBIDDEN not_grantable',
-    'FORBIDDEN not_grantable',
-    'FORBIDDEN not_grantable',
-    'FORBIDDEN not_grantable',
-    'NOT_FOUND',
-    'NOT_FOUND',
-  ]);
+  expect(caller.grants.add({ name: 'dev-a', secret })).rejects.toMatchObject(refusal);
 });
 
-test('tokens.create takes a list only with manage and imps, of secrets that exist', async () => {
+test('it refuses a token’s revoke of a secret that does not exist', async () => {
   const ctx = await setupTest();
 
-  const create = (
-    scope: Scope,
-    imps: readonly string[] | undefined,
-    grantable: readonly string[],
-  ) =>
-    readFailure(
-      ctx.client.tokens.create({
-        name: 'agent',
-        scope,
-        ...(imps !== undefined && { imps: [...imps] }),
-        grantable: [...grantable],
-      }),
-    );
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-  const outcomes = await Promise.all([
-    create('exec', ['dev-*'], ['gh']),
-    create('manage', undefined, ['gh']),
-    create('manage', ['dev-*'], []),
-    create('manage', ['dev-*'], ['gh', 'gh']),
-    create('manage', ['dev-*'], ['Not A Name']),
-    create(
-      'manage',
-      ['dev-*'],
-      Array.from({ length: 33 }, (_, index) => `s${String(index)}`),
-    ),
-    create('manage', ['dev-*'], ['gh', 'nope']),
-  ]);
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
-  expect(outcomes).toEqual([
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.delete({ name: 'dev-a', secret: 'nope' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it answers NOT_FOUND to a token’s grant on an imp of its patterns that does not exist', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-gone', secret: 'gh' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+  });
+});
+
+test('it answers NOT_FOUND to a token’s revoke of a grant that does not exist', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.delete({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+  });
+});
+
+test.each([
+  [
+    'a list without manage',
+    { scope: 'exec' as const, imps: ['dev-*'], grantable: ['gh'] },
     'BAD_REQUEST',
+  ],
+  ['a list without imps', { scope: 'manage' as const, grantable: ['gh'] }, 'BAD_REQUEST'],
+  ['an empty list', { scope: 'manage' as const, imps: ['dev-*'], grantable: [] }, 'BAD_REQUEST'],
+  [
+    'a list that names a secret twice',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['gh', 'gh'] },
     'BAD_REQUEST',
+  ],
+  [
+    'a list entry that is not a name',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['Not A Name'] },
     'BAD_REQUEST',
+  ],
+  [
+    'a list of 33 secrets',
+    {
+      scope: 'manage' as const,
+      imps: ['dev-*'],
+      grantable: Array.from({ length: 33 }, (_, index) => `s${String(index)}`),
+    },
     'BAD_REQUEST',
-    'BAD_REQUEST',
-    'BAD_REQUEST',
+  ],
+  [
+    'a list entry that does not exist',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['gh', 'nope'] },
     'NOT_FOUND',
-  ]);
+  ],
+])('it refuses a token made with %s and makes no token', async (_label, options, code) => {
+  const ctx = await setupTest();
 
-  const none = await ctx.client.tokens.list();
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-  expect(none).toEqual([]);
+  expect(ctx.client.tokens.create({ name: 'agent', ...options })).rejects.toMatchObject({ code });
+
+  const tokens = await ctx.client.tokens.list();
+
+  expect(tokens).toStrictEqual([]);
+});
+
+test('it makes a manage token for some imps with a list of secrets that exist', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
 
   const made = await ctx.client.tokens.create({
     name: 'agent',
@@ -289,13 +521,33 @@ test('tokens.create takes a list only with manage and imps, of secrets that exis
     grantable: ['gh', 'npm'],
   });
 
-  expect(made.token.grantable).toEqual(['gh', 'npm']);
+  expect(made.token.grantable).toStrictEqual(['gh', 'npm']);
+});
 
-  const agent = buildClient(ctx.app, { authorization: `Bearer ${made.secret}` });
+test('it names the list to the token that holds it', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
   const identity = await agent.tokens.whoami();
 
-  expect(identity).toEqual({
+  expect(identity).toStrictEqual({
     kind: 'token',
     name: 'agent',
     scope: 'manage',
@@ -304,478 +556,1403 @@ test('tokens.create takes a list only with manage and imps, of secrets that exis
   });
 });
 
-test('a dashboard session made with the token has the same authority, no more', async () => {
-  const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-  const browser = await ctx.createSession(agent.secret);
-
-  const outcomes = await Promise.all([
-    readFailure(browser.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readFailure(browser.grants.add({ name: 'dev-a', secret: 'npm' })),
-    readFailure(browser.grants.add({ name: 'prod', secret: 'gh' })),
-    readFailure(browser.imps.fork({ source: 'dev-a', name: 'dev-b' })),
-  ]);
-
-  expect(outcomes).toEqual([
-    'ok',
-    'FORBIDDEN not_grantable',
-    'FORBIDDEN imp_out_of_scope',
-    'FORBIDDEN',
-  ]);
-
-  const identity = await browser.tokens.whoami();
-
-  expect(identity.grantable).toEqual(['gh']);
-});
-
-test('a token that may grant forks and moves nothing, and leaves nothing behind', async () => {
+test('it lets the token’s dashboard session grant a listed secret on its imps', async () => {
   const ctx = await setupTest();
 
-  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-  const plain = await ctx.createToken('plain');
-
-  const outcomes = await Promise.all([
-    readFailure(agent.client.imps.fork({ source: 'dev-a', name: 'dev-b' })),
-    readFailure(agent.client.moves.prepare({ name: 'dev-a' })),
-    readFailure(
-      agent.client.moves.send({ name: 'dev-a', to: 'https://other.example.com', ticket: 't' }),
-    ),
-    readFailure(agent.client.moves.resume({ name: 'dev-a' })),
-  ]);
-
-  expect(outcomes).toEqual(['FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN']);
-
-  const imps = await ctx.client.imps.list();
-  const tickets = await ctx.db.selectFrom('move_tickets').selectAll().execute();
-
-  expect(imps.map((imp) => imp.name)).toEqual(['dev-a', 'prod']);
-  expect(tickets).toEqual([]);
-
-  // the same patterns without a list fork, but copy no grant they could
-  // not make
-  const fork = await plain.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
-  const forked = await ctx.client.grants.list({ name: 'dev-b' });
-
-  expect(forked).toEqual([]);
-  expect(fork.grantsNotCopied).toEqual([{ secret: 'npm', reason: 'not-grantable' }]);
-});
-
-test('a listed secret deleted, or deleted and made again, grants nothing, even after a restart', async () => {
-  const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-  const browser = await ctx.createSession(agent.secret);
-
-  await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
-  await ctx.client.secrets.delete({ name: 'gh' });
-
-  const deleted = await readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' }));
-
-  // made again under the name, by the host: another secret
-  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
-
-  const remade = await Promise.all([
-    readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readFailure(browser.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readFailure(agent.client.grants.delete({ name: 'dev-a', secret: 'gh' })),
-  ]);
-
-  expect(deleted).toBe('FORBIDDEN not_grantable');
-
-  expect(remade).toEqual([
-    'FORBIDDEN not_grantable',
-    'FORBIDDEN not_grantable',
-    'FORBIDDEN not_grantable',
-  ]);
-
-  // the list still shows the name, and the token still may not fork
-  const restarted = await ctx.startAgain();
-
-  const after = buildClient(restarted.app, { authorization: `Bearer ${agent.secret}` });
-
-  const outcomes = await Promise.all([
-    readFailure(after.imps.fork({ source: 'dev-a', name: 'dev-b' })),
-    readFailure(after.grants.add({ name: 'dev-a', secret: 'gh' })),
-  ]);
-
-  expect(outcomes).toEqual(['FORBIDDEN', 'FORBIDDEN not_grantable']);
-
-  const identity = await after.tokens.whoami();
-
-  expect(identity.grantable).toEqual(['gh']);
-});
-
-test('a grant a token made outlives sleep, wake, a checkpoint restore and a restart', async () => {
-  const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh', 'npm'] });
-
-  await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
-  await agent.client.grants.add({ name: 'dev-a', secret: 'npm' });
-
-  const seen: string[][] = [];
-
-  const readGrants = async (client: Client = agent.client) => {
-    const names = await client.grants.list({ name: 'dev-a' });
-
-    seen.push(names);
-  };
-
-  await agent.client.imps.sleep({ name: 'dev-a' });
-
-  await readGrants();
-
-  await agent.client.imps.wake({ name: 'dev-a' });
-
-  await readGrants();
-
-  const checkpoint = await agent.client.checkpoints.create({ name: 'dev-a' });
-
-  await agent.client.grants.delete({ name: 'dev-a', secret: 'npm' });
-  await agent.client.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint.id });
-
-  await readGrants();
-
-  const restarted = await ctx.startAgain();
-
-  await readGrants(buildClient(restarted.app, { authorization: `Bearer ${agent.secret}` }));
-
-  // a restore brings back the disk, not the grants of that time
-  expect(seen).toEqual([['gh', 'npm'], ['gh', 'npm'], ['gh'], ['gh']]);
-});
-
-test('an imp made from a template gets no grants, and a destroyed imp takes its own', async () => {
-  const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-
-  await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
-  await ctx.client.images.add({ imp: 'dev-a', name: 'dev-tpl' });
-  await agent.client.imps.create({ name: 'dev-c', image: 'dev-tpl' });
-
-  const fromTemplate = await agent.client.grants.list({ name: 'dev-c' });
-
-  expect(fromTemplate).toEqual([]);
-
-  await agent.client.imps.destroy({ name: 'dev-a' });
-  await agent.client.imps.create({ name: 'dev-a' });
-
-  const remade = await agent.client.grants.list({ name: 'dev-a' });
-
-  expect(remade).toEqual([]);
-});
-
-test('no answer, error, log line or audit row holds a secret value', async () => {
-  const ctx = await setupTest();
-
-  const printed: string[] = [];
-
-  const spy = spyOn(console, 'error').mockImplementation((...args: readonly unknown[]) => {
-    printed.push(
-      args.map((arg) => (arg instanceof Error ? String(arg.stack) : String(arg))).join(' '),
-    );
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
   });
 
-  const answers: unknown[] = [];
+  // the token's session, as a browser on impd's page sends it
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: made.secret }),
+    }),
+  );
 
-  const collect = async (call: Promise<unknown>): Promise<void> => {
-    try {
-      const answer = await call;
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-      answers.push(answer);
-    } catch (error) {
-      answers.push(error, String(error));
-    }
-  };
+  invariant(cookie);
 
-  try {
-    await ctx.client.secrets.add({
-      name: 'gh-api',
-      kind: 'custom',
-      value: `${VALUE}-2`,
-      rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
-    });
+  const browser: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await browser.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual(['gh']);
+});
+
+test.each([
+  ['an unlisted secret on its imp', 'dev-a', 'npm', 'not_grantable'],
+  ['a listed secret on another imp', 'prod', 'gh', 'imp_out_of_scope'],
+])(
+  'it refuses the token’s dashboard session a grant of %s',
+  async (_label, name, secret, reason) => {
+    const ctx = await setupTest();
+
+    await ctx.client.imps.create({ name: 'dev-a' });
+    await ctx.client.imps.create({ name: 'prod' });
+    await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+    await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
 
     const made = await ctx.client.tokens.create({
       name: 'agent',
       scope: 'manage',
       imps: ['dev-*'],
-      grantable: ['gh', 'gh-api'],
+      grantable: ['gh'],
     });
 
-    answers.push(made.token);
-
-    const agent = buildClient(ctx.app, { authorization: `Bearer ${made.secret}` });
-
-    await collect(agent.grants.add({ name: 'dev-a', secret: 'gh' }));
-    await collect(agent.grants.add({ name: 'dev-a', secret: 'gh-api' }));
-    await collect(agent.grants.add({ name: 'dev-a', secret: 'npm' }));
-    await collect(agent.grants.add({ name: 'prod', secret: 'gh' }));
-    await collect(agent.imps.fork({ source: 'dev-a', name: 'dev-b' }));
-    await collect(agent.grants.list({ name: 'dev-a' }));
-    await collect(agent.secrets.list());
-    await collect(agent.tokens.whoami());
-    await collect(ctx.client.tokens.list());
-
-    await collect(
-      ctx.client.secrets.add({
-        name: 'gh-api',
-        kind: 'github',
-        value: `${VALUE}-3`,
-        replace: true,
+    // the token's session, as a browser on impd's page sends it
+    const login = await ctx.sendToImpd(
+      new Request('http://impd.test/auth/login', {
+        method: 'POST',
+        headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+        body: JSON.stringify({ token: made.secret }),
       }),
     );
 
-    await collect(agent.grants.delete({ name: 'dev-a', secret: 'gh' }));
-  } finally {
-    spy.mockRestore();
-  }
+    const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+    invariant(cookie);
+
+    const browser: ContractRouterClient<ImpContract> = createORPCClient(
+      new RPCLink({
+        url: 'http://impd.test/rpc',
+        headers: { cookie, 'sec-fetch-site': 'same-origin' },
+        fetch: ctx.sendToImpd,
+      }),
+    );
+
+    expect(browser.grants.add({ name, secret })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      data: { reason },
+    });
+  },
+);
+
+test('it refuses the token’s dashboard session a fork', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // the token's session, as a browser on impd's page sends it
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: made.secret }),
+    }),
+  );
+
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
+  const browser: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(browser.imps.fork({ source: 'dev-a', name: 'dev-b' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+});
+
+test('it names the token’s list to its dashboard session', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // the token's session, as a browser on impd's page sends it
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: made.secret }),
+    }),
+  );
+
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
+  const browser: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  const identity = await browser.tokens.whoami();
+
+  expect(identity.grantable).toStrictEqual(['gh']);
+});
+
+test('it refuses a fork by a token that may grant and makes no imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.imps.fork({ source: 'dev-a', name: 'dev-b' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+
+  const imps = await ctx.client.imps.list();
+
+  expect(imps.map((imp) => imp.name)).toStrictEqual(['dev-a']);
+});
+
+test('it refuses a move prepare by a token that may grant and makes no ticket', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.moves.prepare({ name: 'dev-a' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+
+  const tickets = await ctx.db.selectFrom('move_tickets').selectAll().execute();
+
+  expect(tickets).toStrictEqual([]);
+});
+
+test('it refuses a move send by a token that may grant', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(
+    agent.moves.send({ name: 'dev-a', to: 'https://other.example.com', ticket: 't' }),
+  ).rejects.toMatchObject({ code: 'FORBIDDEN', data: undefined });
+
+  const imp = await ctx.client.imps.get({ name: 'dev-a' });
+
+  expect(imp.state).toBe('running');
+});
+
+test('it refuses a move resume by a token that may grant', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.moves.resume({ name: 'dev-a' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+});
+
+test('it forks for the same patterns without a list, copying no grant it could not make', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  const made = await ctx.client.tokens.create({ name: 'plain', scope: 'manage', imps: ['dev-*'] });
+
+  const plain: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  const fork = await plain.imps.fork({ source: 'dev-a', name: 'dev-b' });
+
+  expect(fork.grantsNotCopied).toStrictEqual([{ secret: 'npm', reason: 'not-grantable' }]);
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
+});
+
+test('it refuses a grant of a listed secret that was deleted', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+// made again under the name, by the host: another secret
+test('it refuses a grant of a listed secret that was deleted and made again', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it refuses the dashboard session a grant of a listed secret deleted and made again', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // the token's session, as a browser on impd's page sends it, made before
+  // the secret goes
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: made.secret }),
+    }),
+  );
+
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const browser: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(browser.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it refuses a revoke of a listed secret deleted and made again', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.delete({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual(['gh']);
+});
+
+test('it refuses a grant of a deleted listed secret after a restart', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  // the first impd still holds its resolver's port in this process
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+    restarted.diskUsage.stop();
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => restarted.api.app.handle(request),
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it refuses a fork by a token whose listed secret was deleted, after a restart', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+    restarted.diskUsage.stop();
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => restarted.api.app.handle(request),
+    }),
+  );
+
+  expect(agent.imps.fork({ source: 'dev-a', name: 'dev-b' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+});
+
+test('it still names a deleted listed secret in the list after a restart', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.delete({ name: 'gh' });
+
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+    restarted.diskUsage.stop();
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => restarted.api.app.handle(request),
+    }),
+  );
+
+  const identity = await agent.tokens.whoami();
+
+  expect(identity.grantable).toStrictEqual(['gh']);
+});
+
+test('it keeps a token’s grants through a sleep', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.grants.add({ name: 'dev-a', secret: 'npm' });
+  await agent.imps.sleep({ name: 'dev-a' });
+
+  const listed = await agent.grants.list({ name: 'dev-a' });
+
+  expect(listed).toStrictEqual(['gh', 'npm']);
+});
+
+test('it keeps a token’s grants through a wake', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.grants.add({ name: 'dev-a', secret: 'npm' });
+  await agent.imps.sleep({ name: 'dev-a' });
+  await agent.imps.wake({ name: 'dev-a' });
+
+  const listed = await agent.grants.list({ name: 'dev-a' });
+
+  expect(listed).toStrictEqual(['gh', 'npm']);
+});
+
+// a restore brings back the disk, not the grants of that time
+test('it keeps a token’s grants as they are now through a checkpoint restore', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  const checkpoint = await agent.checkpoints.create({ name: 'dev-a' });
+
+  await agent.grants.delete({ name: 'dev-a', secret: 'npm' });
+  await agent.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint.id });
+
+  const listed = await agent.grants.list({ name: 'dev-a' });
+
+  expect(listed).toStrictEqual(['gh']);
+});
+
+test('it keeps a token’s grants through a restart', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+    restarted.diskUsage.stop();
+  });
+
+  const after: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => restarted.api.app.handle(request),
+    }),
+  );
+
+  const listed = await after.grants.list({ name: 'dev-a' });
+
+  expect(listed).toStrictEqual(['gh', 'npm']);
+});
+
+test('it gives an imp made from a template no grants', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.images.add({ imp: 'dev-a', name: 'dev-tpl' });
+  await agent.imps.create({ name: 'dev-c', image: 'dev-tpl' });
+
+  const listed = await agent.grants.list({ name: 'dev-c' });
+
+  expect(listed).toStrictEqual([]);
+});
+
+test('it takes a destroyed imp’s grants with it', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.imps.destroy({ name: 'dev-a' });
+  await agent.imps.create({ name: 'dev-a' });
+
+  const listed = await agent.grants.list({ name: 'dev-a' });
+
+  expect(listed).toStrictEqual([]);
+});
+
+test('it puts no secret value in an answer, error, log line or audit row', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+
+  await ctx.client.secrets.add({
+    name: 'gh-api',
+    kind: 'custom',
+    value: 'sk-synthetic-126-2',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+  });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'gh-api'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  // gh first, so gh-api clashes with it on api.github.com
+  const granted = await Promise.allSettled([agent.grants.add({ name: 'dev-a', secret: 'gh' })]);
+
+  const answers = await Promise.allSettled([
+    agent.grants.add({ name: 'dev-a', secret: 'gh-api' }),
+    agent.grants.add({ name: 'dev-a', secret: 'npm' }),
+    agent.grants.add({ name: 'prod', secret: 'gh' }),
+    agent.imps.fork({ source: 'dev-a', name: 'dev-b' }),
+    agent.grants.list({ name: 'dev-a' }),
+    agent.secrets.list(),
+    agent.tokens.whoami(),
+    ctx.client.tokens.list(),
+  ]);
+
+  const last = await Promise.allSettled([
+    ctx.client.secrets.add({
+      name: 'gh-api',
+      kind: 'github',
+      value: 'sk-synthetic-126-3',
+      replace: true,
+    }),
+    agent.grants.delete({ name: 'dev-a', secret: 'gh' }),
+  ]);
 
   const calls = await listApiCalls(ctx.db, null, 100, null);
   const brokerRows = await ctx.db.selectFrom('broker_audit').selectAll().execute();
 
+  const everything = JSON.stringify([
+    made.token,
+    granted,
+    answers,
+    last,
+    ctx.rpcFailures,
+    ctx.logs,
+    calls,
+    brokerRows,
+  ]);
+
   // the refusals and the clash are there, by name
   expect(calls.map((call) => call.outcome)).toContain('FORBIDDEN');
   expect(calls.map((call) => call.outcome)).toContain('CONFLICT');
-
-  const everything = JSON.stringify([answers, printed, ctx.logs, calls, brokerRows]);
-
   expect(everything).toContain('gh-api');
-  expect(everything).not.toContain(VALUE);
+  expect(everything).not.toContain('sk-synthetic-126');
 });
 
-test('a secret deleted and made again after the access check is refused in the transaction', async () => {
+test('it refuses in the transaction a grant whose secret was deleted and made again after the check', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
-  const gapped = ctx.buildAppWithGap(async () => {
-    await ctx.client.secrets.delete({ name: 'gh' });
-    await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
   });
 
-  const client = buildClient(gapped.app, { authorization: `Bearer ${agent.secret}` });
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
-  const added = await readFailure(client.grants.add({ name: 'dev-a', secret: 'gh' }));
-  const left = await ctx.client.grants.list({ name: 'dev-a' });
+  ctx.gap.once = async () => {
+    await ctx.client.secrets.delete({ name: 'gh' });
+    await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  };
 
-  expect(added).toBe('FORBIDDEN not_grantable');
-  expect(left).toEqual([]);
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual([]);
 });
 
-test('a token removed after the access check makes no grant and revokes none', async () => {
+test('it makes no grant for a token removed after the access check', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
 
-  const state = { removed: false };
-
-  const gapped = ctx.buildAppWithGap(async () => {
-    if (!state.removed) {
-      state.removed = true;
-
-      await ctx.client.tokens.delete({ name: 'agent' });
-    }
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
   });
 
-  const client = buildClient(gapped.app, { authorization: `Bearer ${agent.secret}` });
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
-  const added = await readFailure(client.grants.add({ name: 'dev-a', secret: 'gh' }));
-  const left = await ctx.client.grants.list({ name: 'dev-a' });
+  ctx.gap.once = async () => {
+    await ctx.client.tokens.delete({ name: 'agent' });
+  };
 
-  expect(added).toBe('UNAUTHORIZED');
-  expect(left).toEqual(['npm']);
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
+  });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual(['npm']);
 });
 
-test('a list entry from before a rebind is refused', async () => {
+test('it revokes no grant for a token removed after the access check', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
 
-  await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  ctx.gap.once = async () => {
+    await ctx.client.tokens.delete({ name: 'agent' });
+  };
+
+  expect(agent.grants.delete({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
+  });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual(['gh']);
+});
+
+test('it drops the grant a rebind left stale', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
   const rebound = await ctx.client.secrets.add({
     name: 'gh',
     kind: 'custom',
-    value: VALUE,
+    value: 'sk-synthetic-126-0',
     rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
     replace: true,
     rebind: true,
   });
 
-  const outcomes = await Promise.all([
-    readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readFailure(agent.client.grants.delete({ name: 'dev-a', secret: 'gh' })),
-  ]);
-
   expect(rebound.droppedGrants).toBe(1);
-  expect(outcomes).toEqual(['FORBIDDEN not_grantable', 'FORBIDDEN not_grantable']);
 });
 
-test('a checkpoint restore keeps the host’s grants now: a revoke or a rebind stays', async () => {
+test('it refuses a grant by a list entry from before a rebind', async () => {
   const ctx = await setupTest();
-  const imp = await findImpByName(ctx.db, 'dev-a');
 
-  const isGranted = (host: string) => ctx.broker.isGranted(imp?.id ?? '', host);
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-  const runRestore = async () => {
-    const [checkpoint] = await ctx.client.checkpoints.list({ name: 'dev-a' });
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
-    await ctx.client.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint?.id ?? '' });
-  };
+  await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: 'sk-synthetic-126-0',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
 
-  // an unchanged grant stays usable through sleep, wake and a restore
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it refuses a revoke by a list entry from before a rebind', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: 'sk-synthetic-126-0',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  // granted again at the new generation, so a revoke finds a grant
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.delete({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it keeps an unchanged grant usable through sleep, wake and a checkpoint restore', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
-  await ctx.client.checkpoints.create({ name: 'dev-a' });
+
+  const checkpoint = await ctx.client.checkpoints.create({ name: 'dev-a' });
+
   await ctx.client.imps.sleep({ name: 'dev-a' });
   await ctx.client.imps.wake({ name: 'dev-a' });
+  await ctx.client.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint.id });
 
-  await runRestore();
+  const imp = await findImpByName(ctx.db, 'dev-a');
 
-  const kept = await isGranted('registry.npmjs.org');
+  invariant(imp);
 
-  // revoked, or rebound, after the checkpoint
+  const granted = await ctx.impd.broker.isGranted(imp.id, 'registry.npmjs.org');
+
+  expect(granted).toBeTrue();
+});
+
+test('it keeps a revoke made after the checkpoint through its restore', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const checkpoint = await ctx.client.checkpoints.create({ name: 'dev-a' });
+
   await ctx.client.grants.delete({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint.id });
+
+  const imp = await findImpByName(ctx.db, 'dev-a');
+
+  invariant(imp);
+
+  const granted = await ctx.impd.broker.isGranted(imp.id, 'api.github.com');
+
+  expect(granted).toBeFalse();
+});
+
+test('it keeps a rebind made after the checkpoint through its restore', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  const checkpoint = await ctx.client.checkpoints.create({ name: 'dev-a' });
 
   await ctx.client.secrets.add({
     name: 'npm',
     kind: 'custom',
-    value: VALUE,
+    value: 'sk-synthetic-126-1',
     rules: [{ host: 'registry.npmjs.org', header: 'x-token', scheme: 'raw' }],
     replace: true,
     rebind: true,
   });
 
-  await runRestore();
+  await ctx.client.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint.id });
 
-  const after = await Promise.all([isGranted('api.github.com'), isGranted('registry.npmjs.org')]);
+  const imp = await findImpByName(ctx.db, 'dev-a');
 
-  expect(kept).toBeTrue();
-  expect(after).toEqual([false, false]);
+  invariant(imp);
+
+  const granted = await ctx.impd.broker.isGranted(imp.id, 'registry.npmjs.org');
+
+  expect(granted).toBeFalse();
 });
 
-test('a token that may grant restores no backup, before anything happens', async () => {
-  const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-  const refused = await readFailure(agent.client.backups.restore({ name: 'dev-a', as: 'dev-b' }));
-  const after = await ctx.client.imps.list();
-
-  expect(refused).toBe('FORBIDDEN');
-  expect(after.map((imp) => imp.name)).toEqual(['dev-a', 'prod']);
-});
-
-test('its ssh keys and dashboard sessions may not fork or move, even with every entry stale', async () => {
+test('it refuses a backup restore by a token that may grant, before anything happens', async () => {
   const ctx = await setupTest();
 
-  const key = createEd25519Key().public;
-  const parsed = utils.parseKey(key);
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
 
-  if (parsed instanceof Error) {
-    throw parsed;
-  }
-
-  const agent = await ctx.client.tokens.create({
+  const made = await ctx.client.tokens.create({
     name: 'agent',
     scope: 'manage',
     imps: ['dev-*'],
     grantable: ['gh'],
-    sshKeys: [key],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.backups.restore({ name: 'dev-a', as: 'dev-b' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+
+  const imps = await ctx.client.imps.list();
+
+  expect(imps.map((imp) => imp.name)).toStrictEqual(['dev-a']);
+});
+
+test.each([['imps.fork'], ['moves.prepare'], ['moves.send'], ['moves.resume']])(
+  'it refuses %s to an ssh key of a token that may grant, with every entry stale',
+  async (path) => {
+    const ctx = await setupTest();
+
+    await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+    const key = createEd25519Key().public;
+    const parsed = utils.parseKey(key);
+
+    if (parsed instanceof Error) {
+      throw parsed;
+    }
+
+    await ctx.client.tokens.create({
+      name: 'agent',
+      scope: 'manage',
+      imps: ['dev-*'],
+      grantable: ['gh'],
+      sshKeys: [key],
+    });
+
+    // every entry stale
+    await ctx.client.secrets.delete({ name: 'gh' });
+
+    const caller = ctx.impd.tokens.findSshKey(parsed.getPublicSSH())?.caller;
+
+    invariant(caller);
+
+    const refusal = await checkAccess(
+      findAccess(path),
+      caller,
+      { source: 'dev-a', name: 'dev-a' },
+      () => Promise.resolve(null),
+    );
+
+    expect(caller.kind).toBe('ssh');
+    expect(refusal?.message).toInclude('may not fork');
+  },
+);
+
+test('it refuses a move prepare to the dashboard session of a token whose entries are all stale', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
   });
 
   // every entry stale
   await ctx.client.secrets.delete({ name: 'gh' });
 
-  const browser = await ctx.createSession(agent.secret);
-
-  const sshCaller = ctx.tokens.findSshKey(parsed.getPublicSSH())?.caller;
-
-  const sshRefusals = await Promise.all(
-    ['imps.fork', 'moves.prepare', 'moves.send', 'moves.resume'].map((path) =>
-      checkAccess(
-        findAccess(path),
-        sshCaller ?? buildTestCaller(),
-        { source: 'dev-a', name: 'dev-a' },
-        readNoGeneration,
-      ),
-    ),
+  // the token's session, as a browser on impd's page sends it
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: made.secret }),
+    }),
   );
 
-  const browserRefusals = await Promise.all([
-    readFailure(browser.imps.fork({ source: 'dev-a', name: 'dev-b' })),
-    readFailure(browser.moves.prepare({ name: 'dev-a' })),
-  ]);
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  expect(sshCaller?.kind).toBe('ssh');
+  invariant(cookie);
 
-  expect(sshRefusals.map((refusal) => refusal?.message.includes('may not fork'))).toEqual([
-    true,
-    true,
-    true,
-    true,
-  ]);
+  const browser: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
-  expect(browserRefusals).toEqual(['FORBIDDEN', 'FORBIDDEN']);
+  expect(browser.moves.prepare({ name: 'dev-a' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
+});
+
+test('it refuses a fork to the dashboard session of a token whose entries are all stale', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // every entry stale
+  await ctx.client.secrets.delete({ name: 'gh' });
+
+  // the token's session, as a browser on impd's page sends it
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: made.secret }),
+    }),
+  );
+
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
+  const browser: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(browser.imps.fork({ source: 'dev-a', name: 'dev-b' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: undefined,
+  });
 });
 
 // A fork copies its source's grants only as far as the caller could make
 // them (docs/guides/connectors.md#secrets-and-grants): every one for a
 // host-wide caller, none it could not grant for a caller with patterns.
 
-test('root and host-wide manage forks copy every grant; a scoped fork copies none, live or from a checkpoint', async () => {
+test.each([
+  ['live', { source: 'dev-a', name: 'dev-b' }],
+  ['from a checkpoint', { source: 'dev-a', name: 'dev-b', checkpoint: 'cp' }],
+])('it copies every grant to a root token’s fork, %s', async (_label, input) => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await ctx.client.checkpoints.create({ name: 'dev-a', label: 'cp' });
 
-  const checkpoint = await ctx.client.checkpoints.create({ name: 'dev-a' });
-  const host = await ctx.createToken('host', { imps: null });
-  const scoped = await ctx.createToken('scoped');
+  const fork = await ctx.client.imps.fork(input);
 
-  const callers = [
-    ['root', ctx.client],
-    ['host', host.client],
-    ['scoped', scoped.client],
-  ] as const;
+  expect(fork.grantsNotCopied).toStrictEqual([]);
+  expect(fork.grantsError).toBeUndefined();
 
-  const outcomes: unknown[] = [];
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
 
-  for (const [who, client] of callers) {
-    for (const from of [undefined, checkpoint.id]) {
-      const name = `dev-${who}-${from === undefined ? 'live' : 'cp'}`;
-
-      const fork = await client.imps.fork({
-        source: 'dev-a',
-        name,
-        ...(from !== undefined && { checkpoint: from }),
-      });
-
-      const grants = await ctx.client.grants.list({ name });
-
-      outcomes.push({ name, grants, notCopied: fork.grantsNotCopied, error: fork.grantsError });
-    }
-  }
-
-  const skipped = [
-    { secret: 'gh', reason: 'not-grantable' },
-    { secret: 'npm', reason: 'not-grantable' },
-  ];
-
-  expect(outcomes).toEqual([
-    { name: 'dev-root-live', grants: ['gh', 'npm'], notCopied: [], error: undefined },
-    { name: 'dev-root-cp', grants: ['gh', 'npm'], notCopied: [], error: undefined },
-    { name: 'dev-host-live', grants: ['gh', 'npm'], notCopied: [], error: undefined },
-    { name: 'dev-host-cp', grants: ['gh', 'npm'], notCopied: [], error: undefined },
-    { name: 'dev-scoped-live', grants: [], notCopied: skipped, error: undefined },
-    { name: 'dev-scoped-cp', grants: [], notCopied: skipped, error: undefined },
-  ]);
+  expect(devBGrants).toStrictEqual(['gh', 'npm']);
 });
 
-test('a grant made on the fork before the copy is named as a clash', async () => {
+test.each([
+  ['live', { source: 'dev-a', name: 'dev-b' }],
+  ['from a checkpoint', { source: 'dev-a', name: 'dev-b', checkpoint: 'cp' }],
+])('it copies every grant to a host-wide manage token’s fork, %s', async (_label, input) => {
   const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await ctx.client.checkpoints.create({ name: 'dev-a', label: 'cp' });
+
+  const made = await ctx.client.tokens.create({ name: 'host', scope: 'manage' });
+
+  const host: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  const fork = await host.imps.fork(input);
+
+  expect(fork.grantsNotCopied).toStrictEqual([]);
+  expect(fork.grantsError).toBeUndefined();
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual(['gh', 'npm']);
+});
+
+test.each([
+  ['live', { source: 'dev-a', name: 'dev-b' }],
+  ['from a checkpoint', { source: 'dev-a', name: 'dev-b', checkpoint: 'cp' }],
+])('it copies no grant to a scoped token’s fork and names each, %s', async (_label, input) => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await ctx.client.checkpoints.create({ name: 'dev-a', label: 'cp' });
+
+  const made = await ctx.client.tokens.create({ name: 'scoped', scope: 'manage', imps: ['dev-*'] });
+
+  const scoped: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  const fork = await scoped.imps.fork(input);
+
+  expect(fork.grantsNotCopied).toStrictEqual([
+    { secret: 'gh', reason: 'not-grantable' },
+    { secret: 'npm', reason: 'not-grantable' },
+  ]);
+
+  expect(fork.grantsError).toBeUndefined();
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
+});
+
+test('it names a grant made on the fork before the copy as a clash', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
 
   await ctx.client.secrets.add({
     name: 'gh-api',
     kind: 'custom',
-    value: VALUE,
+    value: 'sk-synthetic-126-2',
     rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
   });
 
@@ -783,87 +1960,106 @@ test('a grant made on the fork before the copy is named as a clash', async () =>
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
 
   // the fork exists by then, so a host-wide grant on it lands first
-  const gapped = ctx.buildAppWithGap(async () => {
+  ctx.gap.once = async () => {
     await ctx.client.grants.add({ name: 'dev-b', secret: 'gh-api' });
-  });
+  };
 
-  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+  const fork = await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
 
-  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+  expect(fork.grantsNotCopied).toStrictEqual([{ secret: 'gh', reason: 'clash' }]);
 
-  expect(fork.grantsNotCopied).toEqual([{ secret: 'gh', reason: 'clash' }]);
-  expect(grants).toEqual(['gh-api', 'npm']);
-  expect(ctx.logs.join('\n')).toContain('forked without grant gh of dev-a');
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual(['gh-api', 'npm']);
+
+  expect(ctx.logs).toContain(
+    'impd: dev-b: forked without grant gh of dev-a: it has another credential for that host',
+  );
 });
 
-test('a rebind between the fork and the copy copies the grants left after it', async () => {
+test('it copies the grants a rebind between the fork and the copy left', async () => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
 
   // the rebind drops every grant of gh, the source's too
-  const gapped = ctx.buildAppWithGap(async () => {
+  ctx.gap.once = async () => {
     await ctx.client.secrets.add({
       name: 'gh',
       kind: 'custom',
-      value: VALUE,
+      value: 'sk-synthetic-126-0',
       rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
       replace: true,
       rebind: true,
     });
-  });
+  };
 
-  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+  const fork = await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
 
-  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+  expect(fork.grantsNotCopied).toStrictEqual([]);
 
-  expect(fork.grantsNotCopied).toEqual([]);
-  expect(grants).toEqual(['npm']);
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual(['npm']);
 });
 
-test('a source destroyed and made again under its name before the copy lends the fork nothing', async () => {
+test('it lends the fork nothing from a source destroyed and made again before the copy', async () => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
   // the new dev-a holds npm: a copy by name would hand it to the fork
-  const gapped = ctx.buildAppWithGap(async () => {
+  ctx.gap.once = async () => {
     await ctx.client.imps.destroy({ name: 'dev-a' });
     await ctx.client.imps.create({ name: 'dev-a' });
     await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
-  });
+  };
 
-  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+  const fork = await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
 
-  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
-
-  expect(fork.grantsNotCopied).toEqual([]);
+  expect(fork.grantsNotCopied).toStrictEqual([]);
   expect(fork.grantsError).toBeUndefined();
-  expect(grants).toEqual([]);
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual(['npm']);
 });
 
-test('a revoke on the source after a fork does not reach the fork', async () => {
+test('it keeps the fork’s grant when the source’s is revoked after the fork', async () => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
   await ctx.client.grants.delete({ name: 'dev-a', secret: 'gh' });
 
-  const grants = await Promise.all([
-    ctx.client.grants.list({ name: 'dev-a' }),
-    ctx.client.grants.list({ name: 'dev-b' }),
-  ]);
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
 
-  expect(grants).toEqual([[], ['gh']]);
+  expect(devAGrants).toStrictEqual([]);
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual(['gh']);
 });
 
-test('a fork whose copy fails as a whole is still returned, with the error and no grant', async () => {
+test('it returns a fork whose copy fails as a whole, with the error and no grant', async () => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
 
@@ -875,23 +2071,38 @@ test('a fork whose copy fails as a whole is still returned, with the error and n
     .execute();
 
   const fork = await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
 
   expect(fork.name).toBe('dev-b');
-  expect(fork.grantsNotCopied).toEqual([]);
-  expect(fork.grantsError).toContain('could not be copied');
-  expect(fork.grantsError).not.toContain('JSON');
-  expect(grants).toEqual([]);
-  expect(ctx.logs.join('\n')).toContain('forked without the grants of dev-a');
+  expect(fork.grantsNotCopied).toStrictEqual([]);
+
+  expect(fork.grantsError).toBe(
+    "the source's grants could not be copied, so the fork has none; impd's log has the cause",
+  );
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
+  expect(ctx.logs.join('\n')).toInclude('impd: dev-b: forked without the grants of dev-a: ');
 });
 
-test('an older client reads a fork answer with the new fields', async () => {
+test('it lets an older client read a fork answer with the new fields', async () => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
-  const scoped = await ctx.createToken('scoped');
-  const fork = await scoped.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  const made = await ctx.client.tokens.create({ name: 'scoped', scope: 'manage', imps: ['dev-*'] });
+
+  const scoped: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  const fork = await scoped.imps.fork({ source: 'dev-a', name: 'dev-b' });
 
   // the output schema before the report: a plain object drops the fields
   const parsed = ImpSchema.parse(fork);
@@ -904,54 +2115,73 @@ test('an older client reads a fork answer with the new fields', async () => {
 // caller reaches imps.fork today (it is refused first), so these call the
 // copy as the handler would, with the authority read at the access check.
 
-async function setupListedFork() {
+test('it copies to a listed caller’s fork the secrets on its list, and names the rest', async () => {
   const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
-  await ctx.client.imps.create({ name: 'dev-b' });
-  await ctx.createToken('agent', { grantable: ['gh'] });
 
-  const records = await listTokenRecords(ctx.db);
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
-  const token = records.find((record) => record.name === 'agent');
+  const [token] = await listTokenRecords(ctx.db);
+  const from = await findImpByName(ctx.db, 'dev-a');
+  const to = await findImpByName(ctx.db, 'dev-b');
 
-  const authority: ForkAuthority = {
-    tokenId: token?.id ?? null,
-    grantable: token?.grantable ?? [],
-  };
+  invariant(token);
+  invariant(from);
+  invariant(to);
 
-  const [from, to] = await Promise.all([
-    findImpByName(ctx.db, 'dev-a'),
-    findImpByName(ctx.db, 'dev-b'),
-  ]);
+  const outcome = await createForkGrants(ctx.db, from.id, to.id, {
+    tokenId: token.id,
+    grantable: token.grantable,
+  });
 
-  const runCopy = () => createForkGrants(ctx.db, from?.id ?? '', to?.id ?? '', authority);
-
-  return Object.assign(ctx, { runCopy });
-}
-
-test('a listed caller’s fork copies the secrets on its list, and names the rest', async () => {
-  const ctx = await setupListedFork();
-  const outcome = await ctx.runCopy();
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
-
-  expect(outcome).toEqual({
+  expect(outcome).toStrictEqual({
     kind: 'copied',
     notCopied: [{ secret: 'npm', reason: 'not-grantable' }],
   });
 
-  expect(grants).toEqual(['gh']);
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual(['gh']);
 });
 
-test('a list entry from before a rebind copies nothing of that secret', async () => {
-  const ctx = await setupListedFork();
+test('it copies nothing of a secret whose list entry is from before a rebind', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // the authority read at the access check
+  const [token] = await listTokenRecords(ctx.db);
+
+  invariant(token);
 
   // rebound after the access check, and granted again at its new generation
   await ctx.client.secrets.add({
     name: 'gh',
     kind: 'custom',
-    value: VALUE,
+    value: 'sk-synthetic-126-0',
     rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
     replace: true,
     rebind: true,
@@ -959,10 +2189,18 @@ test('a list entry from before a rebind copies nothing of that secret', async ()
 
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
-  const outcome = await ctx.runCopy();
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+  const from = await findImpByName(ctx.db, 'dev-a');
+  const to = await findImpByName(ctx.db, 'dev-b');
 
-  expect(outcome).toEqual({
+  invariant(from);
+  invariant(to);
+
+  const outcome = await createForkGrants(ctx.db, from.id, to.id, {
+    tokenId: token.id,
+    grantable: token.grantable,
+  });
+
+  expect(outcome).toStrictEqual({
     kind: 'copied',
     notCopied: [
       { secret: 'gh', reason: 'not-grantable' },
@@ -970,32 +2208,89 @@ test('a list entry from before a rebind copies nothing of that secret', async ()
     ],
   });
 
-  expect(grants).toEqual([]);
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
 });
 
-test('a token removed after the access check copies no grant', async () => {
-  const ctx = await setupListedFork();
+test('it copies no grant for a token removed after the access check', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // the authority read at the access check
+  const [token] = await listTokenRecords(ctx.db);
+
+  invariant(token);
 
   await ctx.client.tokens.delete({ name: 'agent' });
 
-  const outcome = await ctx.runCopy();
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+  const from = await findImpByName(ctx.db, 'dev-a');
+  const to = await findImpByName(ctx.db, 'dev-b');
 
-  expect(outcome).toEqual({ kind: 'no-token' });
-  expect(grants).toEqual([]);
+  invariant(from);
+  invariant(to);
+
+  const outcome = await createForkGrants(ctx.db, from.id, to.id, {
+    tokenId: token.id,
+    grantable: token.grantable,
+  });
+
+  expect(outcome).toStrictEqual({ kind: 'no-token' });
+
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
 });
 
-test('a secret taken off the list after the access check copies nothing of it', async () => {
-  const ctx = await setupListedFork();
+test('it copies nothing of a secret taken off the list after the access check', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-126-1' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // the authority read at the access check
+  const [token] = await listTokenRecords(ctx.db);
+
+  invariant(token);
 
   // the update drops gh from dev-a; the root token grants it again
   await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
   await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
 
-  const outcome = await ctx.runCopy();
-  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+  const from = await findImpByName(ctx.db, 'dev-a');
+  const to = await findImpByName(ctx.db, 'dev-b');
 
-  expect(outcome).toEqual({
+  invariant(from);
+  invariant(to);
+
+  const outcome = await createForkGrants(ctx.db, from.id, to.id, {
+    tokenId: token.id,
+    grantable: token.grantable,
+  });
+
+  expect(outcome).toStrictEqual({
     kind: 'copied',
     notCopied: [
       { secret: 'gh', reason: 'not-grantable' },
@@ -1003,5 +2298,7 @@ test('a secret taken off the list after the access check copies nothing of it', 
     ],
   });
 
-  expect(grants).toEqual([]);
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devBGrants).toStrictEqual([]);
 });
