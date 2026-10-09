@@ -15,8 +15,9 @@ interface IdleLoopDeps {
   readonly imps: Pick<Imps, 'isImpBusy' | 'readActivity' | 'tracker' | 'trySleepImp' | 'watchdog'>;
   readonly log: (message: string) => void;
 
-  // the clock idle time is read on; Date.now by default
+  // the clock and a Firecracker's CPU time; the wall clock and /proc by default
   readonly now?: () => number;
+  readonly readCpuTicks?: (pid: number) => number | null;
 }
 
 export interface IdleLoop {
@@ -28,8 +29,11 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
   // per imp: the last CPU sample of its Firecracker
   const samples = new Map<string, { pid: number; ticks: number; at: number }>();
 
+  const readNow = deps.now ?? Date.now;
+  const readTicks = deps.readCpuTicks ?? readCpuTicks;
+
   const readCpuPercent = (imp: ImpRecord, pid: number, now: number): number | null => {
-    const ticks = readCpuTicks(pid);
+    const ticks = readTicks(pid);
     const previous = samples.get(imp.id);
 
     if (ticks === null) {
@@ -58,7 +62,7 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
       return;
     }
 
-    const now = (deps.now ?? Date.now)();
+    const now = readNow();
     const cpuPercent = readCpuPercent(imp, pid, now);
 
     // a busy or wedged agent: the other signals decide; a detached session
