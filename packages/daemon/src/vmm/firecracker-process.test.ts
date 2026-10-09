@@ -1,131 +1,273 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { startStubFirecrackerProcess } from '../test-utils/start-stub-firecracker-process';
 import {
+  buildFirecrackerCommand,
   buildSpawnArgv,
   isFirecrackerAlive,
+  isImpVm,
+  isJailedFirecracker,
   listFirecrackers,
+  readLogTail,
   readPidFile,
+  readVmOwner,
+  startFirecracker,
+  stopProcess,
+  waitForExit,
 } from './firecracker-process';
 import { buildJailerCommand } from './jail';
 import { readProcessCgroup } from './process-owner';
 
-// A stand-in whose command line reads `firecracker ... --api-sock <socket>`,
-// as /proc shows a real one
-async function startStandIn(apiSocket: string) {
-  const child = Bun.spawn([
-    'bash',
-    '-c',
-    `exec -a firecracker bash -c 'sleep 30; true' x --api-sock "$0"`,
+function setupTest() {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-'));
+
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  return { dir };
+}
+
+test('#listFirecrackers finds a live firecracker with the socket it serves and its owner', async () => {
+  const ctx = setupTest();
+  const apiSocket = join(ctx.dir, 'api.sock');
+
+  const child = await startStubFirecrackerProcess(apiSocket);
+
+  const found = listFirecrackers();
+
+  // whom it runs as, which a jailed process cannot forge as its argv
+  expect(found).toContainEqual({
+    pid: child.pid,
     apiSocket,
-  ]);
+    owner: { uid: process.getuid?.() ?? 0, cgroup: readProcessCgroup(child.pid) },
+  });
+});
 
-  const deadline = Date.now() + 10_000;
+test('#isFirecrackerAlive finds a live firecracker serving its socket', async () => {
+  const ctx = setupTest();
 
-  // the socket is in bash's own command line before the exec renames it, so
-  // wait for the name too
-  while (!isFirecrackerAlive(child.pid, apiSocket) || !isRenamed(child.pid)) {
-    if (Date.now() > deadline) {
-      throw new Error('the stand-in never started');
-    }
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
 
-    await Bun.sleep(1);
-  }
+  expect(isFirecrackerAlive(child.pid, join(ctx.dir, 'api.sock'))).toBeTrue();
+});
 
-  return child;
-}
+test('#isFirecrackerAlive finds no firecracker serving another socket under the pid', async () => {
+  const ctx = setupTest();
 
-function isRenamed(pid: number): boolean {
-  try {
-    return readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').startsWith('firecracker\0');
-  } catch {
-    return false;
-  }
-}
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
 
-test('/proc shows every live firecracker with the socket it serves', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-'));
-  const apiSocket = join(dir, 'api.sock');
+  expect(isFirecrackerAlive(child.pid, join(ctx.dir, 'other.sock'))).toBeFalse();
+});
 
-  const child = await startStandIn(apiSocket);
+test('#isFirecrackerAlive finds no firecracker once it is gone', async () => {
+  const ctx = setupTest();
 
-  try {
-    const found = listFirecrackers();
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
 
-    // whom it runs as, which a jailed process cannot forge as its argv
-    expect(found).toContainEqual({
-      pid: child.pid,
-      apiSocket,
-      owner: { uid: process.getuid?.() ?? 0, cgroup: readProcessCgroup(child.pid) },
-    });
-  } finally {
+  child.kill('SIGKILL');
+
+  await child.exited;
+
+  expect(isFirecrackerAlive(child.pid, join(ctx.dir, 'api.sock'))).toBeFalse();
+});
+
+test('#waitForExit resolves true once the firecracker is gone', async () => {
+  const ctx = setupTest();
+
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+
+  child.kill('SIGKILL');
+
+  const exited = await waitForExit(child.pid, join(ctx.dir, 'api.sock'), 4000);
+
+  expect(exited).toBeTrue();
+});
+
+test('#waitForExit resolves false at the timeout while the firecracker still runs', async () => {
+  const ctx = setupTest();
+
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  const exited = await waitForExit(child.pid, join(ctx.dir, 'api.sock'), 20);
+
+  expect(exited).toBeFalse();
+});
+
+test('#stopProcess kills a running process', async () => {
+  const child = Bun.spawn(['sleep', '30']);
+
+  onTestFinished(() => {
     child.kill('SIGKILL');
+  });
 
-    rmSync(dir, { recursive: true, force: true });
-  }
+  stopProcess(child.pid);
+
+  await child.exited;
+
+  expect(child.signalCode).toBe('SIGKILL');
 });
 
-test('a pid file reads as its pid, and anything else as none', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-'));
-  const pidFile = join(dir, 'pid');
+test('#stopProcess ignores a process that is gone', async () => {
+  const child = Bun.spawn(['true']);
 
-  try {
-    const missing = readPidFile(pidFile);
+  await child.exited;
 
-    writeFileSync(pidFile, '4242\n');
-
-    const written = readPidFile(pidFile);
-
-    writeFileSync(pidFile, 'half');
-
-    const broken = readPidFile(pidFile);
-
-    expect([missing, written, broken]).toEqual([null, 4242, null]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(() => {
+    stopProcess(child.pid);
+  }).not.toThrow();
 });
 
-const JAILER_COMMAND = buildJailerCommand({
-  jailerBin: 'jailer',
-  firecrackerBin: '/usr/local/bin/firecracker',
-  chrootBase: '/var/lib/imp/jail',
-  impId: 'imp',
-  user: { uid: 900_000, gid: 900_000 },
-  apiSocket: 'api.sock',
+test('#readPidFile reads a missing pid file as none', () => {
+  const ctx = setupTest();
+
+  expect(readPidFile(join(ctx.dir, 'pid'))).toBeNull();
 });
 
-test('the merge wrapper goes before the jailer, so the chroot needs no copy of it', () => {
-  expect(buildSpawnArgv(JAILER_COMMAND, null, null)).toEqual(['setsid', ...JAILER_COMMAND]);
+test.each([
+  ['4242\n', 4242],
+  ['half', null],
+  ['0', null],
+  ['-3', null],
+])('#readPidFile reads a pid file of %j as %p', (content, expected) => {
+  const ctx = setupTest();
 
-  expect(buildSpawnArgv(JAILER_COMMAND, null, 'ksm-exec')).toEqual([
+  writeFileSync(join(ctx.dir, 'pid'), content);
+
+  expect(readPidFile(join(ctx.dir, 'pid'))).toBe(expected);
+});
+
+test('#readLogTail reads the last lines of the log', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'log'), 'one\ntwo\nthree\n');
+
+  expect(readLogTail(join(ctx.dir, 'log'), 2)).toBe('two\nthree');
+});
+
+test('#readLogTail reads a missing log as none', () => {
+  const ctx = setupTest();
+
+  expect(readLogTail(join(ctx.dir, 'log'))).toBe('(no log)');
+});
+
+test('#buildSpawnArgv detaches the command', () => {
+  expect(buildSpawnArgv(['firecracker', '--api-sock', 'api.sock'], null, null)).toStrictEqual([
     'setsid',
-    'ksm-exec',
-    ...JAILER_COMMAND,
-  ]);
-
-  expect(buildSpawnArgv(['firecracker', '--api-sock', 'api.sock'], null, 'ksm-exec')).toEqual([
-    'setsid',
-    'ksm-exec',
     'firecracker',
     '--api-sock',
     'api.sock',
   ]);
 });
 
+test('#buildSpawnArgv puts the merge wrapper before the jailer, so the chroot needs no copy of it', () => {
+  const jailer = buildJailerCommand({
+    jailerBin: 'jailer',
+    firecrackerBin: '/usr/local/bin/firecracker',
+    chrootBase: '/var/lib/imp/jail',
+    impId: 'imp',
+    user: { uid: 900_000, gid: 900_000 },
+    apiSocket: 'api.sock',
+  });
+
+  expect(buildSpawnArgv(jailer, null, 'ksm-exec')).toStrictEqual(['setsid', 'ksm-exec', ...jailer]);
+});
+
 // /usr/bin/env stands in for ksm-exec: it execs the rest of its argv
-test('in a cgroup, the shell records its pid and execs the wrapper and the command', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-argv-'));
+test('#buildSpawnArgv records the pid in the cgroup and execs the wrapper and the command', () => {
+  const ctx = setupTest();
+  const procs = join(ctx.dir, 'cgroup.procs');
 
-  try {
-    const procs = join(dir, 'cgroup.procs');
-    const argv = buildSpawnArgv(['echo', '--api-sock', 'api.sock'], procs, '/usr/bin/env');
-    const result = Bun.spawnSync(argv);
+  const result = Bun.spawnSync(
+    buildSpawnArgv(['echo', '--api-sock', 'api.sock'], procs, '/usr/bin/env'),
+  );
 
-    expect(result.stdout.toString()).toBe('--api-sock api.sock\n');
-    expect(readFileSync(procs, 'utf8').trim()).toBe(String(result.pid));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(result.stdout.toString()).toBe('--api-sock api.sock\n');
+  expect(readFileSync(procs, 'utf8').trim()).toBe(String(result.pid));
+});
+
+test('#buildFirecrackerCommand names the API socket', () => {
+  expect(buildFirecrackerCommand('/usr/local/bin/firecracker', '/i1/api.sock')).toStrictEqual([
+    '/usr/local/bin/firecracker',
+    '--api-sock',
+    '/i1/api.sock',
+  ]);
+});
+
+test('#startFirecracker resolves with the pid and writes it to the pid file once the socket opens', async () => {
+  const ctx = setupTest();
+  const apiSocket = join(ctx.dir, 'api.sock');
+
+  // stands in for Firecracker: it makes its API socket path, then runs on
+  const pid = await startFirecracker(['sh', '-c', 'touch "$0"; exec sleep 30', apiSocket], {
+    apiSocket,
+    vsockSocket: join(ctx.dir, 'vsock.sock'),
+    logFile: join(ctx.dir, 'log'),
+    pidFile: join(ctx.dir, 'pid'),
+  });
+
+  onTestFinished(() => {
+    stopProcess(pid);
+  });
+
+  expect(readPidFile(join(ctx.dir, 'pid'))).toBe(pid);
+});
+
+test('#startFirecracker rejects with the log tail when the process exits before its socket opens', () => {
+  const ctx = setupTest();
+
+  expect(
+    startFirecracker(['sh', '-c', 'echo no kvm >&2; exit 1'], {
+      apiSocket: join(ctx.dir, 'api.sock'),
+      vsockSocket: join(ctx.dir, 'vsock.sock'),
+      logFile: join(ctx.dir, 'log'),
+      pidFile: join(ctx.dir, 'pid'),
+    }),
+  ).rejects.toThrowWithMessage(Error, 'firecracker did not open its API socket (exit 1): no kvm');
+});
+
+test('#readVmOwner reads the uid and the cgroup of a process', async () => {
+  const ctx = setupTest();
+
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+
+  expect(readVmOwner(child.pid)).toStrictEqual({
+    uid: process.getuid?.() ?? 0,
+    cgroup: readProcessCgroup(child.pid),
+  });
+});
+
+test('#isImpVm takes a VM that runs as impd, unjailed', () => {
+  expect(isImpVm({ uid: process.getuid?.() ?? 0, cgroup: '/other' }, 'i1', null)).toBeTrue();
+});
+
+test('#isImpVm takes a VM that runs as the imp jail uid', () => {
+  expect(isImpVm({ uid: 900_001, cgroup: '/other' }, 'i1', 900_001)).toBeTrue();
+});
+
+test('#isImpVm takes a VM in the imp cgroup', () => {
+  expect(isImpVm({ uid: 900_002, cgroup: '/imps/i1' }, 'i1', null)).toBeTrue();
+});
+
+test('#isImpVm refuses a VM of another uid in another cgroup', () => {
+  expect(isImpVm({ uid: 900_002, cgroup: '/imps/i2' }, 'i1', 900_001)).toBeFalse();
+});
+
+test('#isJailedFirecracker finds a process run with --id', () => {
+  const child = Bun.spawn(['bash', '-c', 'sleep 30', 'x', '--id', 'i1']);
+
+  onTestFinished(() => {
+    child.kill('SIGKILL');
+  });
+
+  expect(isJailedFirecracker(child.pid)).toBeTrue();
+});
+
+test('#isJailedFirecracker finds an unjailed firecracker not jailed', async () => {
+  const ctx = setupTest();
+
+  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+
+  expect(isJailedFirecracker(child.pid)).toBeFalse();
 });

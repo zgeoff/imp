@@ -1,143 +1,189 @@
-import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { parsePrefix64 } from '../net/addressing6';
-import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
+import { buildStubJails } from '../test-utils/build-stub-jails';
+import { createStubKsmExec } from '../test-utils/create-stub-ksm-exec';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { isFirecrackerAlive } from './firecracker-process';
+import { startStubFirecracker } from '../test-utils/start-stub-firecracker';
+import { isFirecrackerAlive, stopProcess } from './firecracker-process';
 import { buildJailerCommand } from './jail';
-import type { Jails } from './jail';
 import { buildBootArgs, createVmRunner } from './vm-runner';
 
-// a VM these tests start runs unjailed
-const NO_JAILS: Jails = {
-  prepare: () => Promise.reject(new Error('no jails here')),
-  prepareBuild: () => Promise.reject(new Error('no jails here')),
-  setupDiskOwner: () => {},
-  release: () => Promise.resolve(),
-  sweepRunDir: () => Promise.resolve(),
-  remove: () => Promise.resolve(),
-  removeOrphans: () => Promise.resolve([]),
-  seal: () => {},
-};
+// A temp dir with the run/ and the disk of imp `vm`, which a sleep needs for
+// its snapshot's owner, and the log the stub VMM appends its calls to.
+function setupTest() {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
 
-function buildPlan(isIdentityReset: boolean) {
-  const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
-
-  return {
-    firecrackerBin: 'firecracker',
-    kernelPath: '/k',
-    systemDrivePath: '/s',
-    paths: buildImpPaths('/var/lib/imp', 'id'),
-    address,
-    impId: 'id',
-    hostname: 'dev',
-    vcpus: 2,
-    memoryMib: 1024,
-    maxMemoryMib: 1024,
-    dns: ['1.1.1.1', '8.8.8.8'],
-    cgroup: null,
-    isIdentityReset,
-    jail: null,
-  };
-}
-
-test('it builds the kernel cmdline with the slot addressing', () => {
-  const args = buildBootArgs(buildPlan(false));
-
-  expect(args).toContain('root=/dev/vdb rootfstype=squashfs ro init=/imp-agent');
-  expect(args).toContain('reboot=k');
-
-  expect(args).toEndWith(
-    'imp.id=id imp.hostname=dev imp.ip=10.66.0.14/30 imp.gw=10.66.0.13 imp.dns=1.1.1.1,8.8.8.8',
-  );
-});
-
-test('it asks for an identity reset only on the first boot of a template copy', () => {
-  expect(buildBootArgs(buildPlan(false))).not.toContain('imp.reset_identity');
-  expect(buildBootArgs(buildPlan(true))).toEndWith(' imp.reset_identity=1');
-});
-
-test('with IPv6, the cmdline names the /128 and the gateway fe80::1', () => {
-  const address = deriveSlotAddress(3, {
-    subnet: parseSubnet('10.66.0.0/16'),
-    portBase: 20_000,
-    prefix6: parsePrefix64('fd12:3456:789a::/64'),
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  const args = buildBootArgs({ ...buildPlan(false), address, dns: ['1.1.1.1'] });
-
-  expect(args).toContain('imp.ip6=fd12:3456:789a::a42:e/128 imp.gw6=fe80::1 imp.dns=1.1.1.1');
-});
-
-test('an elastic imp boots with hot-plugged memory onlined movable', () => {
-  const plan = { ...buildPlan(false), memoryMib: 256, dns: ['1.1.1.1'] };
-
-  expect(buildBootArgs({ ...plan, maxMemoryMib: 1024 })).toEndWith(
-    'imp.dns=1.1.1.1 memhp_default_state=online_movable',
-  );
-
-  expect(buildBootArgs({ ...plan, maxMemoryMib: 256 })).not.toContain('memhp_default_state');
-});
-
-// A Firecracker stand-in: a process whose command line names the API socket,
-// as the liveness check expects, and an API that fails the pause.
-async function setupFailingPause(resumeStatus: number) {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
   const paths = buildImpPaths(dir, 'vm');
 
   mkdirSync(paths.runDir, { recursive: true });
   writeFileSync(paths.disk, '');
 
-  const calls: string[] = [];
-
-  const server = Bun.serve({
-    unix: paths.apiSocket,
-    fetch: async (request) => {
-      const body: unknown = await request.json();
-
-      calls.push(`${request.method} ${new URL(request.url).pathname} ${JSON.stringify(body)}`);
-
-      const paused = JSON.stringify(body).includes('Paused');
-
-      return new Response('{}', { status: paused ? 500 : resumeStatus });
-    },
-  });
-
-  const child = Bun.spawn(['bash', '-c', 'sleep 30; true', 'firecracker', paths.apiSocket]);
-
-  // until bash has exec'd, its command line is empty and it looks dead; on a
-  // loaded host that takes longer than the test
-  const deadline = Date.now() + 10_000;
-
-  while (!isFirecrackerAlive(child.pid, paths.apiSocket)) {
-    if (Date.now() > deadline) {
-      throw new Error('the stand-in never started');
-    }
-
-    await Bun.sleep(1);
-  }
-
-  return {
-    paths,
-    calls,
-    child,
-    async [Symbol.asyncDispose]() {
-      child.kill('SIGKILL');
-
-      await server.stop(true);
-
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+  return { dir, paths, logPath: join(dir, 'calls.log') };
 }
 
-test('a sleep whose pause fails resumes the VM and leaves it running, its limit back', async () => {
-  await using vm = await setupFailingPause(204);
+test('#buildBootArgs builds the kernel cmdline with the slot addressing', () => {
+  const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'id'),
+      address,
+      impId: 'id',
+      hostname: 'dev',
+      vcpus: 2,
+      memoryMib: 1024,
+      maxMemoryMib: 1024,
+      dns: ['1.1.1.1', '8.8.8.8'],
+      cgroup: null,
+      isIdentityReset: false,
+      jail: null,
+    }),
+  ).toBe(
+    'console=ttyS0 reboot=k panic=1 pci=off i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd root=/dev/vdb rootfstype=squashfs ro init=/imp-agent imp.id=id imp.hostname=dev imp.ip=10.66.0.14/30 imp.gw=10.66.0.13 imp.dns=1.1.1.1,8.8.8.8',
+  );
+});
+
+test('#buildBootArgs asks for no identity reset on a later boot', () => {
+  const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'id'),
+      address,
+      impId: 'id',
+      hostname: 'dev',
+      vcpus: 2,
+      memoryMib: 1024,
+      maxMemoryMib: 1024,
+      dns: ['1.1.1.1'],
+      cgroup: null,
+      isIdentityReset: false,
+      jail: null,
+    }),
+  ).not.toInclude('imp.reset_identity');
+});
+
+test('#buildBootArgs asks for an identity reset on the first boot of a template copy', () => {
+  const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'id'),
+      address,
+      impId: 'id',
+      hostname: 'dev',
+      vcpus: 2,
+      memoryMib: 1024,
+      maxMemoryMib: 1024,
+      dns: ['1.1.1.1'],
+      cgroup: null,
+      isIdentityReset: true,
+      jail: null,
+    }),
+  ).toEndWith(' imp.dns=1.1.1.1 imp.reset_identity=1');
+});
+
+test('#buildBootArgs names the /128 and the gateway fe80::1 with IPv6', () => {
+  const prefix6 = parsePrefix64('fd12:3456:789a::/64');
+  const subnet = parseSubnet('10.66.0.0/16');
+  const address = deriveSlotAddress(3, { subnet, portBase: 20_000, prefix6 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'id'),
+      address,
+      impId: 'id',
+      hostname: 'dev',
+      vcpus: 2,
+      memoryMib: 1024,
+      maxMemoryMib: 1024,
+      dns: ['1.1.1.1'],
+      cgroup: null,
+      isIdentityReset: false,
+      jail: null,
+    }),
+  ).toEndWith(
+    ' imp.ip=10.66.0.14/30 imp.gw=10.66.0.13 imp.ip6=fd12:3456:789a::a42:e/128 imp.gw6=fe80::1 imp.dns=1.1.1.1',
+  );
+});
+
+test('#buildBootArgs onlines hot-plugged memory movable for an elastic imp', () => {
+  const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'id'),
+      address,
+      impId: 'id',
+      hostname: 'dev',
+      vcpus: 2,
+      memoryMib: 256,
+      maxMemoryMib: 1024,
+      dns: ['1.1.1.1'],
+      cgroup: null,
+      isIdentityReset: false,
+      jail: null,
+    }),
+  ).toEndWith(' imp.dns=1.1.1.1 memhp_default_state=online_movable');
+});
+
+test('#buildBootArgs leaves hot-plugged memory alone for an imp that does not grow', () => {
+  const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'id'),
+      address,
+      impId: 'id',
+      hostname: 'dev',
+      vcpus: 2,
+      memoryMib: 256,
+      maxMemoryMib: 256,
+      dns: ['1.1.1.1'],
+      cgroup: null,
+      isIdentityReset: false,
+      jail: null,
+    }),
+  ).not.toInclude('memhp_default_state');
+});
+
+test('#sleepVm resumes a VM whose pause fails and leaves it running, its limit back', async () => {
+  const ctx = setupTest();
+
+  const vm = await startStubFirecracker({
+    apiSocket: ctx.paths.apiSocket,
+    logPath: ctx.logPath,
+    failures: ['PATCH /vm {"state":"Paused"}'],
+    isLoggingBodies: true,
+  });
 
   const limits: string[] = [];
 
@@ -151,239 +197,203 @@ test('a sleep whose pause fails resumes the VM and leaves it running, its limit 
     },
   };
 
-  const rejection = await createVmRunner(NO_JAILS)
-    .sleepVm(vm.child.pid, vm.paths, cgroup, vm.paths)
-    .catch((error: unknown) => error);
+  const sleeping = createVmRunner(buildStubJails().jails).sleepVm(
+    vm.pid,
+    ctx.paths,
+    cgroup,
+    ctx.paths,
+  );
 
-  expect(rejection).toBeInstanceOf(Error);
-  expect(vm.calls).toEqual(['PATCH /vm {"state":"Paused"}', 'PATCH /vm {"state":"Resumed"}']);
-  expect(limits).toEqual(['lifted', 'applied']);
-  expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBe(true);
+  expect(sleeping).rejects.toThrow('refused PATCH /vm');
+
+  expect(readFileSync(ctx.logPath, 'utf8').trim().split('\n')).toStrictEqual([
+    'PATCH /vm {"state":"Paused"}',
+    'PATCH /vm {"state":"Resumed"}',
+  ]);
+
+  expect(limits).toStrictEqual(['lifted', 'applied']);
+  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeTrue();
 });
 
-test('a sleep whose pause and resume both fail kills the VM', async () => {
-  await using vm = await setupFailingPause(500);
+test('#sleepVm kills a VM whose pause and resume both fail', async () => {
+  const ctx = setupTest();
 
-  const rejection = await createVmRunner(NO_JAILS)
-    .sleepVm(vm.child.pid, vm.paths, null, vm.paths)
-    .catch((error: unknown) => error);
+  const vm = await startStubFirecracker({
+    apiSocket: ctx.paths.apiSocket,
+    logPath: ctx.logPath,
+    failures: ['PATCH /vm'],
+  });
 
-  expect(rejection).toBeInstanceOf(Error);
-  expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBe(false);
+  expect(
+    createVmRunner(buildStubJails().jails).sleepVm(vm.pid, ctx.paths, null, ctx.paths),
+  ).rejects.toThrow('refused PATCH /vm');
+
+  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
 });
 
-test('a wedged agent gives no guest uptime within a short timeout', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
-  const paths = buildImpPaths(dir, 'vm');
-
-  mkdirSync(paths.runDir, { recursive: true });
+// the ping's own deadline is 250 ms, far below a ping's default of 2 s
+test('#readGuestUptimeMs reads no uptime from a wedged agent within a short timeout', async () => {
+  const ctx = setupTest();
 
   // accepts the connection and never answers
-  const agent = await startStubAgent(paths.vsockSocket, () => {});
+  await startStubAgent(ctx.paths.vsockSocket, () => {});
 
-  try {
-    const started = performance.now();
+  const started = performance.now();
 
-    const uptime = await createVmRunner(NO_JAILS).readGuestUptimeMs(paths);
+  const uptime = await createVmRunner(buildStubJails().jails).readGuestUptimeMs(ctx.paths);
 
-    expect(uptime).toBeNull();
-    expect(performance.now() - started).toBeLessThan(1000);
-  } finally {
-    agent.close();
+  const elapsedMs = performance.now() - started;
 
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(uptime).toBeNull();
+  expect(elapsedMs).toBeLessThan(1000);
 });
 
-test('an agent that cannot read its clock gives no guest uptime', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
-  const paths = buildImpPaths(dir, 'vm');
+test('#readGuestUptimeMs reads no uptime from an agent that cannot read its clock', async () => {
+  const ctx = setupTest();
 
-  mkdirSync(paths.runDir, { recursive: true });
-
-  const agent = await startStubAgent(paths.vsockSocket, (socket) => {
+  await startStubAgent(ctx.paths.vsockSocket, (socket) => {
     socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true, version: '0.1.0' }));
   });
 
-  try {
-    const uptime = await createVmRunner(NO_JAILS).readGuestUptimeMs(paths);
+  const uptime = await createVmRunner(buildStubJails().jails).readGuestUptimeMs(ctx.paths);
 
-    expect(uptime).toBeNull();
-  } finally {
-    agent.close();
-
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(uptime).toBeNull();
 });
 
-test('the VM state comes from GET /, and a resume patches the VM', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
-  const paths = buildImpPaths(dir, 'vm');
+test('#readVmState reads the VM state from the API', async () => {
+  const ctx = setupTest();
+
+  await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+
+  const state = await createVmRunner(buildStubJails().jails).readVmState(ctx.paths);
+
+  expect(state).toBe('Running');
+});
+
+test('#readVmState reads no state once the API is gone', async () => {
+  const ctx = setupTest();
+
+  const vm = await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+
+  stopProcess(vm.pid);
+
+  await vm.exited;
+
+  const state = await createVmRunner(buildStubJails().jails).readVmState(ctx.paths);
+
+  expect(state).toBeNull();
+});
+
+test('#resumeVm seals the run dir, then patches the VM to resumed', async () => {
+  const ctx = setupTest();
+
+  const vm = await startStubFirecracker({
+    apiSocket: ctx.paths.apiSocket,
+    logPath: ctx.logPath,
+    isLoggingBodies: true,
+  });
+
+  const stub = buildStubJails();
+
+  await createVmRunner(stub.jails).resumeVm(vm.pid, ctx.paths);
+
+  expect(stub.notes).toStrictEqual(['seal']);
+  expect(readFileSync(ctx.logPath, 'utf8')).toBe('PATCH /vm {"state":"Resumed"}\n');
+});
+
+test('#resumeVm kills a VM whose seal finds anything planted in run/, and never resumes it', async () => {
+  const ctx = setupTest();
+
+  const vm = await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+
+  const stub = buildStubJails();
+
+  stub.refuseSeal(
+    new Error('jail vm: the VM left planted in run/; a VM that writes there is compromised'),
+  );
+
+  expect(createVmRunner(stub.jails).resumeVm(vm.pid, ctx.paths)).rejects.toThrow(
+    'a VM that writes there is compromised',
+  );
+
+  expect(existsSync(ctx.logPath)).toBeFalse();
+  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
+  expect(stub.notes).toStrictEqual(['seal', 'release vm']);
+});
+
+test('#stopVm releases the jail on a hard stop, as a checkpoint restore asks', async () => {
+  const ctx = setupTest();
+
+  const vm = await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+
+  const stub = buildStubJails();
+
+  await createVmRunner(stub.jails).stopVm(vm.pid, ctx.paths, false);
+
+  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
+  expect(stub.notes).toStrictEqual(['release vm']);
+});
+
+test('#wakeVm releases the mounts of a jail prepare that fails partway, and restores the limit', () => {
+  const ctx = setupTest();
   const calls: string[] = [];
 
-  mkdirSync(paths.runDir, { recursive: true });
-
-  const server = Bun.serve({
-    unix: paths.apiSocket,
-    fetch: async (request) => {
-      const path = new URL(request.url).pathname;
-
-      calls.push(`${request.method} ${path} ${await request.text()}`);
-
-      const body = path === '/' ? '{"id":"vm","state":"Paused"}' : '';
-
-      return new Response(body, { status: 200 });
+  const stub = buildStubJails({
+    onNote: (note) => {
+      calls.push(note);
     },
   });
 
-  try {
-    const runner = createVmRunner(NO_JAILS);
+  stub.refusePrepare(new Error('mount --rbind: no space'));
 
-    const state = await runner.readVmState(paths);
-
-    await runner.resumeVm(process.pid, paths);
-    await server.stop(true);
-
-    const gone = await runner.readVmState(paths);
-
-    expect([state, gone]).toEqual(['Paused', null]);
-    expect(calls).toEqual(['GET / ', 'PATCH /vm {"state":"Resumed"}']);
-  } finally {
-    await server.stop(true);
-
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('a resume whose seal finds anything planted in run/ kills the VM, never resumes it', async () => {
-  await using vm = await setupFailingPause(204);
-
-  const released: string[] = [];
-
-  const jails: Jails = {
-    ...NO_JAILS,
-    seal: () => {
-      throw new Error(
-        'jail vm: the VM left planted in run/; a VM that writes there is compromised',
-      );
-    },
-    release: (impId) => {
-      released.push(impId);
-
-      return Promise.resolve();
-    },
-  };
-
-  const rejection = await createVmRunner(jails)
-    .resumeVm(vm.child.pid, vm.paths)
-    .catch((error: unknown) => error);
-
-  expect(readErrorMessage(rejection)).toContain('compromised');
-  expect(vm.calls).toEqual([]);
-  expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBeFalse();
-  expect(released).toEqual(['vm']);
-});
-
-test('a hard stop, as a checkpoint restore asks, still releases the jail', async () => {
-  await using vm = await setupFailingPause(204);
-
-  const released: string[] = [];
-
-  const jails: Jails = {
-    ...NO_JAILS,
-    release: (impId) => {
-      released.push(impId);
-
-      return Promise.resolve();
-    },
-  };
-
-  await createVmRunner(jails).stopVm(vm.child.pid, vm.paths, false);
-
-  expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBeFalse();
-  expect(released).toEqual(['vm']);
-});
-
-test('a jail prepare that fails partway releases its mounts and restores the limit', async () => {
-  const calls: string[] = [];
-
-  const jails: Jails = {
-    ...NO_JAILS,
-    prepare: () => Promise.reject(new Error('mount --rbind: no space')),
-    release: (impId) => {
-      calls.push(`release ${impId}`);
-
-      return Promise.resolve();
-    },
-  };
-
-  const cgroup = {
-    procsPath: '/nonexistent',
-    liftLimit: () => {
-      calls.push('lifted');
-    },
-    applyLimit: () => {
-      calls.push('applied');
-    },
-  };
-
-  const rejection = await createVmRunner(jails)
-    .wakeVm({
+  expect(
+    createVmRunner(stub.jails).wakeVm({
       firecrackerBin: 'firecracker',
-      paths: buildImpPaths('/nonexistent', 'vm'),
-      cgroup,
+      paths: ctx.paths,
+      cgroup: {
+        procsPath: '/nonexistent',
+        liftLimit: () => {
+          calls.push('lifted');
+        },
+        applyLimit: () => {
+          calls.push('applied');
+        },
+      },
       jail: { uid: 900_000, gid: 900_000 },
       readOnlyFiles: [],
-    })
-    .catch((error: unknown) => error);
+    }),
+  ).rejects.toThrowWithMessage(Error, 'mount --rbind: no space');
 
-  expect(rejection).toBeInstanceOf(Error);
-  expect(calls).toEqual(['lifted', 'release vm', 'applied']);
+  expect(calls).toStrictEqual([
+    'lifted',
+    'prepare vm late=false disk=true',
+    'release vm',
+    'applied',
+  ]);
 });
 
-// a ksm-exec stand-in that records the command it was given, then fails
-test('a jailed VM starts through the merge wrapper, which runs the jailer outside the chroot', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
+test('#wakeVm starts a jailed VM through the merge wrapper, which runs the jailer outside the chroot', () => {
+  const ctx = setupTest();
+  const wrapper = createStubKsmExec(ctx.dir);
 
-  try {
-    const paths = buildImpPaths(dir, 'vm');
-    const recorded = join(dir, 'argv');
-    const wrapper = join(dir, 'ksm-exec');
-    const user = { uid: 900_000, gid: 900_000 };
+  const command = buildJailerCommand({
+    jailerBin: 'jailer',
+    firecrackerBin: '/usr/local/bin/firecracker',
+    chrootBase: join(ctx.dir, 'jail'),
+    impId: 'vm',
+    user: { uid: 900_000, gid: 900_000 },
+    apiSocket: ctx.paths.apiSocket,
+  });
 
-    const command = buildJailerCommand({
-      jailerBin: 'jailer',
-      firecrackerBin: '/usr/local/bin/firecracker',
-      chrootBase: join(dir, 'jail'),
-      impId: 'vm',
-      user,
-      apiSocket: paths.apiSocket,
-    });
+  expect(
+    createVmRunner(buildStubJails({ argv: command }).jails, wrapper.path).wakeVm({
+      firecrackerBin: 'firecracker',
+      paths: ctx.paths,
+      cgroup: null,
+      jail: { uid: 900_000, gid: 900_000 },
+      readOnlyFiles: [],
+    }),
+  ).rejects.toThrow('did not open its API socket');
 
-    mkdirSync(paths.runDir, { recursive: true });
-
-    writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$@" > '${recorded}'\nexit 1\n`, {
-      mode: 0o755,
-    });
-
-    const jails: Jails = {
-      ...NO_JAILS,
-      prepare: () => Promise.resolve(command),
-    };
-
-    const rejection = await createVmRunner(jails, wrapper)
-      .wakeVm({
-        firecrackerBin: 'firecracker',
-        paths,
-        cgroup: null,
-        jail: user,
-        readOnlyFiles: [],
-      })
-      .catch((error: unknown) => error);
-
-    expect(readErrorMessage(rejection)).toContain('did not open its API socket');
-    expect(readFileSync(recorded, 'utf8').trimEnd().split('\n')).toEqual([...command]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(wrapper.readArgv()).toStrictEqual([...command]);
 });

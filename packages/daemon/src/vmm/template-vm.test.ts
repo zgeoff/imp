@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   appendFileSync,
   existsSync,
@@ -11,306 +11,324 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
-import { readErrorMessage } from '../read-error-message';
-import { readRejection } from '../read-rejection';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { buildImpPaths } from '../storage/data-layout';
-import { startStubAgent } from '../test-utils/start-stub-agent';
-import type { Jails } from './jail';
-import { buildTemplateVm, loadTemplateVm } from './template-vm';
-import type { TemplateBuildPlan, TemplateRestorePlan } from './template-vm';
+import { buildMockTemplateBuildPlan } from '../test-utils/build-mock-template-build-plan';
+import { buildMockTemplateRestorePlan } from '../test-utils/build-mock-template-restore-plan';
+import { buildStubJails } from '../test-utils/build-stub-jails';
+import { buildStubFirecrackerArgv } from '../test-utils/start-stub-firecracker';
+import { startStubParkedAgent } from '../test-utils/start-stub-parked-agent';
+import { isFirecrackerAlive, stopProcess } from './firecracker-process';
+import { TemplateRestoreError, buildTemplateVm, loadTemplateVm } from './template-vm';
 
-// A Firecracker stand-in: an API on the socket its argv names, which logs
-// each call to `log` and answers 204, or `status` to every PUT when given.
-const STAND_IN = `
-const [apiSocket, log, status] = process.argv.slice(-3);
-const { appendFileSync } = require('node:fs');
-Bun.serve({
-  unix: apiSocket,
-  fetch: (request) => {
-    const path = new URL(request.url).pathname;
-    appendFileSync(log, request.method + ' ' + path + '\\n');
-    if (path === '/version') {
-      return Response.json({ firecracker_version: 'v1.17.0' });
-    }
-    const failed = request.method === 'PUT' && status !== 'ok';
-    return failed ? new Response('{"fault_message":"no"}', { status: 400 }) : new Response(null, { status: 204 });
-  },
-});
-`;
-
-const JAIL = { uid: 900_001, gid: 900_001 };
-
-// a build chowns its snapshot files to its uid: the test's own, without root
-const OWN_USER = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
-
-// a temp dir with the stand-in, its call log, and Jails that log what they
-// are asked; `prepare` and `prepareBuild` start the stand-in
-function setupTemplateTest(apiSocket: (dir: string) => string, status: 'ok' | 'fail' = 'ok') {
+// A temp dir with one log that the stub VMM and the stub jails both append
+// to, so the order of their calls shows.
+function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-tpl-vm-'));
-  const log = join(dir, 'calls.log');
-  const script = join(dir, 'firecracker.js');
-  const argv = ['bun', script, '--api-sock', apiSocket(dir), log, status];
 
-  const writeNote = (line: string): void => {
-    appendFileSync(log, `${line}\n`);
-  };
-
-  writeFileSync(script, STAND_IN);
-  writeFileSync(log, '');
-
-  const plans: unknown[] = [];
-
-  const jails: Jails = {
-    prepare: (plan) => {
-      plans.push(plan);
-
-      writeNote(
-        `prepare late=${String(plan.isDiskLate)} disk=${String(existsSync(plan.paths.disk))}`,
-      );
-
-      return Promise.resolve(argv);
-    },
-    prepareBuild: (plan) => {
-      plans.push(plan);
-
-      writeNote(`prepare build ${plan.id}`);
-
-      return Promise.resolve(argv);
-    },
-    setupDiskOwner: (paths) => {
-      writeNote(`own disk=${String(existsSync(paths.disk))}`);
-    },
-    release: (id) => {
-      writeNote(`release ${id}`);
-
-      return Promise.resolve();
-    },
-    sweepRunDir: () => Promise.resolve(),
-    remove: () => Promise.resolve(),
-    removeOrphans: () => Promise.resolve([]),
-    seal: () => {
-      writeNote('seal');
-    },
-  };
-
-  return {
-    dir,
-    jails,
-    plans,
-    writeNote,
-    readCalls: () => readFileSync(log, 'utf8').trim().split('\n'),
-    [Symbol.dispose]() {
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
-
-// the agent parked until a claim, then booted on; old enough to snapshot
-function startParkedAgent(vsockSocket: string) {
-  const claimed = { isClaimed: false };
-
-  return startStubAgent(vsockSocket, (socket, request) => {
-    const isClaim = JSON.stringify(decodeJsonPayload(request)).includes('"op":"claim"');
-
-    claimed.isClaimed ||= isClaim;
-
-    const reply = !isClaim && !claimed.isClaimed ? { stage: 'template' } : {};
-
-    socket.end(
-      encodeJsonFrame(FRAME_TYPES.response, {
-        ok: true,
-        version: '0.1.0',
-        uptime_ms: 60_000,
-        ...reply,
-      }),
-    );
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
   });
+
+  return { dir, logPath: join(dir, 'calls.log') };
 }
 
-// the start removes a stale vsock socket: the agent comes once the API is up
-async function startAgentWhenUp(apiSocket: string, vsockSocket: string) {
-  while (!existsSync(apiSocket)) {
-    await Bun.sleep(2);
-  }
-
-  return startParkedAgent(vsockSocket);
-}
-
-function buildRestorePlan(dir: string, diskReady: Promise<number>): TemplateRestorePlan {
-  const paths = buildImpPaths(dir, 'i1');
+test('it owns the disk of a jailed restore once the clone is done, before it patches the drive', async () => {
+  const ctx = setupTest();
+  const paths = buildImpPaths(ctx.dir, 'i1');
 
   mkdirSync(paths.runDir, { recursive: true });
 
-  return {
-    firecrackerBin: 'firecracker',
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({ apiSocket: paths.apiSocket, logPath: ctx.logPath }),
+    onNote: (note) => {
+      appendFileSync(ctx.logPath, `${note}\n`);
+    },
+  });
+
+  const clone = Promise.withResolvers<number>();
+
+  const plan = buildMockTemplateRestorePlan({
     paths,
-    vmstate: join(dir, 'tpl', 'vmstate'),
-    memFile: join(dir, 'tpl', 'mem'),
-    systemDrivePath: join(dir, 'drives', 'system.squashfs'),
-    placeholderPath: join(dir, 'tpl', 'placeholder.ext4'),
-    diskPath: paths.disk,
-    tap: 'imp-t0',
-    cgroup: null,
-    jail: JAIL,
-    diskReady,
-    claim: {
-      id: 'i1',
-      hostname: 'dev',
-      ip: '10.66.0.2/30',
-      gw: '10.66.0.1',
-      ip6: null,
-      gw6: null,
-      dns: ['1.1.1.1'],
-      mac: '06:00:0a:42:00:02',
-      seed: new Uint8Array(64),
-      isIdentityReset: false,
+    jail: { uid: 900_001, gid: 900_001 },
+    diskReady: clone.promise,
+  });
+
+  const restoring = loadTemplateVm(plan, stub.jails);
+
+  await waitFor(() => {
+    expect(existsSync(paths.apiSocket)).toBeTrue();
+  });
+
+  const pid = Number(readFileSync(paths.pidFile, 'utf8'));
+
+  onTestFinished(() => {
+    stopProcess(pid);
+  });
+
+  await startStubParkedAgent(paths.vsockSocket);
+
+  // the clone lands once the restore has resumed the parked guest
+  await waitFor(() => {
+    expect(readFileSync(ctx.logPath, 'utf8')).toInclude('PATCH /vm\n');
+  });
+
+  writeFileSync(paths.disk, '');
+
+  clone.resolve(0);
+
+  await restoring;
+
+  expect(readFileSync(ctx.logPath, 'utf8').trim().split('\n')).toStrictEqual([
+    'prepare i1 late=true disk=false',
+    'PUT /snapshot/load',
+    'seal',
+    'PATCH /vm',
+    'own disk=true',
+    'PATCH /drives/rootfs',
+    'GET /version',
+  ]);
+
+  // without the drive the snapshot names, every jailed load fails
+  expect(stub.plans).toStrictEqual([
+    {
+      impId: 'i1',
+      user: { uid: 900_001, gid: 900_001 },
+      paths,
+      readOnlyFiles: [plan.vmstate, plan.memFile, plan.systemDrivePath],
+      scratchFiles: [plan.placeholderPath],
+      isDiskLate: true,
     },
-  };
-}
+  ]);
+});
 
-function buildBuildPlan(dir: string): TemplateBuildPlan {
-  const workDir = join(dir, '.build-1');
-  const runDir = join(workDir, 'run');
-  const snapshotDir = join(workDir, 'snapshot');
+test('it fails a restore whose load fails as a fault of the template', () => {
+  const ctx = setupTest();
+  const paths = buildImpPaths(ctx.dir, 'i1');
 
-  mkdirSync(runDir, { recursive: true });
+  mkdirSync(paths.runDir, { recursive: true });
 
-  return {
-    firecrackerBin: 'firecracker',
-    kernelPath: join(dir, 'vmlinux'),
-    systemDrivePath: join(dir, 'system.squashfs'),
-    bootArgs: 'console=ttyS0 imp.template=1',
-    vcpus: 1,
-    memoryMib: 128,
-    workDir,
-    paths: {
-      runDir,
-      apiSocket: join(runDir, 'api.sock'),
-      vsockSocket: join(runDir, 'vsock.sock'),
-      logFile: join(runDir, 'firecracker.log'),
-      pidFile: join(runDir, 'pid'),
-    },
-    placeholderPath: join(dir, 'placeholder.ext4'),
-    tap: 'imp-tpl',
-    guestMac: '06:00:a9:fe:ff:fe',
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({
+      apiSocket: paths.apiSocket,
+      logPath: ctx.logPath,
+      failures: ['PUT /snapshot/load'],
+    }),
+  });
+
+  const restoring = loadTemplateVm(
+    buildMockTemplateRestorePlan({ paths, jail: { uid: 900_001, gid: 900_001 } }),
+    stub.jails,
+  );
+
+  expect(restoring).rejects.toBeInstanceOf(TemplateRestoreError);
+  expect(restoring).rejects.toMatchObject({ isTemplateFault: true });
+  expect(restoring).rejects.toThrow(/^template restore failed: /);
+});
+
+test('it fails a restore whose drive patch fails as a fault of the imp', async () => {
+  const ctx = setupTest();
+  const paths = buildImpPaths(ctx.dir, 'i1');
+
+  mkdirSync(paths.runDir, { recursive: true });
+  writeFileSync(paths.disk, '');
+
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({
+      apiSocket: paths.apiSocket,
+      logPath: ctx.logPath,
+      failures: ['PATCH /drives'],
+    }),
+  });
+
+  const restoring = loadTemplateVm(
+    buildMockTemplateRestorePlan({ paths, jail: { uid: 900_001, gid: 900_001 } }),
+    stub.jails,
+  );
+
+  await waitFor(() => {
+    expect(existsSync(paths.apiSocket)).toBeTrue();
+  });
+
+  await startStubParkedAgent(paths.vsockSocket);
+
+  expect(restoring).rejects.toBeInstanceOf(TemplateRestoreError);
+  expect(restoring).rejects.toMatchObject({ isTemplateFault: false });
+});
+
+test('it kills the VM and releases the jail of a restore that fails', () => {
+  const ctx = setupTest();
+  const paths = buildImpPaths(ctx.dir, 'i1');
+
+  mkdirSync(paths.runDir, { recursive: true });
+
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({
+      apiSocket: paths.apiSocket,
+      logPath: ctx.logPath,
+      failures: ['PUT /snapshot/load'],
+    }),
+  });
+
+  expect(
+    loadTemplateVm(
+      buildMockTemplateRestorePlan({ paths, jail: { uid: 900_001, gid: 900_001 } }),
+      stub.jails,
+    ),
+  ).rejects.toThrow();
+
+  const pid = Number(readFileSync(paths.pidFile, 'utf8'));
+
+  expect(isFirecrackerAlive(pid, paths.apiSocket)).toBeFalse();
+  expect(stub.notes.at(-1)).toBe('release i1');
+});
+
+test('it releases the jail of a restore whose prepare fails, and passes the error on', () => {
+  const ctx = setupTest();
+  const paths = buildImpPaths(ctx.dir, 'i1');
+  const stub = buildStubJails({ argv: [] });
+
+  stub.refusePrepare(new Error('mount --rbind: no space'));
+
+  expect(
+    loadTemplateVm(
+      buildMockTemplateRestorePlan({ paths, jail: { uid: 900_001, gid: 900_001 } }),
+      stub.jails,
+    ),
+  ).rejects.toThrowWithMessage(Error, 'mount --rbind: no space');
+
+  expect(stub.notes).toStrictEqual(['prepare i1 late=true disk=false', 'release i1']);
+});
+
+test('it releases the jail of a build before its files go to root, readable by all', async () => {
+  const ctx = setupTest();
+
+  // a build chowns its snapshot files to its uid: the test's own, without root
+  const user = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
+
+  const plan = buildMockTemplateBuildPlan({
+    workDir: join(ctx.dir, '.build-1'),
     jailId: 'tpl-build',
-    jail: OWN_USER,
-    cgroup: null,
-    minGuestUptimeMs: 0,
-    snapshotDir,
-    vmstate: join(snapshotDir, 'vmstate'),
-    memFile: join(snapshotDir, 'mem'),
-  };
-}
+    jail: user,
+  });
 
-test('a jailed restore owns its disk once the clone is done, before the drive patch', async () => {
-  using ctx = setupTemplateTest((dir) => buildImpPaths(dir, 'i1').apiSocket);
+  mkdirSync(plan.paths.runDir, { recursive: true });
 
-  // the clone lands after the restore has started
-  const diskReady = (async () => {
-    await Bun.sleep(100);
-
-    writeFileSync(buildImpPaths(ctx.dir, 'i1').disk, '');
-
-    return 0;
-  })();
-
-  const plan = buildRestorePlan(ctx.dir, diskReady);
-  const restoring = loadTemplateVm(plan, ctx.jails);
-
-  const agent = await startAgentWhenUp(plan.paths.apiSocket, plan.paths.vsockSocket);
-
-  try {
-    const vm = await restoring;
-
-    process.kill(vm.pid, 'SIGKILL');
-
-    expect(ctx.readCalls()).toEqual([
-      'prepare late=true disk=false',
-      'PUT /snapshot/load',
-      'seal',
-      'PATCH /vm',
-      'own disk=true',
-      'PATCH /drives/rootfs',
-      'GET /version',
-    ]);
-
-    // without the drive the snapshot names, every jailed load fails, and
-    // the imp boots the kernel with no more than a log line
-    expect(ctx.plans).toEqual([
-      expect.objectContaining({
-        impId: 'i1',
-        user: JAIL,
-        readOnlyFiles: [plan.vmstate, plan.memFile, plan.systemDrivePath],
-        scratchFiles: [plan.placeholderPath],
-        isDiskLate: true,
-      }),
-    ]);
-  } finally {
-    agent.close();
-  }
-});
-
-test('a build releases its jail before its files go to root, readable by all', async () => {
-  using ctx = setupTemplateTest((dir) => join(dir, '.build-1', 'run', 'api.sock'));
-
-  const plan = buildBuildPlan(ctx.dir);
-
-  const jails: Jails = {
-    ...ctx.jails,
-
-    // the release kills the build uid: the files are still the VM's then
-    release: (id) => {
-      const mode = existsSync(plan.memFile)
-        ? (lstatSync(plan.memFile).mode & 0o777).toString(8)
-        : 'none';
-
-      ctx.writeNote(`release ${id} mem=${mode}`);
-
-      return Promise.resolve();
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({ apiSocket: plan.paths.apiSocket, logPath: ctx.logPath }),
+    onNote: (note) => {
+      appendFileSync(ctx.logPath, `${note}\n`);
     },
-  };
+  });
 
-  const building = buildTemplateVm(plan, jails);
+  // the release kills the build uid: the files are still the VM's then
+  const memModes: string[] = [];
 
-  const agent = await startAgentWhenUp(plan.paths.apiSocket, plan.paths.vsockSocket);
+  const building = buildTemplateVm(plan, {
+    ...stub.jails,
+    release: (id) => {
+      memModes.push((lstatSync(plan.memFile).mode & 0o777).toString(8));
 
-  try {
-    await building.catch((error: unknown) => {
-      throw new Error(`${readErrorMessage(error)}\n${ctx.readCalls().join('\n')}`);
-    });
+      return stub.jails.release(id);
+    },
+  });
 
-    const calls = ctx.readCalls();
+  await waitFor(() => {
+    expect(existsSync(plan.paths.apiSocket)).toBeTrue();
+  });
 
-    expect(calls[0]).toBe('prepare build tpl-build');
-    expect(calls.indexOf('seal')).toBeLessThan(calls.indexOf('PUT /actions'));
-    expect(calls.at(-1)).toBe('release tpl-build mem=600');
-    expect(lstatSync(plan.memFile).mode & 0o777).toBe(0o644);
-    expect(lstatSync(plan.vmstate).mode & 0o777).toBe(0o644);
+  await startStubParkedAgent(plan.paths.vsockSocket);
+  await building;
 
-    expect(ctx.plans).toEqual([
-      expect.objectContaining({
-        id: 'tpl-build',
-        user: OWN_USER,
-        workDir: plan.workDir,
-        readOnlyFiles: [plan.kernelPath, plan.systemDrivePath],
-        scratchFiles: [plan.placeholderPath],
-      }),
-    ]);
-  } finally {
-    agent.close();
-  }
+  const calls = readFileSync(ctx.logPath, 'utf8').trim().split('\n');
+
+  expect(calls[0]).toBe('prepare build tpl-build');
+  expect(calls.indexOf('seal')).toBeLessThan(calls.indexOf('PUT /actions'));
+  expect(calls.at(-1)).toBe('release tpl-build');
+  expect(memModes).toStrictEqual(['600']);
+  expect(lstatSync(plan.memFile).mode & 0o777).toBe(0o644);
+  expect(lstatSync(plan.vmstate).mode & 0o777).toBe(0o644);
 });
 
-test('a build that fails still releases its jail, and leaves no snapshot', async () => {
-  using ctx = setupTemplateTest((dir) => join(dir, '.build-1', 'run', 'api.sock'), 'fail');
+test('it binds the kernel and the system drive into a jailed build read-only', async () => {
+  const ctx = setupTest();
+  const user = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
 
-  const plan = buildBuildPlan(ctx.dir);
+  const plan = buildMockTemplateBuildPlan({
+    workDir: join(ctx.dir, '.build-1'),
+    jailId: 'tpl-build',
+    jail: user,
+  });
 
-  const error = await readRejection(buildTemplateVm(plan, ctx.jails));
+  mkdirSync(plan.paths.runDir, { recursive: true });
 
-  expect(readErrorMessage(error)).toStartWith('template build failed');
-  expect(ctx.readCalls().at(-1)).toBe('release tpl-build');
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({ apiSocket: plan.paths.apiSocket, logPath: ctx.logPath }),
+  });
+
+  const building = buildTemplateVm(plan, stub.jails);
+
+  await waitFor(() => {
+    expect(existsSync(plan.paths.apiSocket)).toBeTrue();
+  });
+
+  await startStubParkedAgent(plan.paths.vsockSocket);
+  await building;
+
+  expect(stub.plans).toStrictEqual([
+    {
+      id: 'tpl-build',
+      user,
+      workDir: plan.workDir,
+      paths: plan.paths,
+      readOnlyFiles: [plan.kernelPath, plan.systemDrivePath],
+      scratchFiles: [plan.placeholderPath],
+    },
+  ]);
+});
+
+test('it fails a build whose VM refuses its config', () => {
+  const ctx = setupTest();
+
+  const plan = buildMockTemplateBuildPlan({
+    workDir: join(ctx.dir, '.build-1'),
+    jailId: 'tpl-build',
+    jail: { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 },
+  });
+
+  mkdirSync(plan.paths.runDir, { recursive: true });
+
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({
+      apiSocket: plan.paths.apiSocket,
+      logPath: ctx.logPath,
+      failures: ['PUT '],
+    }),
+  });
+
+  expect(buildTemplateVm(plan, stub.jails)).rejects.toThrow(/^template build failed: /);
+});
+
+test('it releases the jail of a build that fails, and leaves no snapshot', () => {
+  const ctx = setupTest();
+
+  const plan = buildMockTemplateBuildPlan({
+    workDir: join(ctx.dir, '.build-1'),
+    jailId: 'tpl-build',
+    jail: { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 },
+  });
+
+  mkdirSync(plan.paths.runDir, { recursive: true });
+
+  const stub = buildStubJails({
+    argv: buildStubFirecrackerArgv({
+      apiSocket: plan.paths.apiSocket,
+      logPath: ctx.logPath,
+      failures: ['PUT '],
+    }),
+  });
+
+  expect(buildTemplateVm(plan, stub.jails)).rejects.toThrow();
+  expect(stub.notes.at(-1)).toBe('release tpl-build');
   expect(existsSync(plan.snapshotDir)).toBeFalse();
 });
