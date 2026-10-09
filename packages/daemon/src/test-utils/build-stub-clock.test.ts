@@ -69,6 +69,28 @@ test('it never fires a cancelled timer', () => {
   expect(fired).toStrictEqual([]);
 });
 
+test('it moves the clock by the length of a sleep and records it', async () => {
+  const clock = buildStubClock();
+
+  await clock.sleep(50);
+
+  expect(clock.now()).toBe(50);
+  expect(clock.sleeps).toStrictEqual([50]);
+});
+
+test('it fires the timers a sleep passes', async () => {
+  const clock = buildStubClock();
+  const fired: number[] = [];
+
+  clock.startTimer(() => {
+    fired.push(clock.now());
+  }, 30);
+
+  await clock.sleep(50);
+
+  expect(fired).toStrictEqual([30]);
+});
+
 test('it records the delay of each timer it starts', () => {
   const clock = buildStubClock();
 
