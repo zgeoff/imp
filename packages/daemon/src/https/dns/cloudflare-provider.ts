@@ -51,6 +51,11 @@ const RecordListSchema = z.array(RecordSchema);
 
 type Zone = z.infer<typeof ZoneSchema>;
 
+// a zone and a DNS record as Cloudflare answers them, in the fields impd reads
+export type CloudflareZone = z.input<typeof ZoneSchema>;
+
+export type CloudflareRecord = z.input<typeof RecordSchema>;
+
 interface CloudflareOptions {
   // a token with Zone:Read and DNS:Edit on the zone, read at each request
   // so a rotated one works at once; never logged

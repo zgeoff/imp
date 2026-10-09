@@ -29,12 +29,19 @@ export interface DnsToken {
   readonly check: (() => Promise<DnsTokenStatus>) | null;
 }
 
-export function createDnsToken(source: DnsTokenSource, now: () => number): DnsToken {
+// how the token file's text is read; the filesystem by default
+type ReadText = (path: string) => Promise<string>;
+
+export function createDnsToken(
+  source: DnsTokenSource,
+  now: () => number,
+  readText: ReadText = (path) => readFile(path, 'utf8'),
+): DnsToken {
   if (source.kind === 'value') {
     return { read: () => Promise.resolve(source.value), check: null };
   }
 
-  const read = (): Promise<string> => readTokenFile(source.path);
+  const read = (): Promise<string> => readTokenFile(source.path, readText);
 
   return {
     read,
@@ -52,11 +59,11 @@ export function createDnsToken(source: DnsTokenSource, now: () => number): DnsTo
 
 // Every message names the file, never what it holds: a token with a stray
 // character inside is still most of a secret.
-async function readTokenFile(path: string): Promise<string> {
+async function readTokenFile(path: string, readText: ReadText): Promise<string> {
   let text: string;
 
   try {
-    text = await readFile(path, 'utf8');
+    text = await readText(path);
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : 'unreadable';
 
