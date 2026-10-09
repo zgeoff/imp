@@ -1,109 +1,257 @@
-import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname } from 'node:path';
+import { join } from 'node:path';
 import { loadConfig } from '../config';
-import { readErrorMessage } from '../read-error-message';
-import { readRejection } from '../read-rejection';
-import { buildSystemDrivesDir } from './data-layout';
-import { removeUnusedSystemDrives } from './remove-unused-system-drives';
 import { setupSystemFiles } from './setup-system-files';
 
-async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(`${tmpdir()}/imp-system-files-`);
+async function setupTest() {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-system-files-'));
 
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  return { dir };
 }
 
-function setup(dir: string, drive: string) {
-  writeFileSync(`${dir}/vmlinux`, 'Linux version 6.1.188 (imp@imp)\0');
-  writeFileSync(`${dir}/drive.squashfs`, drive);
+test('it installs the system drive under its sha256', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const files = await setupSystemFiles(
+    loadConfig({
+      IMP_DATA_DIR: join(ctx.dir, 'data'),
+      IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+      IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+    }),
+  );
+
+  const expected = join(
+    ctx.dir,
+    'data',
+    'system',
+    'drives',
+    '7da85c2b44484d6fc3efaeea7807587cb8e760156748e0e70988c94f31eb163d.squashfs',
+  );
+
+  expect(files.systemDrivePath).toBe(expected);
+  expect(readFileSync(expected, 'utf8')).toBe('drive a');
+});
+
+test('it installs a changed system drive at its own path and keeps the one before it', async () => {
+  const ctx = await setupTest();
 
   const config = loadConfig({
-    IMP_DATA_DIR: `${dir}/data`,
-    IMP_KERNEL: `${dir}/vmlinux`,
-    IMP_SYSTEM_DRIVE: `${dir}/drive.squashfs`,
+    IMP_DATA_DIR: join(ctx.dir, 'data'),
+    IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+    IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
   });
 
-  return setupSystemFiles(config);
-}
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
 
-function deriveSha256(text: string): string {
-  return new Bun.CryptoHasher('sha256').update(text).digest('hex');
-}
+  const first = await setupSystemFiles(config);
 
-test('each system drive goes to its own path, and the one before it stays', async () => {
-  await withTempDir(async (dir) => {
-    const first = await setup(dir, 'drive a');
-    const second = await setup(dir, 'drive b');
-    const again = await setup(dir, 'drive b');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive b');
 
-    const drivesDir = buildSystemDrivesDir(`${dir}/data`);
+  const second = await setupSystemFiles(config);
 
-    expect(first.systemDrivePath).toBe(`${drivesDir}/${deriveSha256('drive a')}.squashfs`);
-    expect(second.systemDrivePath).not.toBe(first.systemDrivePath);
-    expect(again.systemDrivePath).toBe(second.systemDrivePath);
-    expect(readFileSync(first.systemDrivePath, 'utf8')).toBe('drive a');
-    expect(readFileSync(second.systemDrivePath, 'utf8')).toBe('drive b');
-    expect(existsSync(first.kernelPath)).toBeTrue();
+  expect(second.systemDrivePath).toBe(
+    join(
+      ctx.dir,
+      'data',
+      'system',
+      'drives',
+      '9d4e34158e51fc516bc5f09fe33a9ee07712ddefda94c351978e6c366de830c5.squashfs',
+    ),
+  );
+
+  expect(readFileSync(second.systemDrivePath, 'utf8')).toBe('drive b');
+  expect(readFileSync(first.systemDrivePath, 'utf8')).toBe('drive a');
+});
+
+test('it leaves an installed system drive in place when its source is unchanged', async () => {
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: join(ctx.dir, 'data'),
+    IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+    IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
   });
+
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const first = await setupSystemFiles(config);
+
+  const installed = statSync(first.systemDrivePath).ino;
+
+  const again = await setupSystemFiles(config);
+
+  expect(again.systemDrivePath).toBe(first.systemDrivePath);
+  expect(statSync(again.systemDrivePath).ino).toBe(installed);
 });
 
 test('it reports the hashes it installed by, for system.info', async () => {
-  await withTempDir(async (dir) => {
-    const files = await setup(dir, 'drive a');
+  const ctx = await setupTest();
 
-    expect(files.info).toEqual({
-      guestKernel: {
-        version: '6.1.188',
-        sha256: deriveSha256('Linux version 6.1.188 (imp@imp)\0'),
-      },
-      systemDrive: { sha256: deriveSha256('drive a') },
-    });
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const files = await setupSystemFiles(
+    loadConfig({
+      IMP_DATA_DIR: join(ctx.dir, 'data'),
+      IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+      IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+    }),
+  );
+
+  expect(files.info).toStrictEqual({
+    guestKernel: {
+      version: '6.1.188',
+      sha256: '4d0bcb0c40c3f487930fe8e285765a9d0122209b9e7712968a447caa5d1b4ea7',
+    },
+    systemDrive: { sha256: '7da85c2b44484d6fc3efaeea7807587cb8e760156748e0e70988c94f31eb163d' },
   });
 });
 
-test('without IMP_SYSTEM_DRIVE the drive in the data dir is the source', async () => {
-  await withTempDir(async (dir) => {
-    writeFileSync(`${dir}/vmlinux`, 'kernel');
+test('it copies the configured kernel into the data dir', async () => {
+  const ctx = await setupTest();
 
-    const config = loadConfig({ IMP_DATA_DIR: dir, IMP_KERNEL: `${dir}/vmlinux` });
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
 
-    const error = await readRejection(setupSystemFiles(config));
+  const files = await setupSystemFiles(
+    loadConfig({
+      IMP_DATA_DIR: join(ctx.dir, 'data'),
+      IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+      IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+    }),
+  );
 
-    expect(readErrorMessage(error)).toContain('imp-system.squashfs does not exist');
-
-    mkdirSync(dirname(config.systemDriveSource), { recursive: true });
-    writeFileSync(config.systemDriveSource, 'hand-placed drive');
-
-    const files = await setupSystemFiles(config);
-
-    // kept: a VM booted by an older impd may still run from it
-    expect(existsSync(files.systemDrivePath)).toBeTrue();
-    expect(existsSync(config.systemDriveSource)).toBeTrue();
-  });
+  expect(files.kernelPath).toBe(join(ctx.dir, 'data', 'system', 'vmlinux'));
+  expect(readFileSync(files.kernelPath, 'utf8')).toBe('Linux version 6.1.188 (imp@imp)\0');
 });
 
-test('pruning keeps the drives named and deletes the rest and half copies', async () => {
-  await withTempDir(async (dir) => {
-    const kept = await setup(dir, 'drive a');
-    const old = await setup(dir, 'drive b');
+test('it replaces a kernel in the data dir that differs from the configured one', async () => {
+  const ctx = await setupTest();
 
-    writeFileSync(`${old.systemDrivePath}.new`, 'half');
+  mkdirSync(join(ctx.dir, 'data', 'system'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'data', 'system', 'vmlinux'), 'Linux version 6.1.100 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
 
-    const removed = removeUnusedSystemDrives(
-      `${dir}/data`,
-      new Set([basename(kept.systemDrivePath)]),
-    );
+  const files = await setupSystemFiles(
+    loadConfig({
+      IMP_DATA_DIR: join(ctx.dir, 'data'),
+      IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+      IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+    }),
+  );
 
-    const oldName = basename(old.systemDrivePath);
+  expect(readFileSync(files.kernelPath, 'utf8')).toBe('Linux version 6.1.188 (imp@imp)\0');
+});
 
-    expect(removed.toSorted()).toEqual([oldName, `${oldName}.new`]);
-    expect(existsSync(kept.systemDrivePath)).toBeTrue();
-    expect(existsSync(old.systemDrivePath)).toBeFalse();
+test('it leaves a kernel in the data dir alone when it matches the configured one', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'data', 'system'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'data', 'system', 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+
+  const installed = statSync(join(ctx.dir, 'data', 'system', 'vmlinux')).ino;
+
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const files = await setupSystemFiles(
+    loadConfig({
+      IMP_DATA_DIR: join(ctx.dir, 'data'),
+      IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+      IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+    }),
+  );
+
+  expect(statSync(files.kernelPath).ino).toBe(installed);
+});
+
+test('it boots from the kernel in the data dir when no kernel is configured', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(join(ctx.dir, 'data', 'system'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'data', 'system', 'vmlinux'), 'Linux version 6.1.188 (imp@imp)\0');
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const files = await setupSystemFiles(
+    loadConfig({
+      IMP_DATA_DIR: join(ctx.dir, 'data'),
+      IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+    }),
+  );
+
+  expect(files.info.guestKernel.version).toBe('6.1.188');
+});
+
+test('it refuses a configured kernel that does not exist', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const config = loadConfig({
+    IMP_DATA_DIR: join(ctx.dir, 'data'),
+    IMP_KERNEL: join(ctx.dir, 'vmlinux'),
+    IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
   });
+
+  expect(setupSystemFiles(config)).rejects.toThrowWithMessage(
+    Error,
+    `${join(ctx.dir, 'vmlinux')} does not exist`,
+  );
+});
+
+test('it refuses a missing kernel in the data dir when no kernel is configured', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'drive.squashfs'), 'drive a');
+
+  const config = loadConfig({
+    IMP_DATA_DIR: join(ctx.dir, 'data'),
+    IMP_SYSTEM_DRIVE: join(ctx.dir, 'drive.squashfs'),
+  });
+
+  expect(setupSystemFiles(config)).rejects.toThrowWithMessage(
+    Error,
+    `${join(ctx.dir, 'data', 'system', 'vmlinux')} does not exist and no source is configured`,
+  );
+});
+
+test('it refuses a system drive that does not exist', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'kernel');
+
+  const config = loadConfig({ IMP_DATA_DIR: ctx.dir, IMP_KERNEL: join(ctx.dir, 'vmlinux') });
+
+  expect(setupSystemFiles(config)).rejects.toThrowWithMessage(
+    Error,
+    `${join(ctx.dir, 'system', 'imp-system.squashfs')} does not exist`,
+  );
+});
+
+test('it installs the drive placed in the data dir when no drive is configured, and keeps it', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'vmlinux'), 'kernel');
+  mkdirSync(join(ctx.dir, 'system'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'system', 'imp-system.squashfs'), 'hand-placed drive');
+
+  const files = await setupSystemFiles(
+    loadConfig({ IMP_DATA_DIR: ctx.dir, IMP_KERNEL: join(ctx.dir, 'vmlinux') }),
+  );
+
+  expect(readFileSync(files.systemDrivePath, 'utf8')).toBe('hand-placed drive');
+
+  // kept: a VM booted by an older impd may still run from it
+  expect(existsSync(join(ctx.dir, 'system', 'imp-system.squashfs'))).toBeTrue();
 });

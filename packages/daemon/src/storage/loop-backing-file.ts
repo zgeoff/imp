@@ -1,23 +1,25 @@
 import { readFileSync, realpathSync, statfsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
-interface LoopFiles {
-  readonly readText: (path: string) => string;
-  readonly resolvePath: (path: string) => string;
+// where procfs and sysfs are mounted
+export interface LoopHostDirs {
+  readonly procDir: string;
+  readonly sysDir: string;
 }
 
-const HOST_FILES: LoopFiles = {
-  readText: (path) => readFileSync(path, 'utf8'),
-  resolvePath: (path) => realpathSync(path),
-};
+const HOST_DIRS: LoopHostDirs = { procDir: '/proc', sysDir: '/sys' };
 
 // The file behind the loop device mounted on `dir`, from mountinfo and the
 // loop driver's sysfs; null for any other mount, or when either is unreadable.
-export function findLoopBackingFile(dir: string, files: LoopFiles = HOST_FILES): string | null {
+export function findLoopBackingFile(
+  dir: string,
+  hostDirs: Readonly<LoopHostDirs> = HOST_DIRS,
+): string | null {
   try {
-    const target = files.resolvePath(dir);
+    const target = realpathSync(dir);
+    const mountInfo = readFileSync(join(hostDirs.procDir, 'self', 'mountinfo'), 'utf8');
 
-    for (const line of files.readText('/proc/self/mountinfo').split('\n')) {
+    for (const line of mountInfo.split('\n')) {
       // <id> <parent> <dev> <root> <mount point> ... - <fstype> <source> ...
       const [mounts = '', fields = ''] = line.split(' - ');
       const mountPoint = mounts.split(' ').at(4);
@@ -25,7 +27,9 @@ export function findLoopBackingFile(dir: string, files: LoopFiles = HOST_FILES):
       const loop = /^\/dev\/(?<name>loop\d+)$/.exec(source)?.groups?.['name'];
 
       if (mountPoint === target && loop !== undefined) {
-        return files.readText(`/sys/block/${loop}/loop/backing_file`).trim();
+        const backing = join(hostDirs.sysDir, 'block', loop, 'loop', 'backing_file');
+
+        return readFileSync(backing, 'utf8').trim();
       }
     }
   } catch {
@@ -38,8 +42,11 @@ export function findLoopBackingFile(dir: string, files: LoopFiles = HOST_FILES):
 // Free bytes in the directory that holds the loop file behind `dir`: the
 // filesystem inside can report room its sparse file can no longer get. null
 // when `dir` is no loop mount, or the host directory cannot be read.
-export function readLoopHostFreeBytes(dir: string): number | null {
-  const backing = findLoopBackingFile(dir);
+export function readLoopHostFreeBytes(
+  dir: string,
+  hostDirs: Readonly<LoopHostDirs> = HOST_DIRS,
+): number | null {
+  const backing = findLoopBackingFile(dir, hostDirs);
 
   if (backing === null) {
     return null;

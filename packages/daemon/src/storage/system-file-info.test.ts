@@ -1,46 +1,44 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deriveFileSha256, parseKernelVersion, readKernelInfo } from './system-file-info';
 
-function buildImage(text: string): Uint8Array {
-  return new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0, 1, 2, ...Buffer.from(text), 0, 9]);
-}
-
-test('it reads the release from the kernel banner', () => {
-  const image = buildImage('Linux version 6.1.188 (imp@imp) (gcc (Ubuntu 11.4.0) 11.4.0) #1 SMP');
+test('#parseKernelVersion reads the release from the kernel banner', () => {
+  // an ELF header, then the banner as a C string
+  const image = Buffer.concat([
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 1, 2]),
+    Buffer.from('Linux version 6.1.188 (imp@imp) (gcc (Ubuntu 11.4.0) 11.4.0) #1 SMP\0'),
+  ]);
 
   expect(parseKernelVersion(image)).toBe('6.1.188');
 });
 
-test('it keeps a local version suffix', () => {
-  expect(parseKernelVersion(buildImage('Linux version 6.1.188-imp\0'))).toBe('6.1.188-imp');
+test('#parseKernelVersion keeps a local version suffix', () => {
+  expect(parseKernelVersion(Buffer.from('\u007FELF\0Linux version 6.1.188-imp\0\u0009'))).toBe(
+    '6.1.188-imp',
+  );
 });
 
-test('it returns null for an image without a banner', () => {
-  expect(parseKernelVersion(buildImage('not a kernel'))).toBeNull();
+test('#parseKernelVersion reads no release from an image without a banner', () => {
+  expect(parseKernelVersion(Buffer.from('\u007FELF\0not a kernel\0'))).toBeNull();
 });
 
-test('it reads the kernel version and its sha256', () => {
-  const info = readKernelInfo(buildImage('Linux version 6.1.188 (imp@imp)'));
-
-  expect(info.version).toBe('6.1.188');
-  expect(info.sha256).toMatch(/^[0-9a-f]{64}$/);
+test('#readKernelInfo reads the kernel release and the sha256 of the whole image', () => {
+  expect(readKernelInfo(Buffer.from('Linux version 6.1.188 (imp@imp)'))).toStrictEqual({
+    version: '6.1.188',
+    sha256: 'add71d53499921736be7d709dcbaa13b28f0e7a7e5922706c8a2150e877ba035',
+  });
 });
 
-test('it streams the sha256 of a file', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-system-files-'));
+test('#deriveFileSha256 streams the sha256 of a file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-system-files-'));
 
-  try {
-    const path = join(dir, 'imp-system.squashfs');
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, 'imp-system.squashfs'), 'drive');
 
-    writeFileSync(path, 'drive');
+  const sha256 = await deriveFileSha256(join(dir, 'imp-system.squashfs'));
 
-    const sha256 = await deriveFileSha256(path);
-
-    expect(sha256).toBe('7062520c5a0ea9deac825278c9f4f0cbad48864b2c7d0c7f1ebccdb752afb058');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(sha256).toBe('7062520c5a0ea9deac825278c9f4f0cbad48864b2c7d0c7f1ebccdb752afb058');
 });
