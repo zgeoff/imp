@@ -28,7 +28,7 @@ import type { DiskFreezer } from './consistent-disk';
 
 // Short, typeable and global, so the existing primary key holds them without
 // a migration, and an id never comes back after a delete (unlike v1, v2…).
-const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+export const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 const CHECKPOINT_ID_PREFIX = 'cp-';
 const ID_ATTEMPTS = 3;
 
@@ -69,6 +69,9 @@ export interface CheckpointServiceDeps {
 
   // a checkpoint is thin, but none is made past the reserve
   readonly diskBudget: Pick<DiskBudget, 'requireRoom'>;
+
+  // the draws each new checkpoint id is made from; Math.random by default
+  readonly random?: () => number;
 }
 
 export function buildCheckpointId(random: () => number = Math.random): string {
@@ -122,7 +125,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
   // that a fork needs; the database alone cannot tell.
   const createWithFreshId = async (impId: string) => {
     for (let attempt = 1; ; attempt += 1) {
-      const id = buildCheckpointId();
+      const id = buildCheckpointId(deps.random);
 
       try {
         const sizeBytes = await storage.createCheckpoint(impId, id);

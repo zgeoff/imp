@@ -1,16 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
 import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
@@ -19,529 +11,843 @@ import { createTemplateService } from '../images/template-service';
 import { createImpTest } from '../imps/test-imps';
 import { createNetworkService } from '../networks/network-service';
 import { buildImpPaths } from '../storage/data-layout';
-import type { BackupConfig } from './backup-config';
+import { buildMockBackupConfig } from '../test-utils/build-mock-backup-config';
+import { buildStubRestic } from '../test-utils/build-stub-restic';
 import { BackupManifestSchema } from './backup-manifest';
-import { buildDigestTag, createBackupService } from './backup-service';
+import { buildBackupsOffError, buildDigestTag, createBackupService } from './backup-service';
+import type { BackupServiceDeps } from './backup-service';
 import { ResticError } from './restic';
-import type { Restic, ResticSnapshot } from './restic';
 
-const HOUR_MS = 60 * 60 * 1000;
+// One host's imps and the backup service's deps over a stub restic in a temp
+// repository; each test picks its backup settings. `stack` and `repoDir` let
+// a test add a second host on that repository, released before it.
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-const LOCKED = new ResticError(
-  'restic prune exited 11: unable to create lock in backend: repository is already locked exclusively by PID 7 on imp-host by root (UID 0, GID 0)',
-  11,
-);
-
-const CONFIG: BackupConfig = {
-  repository: 'fake',
-  passwordFile: '/dev/null',
-  intervalS: 3600,
-  keep: { hourly: 24, daily: 7, weekly: 4 },
-  forget: true,
-  cpus: 1,
-  memoryMib: 64,
-};
-
-// restic over a directory: each snapshot is a copy of the tree
-function createFakeRestic(repoDir: string, readNow: () => Date) {
-  const snapshots: ResticSnapshot[] = [];
-  const calls: string[] = [];
-
-  // pruneErrors: what the next prunes throw, one each
-  const state = {
-    failCheck: false,
-    failBackup: false,
-    pruneErrors: [] as Error[],
-
-    // runs as each restore starts
-    onRestore: null as ((dir: string) => Promise<void>) | null,
-  };
-
-  const restores: string[] = [];
-
-  const findSnapshot = (id: string): ResticSnapshot => {
-    const found = snapshots.find((snapshot) => snapshot.id === id);
-
-    if (found === undefined) {
-      throw new Error(`no snapshot ${id}`);
-    }
-
-    return found;
-  };
-
-  const resolvePath = (id: string, path: string) =>
-    join(repoDir, id, relative(findSnapshot(id).paths[0] ?? '', path));
-
-  const restic: Restic = {
-    setupRepository: () => Promise.resolve(),
-    backup: (dir, tags) => {
-      if (state.failBackup) {
-        return Promise.reject(new Error('Fatal: unable to save snapshot: bucket full'));
-      }
-
-      const id = `snap${String(snapshots.length + 1)}`;
-
-      cpSync(dir, join(repoDir, id), { recursive: true });
-
-      snapshots.push({ id, time: readNow(), paths: [dir], tags: ['imp-backup', ...tags] });
-      calls.push('backup');
-
-      return Promise.resolve({
-        snapshotId: id,
-        filesNew: 0,
-        filesChanged: 0,
-        filesUnmodified: 0,
-        dataAddedBytes: 10,
-      });
-    },
-    forget: () => {
-      calls.push('forget');
-
-      return Promise.resolve();
-    },
-    prune: () => {
-      calls.push('prune');
-
-      const failure = state.pruneErrors.shift();
-
-      return failure === undefined ? Promise.resolve() : Promise.reject(failure);
-    },
-    check: () => {
-      calls.push('check');
-
-      return state.failCheck
-        ? Promise.reject(new Error('Fatal: pack 9f2c: ciphertext verification failed'))
-        : Promise.resolve();
-    },
-    unlock: () => {
-      calls.push('unlock');
-
-      return Promise.resolve();
-    },
-    listSnapshots: () => Promise.resolve([...snapshots]),
-    dump: (id, path) => Promise.resolve(readFileSync(resolvePath(id, path), 'utf8')),
-    restore: async (id, dir, target) => {
-      restores.push(relative(findSnapshot(id).paths[0] ?? '', dir));
-
-      await state.onRestore?.(relative(findSnapshot(id).paths[0] ?? '', dir));
-
-      cpSync(resolvePath(id, dir), target, { recursive: true });
-    },
-  };
-
-  return { restic, snapshots, calls, state, restores };
-}
-
-// Imps on the harness's XFS backend over a fake repository, which a second
-// host can share to restore from: given the first host, it uses its
-// repository and its stack, so both harnesses go before the repository.
-async function setupTest(
-  source?: Readonly<{ repoDir: string; stack: Readonly<AsyncDisposableStack> }>,
-) {
-  const stack = source?.stack ?? new AsyncDisposableStack();
-
-  // a second registration of a shared stack's release does nothing
   onTestFinished(() => stack.disposeAsync());
 
-  const ownRepoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`);
+  const repoDir = mkdtempSync(join(tmpdir(), 'impd-restic-test-'));
 
   stack.defer(() => {
-    rmSync(ownRepoDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
   });
 
-  const repoDir = source?.repoDir ?? ownRepoDir;
+  // a frozen clock, so a scheduled run is due only once the test advances it
+  const host = await createImpTest(stack, { frozenClockMs: Date.UTC(2026, 9, 2) });
 
-  const harness = await createImpTest(stack);
+  const restic = buildStubRestic({ repoDir, now: () => new Date(host.now()) });
 
-  const clock = { now: new Date('2026-10-02T00:00:00Z') };
-  const fake = createFakeRestic(repoDir, () => clock.now);
-  const events: string[] = [];
-  const logs: string[] = [];
+  // the freezer's calls, and the service's log lines
+  const freezes: string[] = [];
+  const backupLogs: string[] = [];
 
-  const backups = createBackupService({
-    dataDir: harness.dataDir,
-    backup: CONFIG,
-    db: harness.db,
-    imps: harness.imps,
-    grants: harness.broker,
-    networks: createNetworkService({ db: harness.db, egress: harness.egress, imps: harness.imps }),
-    storage: harness.storage,
-    storageGate: harness.storageGate,
-    diskBudget: harness.diskBudget,
-    restic: fake.restic,
+  const deps: Omit<BackupServiceDeps, 'backup'> = {
+    dataDir: host.dataDir,
+    db: host.db,
+    imps: host.imps,
+    grants: host.broker,
+    networks: createNetworkService({ db: host.db, egress: host.egress, imps: host.imps }),
+    storage: host.storage,
+    storageGate: host.storageGate,
+    diskBudget: host.diskBudget,
+    restic: restic.restic,
     log: (message) => {
-      logs.push(message);
+      backupLogs.push(message);
     },
-    now: () => clock.now,
+    now: () => new Date(host.now()),
     freezer: {
       freeze: () => {
-        events.push('freeze');
+        freezes.push('freeze');
 
         return Promise.resolve();
       },
       thaw: () => {
-        events.push('thaw');
+        freezes.push('thaw');
 
         return Promise.resolve();
       },
     },
-  });
-
-  const image = await harness.createTestImage('base');
-
-  writeFileSync(join(harness.dataDir, 'images', 'base', 'config.json'), '{}');
-
-  const findDisk = async (name: string) => {
-    const imp = await findImpByName(harness.db, name);
-
-    return buildImpPaths(harness.dataDir, imp?.id ?? '').disk;
   };
 
-  const writeDisk = async (name: string, content: string) => {
-    const disk = await findDisk(name);
-
-    writeFileSync(disk, content);
-  };
-
-  // a checkpoint row and its disk, as the checkpoint service makes them
-  const createDevCheckpoint = async (impId: string, label: string, createdAt: Date) => {
-    const id = `cp-${label}`;
-
-    const sizeBytes = await harness.storage.createCheckpoint(impId, id);
-
-    // a size of its own, so a restore shows it took the manifest's
-    const diskBytes = 1000 + label.length;
-
-    await createCheckpoint(harness.db, { id, impId, label, sizeBytes, createdAt, diskBytes });
-  };
-
-  return {
-    ...harness,
-    image,
-    repoDir,
-    stack,
-    clock,
-    fake,
-    events,
-    logs,
-    backups,
-    findDisk,
-    readDisk: async (name: string) => {
-      const disk = await findDisk(name);
-
-      return readFileSync(disk, 'utf8');
-    },
-    writeDisk,
-
-    // imp dev with checkpoints one and two, then the disk at "now"
-    createDevImp: async () => {
-      const dev = await harness.imps.createImp({ name: 'dev', httpPort: 3000, memoryMib: 256 });
-
-      await writeDisk('dev', 'one');
-      await createDevCheckpoint(dev.id, 'one', new Date('2026-09-01T00:00:00Z'));
-      await writeDisk('dev', 'two');
-      await createDevCheckpoint(dev.id, 'two', new Date('2026-09-02T00:00:00Z'));
-      await writeDisk('dev', 'now');
-    },
-    readManifest: async (snapshotId: string) => {
-      const snapshot = fake.snapshots.find((candidate) => candidate.id === snapshotId);
-      const manifestPath = join(snapshot?.paths[0] ?? '', 'manifest.json');
-
-      const text = await fake.restic.dump(snapshotId, manifestPath);
-
-      return BackupManifestSchema.parse(JSON.parse(text));
-    },
-
-    // the snapshot's manifest, edited in the fake repository
-    editManifest: (snapshotId: string, edit: (manifest: unknown) => unknown) => {
-      const path = join(repoDir, snapshotId, 'manifest.json');
-      const manifest: unknown = JSON.parse(readFileSync(path, 'utf8'));
-
-      writeFileSync(path, JSON.stringify(edit(manifest)));
-    },
-    advance: (ms: number) => {
-      clock.now = new Date(clock.now.getTime() + ms);
-    },
-  };
+  return { ...host, stack, repoDir, restic, freezes, backupLogs, deps };
 }
 
-test('a run freezes running imps, copies the rest as they are and lists what it holds', async () => {
+test('it freezes a running imp and copies stopped and sleeping imps as they are', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
   await ctx.imps.createImp({ name: 'idle' });
   await ctx.imps.stopImp('idle');
   await ctx.imps.createImp({ name: 'napping' });
   await ctx.imps.sleepImp('napping');
 
-  ctx.events.length = 0;
+  const run = await backups.runBackup();
 
-  const run = await ctx.backups.runBackup();
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
 
-  expect(ctx.events).toEqual(['freeze', 'thaw']);
-  expect(run.imps).toEqual(['dev', 'idle', 'napping']);
-  expect(run.skipped).toEqual([]);
+  expect(ctx.freezes).toStrictEqual(['freeze', 'thaw']);
+  expect(run.imps).toStrictEqual(['dev', 'idle', 'napping']);
+  expect(run.skipped).toStrictEqual([]);
 
-  expect(ctx.fake.snapshots[0]?.tags).toEqual([
-    'imp-backup',
-    expect.stringMatching(/^run=/),
-    'imp=dev',
-    'imp=idle',
-    'imp=napping',
-  ]);
-
-  expect(ctx.fake.calls).toEqual(['unlock', 'backup', 'forget']);
-
-  const manifest = await ctx.readManifest(run.snapshotId);
-
-  const dev = manifest.imps.find((imp) => imp.name === 'dev');
-
-  expect(manifest.imps.map((imp) => [imp.name, imp.state, imp.synced])).toEqual([
+  expect(manifest.imps.map((imp) => [imp.name, imp.state, imp.synced])).toStrictEqual([
     ['dev', 'running', true],
     ['idle', 'stopped', true],
     ['napping', 'sleeping', false],
   ]);
+});
 
-  expect(dev).toMatchObject({ httpPort: 3000, memoryMib: 256, imageDigest: 'sha256:base' });
-  expect(dev?.checkpoints.map((checkpoint) => checkpoint.label)).toEqual(['one', 'two']);
-  expect(manifest.images.map((image) => image.digest)).toEqual(['sha256:base']);
+test('it tags the snapshot with the run and each imp, then forgets', async () => {
+  const ctx = await setupTest();
 
-  // the database copy and the token stay on the host
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.createImp({ name: 'idle' });
+  await backups.runBackup();
+
+  const [snapshot] = ctx.restic.readSnapshots();
+
+  expect(snapshot?.tags).toStrictEqual([
+    'imp-backup',
+    expect.stringMatching(/^run=/v),
+    'imp=dev',
+    'imp=idle',
+  ]);
+
+  expect(ctx.restic.calls).toStrictEqual(['unlock', 'backup', 'forget']);
+});
+
+test('it records each imp’s settings, checkpoints and image in the manifest', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev', httpPort: 3000, memoryMib: 256 });
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
+
+  const twoBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-two');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-two',
+    impId: dev.id,
+    label: 'two',
+    sizeBytes: twoBytes,
+    createdAt: new Date('2026-09-02T00:00:00Z'),
+    diskBytes: 1003,
+  });
+
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+  const [recorded] = manifest.imps;
+
+  expect(recorded).toMatchObject({
+    name: 'dev',
+    httpPort: 3000,
+    memoryMib: 256,
+    imageDigest: 'sha256:base',
+  });
+
+  expect(recorded?.checkpoints.map((checkpoint) => checkpoint.label)).toStrictEqual(['one', 'two']);
+  expect(manifest.images.map((image) => image.digest)).toStrictEqual(['sha256:base']);
+});
+
+test('it keeps the database copy and the token out of the snapshot', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+
   const snapshotDir = join(ctx.repoDir, run.snapshotId);
 
-  expect(readdirSync(snapshotDir).toSorted()).toEqual(['images', 'imps', 'manifest.json']);
+  expect(readdirSync(snapshotDir)).toIncludeSameMembers(['images', 'imps', 'manifest.json']);
   expect(readFileSync(join(snapshotDir, 'manifest.json'), 'utf8')).not.toContain('token');
 });
 
-test('a restore rebuilds the imp stopped, with its checkpoints in order', async () => {
+test('it restores an imp stopped, with its disk and its checkpoints newest first', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
-  await ctx.backups.runBackup();
-  await ctx.imps.destroyImp('dev');
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
 
-  const result = await ctx.backups.restoreBackup({ name: 'dev' });
+  await ctx.createTestImage('base');
 
-  const [restored] = result.imps;
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
-  expect(restored).toMatchObject({ name: 'dev', state: 'stopped', httpPort: 3000, memoryMib: 256 });
+  const dev = await ctx.imps.createImp({ name: 'dev', httpPort: 3000, memoryMib: 256 });
 
-  const devDisk = await ctx.readDisk('dev');
+  const devDisk = buildImpPaths(ctx.dataDir, dev.id).disk;
 
-  expect(devDisk).toBe('now');
+  writeFileSync(devDisk, 'one');
 
-  const imp = await findImpByName(ctx.db, 'dev');
-  const checkpoints = await listCheckpoints(ctx.db, imp?.id ?? '');
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  // newest first, with new ids and the original times and disk sizes
-  expect(
-    checkpoints.map((checkpoint) => [checkpoint.label, checkpoint.createdAt, checkpoint.diskBytes]),
-  ).toEqual([
-    ['two', new Date('2026-09-02T00:00:00Z'), 1003],
-    ['one', new Date('2026-09-01T00:00:00Z'), 1003],
-  ]);
-
-  expect(checkpoints.map((checkpoint) => checkpoint.id)).not.toContain('cp-one');
-
-  const checkpointsDir = buildImpPaths(ctx.dataDir, imp?.id ?? '').checkpointsDir;
-
-  const readCheckpoint = (id: string | undefined) =>
-    readFileSync(join(checkpointsDir, id ?? '', 'disk.ext4'), 'utf8');
-
-  expect(readCheckpoint(checkpoints[1]?.id)).toBe('one');
-  expect(readCheckpoint(checkpoints[0]?.id)).toBe('two');
-  expect(existsSync(join(ctx.dataDir, 'backup', 'restore'))).toBeTrue();
-  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toEqual([]);
-});
-
-test('--at picks the newest backup at or before it that holds the imp', async () => {
-  const ctx = await setupTest();
-
-  await ctx.createDevImp();
-  await ctx.backups.runBackup();
-
-  ctx.advance(HOUR_MS);
-
-  await ctx.writeDisk('dev', 'later');
-  await ctx.backups.runBackup();
-
-  ctx.advance(HOUR_MS);
-
-  await ctx.backups.restoreBackup({
-    name: 'dev',
-    as: 'early',
-    at: new Date('2026-10-02T00:30:00Z'),
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
   });
 
-  await ctx.backups.restoreBackup({ name: 'dev', as: 'late' });
+  writeFileSync(devDisk, 'two');
 
-  const earlyDisk = await ctx.readDisk('early');
+  const twoBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-two');
 
-  expect(earlyDisk).toBe('now');
+  await createCheckpoint(ctx.db, {
+    id: 'cp-two',
+    impId: dev.id,
+    label: 'two',
+    sizeBytes: twoBytes,
+    createdAt: new Date('2026-09-02T00:00:00Z'),
+    diskBytes: 1003,
+  });
 
-  const lateDisk = await ctx.readDisk('late');
+  writeFileSync(devDisk, 'now');
 
-  expect(lateDisk).toBe('later');
+  await backups.runBackup();
+  await ctx.imps.destroyImp('dev');
 
-  const before = await ctx.backups
-    .restoreBackup({ name: 'dev', as: 'none', at: new Date('2026-10-01T00:00:00Z') })
-    .catch(String);
+  const result = await backups.restoreBackup({ name: 'dev' });
+  const restored = await findImpByName(ctx.db, 'dev');
 
-  expect(before).toContain('not found');
-});
+  invariant(restored);
 
-test('a restore refuses a name in use and --all on a host with imps, unless merged', async () => {
-  const ctx = await setupTest();
+  const checkpoints = await listCheckpoints(ctx.db, restored.id);
 
-  await ctx.createDevImp();
-  await ctx.backups.runBackup();
+  const checkpointsDir = buildImpPaths(ctx.dataDir, restored.id).checkpointsDir;
 
-  const clash = await ctx.backups.restoreBackup({ name: 'dev' }).catch((error: unknown) => error);
-
-  expect(clash).toMatchObject({ code: 'CONFLICT', data: { kind: 'imp', name: 'dev' } });
-
-  const all = await ctx.backups.restoreBackup({ all: true }).catch((error: unknown) => error);
-
-  expect(all).toMatchObject({ code: 'PRECONDITION_FAILED' });
-
-  const merged = await ctx.backups
-    .restoreBackup({ all: true, merge: true })
-    .catch((error: unknown) => error);
-
-  expect(merged).toMatchObject({ code: 'CONFLICT', data: { name: 'dev' } });
-});
-
-test('restore --all on a fresh host brings back every imp and its image', async () => {
-  const source = await setupTest();
-
-  await source.createDevImp();
-  await source.imps.createImp({ name: 'web' });
-  await source.backups.runBackup();
-
-  const fresh = await setupTest(source);
-
-  fresh.fake.snapshots.push(...source.fake.snapshots);
-
-  // a different image under the same name: the restored one gets a suffix
-  await fresh.db.deleteFrom('images').execute();
-
-  rmSync(join(fresh.dataDir, 'images', 'base'), { recursive: true });
-
-  await fresh.createTestImage('other');
-  await fresh.db.updateTable('images').set({ name: 'base' }).execute();
-
-  const restored = await fresh.backups.restoreBackup({ all: true });
-
-  expect(restored.imps.map((imp) => [imp.name, imp.state, imp.image])).toEqual([
-    ['dev', 'stopped', 'base-base'],
-    ['web', 'stopped', 'base-base'],
+  expect(result.imps).toStrictEqual([
+    expect.objectContaining({ name: 'dev', state: 'stopped', httpPort: 3000, memoryMib: 256 }),
   ]);
 
-  const freshDisk = await fresh.readDisk('dev');
+  expect(readFileSync(buildImpPaths(ctx.dataDir, restored.id).disk, 'utf8')).toBe('now');
 
-  expect(freshDisk).toBe('now');
+  // new ids, with the original times and disk sizes
+  expect(checkpoints).toStrictEqual([
+    {
+      id: expect.not.toBeOneOf(['cp-one', 'cp-two']),
+      impId: restored.id,
+      label: 'two',
+      sizeBytes: expect.toBeNumber(),
+      createdAt: new Date('2026-09-02T00:00:00Z'),
+      diskBytes: 1003,
+    },
+    {
+      id: expect.not.toBeOneOf(['cp-one', 'cp-two']),
+      impId: restored.id,
+      label: 'one',
+      sizeBytes: expect.toBeNumber(),
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      diskBytes: 1003,
+    },
+  ]);
+
+  expect(readFileSync(join(checkpointsDir, checkpoints[0]?.id ?? '', 'disk.ext4'), 'utf8')).toBe(
+    'two',
+  );
+
+  expect(readFileSync(join(checkpointsDir, checkpoints[1]?.id ?? '', 'disk.ext4'), 'utf8')).toBe(
+    'one',
+  );
+
+  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toStrictEqual([]);
 });
 
-test('templates round-trip with their source, and --all brings back unused ones', async () => {
-  const source = await setupTest();
+test('it restores the newest backup at or before --at that holds the imp', async () => {
+  const ctx = await setupTest();
 
-  const templates = createTemplateService({
-    config: source.config,
-    db: source.db,
-    imps: source.imps,
-    storage: source.storage,
-    storageGate: source.storageGate,
-    diskBudget: source.diskBudget,
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'early');
+
+  await backups.runBackup();
+
+  const halfway = ctx.now() + 30 * 60 * 1000;
+
+  ctx.advance(60 * 60 * 1000);
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'later');
+
+  await backups.runBackup();
+
+  ctx.advance(60 * 60 * 1000);
+
+  await backups.restoreBackup({ name: 'dev', as: 'back', at: new Date(halfway) });
+
+  const back = await findImpByName(ctx.db, 'back');
+
+  invariant(back);
+
+  expect(readFileSync(buildImpPaths(ctx.dataDir, back.id).disk, 'utf8')).toBe('early');
+});
+
+test('it restores the newest backup without --at', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'early');
+
+  await backups.runBackup();
+
+  ctx.advance(60 * 60 * 1000);
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'later');
+
+  await backups.runBackup();
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
+
+  const back = await findImpByName(ctx.db, 'back');
+
+  invariant(back);
+
+  expect(readFileSync(buildImpPaths(ctx.dataDir, back.id).disk, 'utf8')).toBe('later');
+});
+
+test('it rejects a restore --at before every backup as NOT_FOUND', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runBackup();
+
+  expect(
+    backups.restoreBackup({ name: 'dev', as: 'back', at: new Date('2026-10-01T00:00:00Z') }),
+  ).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    message: 'backup dev at 2026-10-01T00:00:00.000Z not found',
+  });
+});
+
+test('it rejects a restore over an imp of the same name as CONFLICT', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runBackup();
+
+  expect(backups.restoreBackup({ name: 'dev' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    data: { kind: 'imp', name: 'dev' },
+  });
+});
+
+test('it rejects a restore of all imps on a host with imps as PRECONDITION_FAILED', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runBackup();
+
+  expect(backups.restoreBackup({ all: true })).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message: "impd has 1 imps already; restore --all --merge adds the backup's imps to them",
+  });
+});
+
+test('it rejects a merged restore of all imps over a name in use as CONFLICT', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runBackup();
+
+  expect(backups.restoreBackup({ all: true, merge: true })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    data: { kind: 'imp', name: 'dev' },
+  });
+});
+
+test('it rejects a restore that names neither an imp nor all of them as BAD_REQUEST', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  expect(backups.restoreBackup({})).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'restore one imp by name, or all of them',
+  });
+});
+
+test('it rejects a restore that names an imp and all of them as BAD_REQUEST', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  expect(backups.restoreBackup({ name: 'dev', all: true })).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'restore one imp by name, or all of them',
+  });
+});
+
+test('it rejects a restore of all imps under another name as BAD_REQUEST', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  expect(backups.restoreBackup({ all: true, as: 'back' })).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: '`as` renames one imp, not all of them',
+  });
+});
+
+test('it restores every imp and its image on a fresh host, renaming an image whose name is taken', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'now');
+
+  await ctx.imps.createImp({ name: 'web' });
+  await backups.runBackup();
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() }).restic,
     log: () => {},
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
 
-  await source.createDevImp();
-  await source.imps.stopImp('dev');
+  // a different image under the same name
+  await fresh.createTestImage('other');
+  await fresh.db.updateTable('images').set({ name: 'base' }).execute();
+
+  const restored = await freshBackups.restoreBackup({ all: true });
+  const freshDev = await findImpByName(fresh.db, 'dev');
+
+  invariant(freshDev);
+
+  expect(restored.imps.map((imp) => [imp.name, imp.state, imp.image])).toStrictEqual([
+    ['dev', 'stopped', 'base-base'],
+    ['web', 'stopped', 'base-base'],
+  ]);
+
+  expect(readFileSync(buildImpPaths(fresh.dataDir, freshDev.id).disk, 'utf8')).toBe('now');
+});
+
+test('it rejects a restored image as CONFLICT when its name and its tagged name are both taken', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runBackup();
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() }).restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  // other images hold the backup's image name, base, and its tagged one
+  await fresh.createTestImage('other');
+  await fresh.db.updateTable('images').set({ name: 'base' }).where('name', '=', 'other').execute();
+  await fresh.createTestImage('third');
+
+  await fresh.db
+    .updateTable('images')
+    .set({ name: 'base-base' })
+    .where('name', '=', 'third')
+    .execute();
+
+  expect(freshBackups.restoreBackup({ name: 'dev' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    message: 'images base and base-base both exist; remove one to restore this image',
+    data: { kind: 'image', name: 'base-base' },
+  });
+});
+
+test('it records templates with their source imp and an identity reset still owed', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  const templates = createTemplateService({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    storage: ctx.storage,
+    storageGate: ctx.storageGate,
+    diskBudget: ctx.diskBudget,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.stopImp('dev');
   await templates.createTemplate('dev', 'tools');
   await templates.createTemplate('dev', 'spare');
 
   // made stopped, so its identity reset is still owed
-  await source.imps.createImp({ name: 'copy', image: 'tools', start: false });
+  await ctx.imps.createImp({ name: 'copy', image: 'tools', start: false });
 
-  const run = await source.backups.runBackup();
-  const manifest = await source.readManifest(run.snapshotId);
+  const run = await backups.runBackup();
 
-  expect(manifest.images.map((image) => [image.name, image.source, image.sourceImp])).toEqual([
-    ['base', 'oci', null],
-    ['spare', 'imp', 'dev'],
-    ['tools', 'imp', 'dev'],
-  ]);
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
 
-  expect(manifest.imps.map((imp) => [imp.name, imp.identityResetPending])).toEqual([
+  expect(manifest.images.map((image) => [image.name, image.source, image.sourceImp])).toStrictEqual(
+    [
+      ['base', 'oci', null],
+      ['spare', 'imp', 'dev'],
+      ['tools', 'imp', 'dev'],
+    ],
+  );
+
+  expect(manifest.imps.map((imp) => [imp.name, imp.identityResetPending])).toStrictEqual([
     ['copy', true],
     ['dev', false],
   ]);
+});
 
-  const fresh = await setupTest(source);
+test('it restores unused templates with all imps, tagging one whose name is taken', async () => {
+  const ctx = await setupTest();
 
-  fresh.fake.snapshots.push(...source.fake.snapshots);
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
 
-  // a docker image named tools: the restored template gets a tag
+  const templates = createTemplateService({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    storage: ctx.storage,
+    storageGate: ctx.storageGate,
+    diskBudget: ctx.diskBudget,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'now');
+
+  await ctx.imps.stopImp('dev');
+  await templates.createTemplate('dev', 'tools');
+  await templates.createTemplate('dev', 'spare');
+  await ctx.imps.createImp({ name: 'copy', image: 'tools', start: false });
+  await backups.runBackup();
+
+  const tools = await findImageByName(ctx.db, 'tools');
+
+  invariant(tools);
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() }).restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  // a docker image named tools
   await fresh.createTestImage('tools');
 
-  const restored = await fresh.backups.restoreBackup({ all: true });
-  const tools = await findImageByName(source.db, 'tools');
+  const restored = await freshBackups.restoreBackup({ all: true });
+  const spare = await findImageByName(fresh.db, 'spare');
+  const copy = await findImpByName(fresh.db, 'copy');
 
-  const renamed = `tools-${buildDigestTag(tools?.digest ?? '')}`;
+  invariant(copy);
 
-  expect(restored.imps.map((imp) => [imp.name, imp.image])).toEqual([
-    ['copy', renamed],
+  expect(restored.imps.map((imp) => [imp.name, imp.image])).toStrictEqual([
+    ['copy', `tools-${tools.digest.slice(-8)}`],
     ['dev', 'base'],
   ]);
 
-  const spare = await findImageByName(fresh.db, 'spare');
-
   expect(spare).toMatchObject({ source: 'imp', sourceImp: 'dev' });
-
-  const copy = await findImpByName(fresh.db, 'copy');
-
-  expect(copy?.isIdentityResetPending).toBe(true);
-
-  const copyDisk = await fresh.readDisk('copy');
-
-  expect(copyDisk).toBe('now');
+  expect(copy.isIdentityResetPending).toBeTrue();
+  expect(readFileSync(buildImpPaths(fresh.dataDir, copy.id).disk, 'utf8')).toBe('now');
 });
 
-test('a digest tag is the head of a docker ID or the random tail of a template uuid', () => {
-  expect(buildDigestTag('sha256:9f2c1a0b77')).toBe('9f2c1a0b');
-  expect(buildDigestTag('imp-0199a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b')).toBe('3e4f5a6b');
+test.each([
+  ['sha256:9f2c1a0b77', '9f2c1a0b'],
+  ['imp-0199a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b', '3e4f5a6b'],
+])('#buildDigestTag tags %s as %s', (digest, tag) => {
+  expect(buildDigestTag(digest)).toBe(tag);
 });
 
-test('a restore that fails part way leaves no imp behind', async () => {
+test('#buildBackupsOffError tells the caller to set a repository', () => {
+  expect(buildBackupsOffError()).toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message: 'backups are off: set IMP_BACKUP_REPOSITORY (docs/guides/configuration.md)',
+  });
+});
+
+test('it leaves no imp behind when a restore fails part way', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
 
-  const run = await ctx.backups.runBackup();
-  const manifest = await ctx.readManifest(run.snapshotId);
+  await ctx.createTestImage('base');
 
-  const [dev] = manifest.imps;
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
-  // a pack restic could not read: the newest disk is missing
-  rmSync(join(ctx.repoDir, run.snapshotId, dev?.disk ?? ''));
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  const failure = await ctx.backups.restoreBackup({ name: 'dev', as: 'copy' }).catch(String);
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
 
-  expect(failure).toContain('ENOENT');
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+
+  // a pack restic could not read: the newest disk is missing, after the
+  // checkpoint restored
+  rmSync(join(ctx.repoDir, run.snapshotId, manifest.imps[0]?.disk ?? ''));
+
+  expect(backups.restoreBackup({ name: 'dev', as: 'copy' })).rejects.toThrow('ENOENT');
 
   const copy = await findImpByName(ctx.db, 'copy');
+  const checkpoints = await ctx.db.selectFrom('checkpoints').select('id').execute();
 
+  expect(ctx.restic.restores).toContain(`imps/${dev.id}/checkpoints/cp-one`);
   expect(copy).toBeUndefined();
+  expect(checkpoints).toStrictEqual([{ id: 'cp-one' }]);
+  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toStrictEqual([]);
 });
 
-test('the schedule prunes once a day and checks once a week, loudly on failure', async () => {
+test('it rejects a restore of a backup that holds no copy of the imp’s image', async () => {
   const ctx = await setupTest();
 
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
   await ctx.imps.createImp({ name: 'dev' });
-  await ctx.backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual([
+  const run = await backups.runBackup();
+
+  const manifestPath = join(ctx.repoDir, run.snapshotId, 'manifest.json');
+  const manifest = BackupManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
+
+  writeFileSync(manifestPath, JSON.stringify({ ...manifest, images: [] }));
+
+  expect(backups.restoreBackup({ name: 'dev', as: 'copy' })).rejects.toThrow(
+    'the backup holds no image sha256:base',
+  );
+});
+
+test('it prunes and checks on the first scheduled run', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runScheduled();
+
+  expect(ctx.restic.calls).toStrictEqual([
+    'unlock',
+    'backup',
+    'forget',
+    'unlock',
+    'prune',
+    'unlock',
+    'check',
+  ]);
+});
+
+test('it runs nothing before the interval has passed', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runScheduled();
+
+  const before = ctx.restic.calls.length;
+
+  ctx.advance(30 * 60 * 1000);
+
+  await backups.runScheduled();
+
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([]);
+});
+
+test('it backs up without a prune or a check once the interval has passed', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runScheduled();
+
+  const before = ctx.restic.calls.length;
+
+  ctx.advance(60 * 60 * 1000);
+
+  await backups.runScheduled();
+
+  expect(ctx.restic.calls.slice(before)).toStrictEqual(['unlock', 'backup', 'forget']);
+});
+
+test('it logs a failed weekly check loudly and reports it in the status', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await backups.runScheduled();
+
+  const before = ctx.restic.calls.length;
+
+  ctx.restic.state.failCheck = true;
+
+  ctx.advance(7 * 24 * 60 * 60 * 1000);
+
+  await backups.runScheduled();
+
+  const status = await backups.readStatus();
+
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([
     'unlock',
     'backup',
     'forget',
@@ -551,115 +857,171 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
     'check',
   ]);
 
-  // not due before an interval has passed
-  ctx.fake.calls.length = 0;
-
-  ctx.advance(HOUR_MS / 2);
-
-  await ctx.backups.runScheduled();
-
-  expect(ctx.fake.calls).toEqual([]);
-
-  ctx.advance(HOUR_MS / 2);
-
-  await ctx.backups.runScheduled();
-
-  expect(ctx.fake.calls).toEqual(['unlock', 'backup', 'forget']);
-
-  ctx.fake.calls.length = 0;
-  ctx.fake.state.failCheck = true;
-
-  ctx.advance(7 * 24 * HOUR_MS);
-
-  await ctx.backups.runScheduled();
-
-  expect(ctx.fake.calls).toEqual([
-    'unlock',
-    'backup',
-    'forget',
-    'unlock',
-    'prune',
-    'unlock',
-    'check',
-  ]);
-
-  expect(ctx.logs).toContain(
+  expect(ctx.backupLogs).toContain(
     'impd: backup: CHECK FAILED, the repository may be damaged: Fatal: pack 9f2c: ciphertext verification failed',
   );
 
-  const status = await ctx.backups.readStatus();
-
-  expect(status.points).toHaveLength(3);
   expect(status.lastCheck?.error).toContain('ciphertext verification failed');
+
+  // both runs stay restore points, oldest first
+  expect(status.points).toStrictEqual([
+    { id: expect.toBeString(), time: new Date('2026-10-02T00:00:00Z'), imps: ['dev'] },
+    { id: expect.toBeString(), time: new Date('2026-10-09T00:00:00Z'), imps: ['dev'] },
+  ]);
 });
 
-test('a prune that meets a lock tries again on the next tick, not the next run', async () => {
+test('it tries a prune that met a lock again on the next tick, not the next run', async () => {
   const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  ctx.fake.state.pruneErrors.push(LOCKED);
+  ctx.restic.state.pruneErrors.push(
+    new ResticError(
+      'restic prune exited 11: unable to create lock in backend: repository is already locked exclusively by PID 7 on imp-host by root (UID 0, GID 0)',
+      11,
+    ),
+  );
 
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  expect(ctx.logs.some((line) => line.includes('PRUNE FAILED'))).toBeTrue();
+  const before = ctx.restic.calls.length;
 
   // the next tick, well inside the interval
-  ctx.fake.calls.length = 0;
-
   ctx.advance(5 * 60 * 1000);
 
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual(['unlock', 'prune']);
+  const status = await backups.readStatus();
 
-  const status = await ctx.backups.readStatus();
+  expect(ctx.backupLogs).toContain(
+    'impd: backup: PRUNE FAILED: restic prune exited 11: unable to create lock in backend: repository is already locked exclusively by PID 7 on imp-host by root (UID 0, GID 0)',
+  );
 
-  expect(status.lastPruneAt).not.toBeNull();
-
-  // done: the tick after does nothing
-  ctx.fake.calls.length = 0;
-
-  ctx.advance(5 * 60 * 1000);
-
-  await ctx.backups.runScheduled();
-
-  expect(ctx.fake.calls).toEqual([]);
+  expect(ctx.restic.calls.slice(before)).toStrictEqual(['unlock', 'prune']);
+  expect(status.lastPruneAt).toBeValidDate();
 });
 
-test('after six prunes in a row meet a lock, the next try waits for a run', async () => {
+test('it runs nothing on the tick after a prune it tried again succeeded', async () => {
   const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  ctx.fake.state.pruneErrors.push(...Array.from({ length: 7 }, () => LOCKED));
+  ctx.restic.state.pruneErrors.push(
+    new ResticError('restic prune exited 11: unable to create lock in backend', 11),
+  );
 
-  // the run's prune, then five ticks: six in all
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  ctx.fake.calls.length = 0;
+  ctx.advance(5 * 60 * 1000);
+
+  await backups.runScheduled();
+
+  const before = ctx.restic.calls.length;
+
+  ctx.advance(5 * 60 * 1000);
+
+  await backups.runScheduled();
+
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([]);
+});
+
+test('it stops trying a prune again after six in a row meet a lock', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.restic.state.pruneErrors.push(
+    ...Array.from(
+      { length: 7 },
+      () => new ResticError('restic prune exited 11: unable to create lock in backend', 11),
+    ),
+  );
+
+  await backups.runScheduled();
+
+  const before = ctx.restic.calls.length;
+
+  // six ticks after the run's prune
+  for (let tick = 0; tick < 6; tick += 1) {
+    ctx.advance(5 * 60 * 1000);
+
+    await backups.runScheduled();
+  }
+
+  expect(ctx.restic.calls.slice(before).filter((call) => call === 'prune')).toHaveLength(5);
+});
+
+test('it starts a new series of prune tries with the next run', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.restic.state.pruneErrors.push(
+    ...Array.from(
+      { length: 7 },
+      () => new ResticError('restic prune exited 11: unable to create lock in backend', 11),
+    ),
+  );
+
+  // the run's prune and five ticks' meet six locks; the sixth tick tries none
+  await backups.runScheduled();
 
   for (let tick = 0; tick < 6; tick += 1) {
     ctx.advance(5 * 60 * 1000);
 
-    await ctx.backups.runScheduled();
+    await backups.runScheduled();
   }
 
-  expect(ctx.fake.calls.filter((call) => call === 'prune')).toHaveLength(5);
+  const before = ctx.restic.calls.length;
 
-  // the next run starts a new series: its prune meets the seventh lock, and
-  // the tick after it succeeds
-  ctx.fake.calls.length = 0;
+  // the next run's prune meets the seventh lock, and the tick after succeeds
+  ctx.advance(60 * 60 * 1000);
 
-  ctx.advance(HOUR_MS);
-
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
   ctx.advance(5 * 60 * 1000);
 
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual([
+  const status = await backups.readStatus();
+
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([
     'unlock',
     'backup',
     'forget',
@@ -669,69 +1031,102 @@ test('after six prunes in a row meet a lock, the next try waits for a run', asyn
     'prune',
   ]);
 
-  const status = await ctx.backups.readStatus();
-
-  expect(status.lastPruneAt).not.toBeNull();
+  expect(status.lastPruneAt).toBeValidDate();
 });
 
-test('a prune that fails for another reason waits for the next run', async () => {
+test('it leaves a prune that failed for another reason to the next run', async () => {
   const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  ctx.fake.state.pruneErrors.push(new ResticError('restic prune exited 1: Fatal: bucket full', 1));
+  ctx.restic.state.pruneErrors.push(
+    new ResticError('restic prune exited 1: Fatal: bucket full', 1),
+  );
 
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  ctx.fake.calls.length = 0;
+  const before = ctx.restic.calls.length;
 
   ctx.advance(5 * 60 * 1000);
 
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual([]);
-
-  ctx.advance(HOUR_MS);
-
-  await ctx.backups.runScheduled();
-
-  expect(ctx.fake.calls).toEqual(['unlock', 'backup', 'forget', 'unlock', 'prune']);
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([]);
 });
 
-test('an imp being created is left out of the run', async () => {
+test('it prunes again with the next run after a prune failed for another reason', async () => {
   const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  const dev = await findImpByName(ctx.db, 'dev');
+  ctx.restic.state.pruneErrors.push(
+    new ResticError('restic prune exited 1: Fatal: bucket full', 1),
+  );
 
-  await updateImpState(ctx.db, dev?.id ?? '', { reason: 'failed', state: 'creating' });
+  await backups.runScheduled();
 
-  const run = await ctx.backups.runBackup();
+  const before = ctx.restic.calls.length;
 
-  expect(run.imps).toEqual([]);
-  expect(run.skipped).toEqual([{ name: 'dev', reason: 'being created' }]);
+  ctx.advance(60 * 60 * 1000);
+
+  await backups.runScheduled();
+
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([
+    'unlock',
+    'backup',
+    'forget',
+    'unlock',
+    'prune',
+  ]);
 });
 
-// every file under dir, by path relative to it, with its text
-function readTree(dir: string): Map<string, string> {
-  const files = new Map<string, string>();
-
-  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
-    if (entry.isFile()) {
-      const path = join(entry.parentPath, entry.name);
-
-      files.set(relative(dir, path), readFileSync(path, 'latin1'));
-    }
-  }
-
-  return files;
-}
-
-test('no secret, key, password or token of the host reaches a backup', async () => {
+test('it leaves an imp being created out of the run', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+
+  await updateImpState(ctx.db, dev.id, { reason: 'failed', state: 'creating' });
+
+  const run = await backups.runBackup();
+
+  expect(run.imps).toStrictEqual([]);
+  expect(run.skipped).toStrictEqual([{ name: 'dev', reason: 'being created' }]);
+});
+
+test('it puts no secret, key, password or token of the host in a backup', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_never_backed_up' });
   await ctx.broker.addGrant('dev', 'gh');
 
@@ -740,257 +1135,414 @@ test('no secret, key, password or token of the host reaches a backup', async () 
   writeFileSync(join(ctx.dataDir, 'restic-password'), 'restic-password-text');
   writeFileSync(join(ctx.dataDir, 'token'), 'api-token-text');
 
-  const run = await ctx.backups.runBackup();
+  const run = await backups.runBackup();
 
-  const files = readTree(join(ctx.repoDir, run.snapshotId));
-  const paths = [...files.keys()];
-  const texts = [...files.values()].join('\n');
+  const snapshotDir = join(ctx.repoDir, run.snapshotId);
 
-  expect(
-    paths.filter((path) => /secrets|broker|tls|password|token|db\.sqlite/v.test(path)),
-  ).toEqual([]);
+  const files = readdirSync(snapshotDir, { recursive: true, withFileTypes: true }).filter((entry) =>
+    entry.isFile(),
+  );
 
-  for (const secret of ['ghp_never_backed_up', 'acme-account-key-text', 'restic-password-text']) {
-    expect(texts).not.toContain(secret);
-  }
+  const texts = files
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), 'latin1'))
+    .join('\n');
 
-  expect(texts).not.toContain('api-token-text');
-  expect(texts).not.toContain('PRIVATE KEY');
+  expect(files.map((entry) => join(entry.parentPath, entry.name))).not.toSatisfyAny(
+    (path: string) =>
+      /secrets|broker|tls|password|token|db\.sqlite/v.test(path.slice(snapshotDir.length)),
+  );
 
-  // the grant goes by name only
-  const manifest = await ctx.readManifest(run.snapshotId);
-
-  expect(manifest.imps[0]?.grants).toEqual(['gh']);
+  expect(texts).not.toMatch(
+    /ghp_never_backed_up|acme-account-key-text|restic-password-text|api-token-text|PRIVATE KEY/v,
+  );
 });
 
-test('a restore regrants by name, and keeps the egress policy and its list', async () => {
+test('it records an imp’s grants by secret name only', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_never_backed_up' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+
+  expect(manifest.imps[0]?.grants).toStrictEqual(['gh']);
+});
+
+test('it regrants a restored imp by name and skips a secret that is gone', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
   await ctx.broker.addSecret({ name: 'npm-old', kind: 'npm', value: 'npm_value' });
   await ctx.broker.addGrant('dev', 'gh');
   await ctx.broker.addGrant('dev', 'npm-old');
-  await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['github.com', '*.npmjs.org'] });
-  await ctx.backups.runBackup();
+  await backups.runBackup();
   await ctx.broker.deleteSecret('npm-old');
 
-  const result = await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+  const result = await backups.restoreBackup({ name: 'dev', as: 'back' });
   const grants = await ctx.broker.listGrants('back');
 
-  expect(grants).toEqual(['gh']);
+  expect(grants).toStrictEqual(['gh']);
 
-  expect(result.skippedGrants.map((skip) => [skip.imp, skip.secret])).toEqual([
-    ['back', 'npm-old'],
+  expect(result.skippedGrants).toStrictEqual([
+    { imp: 'back', secret: 'npm-old', reason: expect.toInclude('npm-old') },
   ]);
+});
 
-  expect(result.skippedGrants[0]?.reason).toContain('npm-old');
+test('it restores an imp’s egress policy and its allow list', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['github.com', '*.npmjs.org'] });
+  await backups.runBackup();
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
 
   const policy = await ctx.egress.readPolicy('back');
 
-  expect(policy).toEqual({ mode: 'box', allow: ['github.com', '*.npmjs.org'] });
+  expect(policy).toStrictEqual({ mode: 'box', allow: ['github.com', '*.npmjs.org'] });
 });
 
-test('a restore puts the imp back on its networks, made again when gone', async () => {
+test('it puts a restored imp back on its networks, made again when gone', async () => {
   const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
 
   const networks = createNetworkService({ db: ctx.db, egress: ctx.egress, imps: ctx.imps });
 
-  await ctx.createDevImp();
   await networks.createNetwork('lab');
   await networks.joinNetwork('lab', 'dev');
 
-  const run = await ctx.backups.runBackup();
-  const manifest = await ctx.readManifest(run.snapshotId);
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
 
   await networks.deleteNetwork('lab');
-  await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
 
   const restored = await networks.listNetworks();
 
-  expect(manifest.imps[0]?.networks).toEqual(['lab']);
-  expect(restored.map((network) => [network.name, network.imps])).toEqual([['lab', ['back']]]);
+  expect(manifest.imps[0]?.networks).toStrictEqual(['lab']);
+
+  expect(restored.map((network) => [network.name, network.imps])).toStrictEqual([
+    ['lab', ['back']],
+  ]);
 });
 
-test('an egress policy this impd cannot read comes back none, never more open', async () => {
+test('it restores an egress policy this impd cannot read as none, never more open', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
 
-  const run = await ctx.backups.runBackup();
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
 
   // a policy from a newer impd
-  ctx.editManifest(run.snapshotId, (manifest) => {
-    const parsed = BackupManifestSchema.parse(manifest);
-    const [imp] = parsed.imps;
+  const manifestPath = join(ctx.repoDir, run.snapshotId, 'manifest.json');
+  const manifest = BackupManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
 
-    return { ...parsed, imps: [{ ...imp, egressPolicy: 'granted-only' }] };
-  });
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      ...manifest,
+      imps: [{ ...manifest.imps[0], egressPolicy: 'granted-only' }],
+    }),
+  );
 
-  await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
 
   const policy = await ctx.egress.readPolicy('back');
 
-  expect(policy).toEqual({ mode: 'none', allow: [] });
+  expect(policy).toStrictEqual({ mode: 'none', allow: [] });
 
-  expect(ctx.logs).toContain(
+  expect(ctx.backupLogs).toContain(
     'impd: backup: back: unknown egress policy "granted-only"; restored as none',
   );
 });
 
-test('a restore fetches one file at a time and leaves none behind', async () => {
+test('it restores one file at a time and leaves none behind', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
 
-  const run = await ctx.backups.runBackup();
-  const manifest = await ctx.readManifest(run.snapshotId);
+  await ctx.createTestImage('base');
 
-  const [dev] = manifest.imps;
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
 
-  ctx.fake.restores.length = 0;
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await ctx.backups.restoreBackup({ name: 'dev', as: 'copy' });
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
 
-  expect(ctx.fake.restores).toEqual([
-    ...(dev?.checkpoints ?? []).map((checkpoint) => dirname(checkpoint.disk)),
-    dirname(dev?.disk ?? ''),
+  await backups.runBackup();
+
+  const before = ctx.restic.restores.length;
+
+  await backups.restoreBackup({ name: 'dev', as: 'copy' });
+
+  expect(ctx.restic.restores.slice(before)).toStrictEqual([
+    `imps/${dev.id}/checkpoints/cp-one`,
+    `imps/${dev.id}/disk`,
   ]);
 
-  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toEqual([]);
+  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toStrictEqual([]);
 });
 
-test('a manual run that succeeds ends the backoff of a failed scheduled run', async () => {
+test('it ends the backoff of a failed scheduled run with a manual run that succeeds', async () => {
   const ctx = await setupTest();
 
-  ctx.fake.state.failBackup = true;
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
 
-  await ctx.backups.runScheduled().catch(() => {});
+  ctx.restic.state.failBackup = true;
 
-  ctx.fake.state.failBackup = false;
+  const failed = await backups.runScheduled().catch((error: unknown) => error);
+
+  ctx.restic.state.failBackup = false;
 
   ctx.advance(60 * 1000);
 
-  await ctx.backups.runBackup();
+  await backups.runBackup();
+
+  const before = ctx.restic.calls.length;
 
   // with the backoff left, the retry would be due 5 minutes after the failure
-  ctx.fake.calls.length = 0;
-
   ctx.advance(5 * 60 * 1000);
 
-  await ctx.backups.runScheduled();
+  await backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual([]);
+  expect(failed).toBeInstanceOf(Error);
+  expect(ctx.restic.calls.slice(before)).toStrictEqual([]);
 });
 
-test('a failed scheduled run waits twice as long each time, up to the interval', async () => {
+test('it waits twice as long after each failed scheduled run, up to the interval', async () => {
   const ctx = await setupTest();
 
-  const MINUTE_MS = 60 * 1000;
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ intervalS: 3600 }),
+  });
 
-  ctx.fake.state.failBackup = true;
+  // whether each tick, the given minutes after the last, started a run
+  const failingTicks: boolean[] = [];
+  const passingTicks: boolean[] = [];
 
-  const tryRun = async (afterMs: number): Promise<boolean> => {
-    ctx.advance(afterMs);
+  ctx.restic.state.failBackup = true;
 
-    const before = ctx.logs.length;
+  for (const minutes of [0, 4, 1, 9, 1, 20, 40, 59, 1]) {
+    ctx.advance(minutes * 60 * 1000);
 
-    await ctx.backups.runScheduled().catch(() => {});
+    const before = ctx.restic.calls.length;
 
-    const calls = ctx.fake.calls.filter((call) => call === 'unlock').length;
+    await backups.runScheduled().catch(() => {});
 
-    ctx.fake.calls.length = 0;
-
-    return calls > 0 || ctx.logs.length > before;
-  };
-
-  // first failure, then 5, 10, 20 and 40 minutes, then the hour's interval;
-  // after a success, the interval again
-  const steps: [number, boolean][] = [
-    [0, true],
-    [4, false],
-    [1, true],
-    [9, false],
-    [1, true],
-    [20, true],
-    [40, true],
-    [59, false],
-    [1, true],
-  ];
-
-  const seen: boolean[] = [];
-
-  for (const [minutes] of steps) {
-    const ran = await tryRun(minutes * MINUTE_MS);
-
-    seen.push(ran);
+    failingTicks.push(ctx.restic.calls.length > before);
   }
 
-  ctx.fake.state.failBackup = false;
+  ctx.restic.state.failBackup = false;
 
   for (const minutes of [60, 30]) {
-    const ran = await tryRun(minutes * MINUTE_MS);
+    ctx.advance(minutes * 60 * 1000);
 
-    seen.push(ran);
+    const before = ctx.restic.calls.length;
+
+    await backups.runScheduled();
+
+    passingTicks.push(ctx.restic.calls.length > before);
   }
 
-  expect(seen).toEqual([...steps.map(([, ran]) => ran), true, false]);
+  // the first failure, then 5, 10, 20 and 40 minutes, then the hour's interval
+  expect(failingTicks).toStrictEqual([true, false, true, false, true, true, true, false, true]);
+
+  // after a success, the interval again
+  expect(passingTicks).toStrictEqual([true, false]);
 });
 
-test('a restore holds the storage gate for its image and room for each file', async () => {
-  const source = await setupTest();
-
-  await source.createDevImp();
-
-  const run = await source.backups.runBackup();
-  const manifest = await source.readManifest(run.snapshotId);
-
-  const usedBytes = manifest.imps[0]?.usedBytes ?? -1;
-
-  // what the disk file held in the tree, not its 32 GiB apparent size
-  expect(usedBytes).toBeGreaterThan(0);
-  expect(usedBytes).toBeLessThan(1024 ** 2);
-
-  const fresh = await setupTest(source);
-
-  fresh.fake.snapshots.push(...source.fake.snapshots);
-
-  await fresh.db.deleteFrom('images').execute();
-
-  rmSync(join(fresh.dataDir, 'images', 'base'), { recursive: true });
-
-  const seen: string[] = [];
-  const held: number[] = [];
-
-  // a GC would wait for each of these, so no image dir is taken before its row
-  fresh.fake.state.onRestore = async (dir) => {
-    const status = await fresh.diskBudget.readStatus();
-
-    const kind = dir.startsWith('images/') ? 'image' : 'file';
-
-    seen.push(
-      `${kind} joined=${String(fresh.storageGate.countInFlight() > 0)} held=${String(status.pendingBytes > 0)}`,
-    );
-
-    // twice a file's blocks: restic's sparse copy, then the disk
-    if (dir === dirname(manifest.imps[0]?.disk ?? '')) {
-      held.push(status.pendingBytes);
-    }
-  };
-
-  await fresh.backups.restoreBackup({ name: 'dev' });
-
-  expect(held).toEqual([2 * usedBytes]);
-
-  expect(new Set(seen)).toEqual(
-    new Set(['image joined=true held=true', 'file joined=true held=true']),
-  );
-});
-
-test('a restore grants against the secret as it is now, and a stale list entry stays refused', async () => {
+test('it holds the storage gate for a restored image and disk room for each restored file', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'one');
+
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'now');
+
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+  const [recorded] = manifest.imps;
+
+  invariant(recorded);
+
+  const [checkpoint] = recorded.checkpoints;
+
+  invariant(checkpoint);
+
+  const usedBytes = recorded.usedBytes ?? -1;
+  const checkpointUsedBytes = checkpoint.usedBytes ?? -1;
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshRestic = buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() });
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: freshRestic.restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  // what each restore of a dir sees as it starts; a GC would wait for each
+  const seen: { dir: string; isJoined: boolean; pendingBytes: number }[] = [];
+
+  freshRestic.state.onRestore = async (dir) => {
+    const status = await fresh.diskBudget.readStatus();
+
+    seen.push({
+      dir,
+      isJoined: fresh.storageGate.countInFlight() > 0,
+      pendingBytes: status.pendingBytes,
+    });
+  };
+
+  await freshBackups.restoreBackup({ name: 'dev' });
+
+  // what each disk file held in the tree, not its 32 GiB apparent size
+  expect(usedBytes).toBeWithin(1, 1024 ** 2);
+  expect(checkpointUsedBytes).toBeWithin(1, 1024 ** 2);
+
+  expect(seen).toStrictEqual([
+    {
+      dir: 'images/base',
+      isJoined: true,
+      pendingBytes: expect.toSatisfy((bytes: number) => bytes > 0),
+    },
+
+    // twice each file's blocks: restic's sparse copy, then the disk
+    { dir: dirname(checkpoint.disk), isJoined: true, pendingBytes: 2 * checkpointUsedBytes },
+    { dir: dirname(recorded.disk), isJoined: true, pendingBytes: 2 * usedBytes },
+  ]);
+});
+
+test('it grants a restored imp against the secret as it is now', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addGrant('dev', 'gh');
+  await backups.runBackup();
+
+  await ctx.broker.addSecret({
+    name: 'gh',
+    kind: 'custom',
+    value: 'ghp_other',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
+
+  const back = await findImpByName(ctx.db, 'back');
+  const secret = await findSecret(ctx.db, 'gh');
+
+  invariant(back);
+  invariant(secret);
+
+  const rows = await ctx.db.selectFrom('grants').selectAll().execute();
+  const isGranted = await ctx.broker.isGranted(back.id, 'api.github.com');
+
+  expect(rows).toStrictEqual([
+    { imp_id: back.id, secret_name: 'gh', secret_generation: secret.generation },
+  ]);
+
+  expect(isGranted).toBeTrue();
+});
+
+test('it refuses a revoke of a restored grant by a token’s list entry from before a rebind', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
   await ctx.broker.addGrant('dev', 'gh');
 
@@ -1004,12 +1556,16 @@ test('a restore grants against the secret as it is now, and a stale list entry s
 
   const caller = ctx.tokens.authenticate(made.secret);
 
-  const stale = {
-    tokenId: caller?.tokenId ?? '',
-    generation: caller?.grantable[0]?.generation ?? '',
-  };
+  invariant(caller);
 
-  await ctx.backups.runBackup();
+  const tokenId = caller.tokenId;
+  const [entry] = caller.grantable;
+  const generation = entry?.generation;
+
+  invariant(tokenId);
+  invariant(generation);
+
+  await backups.runBackup();
 
   await ctx.broker.addSecret({
     name: 'gh',
@@ -1020,53 +1576,71 @@ test('a restore grants against the secret as it is now, and a stale list entry s
     rebind: true,
   });
 
-  await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
 
-  const back = await findImpByName(ctx.db, 'back');
-  const secret = await findSecret(ctx.db, 'gh');
-  const rows = await ctx.db.selectFrom('grants').selectAll().execute();
-  const isGranted = await ctx.broker.isGranted(back?.id ?? '', 'api.github.com');
-
-  // the revoke the token's list allowed before the rebind
-  const refused = await ctx.broker
-    .removeGrant('back', 'gh', stale)
-    .catch((error: unknown) => error);
-
-  expect(rows).toEqual([
-    { imp_id: back?.id ?? '', secret_name: 'gh', secret_generation: secret?.generation ?? '' },
-  ]);
-
-  expect(isGranted).toBeTrue();
-  expect(refused).toMatchObject({ code: 'FORBIDDEN', data: { reason: 'not_grantable' } });
+  expect(ctx.broker.removeGrant('back', 'gh', { tokenId, generation })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
 });
 
-test('a restore that fails leaves the host’s imps, secrets and grants as they were', async () => {
+test('it leaves the host’s imps, secrets and grants as they were when a restore fails', async () => {
   const ctx = await setupTest();
 
-  await ctx.createDevImp();
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+  const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
+
+  await createCheckpoint(ctx.db, {
+    id: 'cp-one',
+    impId: dev.id,
+    label: 'one',
+    sizeBytes: oneBytes,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    diskBytes: 1003,
+  });
+
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
   await ctx.broker.addGrant('dev', 'gh');
 
-  const run = await ctx.backups.runBackup();
-  const manifest = await ctx.readManifest(run.snapshotId);
+  const run = await backups.runBackup();
 
-  const readState = async () => {
-    const [imps, secrets, grants] = await Promise.all([
-      ctx.db.selectFrom('imps').select(['id', 'name']).orderBy('name').execute(),
-      ctx.db.selectFrom('secrets').selectAll().execute(),
-      ctx.db.selectFrom('grants').selectAll().execute(),
-    ]);
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
 
-    return { imps, secrets, grants };
-  };
+  const checkpointsBefore = await ctx.db.selectFrom('checkpoints').selectAll().execute();
 
-  const before = await readState();
+  const impsBefore = await ctx.db
+    .selectFrom('imps')
+    .select(['id', 'name'])
+    .orderBy('name')
+    .execute();
+
+  const secretsBefore = await ctx.db.selectFrom('secrets').selectAll().execute();
+  const grantsBefore = await ctx.db.selectFrom('grants').selectAll().execute();
 
   rmSync(join(ctx.repoDir, run.snapshotId, manifest.imps[0]?.disk ?? ''));
 
-  const failure = await ctx.backups.restoreBackup({ name: 'dev', as: 'copy' }).catch(String);
-  const after = await readState();
+  expect(backups.restoreBackup({ name: 'dev', as: 'copy' })).rejects.toThrow('ENOENT');
 
-  expect(failure).toContain('ENOENT');
-  expect(after).toEqual(before);
+  const impsAfter = await ctx.db
+    .selectFrom('imps')
+    .select(['id', 'name'])
+    .orderBy('name')
+    .execute();
+
+  const secretsAfter = await ctx.db.selectFrom('secrets').selectAll().execute();
+  const grantsAfter = await ctx.db.selectFrom('grants').selectAll().execute();
+  const checkpointsAfter = await ctx.db.selectFrom('checkpoints').selectAll().execute();
+
+  expect(ctx.restic.restores).toContain(`imps/${dev.id}/checkpoints/cp-one`);
+  expect(impsAfter).toStrictEqual(impsBefore);
+  expect(secretsAfter).toStrictEqual(secretsBefore);
+  expect(grantsAfter).toStrictEqual(grantsBefore);
+  expect(checkpointsAfter).toStrictEqual(checkpointsBefore);
 });

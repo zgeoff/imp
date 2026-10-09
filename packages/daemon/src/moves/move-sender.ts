@@ -58,6 +58,10 @@ export interface MoveSender {
 
   // at start: a send a crash cut short aborts; a verified copy commits
   readonly recover: () => Promise<void>;
+
+  // settles once the recovery that `recover` last started has run, at once
+  // when none has; it never rejects, as the recovery logs its own failure
+  readonly waitForRecovery: () => Promise<void>;
 }
 
 interface PrepareOptions {
@@ -1000,6 +1004,9 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return to;
   };
 
+  // the background recovery recover last started
+  const recovery: { last: Promise<void> } = { last: Promise.resolve() };
+
   const runRecover = async (): Promise<void> => {
     try {
       for (const imp of await listImps(deps.db)) {
@@ -1187,10 +1194,11 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     // in the background, so impd listens at once; a target that is down
     // leaves its imp marked, with the error in its status
     recover: () => {
-      void runRecover();
+      recovery.last = runRecover();
 
       return Promise.resolve();
     },
+    waitForRecovery: () => recovery.last,
   };
 }
 

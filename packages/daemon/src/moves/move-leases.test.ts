@@ -1,312 +1,523 @@
-import { expect, test } from 'bun:test';
-import { copyFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { copyFile } from 'node:fs/promises';
 import type { ImpEvent } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { findImpByName, updateImpActivity, updateImpExposure } from '../db/imps';
 import { listLeases, writeLease } from '../db/leases';
-import type { LeaseRecord } from '../db/leases';
 import { createIdleLoop } from '../idle/idle-loop';
-import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
-import { readRejection } from '../read-rejection';
-import type { StorageBackend } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
-import {
-  MAX_LEASE_REMAINING_MS,
-  MAX_MOVED_LEASES,
-  MOVE_PATHS,
-  MoveOfferReplySchema,
-} from './move-header';
+import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
+import { buildStubDroppedCommit } from '../test-utils/build-stub-dropped-commit';
+import { buildStubOlderMoveTarget } from '../test-utils/build-stub-older-move-target';
+import { buildStubStorageFaults } from '../test-utils/build-stub-storage-faults';
+import { MOVE_PART_HEADER } from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
-import type { FetchHook } from './test-moves';
+import type { MoveHostsOptions } from './test-moves';
 
-// the source's and the target's clocks, an hour apart: a lease's end on the
-// target follows the target's own clock
-const SOURCE_CLOCK_MS = Date.parse('2026-10-03T12:00:00.000Z');
-const TARGET_CLOCK_MS = SOURCE_CLOCK_MS + 60 * 60 * 1000;
-
-// a tailnet node's lease from leases.*, which blocks a sleep or stop
-const JOB = { principal: 'tailnet:n1', label: 'job', display: 'laptop' };
-
-// root's `hold`, which never blocks one
-const HOLD = { principal: 'root', label: 'hold', display: 'root' };
-
-interface LeaseTestOptions {
-  readonly hook?: FetchHook;
-  readonly isWarm?: boolean;
-
-  // frozen clocks an hour apart, unless the test runs the wall-clock idle loop
-  readonly isFrozen?: boolean;
-  readonly source?: ImpTestOptions;
-  readonly target?: ImpTestOptions;
+interface SetupConfig extends Pick<MoveHostsOptions, 'hook' | 'isShared' | 'partBytes'> {
+  // each host's frozen clock; left out, a host reads the wall clock
+  readonly source?: Pick<NonNullable<MoveHostsOptions['source']>, 'frozenClockMs'>;
+  readonly target?: Pick<NonNullable<MoveHostsOptions['target']>, 'frozenClockMs'>;
 }
 
-// Two impds and `dev` on the source: running, or asleep for a warm move
-async function setupLeaseTest(options: LeaseTestOptions = {}) {
-  const isFrozen = options.isFrozen !== false;
+// Two impds. The source's storage is XFS on plain files, as the harness's,
+// with faults a test can set.
+async function setupTest(config: SetupConfig = {}) {
+  const sourceFaults = buildStubStorageFaults();
 
   const hosts = await setupMoveHosts({
-    isShared: options.isWarm === true,
-    ...(options.hook !== undefined && { hook: options.hook }),
-    source: { ...(isFrozen && { frozenClockMs: SOURCE_CLOCK_MS }), ...options.source },
-    target: { ...(isFrozen && { frozenClockMs: TARGET_CLOCK_MS }), ...options.target },
-  });
-
-  await createUbuntuImage(hosts.source);
-  await createUbuntuImage(hosts.target);
-
-  const created = await hosts.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
-
-  if (options.isWarm === true) {
-    await hosts.sourceApp.client.imps.sleep({ name: 'dev' });
-  }
-
-  // a lease on the source that ends `ms` from its now, or never for null
-  const writeSourceLease = (owner: Readonly<typeof JOB>, ms: number | null) =>
-    writeLeaseOn(hosts.source, created.id, owner, ms);
-
-  const readLeases = (host: Readonly<Pick<ImpTest, 'db' | 'now'>>) =>
-    listLeases(host.db, host.now(), [created.id]);
-
-  return { ...hosts, impId: created.id, writeSourceLease, readLeases };
-}
-
-function writeLeaseOn(
-  host: Readonly<Pick<ImpTest, 'db' | 'now'>>,
-  impId: string,
-  owner: Readonly<typeof JOB>,
-  ms: number | null,
-) {
-  const at = host.now();
-
-  const lease: LeaseRecord = {
-    impId,
-    ...owner,
-    until: ms === null ? null : new Date(at + ms),
-    createdAt: new Date(at),
-  };
-
-  return writeLease(host.db, lease, { at, reason: null });
-}
-
-// the owner and end of each lease, as a test compares them
-function toEnds(leases: readonly LeaseRecord[]) {
-  return leases.map((lease) => ({ label: lease.label, until: lease.until }));
-}
-
-// XFS on plain files, as the test harness makes it, for a test to wrap
-function createCopyingXfs(dataDir: string): StorageBackend {
-  return createXfsBackend({
-    dataDir,
-    cloneFile: (source, target) => {
-      copyFileSync(source, target);
-
-      return Promise.resolve();
+    ...config,
+    source: {
+      ...config.source,
+      createStorage: (dataDir) =>
+        sourceFaults.wrap(
+          createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+        ),
     },
   });
+
+  return { ...hosts, sourceFaults };
 }
 
-function readMoveRows(ctx: Readonly<Pick<ImpTest, 'db'>>) {
-  return ctx.db.selectFrom('move_sends').selectAll().execute();
-}
+test('it refuses a stop move of a leased running imp without force, before it halts or marks it', async () => {
+  const ctx = await setupTest();
 
-// An offer reply as a target from before moving leases answers it
-async function removeKeepsLeases(request: Request, forward: () => Promise<Response>) {
-  const response = await forward();
+  await createUbuntuImage(ctx.source);
 
-  if (!request.url.endsWith(MOVE_PATHS.offer)) {
-    return response;
-  }
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  const body: unknown = await response.json();
+  const sourceNow = ctx.source.now();
 
-  const { keepsLeases: _dropped, ...older } = MoveOfferReplySchema.parse(body);
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
 
-  return Response.json(older);
-}
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
 
-test('a stop move of a leased imp without force is LEASED, before it halts or marks anything', async () => {
-  const ctx = await setupLeaseTest();
+  const prepared = ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true });
 
-  await ctx.writeSourceLease(JOB, 600_000);
-
-  const refused = await readRejection(
-    ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true }),
-  );
+  expect(prepared).rejects.toMatchObject({ code: 'LEASED' });
 
   const imp = await findImpByName(ctx.source.db, 'dev');
-  const rows = await readMoveRows(ctx.source);
+  const sends = await ctx.source.db.selectFrom('move_sends').selectAll().execute();
 
-  expect(refused).toMatchObject({ code: 'LEASED' });
   expect(imp).toMatchObject({ state: 'running', moveState: null });
-  expect(rows).toEqual([]);
-
-  await ctx.sourceApp.client.imps.sleep({ name: 'dev', force: true });
-  await ctx.writeSourceLease(JOB, 600_000);
-
-  const asleep = await readRejection(
-    ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true }),
-  );
-
-  const slept = await findImpByName(ctx.source.db, 'dev');
-
-  expect(asleep).toMatchObject({ code: 'LEASED' });
-  expect(slept).toMatchObject({ state: 'sleeping', moveState: null });
+  expect(sends).toStrictEqual([]);
 });
 
-test('a forced stop move ends the leases from leases.*, and the hold arrives with its time left', async () => {
-  const ctx = await setupLeaseTest();
+test('it refuses a stop move of a leased sleeping imp without force, and leaves it asleep', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
+  const prepared = ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true });
+
+  expect(prepared).rejects.toMatchObject({ code: 'LEASED' });
+
+  const imp = await findImpByName(ctx.source.db, 'dev');
+
+  expect(imp).toMatchObject({ state: 'sleeping', moveState: null });
+});
+
+test('it ends the leases from leases.* on a forced stop move, and moves the hold with its time left', async () => {
+  // clocks an hour apart, so a lease's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
   const events: ImpEvent[] = [];
 
-  ctx.source.imps.events.subscribe((event) => {
+  const unsubscribe = ctx.source.imps.events.subscribe((event) => {
     events.push(event);
   });
 
-  await ctx.writeSourceLease(JOB, 600_000);
-  await ctx.writeSourceLease(HOLD, 300_000);
+  onTestFinished(unsubscribe);
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 300_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
 
   const status = await ctx.runMove('dev', true);
-
-  const released = events.find((event) => event.ev === 'ImpChanged' && event.reason === 'released');
-
+  const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
   const moved = await findImpByName(ctx.target.db, 'dev');
-  const leases = await ctx.readLeases(ctx.target);
 
   expect(status).toMatchObject({ isDone: true, error: null });
-  expect(released).toMatchObject({ detail: { released: 1 } });
-  expect(toEnds(leases)).toEqual([{ label: 'hold', until: new Date(TARGET_CLOCK_MS + 300_000) }]);
-  expect(moved?.holdUntil).toEqual(new Date(TARGET_CLOCK_MS + 300_000));
+
+  expect(events).toPartiallyContain({
+    ev: 'ImpChanged',
+    reason: 'released',
+    detail: { released: 1 },
+  });
+
+  expect(leases).toMatchObject([{ label: 'hold', until: new Date(targetStart + 300_000) }]);
+  expect(moved?.holdUntil).toStrictEqual(new Date(targetStart + 300_000));
 });
 
-test('a warm move keeps each lease with its time left on the target clock, and its owners', async () => {
-  const ctx = await setupLeaseTest({ isWarm: true });
+test('it keeps each lease of a warm move, with its owner and its time left on the target clock', async () => {
+  // clocks an hour apart, so a lease's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    isShared: true,
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
 
-  await ctx.writeSourceLease(JOB, 600_000);
-  await ctx.writeSourceLease({ principal: 'token:abc', label: 'ci', display: 'ci' }, 900_000);
-  await ctx.writeSourceLease({ ...HOLD, principal: 'legacy', display: 'legacy' }, null);
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  const ci = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'token:abc',
+    label: 'ci',
+    display: 'ci',
+    until: new Date(sourceNow + 900_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  const legacy = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'legacy',
+    label: 'hold',
+    display: 'legacy',
+    until: null,
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+  await writeLease(ctx.source.db, ci, { at: sourceNow, reason: null });
+  await writeLease(ctx.source.db, legacy, { at: sourceNow, reason: null });
 
   const status = await ctx.runMove('dev');
-  const leases = await ctx.readLeases(ctx.target);
   const moved = await findImpByName(ctx.target.db, 'dev');
+  const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
   expect(status).toMatchObject({ isDone: true, error: null });
   expect(moved).toMatchObject({ state: 'sleeping', moveState: null });
 
-  expect(leases.map((lease) => [lease.principal, lease.label, lease.display, lease.until])).toEqual(
-    [
-      ['legacy', 'hold', 'legacy', null],
-      ['tailnet:n1', 'job', 'laptop', new Date(TARGET_CLOCK_MS + 600_000)],
-      ['token:abc', 'ci', 'ci', new Date(TARGET_CLOCK_MS + 900_000)],
-    ],
-  );
-
-  // the legacy hold has no end
-  expect(moved?.holdUntil?.getTime()).toBeGreaterThan(TARGET_CLOCK_MS + 900_000);
-
-  // the same tailnet node renews here; no token of the target is the source's
-  const renewed = await ctx.target.imps.renewLease('dev', JOB, 'job', 60);
-  const made = await ctx.targetApp.client.tokens.create({ name: 'ci', scope: 'exec' });
-
-  const principal = ctx.target.tokens.authenticate(made.secret)?.principal ?? '';
-
-  const notHeld = await readRejection(
-    ctx.target.imps.renewLease('dev', { principal, display: 'ci' }, 'ci', 60),
-  );
-
-  expect(renewed.lease.until).toEqual(new Date(TARGET_CLOCK_MS + 600_000));
-  expect(notHeld).toMatchObject({ code: 'LEASE_NOT_HELD' });
+  expect(leases).toMatchObject([
+    { principal: 'legacy', label: 'hold', display: 'legacy', until: null },
+    {
+      principal: 'tailnet:n1',
+      label: 'job',
+      display: 'laptop',
+      until: new Date(targetStart + 600_000),
+    },
+    { principal: 'token:abc', label: 'ci', display: 'ci', until: new Date(targetStart + 900_000) },
+  ]);
 });
 
-test('a cold move of a stopped imp keeps its hold, and the commit says it is held', async () => {
-  const ctx = await setupLeaseTest();
+test('it holds a warm-moved imp past a century while its legacy hold has no end', async () => {
+  const ctx = await setupTest({
+    isShared: true,
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
 
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const legacy = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'legacy',
+    label: 'hold',
+    display: 'legacy',
+    until: null,
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, legacy, { at: sourceNow, reason: null });
+
+  await ctx.runMove('dev');
+
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  invariant(moved?.holdUntil);
+
+  expect(moved.holdUntil).toBeAfter(new Date(targetStart + 100 * 365 * 24 * 60 * 60 * 1000));
+});
+
+test('it lets the same tailnet node renew its warm-moved lease on the target', async () => {
+  // clocks an hour apart, so the renewed end shows it follows the target's clock
+  const ctx = await setupTest({
+    isShared: true,
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
+  await ctx.runMove('dev');
+
+  const holder = { principal: 'tailnet:n1', display: 'laptop' };
+
+  const renewed = await ctx.target.imps.renewLease('dev', holder, 'job', 60);
+
+  expect(renewed.lease.until).toStrictEqual(new Date(targetStart + 600_000));
+});
+
+test("it refuses a target token the warm-moved lease of the source's token", async () => {
+  const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const ci = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'token:abc',
+    label: 'ci',
+    display: 'ci',
+    until: new Date(sourceNow + 900_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, ci, { at: sourceNow, reason: null });
+
+  await ctx.runMove('dev');
+
+  const made = await ctx.targetApp.client.tokens.create({ name: 'ci', scope: 'exec' });
+
+  const caller = ctx.target.tokens.authenticate(made.secret);
+
+  invariant(caller?.principal);
+
+  const holder = { principal: caller.principal, display: 'ci' };
+
+  expect(ctx.target.imps.renewLease('dev', holder, 'ci', 60)).rejects.toMatchObject({
+    code: 'LEASE_NOT_HELD',
+  });
+});
+
+test('it keeps the hold of a stopped imp on a cold move, and says the commit is held', async () => {
+  // clocks an hour apart, so the hold's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
   const events: ImpEvent[] = [];
 
-  ctx.target.imps.events.subscribe((event) => {
+  const unsubscribe = ctx.target.imps.events.subscribe((event) => {
     events.push(event);
   });
 
-  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
-  await ctx.writeSourceLease(HOLD, 300_000);
-
-  const status = await ctx.runMove('dev');
-  const leases = await ctx.readLeases(ctx.target);
-
-  await Bun.sleep(10);
-
-  const held = events.find((event) => event.ev === 'ImpChanged' && event.reason === 'held');
-
-  expect(status).toMatchObject({ isDone: true, error: null });
-  expect(held).toMatchObject({ imp: { name: 'dev', state: 'stopped' } });
-  expect(toEnds(leases)).toEqual([{ label: 'hold', until: new Date(TARGET_CLOCK_MS + 300_000) }]);
-});
-
-test('each lease ends from when the target read the header; one that ended during the disk is left out', async () => {
-  const clock: { advance: (ms: number) => void } = { advance: () => {} };
-
-  // the disk takes 30 s on the target's clock
-  const createStorage = (dataDir: string): StorageBackend => {
-    const backend = createCopyingXfs(dataDir);
-
-    return {
-      ...backend,
-      createImpDisk: async (impId, source) => {
-        clock.advance(30_000);
-
-        await backend.createImpDisk(impId, source);
-      },
-    };
-  };
-
-  const ctx = await setupLeaseTest({ target: { createStorage } });
-
-  clock.advance = ctx.target.advance;
+  onTestFinished(unsubscribe);
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
-  await ctx.writeSourceLease(HOLD, 20_000);
-  await ctx.writeSourceLease({ ...HOLD, principal: 'tailnet:n1', display: 'laptop' }, 600_000);
+
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 300_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
 
   const status = await ctx.runMove('dev');
-  const leases = await ctx.readLeases(ctx.target);
+  const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
   expect(status).toMatchObject({ isDone: true, error: null });
-  expect(ctx.target.now()).toBe(TARGET_CLOCK_MS + 30_000);
-  expect(toEnds(leases)).toEqual([{ label: 'hold', until: new Date(TARGET_CLOCK_MS + 600_000) }]);
+  expect(leases).toMatchObject([{ label: 'hold', until: new Date(targetStart + 300_000) }]);
+
+  await waitFor(() => {
+    expect(events).toPartiallyContain({
+      ev: 'ImpChanged',
+      reason: 'held',
+      imp: expect.objectContaining({ name: 'dev', state: 'stopped' }) as unknown,
+    });
+  });
 });
 
-test('a forced prepare that fails after the halt keeps the leases, and the imp runs again', async () => {
-  const failing = { isOn: true };
+test('it ends each lease from when the target read the header, and leaves out one that ended during the disk', async () => {
+  // clocks an hour apart, so each end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+    partBytes: 4096,
 
-  // the source cannot open its disk for the count
-  const createStorage = (dataDir: string): StorageBackend => {
-    const backend = createCopyingXfs(dataDir);
+    // the disk's later parts come 30 s after the header, on the target's clock
+    hook: (request, forward, hosts) => {
+      if (request.headers.get(MOVE_PART_HEADER) === '1') {
+        hosts.target.advance(30_000);
+      }
 
-    return {
-      ...backend,
-      openMoveSource: (impId, checkpointIds, mode) =>
-        failing.isOn
-          ? Promise.reject(new Error('the disk is unreadable'))
-          : backend.openMoveSource(impId, checkpointIds, mode),
-    };
-  };
+      return forward();
+    },
+  });
 
-  const ctx = await setupLeaseTest({ source: { createStorage } });
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  await ctx.writeSourceLease(JOB, 600_000);
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  const refused = await readRejection(
-    ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true }),
-  );
+  const sourceNow = ctx.source.now();
+  const headerAt = ctx.target.now();
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  // a disk of many parts, so the clock moves after the header
+  writeFileSync(ctx.source.storage.resolveImpPaths(created.id).disk, 'x'.repeat(64 * 1024));
+
+  const short = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 20_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  const long = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'hold',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, short, { at: sourceNow, reason: null });
+  await writeLease(ctx.source.db, long, { at: sourceNow, reason: null });
+
+  const status = await ctx.runMove('dev');
+  const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+  expect(ctx.target.now()).toBe(headerAt + 30_000);
+
+  expect(leases).toMatchObject([
+    { principal: 'tailnet:n1', label: 'hold', until: new Date(headerAt + 600_000) },
+  ]);
+});
+
+test('it keeps the leases and runs the imp again when a forced prepare fails after the halt', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
+  // the count after the halt cannot open the disk
+  ctx.sourceFaults.failOnce('openMoveSource', new Error('the disk is unreadable'));
+
+  const prepared = ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true });
+
+  expect(prepared).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
 
   const imp = await findImpByName(ctx.source.db, 'dev');
-  const leases = await ctx.readLeases(ctx.source);
-  const rows = await readMoveRows(ctx.source);
+  const leases = await listLeases(ctx.source.db, ctx.source.now(), [created.id]);
+  const sends = await ctx.source.db.selectFrom('move_sends').selectAll().execute();
 
-  expect(refused).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
   expect(imp).toMatchObject({ state: 'running', moveState: null });
-  expect(leases.map((lease) => lease.label)).toEqual(['job']);
-  expect(rows).toEqual([]);
+  expect(leases).toMatchObject([{ label: 'job' }]);
+  expect(sends).toStrictEqual([]);
+});
 
-  failing.isOn = false;
+test('it moves the imp once the fault that failed its forced prepare is gone', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
+  // one count after the halt cannot open the disk; the next can
+  ctx.sourceFaults.failOnce('openMoveSource', new Error('the disk is unreadable'));
+
+  const failed = ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true });
+
+  expect(failed).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
 
   const status = await ctx.runMove('dev', true);
 
@@ -314,254 +525,532 @@ test('a forced prepare that fails after the halt keeps the leases, and the imp r
 });
 
 test.each([
-  ['a hold', HOLD],
-  ['a legacy hold', { ...HOLD, principal: 'legacy', display: 'legacy' }],
+  ['a hold', 'root', 'root'],
+  ['a legacy hold', 'legacy', 'legacy'],
 ])(
-  'an older target is refused an imp with only %s, before any byte goes',
-  async (_label, owner) => {
-    const ctx = await setupLeaseTest({ hook: removeKeepsLeases });
+  'it refuses an older target an imp with %s, before any byte goes',
+  async (_hold, principal, display) => {
+    // a target from before moving leases
+    const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsLeases') });
 
-    await ctx.writeSourceLease(JOB, 600_000);
-    await ctx.writeSourceLease(owner, 300_000);
+    await createUbuntuImage(ctx.source);
+    await createUbuntuImage(ctx.target);
+
+    const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+    const sourceNow = ctx.source.now();
+
+    const job = buildMockLeaseRecord({
+      impId: created.id,
+      principal: 'tailnet:n1',
+      label: 'job',
+      display: 'laptop',
+      until: new Date(sourceNow + 600_000),
+      createdAt: new Date(sourceNow),
+    });
+
+    const hold = buildMockLeaseRecord({
+      impId: created.id,
+      principal,
+      label: 'hold',
+      display,
+      until: new Date(sourceNow + 300_000),
+      createdAt: new Date(sourceNow),
+    });
+
+    await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+    await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
 
     const status = await ctx.runMove('dev', true);
     const imp = await findImpByName(ctx.source.db, 'dev');
-    const leases = await ctx.readLeases(ctx.source);
+    const leases = await listLeases(ctx.source.db, ctx.source.now(), [created.id]);
     const landed = await findImpByName(ctx.target.db, 'dev');
 
-    // the forced stop ended the job lease; the hold refused the send, and
-    // the halted imp runs again
-    expect(status.error).toContain('predates moving leases');
+    // the forced stop ended the job lease; the hold refused the send, and the
+    // halted imp runs again
+    expect(status.error).toInclude('predates moving leases');
     expect(status.sentBytes).toBe(0);
     expect(imp).toMatchObject({ state: 'running', moveState: null });
-
-    expect(leases.map((lease) => [lease.principal, lease.label])).toEqual([
-      [owner.principal, 'hold'],
-    ]);
-
+    expect(leases).toMatchObject([{ principal, label: 'hold' }]);
     expect(landed).toBeUndefined();
   },
 );
 
-test('an older target takes an imp with no lease', async () => {
-  const ctx = await setupLeaseTest({ hook: removeKeepsLeases });
+test('it moves an imp with no lease to an older target', async () => {
+  // a target from before moving leases
+  const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsLeases') });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
   const status = await ctx.runMove('dev', true);
 
   expect(status).toMatchObject({ isDone: true, error: null });
 });
 
-test('an abort after the receipt keeps the source leases, and the target has none', async () => {
-  const lost = { commits: 1 };
+test('it keeps the source leases and leaves the target none on an abort after the receipt', async () => {
+  // the network drops the first commit
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
-  const ctx = await setupLeaseTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-      return forward();
-    },
-  });
+  const sourceNow = ctx.source.now();
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
-  await ctx.writeSourceLease(HOLD, 300_000);
+
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 300_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
+
   await ctx.runMove('dev');
 
-  const staged = await ctx.readLeases(ctx.target);
+  // the staged imp shows its lease until the abort
+  const staged = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
   await ctx.sourceApp.client.moves.abort({ name: 'dev' });
 
-  const kept = await ctx.readLeases(ctx.source);
+  const kept = await listLeases(ctx.source.db, ctx.source.now(), [created.id]);
   const left = await ctx.target.db.selectFrom('imp_leases').selectAll().execute();
 
-  // the staged imp showed its lease; the abort took both
-  expect(staged.map((lease) => lease.label)).toEqual(['hold']);
-  expect(toEnds(kept)).toEqual([{ label: 'hold', until: new Date(SOURCE_CLOCK_MS + 300_000) }]);
-  expect(left).toEqual([]);
+  expect(staged).toMatchObject([{ label: 'hold' }]);
+  expect(kept).toMatchObject([{ label: 'hold', until: new Date(sourceNow + 300_000) }]);
+  expect(left).toStrictEqual([]);
 });
 
-test("a target restart removes a staged imp's leases with it, and keeps a committed imp's", async () => {
-  const ctx = await setupLeaseTest({
-    hook: (request, forward) =>
-      request.url.endsWith(MOVE_PATHS.commit)
-        ? Promise.reject(new Error('the network dropped the commit'))
-        : forward(),
+test("it removes a staged imp's leases with it when the target restarts before the receipt", async () => {
+  // the network drops every commit
+  const ctx = await setupTest({
+    hook: buildStubDroppedCommit({ count: Number.POSITIVE_INFINITY }),
   });
 
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
-  await ctx.writeSourceLease(HOLD, 300_000);
+
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 300_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
+
   await ctx.runMove('dev');
 
-  const staged = await ctx.readLeases(ctx.target);
+  const staged = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
   // a crash before the receipt: the stream counts as cut short
   await ctx.target.db.updateTable('move_tickets').set({ receipt: null }).execute();
   await ctx.targetApp.moves.recover();
+  await ctx.targetApp.moves.waitForRecovery();
 
   const gone = await findImpByName(ctx.target.db, 'dev');
   const left = await ctx.target.db.selectFrom('imp_leases').selectAll().execute();
 
-  expect(staged.map((lease) => lease.label)).toEqual(['hold']);
+  expect(staged).toMatchObject([{ label: 'hold' }]);
   expect(gone).toBeUndefined();
-  expect(left).toEqual([]);
+  expect(left).toStrictEqual([]);
 });
 
-test('a target restart after the commit keeps the leases', async () => {
-  const ctx = await setupLeaseTest();
+test('it keeps the leases of a committed imp when the target restarts', async () => {
+  // clocks an hour apart, so the hold's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
-  await ctx.writeSourceLease(HOLD, 300_000);
+
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 300_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
+
   await ctx.runMove('dev');
   await ctx.targetApp.moves.recover();
+  await ctx.targetApp.moves.waitForRecovery();
 
-  const leases = await ctx.readLeases(ctx.target);
+  const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
-  expect(toEnds(leases)).toEqual([{ label: 'hold', until: new Date(TARGET_CLOCK_MS + 300_000) }]);
+  expect(leases).toMatchObject([{ label: 'hold', until: new Date(targetStart + 300_000) }]);
 });
 
-test('a lease call on a marked imp fails with MOVING', async () => {
-  const ctx = await setupLeaseTest();
+test('it refuses a lease acquire on a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
-  const calls = [
-    ctx.sourceApp.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 }),
-    ctx.sourceApp.client.leases.renew({ name: 'dev', label: 'job', ttlSeconds: 60 }),
-    ctx.sourceApp.client.leases.release({ name: 'dev', label: 'job' }),
-    ctx.sourceApp.client.imps.hold({ name: 'dev', seconds: 60 }),
-  ];
-
-  const refusals = await Promise.all(calls.map((call) => readRejection(call)));
-
-  expect(refusals).toMatchObject(calls.map(() => ({ code: 'MOVING' })));
-});
-
-test("after a warm commit the target's idle loop and governor leave the leased imp awake", async () => {
-  // the idle loop reads the wall clock, so these clocks run
-  const ctx = await setupLeaseTest({
-    isWarm: true,
-    isFrozen: false,
-    target: { env: { IMP_IDLE_TIMEOUT_S: '1', IMP_RAM_BUDGET_MIB: '3000' } },
+  const acquired = ctx.sourceApp.client.leases.acquire({
+    name: 'dev',
+    label: 'job',
+    ttlSeconds: 60,
   });
 
-  await ctx.writeSourceLease(JOB, 600_000);
+  expect(acquired).rejects.toMatchObject({ code: 'MOVING' });
+});
+
+test('it refuses a lease renew on a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const renewed = ctx.sourceApp.client.leases.renew({ name: 'dev', label: 'job', ttlSeconds: 60 });
+
+  expect(renewed).rejects.toMatchObject({ code: 'MOVING' });
+});
+
+test('it refuses a lease release on a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const released = ctx.sourceApp.client.leases.release({ name: 'dev', label: 'job' });
+
+  expect(released).rejects.toMatchObject({ code: 'MOVING' });
+});
+
+test('it refuses a hold on a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const held = ctx.sourceApp.client.imps.hold({ name: 'dev', seconds: 60 });
+
+  expect(held).rejects.toMatchObject({ code: 'MOVING' });
+});
+
+test("it leaves a warm-moved leased imp awake through the target's idle loop", async () => {
+  const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
   await ctx.runMove('dev');
   await ctx.targetApp.client.imps.wake({ name: 'dev' });
 
-  // idle long past the timeout: only the lease keeps it awake
-  await updateImpActivity(ctx.target.db, ctx.impId, new Date(Date.now() - 60_000));
+  // idle for a day: only the lease keeps it awake
+  await updateImpActivity(ctx.target.db, created.id, new Date(ctx.target.now() - 86_400_000));
 
   const idle = createIdleLoop({
     config: ctx.target.config,
     db: ctx.target.db,
     imps: ctx.target.imps,
     log: () => {},
+    now: ctx.target.now,
   });
 
   await idle.runCheck();
 
-  // room for 2900 MiB needs dev asleep, which its lease forbids
-  const refused = await readRejection(
-    ctx.target.governor.admit({ id: 'x', name: 'x', reserveMib: 2900, memoryMib: 2900 }),
-  );
-
   const imp = await findImpByName(ctx.target.db, 'dev');
 
-  expect(refused).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
   expect(imp?.state).toBe('running');
 });
 
-test('an expose that lands between the halt and the mark undoes the mark, keeps the leases, and runs the imp', async () => {
-  const hooks = { onOpen: () => Promise.resolve() };
+test("it sleeps a warm-moved imp with no lease through the target's idle loop", async () => {
+  const ctx = await setupTest({ isShared: true });
 
-  // the count opens the disk after the halt and before the mark
-  const createStorage = (dataDir: string): StorageBackend => {
-    const backend = createCopyingXfs(dataDir);
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-    return {
-      ...backend,
-      openMoveSource: async (impId, checkpointIds, mode) => {
-        await hooks.onOpen();
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-        return backend.openMoveSource(impId, checkpointIds, mode);
-      },
-    };
-  };
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+  await ctx.runMove('dev');
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
 
-  const ctx = await setupLeaseTest({ source: { createStorage } });
+  // idle for a day, with no lease to keep it awake
+  await updateImpActivity(ctx.target.db, created.id, new Date(ctx.target.now() - 86_400_000));
 
-  hooks.onOpen = async () => {
-    await updateImpExposure(ctx.source.db, ctx.impId, { auth: 'none', user: null, hash: null });
-  };
+  const idle = createIdleLoop({
+    config: ctx.target.config,
+    db: ctx.target.db,
+    imps: ctx.target.imps,
+    log: () => {},
+    now: ctx.target.now,
+  });
 
-  await ctx.writeSourceLease(JOB, 600_000);
+  await idle.runCheck();
 
-  const refused = await readRejection(
-    ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true }),
+  const imp = await findImpByName(ctx.target.db, 'dev');
+
+  expect(imp?.state).toBe('sleeping');
+});
+
+test('it refuses a RAM admission that needs a warm-moved leased imp asleep on the target', async () => {
+  const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
+  await ctx.runMove('dev');
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  // room for all but 100 MiB of the budget needs dev's RAM back
+  const reserveMib = ctx.target.config.ramBudgetMib - 100;
+
+  const admitted = ctx.target.governor.admit({
+    id: 'x',
+    name: 'x',
+    reserveMib,
+    memoryMib: reserveMib,
+  });
+
+  expect(admitted).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+});
+
+test('it admits a RAM reservation by sleeping a warm-moved imp with no lease on the target', async () => {
+  const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+  await ctx.runMove('dev');
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  // room for all but 100 MiB of the budget needs dev's RAM back
+  const reserveMib = ctx.target.config.ramBudgetMib - 100;
+
+  const admitted = ctx.target.governor.admit({
+    id: 'x',
+    name: 'x',
+    reserveMib,
+    memoryMib: reserveMib,
+  });
+
+  await expect(admitted).toResolve();
+
+  const imp = await findImpByName(ctx.target.db, 'dev');
+
+  expect(imp?.state).toBe('sleeping');
+});
+
+test('it undoes the mark, keeps the leases and runs the imp when an expose lands between the halt and the mark', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  const job = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'tailnet:n1',
+    label: 'job',
+    display: 'laptop',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, job, { at: sourceNow, reason: null });
+
+  // the expose lands while the halt's stop is held, after prepare's own check
+  const halt = ctx.source.fake.hold('stop');
+  const prepared = ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true });
+
+  await halt.reached;
+  await updateImpExposure(ctx.source.db, created.id, { auth: 'none', user: null, hash: null });
+
+  halt.release();
+
+  expect(prepared).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+  const imp = await findImpByName(ctx.source.db, 'dev');
+  const leases = await listLeases(ctx.source.db, ctx.source.now(), [created.id]);
+  const sends = await ctx.source.db.selectFrom('move_sends').selectAll().execute();
+
+  expect(imp).toMatchObject({ state: 'running', moveState: null });
+  expect(leases).toMatchObject([{ label: 'job' }]);
+  expect(sends).toStrictEqual([]);
+});
+
+test('it refuses at the offer an imp with more leases than a move carries, and runs it again', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+
+  // 1025 holds, one past the most a move carries; a forced stop keeps holds
+  const holds = Array.from({ length: 1025 }, (_unused, index) =>
+    buildMockLeaseRecord({
+      impId: created.id,
+      principal: `tailnet:n${String(index)}`,
+      label: 'hold',
+      display: 'root',
+      until: new Date(sourceNow + 600_000),
+      createdAt: new Date(sourceNow),
+    }),
   );
 
-  const imp = await findImpByName(ctx.source.db, 'dev');
-  const leases = await ctx.readLeases(ctx.source);
-  const rows = await readMoveRows(ctx.source);
-
-  expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
-  expect(imp).toMatchObject({ state: 'running', moveState: null });
-  expect(leases.map((lease) => lease.label)).toEqual(['job']);
-  expect(rows).toEqual([]);
-});
-
-test('an imp with more leases than a move carries is refused at the offer, and runs again', async () => {
-  const ctx = await setupLeaseTest();
-
-  // holds, which a forced stop keeps
-  for (let index = 0; index <= MAX_MOVED_LEASES; index += 1) {
-    await ctx.writeSourceLease({ ...HOLD, principal: `tailnet:n${String(index)}` }, 600_000);
-  }
+  await Promise.all(
+    holds.map((hold) => writeLease(ctx.source.db, hold, { at: sourceNow, reason: null })),
+  );
 
   const status = await ctx.runMove('dev', true);
   const imp = await findImpByName(ctx.source.db, 'dev');
   const landed = await findImpByName(ctx.target.db, 'dev');
 
-  expect(status.error).toContain('more than a move carries');
+  expect(status.error).toInclude('more than a move carries');
   expect(status.sentBytes).toBe(0);
   expect(imp).toMatchObject({ state: 'running', moveState: null });
   expect(landed).toBeUndefined();
 });
 
-test('a lease whose owner is longer than a header carries is refused at the offer, and the imp runs again', async () => {
-  const ctx = await setupLeaseTest();
+test('it refuses at the offer a lease whose owner is longer than a header carries, and runs the imp again', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
   const principal = `tailnet-user:${'x'.repeat(300)}@example.com`;
 
-  await ctx.writeSourceLease({ ...HOLD, principal }, 600_000);
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal,
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + 600_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
 
   const status = await ctx.runMove('dev', true);
   const imp = await findImpByName(ctx.source.db, 'dev');
-  const leases = await ctx.readLeases(ctx.source);
+  const leases = await listLeases(ctx.source.db, ctx.source.now(), [created.id]);
   const landed = await findImpByName(ctx.target.db, 'dev');
 
-  expect(status.error).toContain('a move cannot carry');
+  expect(status.error).toInclude('a move cannot carry');
   expect(status.sentBytes).toBe(0);
   expect(imp).toMatchObject({ state: 'running', moveState: null });
-  expect(leases.map((lease) => lease.principal)).toEqual([principal]);
+  expect(leases).toMatchObject([{ principal }]);
   expect(landed).toBeUndefined();
 });
 
-test('a hold that ends past 100 years moves with 100 years left', async () => {
-  const ctx = await setupLeaseTest();
+test('it moves a hold that ends past 100 years with 100 years left', async () => {
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const sourceNow = ctx.source.now();
+  const targetStart = ctx.target.now();
+  const centuryMs = 100 * 365 * 24 * 60 * 60 * 1000;
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
-  await ctx.writeSourceLease(HOLD, MAX_LEASE_REMAINING_MS + 60_000);
+
+  const hold = buildMockLeaseRecord({
+    impId: created.id,
+    principal: 'root',
+    label: 'hold',
+    display: 'root',
+    until: new Date(sourceNow + centuryMs + 60_000),
+    createdAt: new Date(sourceNow),
+  });
+
+  await writeLease(ctx.source.db, hold, { at: sourceNow, reason: null });
 
   const status = await ctx.runMove('dev');
-  const leases = await ctx.readLeases(ctx.target);
+  const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
   expect(status).toMatchObject({ isDone: true, error: null });
-
-  expect(toEnds(leases)).toEqual([
-    { label: 'hold', until: new Date(TARGET_CLOCK_MS + MAX_LEASE_REMAINING_MS) },
-  ]);
+  expect(leases).toMatchObject([{ label: 'hold', until: new Date(targetStart + centuryMs) }]);
 });

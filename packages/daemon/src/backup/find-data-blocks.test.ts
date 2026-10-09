@@ -1,108 +1,141 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { closeSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SeekFile } from './find-data-blocks';
+import { buildStubLseek } from '../test-utils/build-stub-lseek';
 import { findDataBlocks } from './find-data-blocks';
 
-const MIB = 1024 * 1024;
-const GIB = 1024 * MIB;
+function setupTest() {
+  const dir = mkdtempSync(join(tmpdir(), 'impd-seek-test-'));
 
-function sortBlocks(blocks: ReadonlySet<number>): number[] {
-  return [...blocks].toSorted((a, b) => a - b);
-}
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-function setupSparseFile() {
-  const dir = mkdtempSync(`${tmpdir()}/impd-seek-test-`);
   const fd = openSync(join(dir, 'sparse'), 'w+');
 
-  return {
-    fd,
-    [Symbol.dispose]: () => {
-      closeSync(fd);
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+  onTestFinished(() => {
+    closeSync(fd);
+  });
+
+  return { fd };
 }
 
 test('it finds the blocks of a sparse file that hold data, and skips the holes', () => {
-  using file = setupSparseFile();
+  const ctx = setupTest();
 
-  writeSync(file.fd, 'head', 0);
-  writeSync(file.fd, 'middle', 5 * MIB + 10);
-  writeSync(file.fd, 'tail', 64 * MIB - 4);
+  writeSync(ctx.fd, 'head', 0);
+  writeSync(ctx.fd, 'middle', 5 * 1024 ** 2 + 10);
+  writeSync(ctx.fd, 'tail', 64 * 1024 ** 2 - 4);
 
-  expect(sortBlocks(findDataBlocks(file.fd, 64 * MIB, MIB))).toEqual([0, 5, 63]);
-  expect(findDataBlocks(file.fd, 0, MIB).size).toBe(0);
+  expect([...findDataBlocks(ctx.fd, 64 * 1024 ** 2, 1024 ** 2)]).toIncludeSameMembers([0, 5, 63]);
+});
+
+test('it finds no blocks in a scan of no length', () => {
+  const ctx = setupTest();
+
+  writeSync(ctx.fd, 'head', 0);
+
+  expect(findDataBlocks(ctx.fd, 0, 1024 ** 2)).toBeEmpty();
 });
 
 test('it finds data past 4 GiB, where a 32-bit offset would wrap', () => {
-  using file = setupSparseFile();
+  const ctx = setupTest();
 
-  writeSync(file.fd, 'five', 5 * GIB + 3);
-  writeSync(file.fd, 'nine', 9 * GIB);
-  writeSync(file.fd, 'end', 32 * GIB - 3);
+  writeSync(ctx.fd, 'five', 5 * 1024 ** 3 + 3);
+  writeSync(ctx.fd, 'nine', 9 * 1024 ** 3);
+  writeSync(ctx.fd, 'end', 32 * 1024 ** 3 - 3);
 
-  expect(sortBlocks(findDataBlocks(file.fd, 32 * GIB, MIB))).toEqual([
+  expect([...findDataBlocks(ctx.fd, 32 * 1024 ** 3, 1024 ** 2)]).toIncludeSameMembers([
     5 * 1024,
     9 * 1024,
     32 * 1024 - 1,
   ]);
 });
 
-test('an lseek error other than "no more data" means every block', () => {
-  const holeFails = findDataBlocks(3, 4 * MIB, MIB, (_fd, offset, whence) =>
-    whence === 3 ? { offset } : { errno: 22 },
-  );
+test('it reads every block from the data found when SEEK_HOLE fails', () => {
+  const lseek = buildStubLseek({
+    size: 4 * 1024 ** 2,
+    extents: [[0, 1024 ** 2]],
+    holeErrno: 22,
+  });
 
-  expect(sortBlocks(holeFails)).toEqual([0, 1, 2, 3]);
+  const blocks = findDataBlocks(3, 4 * 1024 ** 2, 1024 ** 2, lseek.seek, lseek.readAllocated);
 
-  const dataFails = findDataBlocks(3, 2 * MIB, MIB, () => ({ errno: 5 }));
-
-  expect(sortBlocks(dataFails)).toEqual([0, 1]);
-
-  // a true ENXIO: nothing is allocated past the data found
-  const allHoles = findDataBlocks(
-    3,
-    2 * MIB,
-    MIB,
-    (_fd, offset, whence) => (whence === 3 ? { errno: 6 } : { offset }),
-    () => 0,
-  );
-
-  expect(allHoles.size).toBe(0);
+  expect([...blocks]).toIncludeSameMembers([0, 1, 2, 3]);
 });
 
-test('a stale ENXIO at a hole start, with data after it, reads every block from there', () => {
-  // data in block 0, a hole at 1 MiB, data at 2 MiB; SEEK_DATA at the hole
-  // start answers ENXIO, and SEEK_HOLE agrees it is a hole
-  const runStaleSeek: SeekFile = (_fd, offset, whence) => {
-    if (whence === 3) {
-      return offset === 0 ? { offset: 0 } : { errno: 6 };
-    }
+test('it reads every block when SEEK_DATA fails with an error other than ENXIO', () => {
+  const lseek = buildStubLseek({ size: 2 * 1024 ** 2, extents: [[0, 1024 ** 2]], dataErrno: 5 });
+  const blocks = findDataBlocks(3, 2 * 1024 ** 2, 1024 ** 2, lseek.seek, lseek.readAllocated);
 
-    return offset === 0 ? { offset: MIB } : { offset };
-  };
+  expect([...blocks]).toIncludeSameMembers([0, 1]);
+});
 
-  // fstat counts 3 MiB allocated: 2 MiB more than the scan found
-  expect(sortBlocks(findDataBlocks(3, 4 * MIB, MIB, runStaleSeek, () => 3 * MIB))).toEqual([
-    0, 1, 2, 3,
+test('it finds no blocks in a file that is one hole', () => {
+  const lseek = buildStubLseek({ size: 2 * 1024 ** 2, extents: [] });
+  const blocks = findDataBlocks(3, 2 * 1024 ** 2, 1024 ** 2, lseek.seek, lseek.readAllocated);
+
+  expect(blocks).toBeEmpty();
+});
+
+test('it reads every block from a hole start when fstat counts more than a stale ENXIO found', () => {
+  // SEEK_DATA answers a stale ENXIO at the hole after block 0, over 2 MiB more
+  const lseek = buildStubLseek({
+    size: 4 * 1024 ** 2,
+    extents: [
+      [0, 1024 ** 2],
+      [2 * 1024 ** 2, 4 * 1024 ** 2],
+    ],
+    staleEnxioFrom: 1024 ** 2,
+  });
+
+  const blocks = findDataBlocks(3, 4 * 1024 ** 2, 1024 ** 2, lseek.seek, lseek.readAllocated);
+
+  expect([...blocks]).toIncludeSameMembers([0, 1, 2, 3]);
+});
+
+test('it keeps the scan when fstat counts no more than metadata past what it found', () => {
+  // one 4 KiB block of metadata past the 1 MiB of data
+  const lseek = buildStubLseek({
+    size: 4 * 1024 ** 2,
+    extents: [[0, 1024 ** 2]],
+    metadataBytes: 4096,
+  });
+
+  const blocks = findDataBlocks(3, 4 * 1024 ** 2, 1024 ** 2, lseek.seek, lseek.readAllocated);
+
+  expect([...blocks]).toIncludeSameMembers([0]);
+});
+
+test('it finds the extents of a real sparse file', () => {
+  const ctx = setupTest();
+
+  writeSync(ctx.fd, Buffer.alloc(3 * 1024 ** 2, 1), 0, 3 * 1024 ** 2, 0);
+  writeSync(ctx.fd, Buffer.alloc(2 * 1024 ** 2, 2), 0, 2 * 1024 ** 2, 40 * 1024 ** 2);
+
+  expect([...findDataBlocks(ctx.fd, 42 * 1024 ** 2, 1024 ** 2)]).toIncludeSameMembers([
+    0, 1, 2, 40, 41,
   ]);
-
-  // within the slack it is file-system metadata, and the scan stands
-  expect(sortBlocks(findDataBlocks(3, 4 * MIB, MIB, runStaleSeek, () => MIB + 4096))).toEqual([0]);
 });
 
-test('on a real sparse file, fstat shows the extent a stale ENXIO hid', () => {
-  using file = setupSparseFile();
+test('it reads every block of a real sparse file when fstat shows an extent a stale ENXIO hid', () => {
+  const ctx = setupTest();
 
-  writeSync(file.fd, Buffer.alloc(3 * MIB, 1), 0, 3 * MIB, 0);
-  writeSync(file.fd, Buffer.alloc(2 * MIB, 2), 0, 2 * MIB, 40 * MIB);
+  writeSync(ctx.fd, Buffer.alloc(3 * 1024 ** 2, 1), 0, 3 * 1024 ** 2, 0);
+  writeSync(ctx.fd, Buffer.alloc(2 * 1024 ** 2, 2), 0, 2 * 1024 ** 2, 40 * 1024 ** 2);
 
-  // a stale ENXIO after the first extent: fstat shows the missed one
-  const runStaleAfterFirst: SeekFile = (_fd, offset, whence) =>
-    whence === 3 && offset > 0 ? { errno: 6 } : { offset: whence === 3 ? 0 : 3 * MIB };
+  // the file's own extents, with a stale ENXIO after the first; the real fstat
+  const lseek = buildStubLseek({
+    size: 42 * 1024 ** 2,
+    extents: [
+      [0, 3 * 1024 ** 2],
+      [40 * 1024 ** 2, 42 * 1024 ** 2],
+    ],
+    staleEnxioFrom: 3 * 1024 ** 2,
+  });
 
-  expect(findDataBlocks(file.fd, 42 * MIB, MIB).size).toBe(5);
-  expect(findDataBlocks(file.fd, 42 * MIB, MIB, runStaleAfterFirst).size).toBe(42);
+  const blocks = findDataBlocks(ctx.fd, 42 * 1024 ** 2, 1024 ** 2, lseek.seek);
+
+  expect(blocks.size).toBe(42);
 });

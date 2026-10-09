@@ -84,8 +84,10 @@ the ones after it are skipped. A util that registers its own cleanup is therefor
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier; given `{ stack }`, it defers the close there instead),
 `startStubExecAgent`, `startStubSessionAgent` and `startStubAttachAgent` (through `startStubAgent`,
-so each also takes `{ stack }`), `startStubDnsUpstream`, `createTestDatabase`, `buildQueryGate` (it
-releases a held select), `setupImpTest`, `setupMcpTest` and `setupMoveHosts`.
+so each also takes `{ stack }`), `startStubDnsUpstream`, `createTestDatabase`,
+`createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely closes a driver only
+after a query started it), `buildQueryGate` (it releases a held select), `setupImpTest`,
+`setupMcpTest` and `setupMoveHosts`.
 
 `setupImpTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
 `[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
@@ -384,6 +386,16 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | mount                        | A `run` with a mount table in `vmm/jail.test.ts`                                                   | `mount` and `umount` for the jailer                                                |
 | cgroups and `/proc`          | Temp dirs as `root` and `procRoot` (5)                                                             | The cgroup tree and `/proc`                                                        |
 | cgroups for impd             | `test-utils/build-stub-cpu-cgroups.ts`                                                             | `CpuCgroups`: an in-memory tree that records each change                           |
+| restic                       | `test-utils/build-stub-restic.ts` (`buildStubRestic`)                                              | `Restic` over a directory: snapshots in `snapshots.json`, which two hosts share    |
+| restic's process             | `test-utils/build-stub-restic-runner.ts`, `build-stub-restic-lock-runner.ts`                       | `createRestic`'s runner: queued results; restic's lock rule, held until stopped    |
+| ZFS for moves                | `test-utils/build-stub-zfs-storage.ts` (`buildStubZfsStorage`)                                     | An impd's ZFS backend on `buildStubZfs`, as a harness's `createStorage`            |
+| Storage faults               | `test-utils/build-stub-storage-faults.ts` (`buildStubStorageFaults`)                               | A backend whose next `openMoveSource` rejects                                      |
+| Older move target            | `test-utils/build-stub-older-move-target.ts` (`buildStubOlderMoveTarget`)                          | A target whose offer reply lacks a `keeps*` field, as a `setupMoveHosts` hook      |
+| Switched storage             | `test-utils/build-stub-switched-storage-target.ts`                                                 | A target whose offer reply names another storage backend                           |
+| Lost commits                 | `test-utils/build-stub-dropped-commit.ts` (`buildStubDroppedCommit`)                               | A network that drops a move's first commits, or their answers                      |
+| lseek and fstat              | `test-utils/build-stub-lseek.ts`                                                                   | `SEEK_DATA`/`SEEK_HOLE` over chosen extents, for `findDataBlocks`                  |
+| Move stream faults           | `test-utils/build-stub-move-stream-rewrite.ts`                                                     | A hook that rewrites the frames of a move's first stream part                      |
+| Part pipe timer              | `test-utils/build-stub-timer.ts` (`buildStubTimer`)                                                | `createPartPipe`'s `PartTimer`: a clock and timers that move only on `advance`     |
 | Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
 | Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                 | An agent that runs, takes over and resumes sessions, and answers `activity`        |
 | Attach agent                 | `test-utils/start-stub-attach-agent.ts` (`startStubAttachAgent`)                                   | A 0.15.0 agent: a ping with a boot id, then scripted session replies               |
@@ -540,7 +552,20 @@ stack, and the client smoke's `run-stub-impd.ts` runs it outside a test.
 `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
 `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
 `test-utils/find-free-ports.ts`. Egress's `repeat` dep runs its sweep (`startInterval` by default),
-so a test fires a sweep by calling the function it was handed.
+so a test fires a sweep by calling the function it was handed. A `createImpd` test whose storage
+clones with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
+checkpoint's copy takes minutes.
+
+`moves/test-moves.ts` (tested in `test-moves.test.ts`) builds two impds on `createImpTest`. Its
+`hook` gets each request the source sends, a `forward(replacement?)` to the target's move routes,
+and the target's `advance` and the source's client; `waitForMove` polls with `waitFor`.
+`createZfsUbuntuImage` puts the `ubuntu` image on a ZFS host. The stub VMM numbers VMs from 1 on
+each host, so boot ids of two hosts collide. Time seams for moves: `createPartPipe(waitMs, timer)`
+takes a `PartTimer`, `createIdleLoop` takes `now`, and `createCheckpointService` takes `random` for
+its ids; each defaults to the wall clock or `Math.random`. `runMigrationsTo(db, name, migrations)`
+takes a test's own migrations, so a test can run one that fails; it defaults to impd's. The move
+sender's `waitForRecovery()` settles once the background recovery that `recover` started has run, so
+a test waits for it before teardown.
 
 ## Connectors
 

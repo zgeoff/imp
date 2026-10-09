@@ -1,114 +1,154 @@
-import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { createImage, findImageByName } from '../db/images';
+import { expect, onTestFinished, test } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { findImageByName } from '../db/images';
 import { findImpByName, updateImpExposure, updateImpMove } from '../db/imps';
 import { TEST_TOKEN, buildTestApp } from '../imps/test-imps';
-import type { ImpTest } from '../imps/test-imps';
-import { readRejection } from '../read-rejection';
-import { buildImagePaths } from '../storage/data-layout';
-import type { StorageBackend } from '../storage/storage-backend';
-import { createZfsBackend } from '../storage/zfs/zfs-backend';
-import { buildStubZfs } from '../test-utils/build-stub-zfs';
-import type { StubZfs } from '../test-utils/build-stub-zfs';
-import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
-import { ReceiptSchema, buildTicketHeader } from './move-tickets';
-import { SOURCE_PEER, TARGET_URL, createUbuntuImage, setupMoveHosts } from './test-moves';
-import type { FetchHook } from './test-moves';
+import { buildMockMoveTicketRow } from '../test-utils/build-mock-move-ticket-row';
+import { buildStubDroppedCommit } from '../test-utils/build-stub-dropped-commit';
+import {
+  buildJsonMoveFrame,
+  buildStubMoveStreamRewrite,
+} from '../test-utils/build-stub-move-stream-rewrite';
+import { buildStubOlderMoveTarget } from '../test-utils/build-stub-older-move-target';
+import { buildStubSwitchedStorageTarget } from '../test-utils/build-stub-switched-storage-target';
+import { buildStubZfsStorage } from '../test-utils/build-stub-zfs-storage';
+import { FileEndSchema, MOVE_FRAMES, MoveFileSchema, readJsonPayload } from './move-frames';
+import { MOVE_FINISH_HEADER, MOVE_PART_HEADER, MOVE_PATHS, MoveHeaderSchema } from './move-header';
+import {
+  ReceiptSchema,
+  buildReceipt,
+  buildTicketHeader,
+  readReceipt,
+  readTicketHeader,
+} from './move-tickets';
+import {
+  SOURCE_PEER,
+  TARGET_URL,
+  createUbuntuImage,
+  createZfsUbuntuImage,
+  setupMoveHosts,
+} from './test-moves';
+import type { MoveHostsOptions } from './test-moves';
 
-async function waitUntil(isDone: () => Promise<boolean>): Promise<void> {
-  for (let tries = 0; tries < 500; tries += 1) {
-    const isReady = await isDone();
-
-    if (isReady) {
-      return;
-    }
-
-    await Bun.sleep(10);
-  }
-
-  throw new Error('waited 5 s in vain');
+// two impds, the source's move routes reaching the target's in process
+function setupTest(config: Readonly<MoveHostsOptions> = {}) {
+  return setupMoveHosts(config);
 }
 
-interface MoveTestOptions {
-  readonly hasImage?: boolean;
-  readonly partBytes?: number;
-}
+test('it moves a stopped imp with its id, its checkpoint and its disk', async () => {
+  const ctx = await setupTest();
 
-// a stopped `dev` on the source, with a checkpoint and a disk changed since
-async function setupMoveTest(hook?: FetchHook, options: MoveTestOptions = {}) {
-  const hosts = await setupMoveHosts({
-    ...(hook !== undefined && { hook }),
-    ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
-  });
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  await createUbuntuImage(hosts.source);
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  if (options.hasImage !== false) {
-    await createUbuntuImage(hosts.target);
-  }
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
-  const created = await hosts.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  writeFileSync(ctx.source.storage.resolveImpPaths(created.id).disk, 'hello');
 
-  await hosts.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
-  const disk = hosts.source.storage.resolveImpPaths(created.id).disk;
+  writeFileSync(ctx.source.storage.resolveImpPaths(created.id).disk, 'world');
 
-  writeFileSync(disk, 'hello');
-
-  await hosts.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
-
-  writeFileSync(disk, 'world');
-
-  return {
-    ...hosts,
-    impId: created.id,
-    runMove: () => hosts.runMove('dev'),
-    runMoveWith: (stop: boolean) => hosts.runMove('dev', stop),
-    waitForMove: () => hosts.waitForMove('dev'),
-  };
-}
-
-test('a stopped imp moves with its id, its checkpoints and its disk', async () => {
-  const ctx = await setupMoveTest();
-  const status = await ctx.runMove();
+  const status = await ctx.runMove('dev');
   const moved = await ctx.targetApp.client.imps.get({ name: 'dev' });
   const checkpoints = await ctx.targetApp.client.checkpoints.list({ name: 'dev' });
   const left = await findImpByName(ctx.source.db, 'dev');
 
-  const disk = ctx.target.storage.resolveImpPaths(ctx.impId).disk;
+  invariant(checkpoints[0]);
 
-  const source = await ctx.target.storage.openMoveSource(
-    ctx.impId,
-    checkpoints.map((checkpoint) => checkpoint.id),
-    'files',
+  const impDir = join(ctx.target.dataDir, 'imps', created.id);
+  const disk = readFileSync(join(impDir, 'disk.ext4'), 'utf8');
+
+  const checkpointDisk = readFileSync(
+    join(impDir, 'checkpoints', checkpoints[0].id, 'disk.ext4'),
+    'utf8',
   );
-
-  const checkpointDisk = source.kind === 'files' ? source.checkpointPaths[0] : undefined;
 
   expect(status).toMatchObject({ isDone: true, error: null });
-  expect(moved).toMatchObject({ id: ctx.impId, state: 'stopped' });
+  expect(moved).toMatchObject({ id: created.id, state: 'stopped' });
   expect(moved.move).toBeUndefined();
-  expect(checkpoints.map((checkpoint) => checkpoint.label)).toEqual(['one']);
-  expect(readFileSync(disk, 'utf8').startsWith('world')).toBe(true);
-  expect(readFileSync(checkpointDisk ?? '', 'utf8').startsWith('hello')).toBe(true);
+  expect(checkpoints.map((checkpoint) => checkpoint.label)).toStrictEqual(['one']);
+  expect(disk).toStartWith('world');
+  expect(checkpointDisk).toStartWith('hello');
   expect(left).toBeUndefined();
-  expect(ctx.commits).toEqual(['dev']);
+  expect(ctx.commits).toStrictEqual(['dev']);
 });
 
-test('a marked imp fails fast with MOVING and Retry-After, and an abort before the stream undoes the mark', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses a start of a marked imp with MOVING and a retry after 30 s', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
-  const start = await readRejection(ctx.sourceApp.client.imps.start({ name: 'dev' }));
-  const destroy = await readRejection(ctx.sourceApp.client.imps.destroy({ name: 'dev' }));
+  expect(ctx.sourceApp.client.imps.start({ name: 'dev' })).rejects.toMatchObject({
+    code: 'MOVING',
+    status: 409,
+    data: { retryAfterS: 30 },
+  });
+});
 
-  const resize = await readRejection(
+test('it refuses a destroy of a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  expect(ctx.sourceApp.client.imps.destroy({ name: 'dev' })).rejects.toMatchObject({
+    code: 'MOVING',
+    status: 409,
+    data: { retryAfterS: 30 },
+  });
+});
+
+test('it refuses a disk resize of a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  expect(
     ctx.sourceApp.client.imps.resizeDisk({ name: 'dev', diskMib: 2048 }),
-  );
+  ).rejects.toMatchObject({ code: 'MOVING', status: 409, data: { retryAfterS: 30 } });
+});
 
-  const checkpoint = await readRejection(ctx.sourceApp.client.checkpoints.create({ name: 'dev' }));
-  const listed = await ctx.sourceApp.client.imps.get({ name: 'dev' });
+test('it refuses a checkpoint of a marked imp with MOVING', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  expect(ctx.sourceApp.client.checkpoints.create({ name: 'dev' })).rejects.toMatchObject({
+    code: 'MOVING',
+    status: 409,
+    data: { retryAfterS: 30 },
+  });
+});
+
+test('it answers a raw start of a marked imp with 409 and a Retry-After header', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
   const raw = await ctx.sourceApp.app.handle(
     new Request('http://impd.test/rpc/imps/start', {
@@ -118,101 +158,202 @@ test('a marked imp fails fast with MOVING and Retry-After, and an abort before t
     }),
   );
 
+  expect(raw.status).toBe(409);
+  expect(raw.headers.get('retry-after')).toBe('30');
+});
+
+test('it lists a prepared imp as sending', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const listed = await ctx.sourceApp.client.imps.get({ name: 'dev' });
+
+  expect(listed.move).toBe('sending');
+});
+
+test('it lets an imp start again once an abort before the stream undoes its mark', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
   await ctx.sourceApp.client.moves.abort({ name: 'dev' });
 
   const started = await ctx.sourceApp.client.imps.start({ name: 'dev' });
 
-  for (const refused of [start, destroy, resize, checkpoint]) {
-    expect(refused).toMatchObject({ code: 'MOVING', status: 409, data: { retryAfterS: 30 } });
-  }
-
-  expect(listed.move).toBe('sending');
-  expect(raw.status).toBe(409);
-  expect(raw.headers.get('retry-after')).toBe('30');
   expect(started.state).toBe('running');
 
   // nothing reached the target, so it counted nothing
-  expect(ctx.commits).toEqual([]);
+  expect(ctx.commits).toStrictEqual([]);
 });
 
-test('a public imp is refused a move, and a marked imp refuses an exposure change', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses to move a public imp', async () => {
+  const ctx = await setupTest();
 
-  await updateImpExposure(ctx.source.db, ctx.impId, { auth: 'none', user: null, hash: null });
+  await createUbuntuImage(ctx.source);
 
-  const publicPrepare = await readRejection(ctx.sourceApp.client.moves.prepare({ name: 'dev' }));
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  await ctx.sourceApp.client.imps.unexpose({ name: 'dev' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  await updateImpExposure(ctx.source.db, created.id, { auth: 'none', user: null, hash: null });
+
+  expect(ctx.sourceApp.client.moves.prepare({ name: 'dev' })).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+  });
+});
+
+test('it refuses an unexpose of a marked imp', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
-  const unexpose = await readRejection(ctx.sourceApp.client.imps.unexpose({ name: 'dev' }));
+  expect(ctx.sourceApp.client.imps.unexpose({ name: 'dev' })).rejects.toMatchObject({
+    code: 'MOVING',
+  });
+});
 
-  const written = await updateImpExposure(ctx.source.db, ctx.impId, {
+test('it writes no exposure change to a marked imp', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const written = await updateImpExposure(ctx.source.db, created.id, {
     auth: 'none',
     user: null,
     hash: null,
   });
 
-  expect(publicPrepare).toMatchObject({ code: 'PRECONDITION_FAILED' });
-  expect(unexpose).toMatchObject({ code: 'MOVING' });
   expect(written).toBeUndefined();
 });
 
-test('a running imp moves only with stop, which stops it first', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses to move a running imp without stop', async () => {
+  const ctx = await setupTest();
 
-  await ctx.sourceApp.client.imps.start({ name: 'dev' });
+  await createUbuntuImage(ctx.source);
 
-  const refused = await readRejection(ctx.sourceApp.client.moves.prepare({ name: 'dev' }));
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
+  expect(ctx.sourceApp.client.moves.prepare({ name: 'dev' })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+  });
+});
+
+test('it stops a running imp that a prepare with stop marks', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true });
 
   const imp = await ctx.sourceApp.client.imps.get({ name: 'dev' });
 
-  expect(refused).toMatchObject({ code: 'INVALID_STATE' });
   expect(imp).toMatchObject({ state: 'stopped', move: 'sending' });
 });
 
-test('a receipt that does not hold leaves the source as it was and the target empty', async () => {
-  const ctx = await setupMoveTest(async (request, forward) => {
-    const response = await forward();
+test('it leaves the source unmarked and the target empty when the receipt is not signed with the ticket', async () => {
+  const ctx = await setupTest({
+    hook: async (request, forward) => {
+      const response = await forward();
 
-    if (!request.url.endsWith(MOVE_PATHS.receive) || response.status !== 200) {
-      return response;
-    }
+      if (request.headers.get(MOVE_FINISH_HEADER) !== '1') {
+        return response;
+      }
 
-    const answer: unknown = await response.json();
+      const answer: unknown = await response.json();
 
-    const receipt = ReceiptSchema.parse(answer);
+      const receipt = ReceiptSchema.parse(answer);
 
-    return Response.json({ ...receipt, mac: '00'.repeat(32) });
+      return Response.json({ ...receipt, mac: '00'.repeat(32) });
+    },
   });
 
-  const status = await ctx.runMove();
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
   const source = await findImpByName(ctx.source.db, 'dev');
   const target = await findImpByName(ctx.target.db, 'dev');
 
-  expect(status.error).toContain('not signed with this ticket');
+  expect(status.error).toContain('the receipt is not signed with this ticket');
   expect(source?.moveState).toBeNull();
   expect(target).toBeUndefined();
 });
 
-test('a send to a target that is gone ends with the mark on, and says so', async () => {
-  const ctx = await setupMoveTest(async (request, forward) => {
-    // the abort fails late, so a status read while it goes would show the
-    // send's error with the mark not yet settled
-    if (request.url.endsWith(MOVE_PATHS.abort)) {
-      await Bun.sleep(100);
-    }
+test('it leaves the source unmarked when a signed receipt does not match what was sent', async () => {
+  const ctx = await setupTest({
+    hook: async (request, forward) => {
+      const response = await forward();
 
-    if (request.url.endsWith(MOVE_PATHS.receive) || request.url.endsWith(MOVE_PATHS.abort)) {
-      throw new TypeError('Unable to connect');
-    }
+      const secret = readTicketHeader(request)?.secret;
 
-    return forward();
+      if (request.headers.get(MOVE_FINISH_HEADER) !== '1' || secret === undefined) {
+        return response;
+      }
+
+      const answer: unknown = await response.json();
+
+      const body = readReceipt(ReceiptSchema.parse(answer), secret);
+
+      invariant(body);
+
+      const files = body.files.map((file) => ({ ...file, sha256: '0'.repeat(64) }));
+
+      return Response.json(buildReceipt({ ...body, files }, secret));
+    },
   });
 
-  const status = await ctx.runMove();
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  expect(status.error).toContain('the receipt does not match what was sent');
+  expect(source?.moveState).toBeNull();
+});
+
+test('it ends a send to a target that is gone with the mark on, and says the abort went unconfirmed', async () => {
+  const ctx = await setupTest({
+    hook: (request, forward) => {
+      if (request.url.endsWith(MOVE_PATHS.receive) || request.url.endsWith(MOVE_PATHS.abort)) {
+        return Promise.reject(new TypeError('Unable to connect'));
+      }
+
+      return forward();
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
   const source = await findImpByName(ctx.source.db, 'dev');
 
   expect(status.state).toBe('sending');
@@ -220,128 +361,329 @@ test('a send to a target that is gone ends with the mark on, and says so', async
   expect(source?.moveState).toBe('sending');
 });
 
-test('a commit lost after the receipt holds both copies until resume commits', async () => {
-  const lost = { commits: 1 };
+test('it reports no error for a failed send while its abort still goes', async () => {
+  const abortReached = Promise.withResolvers<undefined>();
+  const abortRelease = Promise.withResolvers<undefined>();
+  const sendEnded = { wait: (): Promise<unknown> => Promise.resolve() };
 
-  const ctx = await setupMoveTest((request, forward) => {
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-      lost.commits -= 1;
+  // the held abort, and with it the send, ends before the hosts go
+  onTestFinished(() => {
+    abortRelease.resolve(undefined);
 
-      return Promise.reject(new Error('the network dropped the commit'));
-    }
-
-    return forward();
+    return sendEnded.wait();
   });
 
-  const status = await ctx.runMove();
-  const sourceAfter = await findImpByName(ctx.source.db, 'dev');
-  const targetAfter = await findImpByName(ctx.target.db, 'dev');
-  const wake = await readRejection(ctx.targetApp.client.imps.start({ name: 'dev' }));
-  const resumed = await ctx.sourceApp.client.moves.resume({ name: 'dev' });
-  const live = await ctx.targetApp.client.imps.start({ name: 'dev' });
+  const ctx = await setupTest({
+    hook: async (request, forward) => {
+      if (request.url.endsWith(MOVE_PATHS.abort)) {
+        abortReached.resolve(undefined);
+
+        await abortRelease.promise;
+
+        throw new TypeError('Unable to connect');
+      }
+
+      if (request.url.endsWith(MOVE_PATHS.receive)) {
+        throw new TypeError('Unable to connect');
+      }
+
+      return forward();
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 * 1024 });
+
+  await ctx.sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
+
+  sendEnded.wait = () => ctx.waitForMove('dev');
+
+  await abortReached.promise;
+
+  const during = await ctx.sourceApp.client.moves.status({ name: 'dev' });
+
+  expect(during).toMatchObject({ isDone: false, error: null });
+});
+
+test('it keeps both copies marked when the commit is lost after the receipt', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const source = await findImpByName(ctx.source.db, 'dev');
+  const target = await findImpByName(ctx.target.db, 'dev');
 
   expect(status.error).toContain('dropped the commit');
-  expect(sourceAfter?.moveState).toBe('moved');
-  expect(targetAfter?.moveState).toBe('receiving');
-  expect(wake).toMatchObject({ code: 'MOVING' });
+  expect(source?.moveState).toBe('moved');
+  expect(target?.moveState).toBe('receiving');
+});
+
+test('it refuses a start on the target of a copy whose commit was lost', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
+
+  expect(ctx.targetApp.client.imps.start({ name: 'dev' })).rejects.toMatchObject({
+    code: 'MOVING',
+  });
+});
+
+test('it commits on resume after a lost commit, and the source copy goes', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const failed = await ctx.runMove('dev');
+  const resumed = await ctx.sourceApp.client.moves.resume({ name: 'dev' });
+  const source = await findImpByName(ctx.source.db, 'dev');
+  const target = await findImpByName(ctx.target.db, 'dev');
+
+  expect(failed.error).toContain('dropped the commit');
   expect(resumed.isDone).toBe(true);
-
-  const gone = await findImpByName(ctx.source.db, 'dev');
-
-  expect(gone).toBeUndefined();
-  expect(live.state).toBe('running');
+  expect(source).toBeUndefined();
+  expect(target?.moveState).toBeNull();
 });
 
 // #167: main counts the received disk on this hook, so a repeat must not
 // fire it again
-test('a commit whose answer was lost fires onCommitted once, not again on resume', async () => {
-  const lost = { answers: 1 };
+test('it fires onCommitted once when a commit whose answer was lost resumes', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit({ drops: 'answer' }) });
 
-  const ctx = await setupMoveTest(async (request, forward) => {
-    const response = await forward();
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.answers > 0) {
-      lost.answers -= 1;
-      throw new Error('the network dropped the answer');
-    }
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
-    return response;
-  });
-
-  const status = await ctx.runMove();
-
-  expect(status.error).toContain('dropped the answer');
-  expect(ctx.commits).toEqual(['dev']);
-
+  const failed = await ctx.runMove('dev');
   const resumed = await ctx.sourceApp.client.moves.resume({ name: 'dev' });
 
+  expect(failed.error).toContain('dropped the answer');
   expect(resumed.isDone).toBe(true);
-  expect(ctx.commits).toEqual(['dev']);
+  expect(ctx.commits).toStrictEqual(['dev']);
 });
 
-test('an abort after the target committed destroys the source copy instead', async () => {
-  const lost = { answers: 1 };
+test('it destroys the source copy on an abort after the target committed', async () => {
+  // the commit lands, but its answer never reaches the source
+  const ctx = await setupTest({ hook: buildStubDroppedCommit({ drops: 'answer' }) });
 
-  const ctx = await setupMoveTest(async (request, forward) => {
-    const response = await forward();
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-    // the commit lands, but its answer never reaches the source
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.answers > 0) {
-      lost.answers -= 1;
-      throw new Error('the answer was lost');
-    }
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
-    return response;
-  });
-
-  await ctx.runMove();
-
+  const failed = await ctx.runMove('dev');
   const aborted = await ctx.sourceApp.client.moves.abort({ name: 'dev' });
+  const source = await findImpByName(ctx.source.db, 'dev');
   const target = await ctx.targetApp.client.imps.get({ name: 'dev' });
 
+  expect(failed.error).toContain('dropped the answer');
   expect(aborted.isDone).toBe(true);
-
-  const gone = await findImpByName(ctx.source.db, 'dev');
-
-  expect(gone).toBeUndefined();
+  expect(source).toBeUndefined();
   expect(target.move).toBeUndefined();
 
   // the target's one commit counted the disk; the abort counts nothing more
-  expect(ctx.commits).toEqual(['dev']);
+  expect(ctx.commits).toStrictEqual(['dev']);
 });
 
-test('a ticket streams once, in a header from the tailnet, and only for its name', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses a ticket in the URL in place of the header', async () => {
+  const ctx = await setupTest();
   const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
 
-  const url = `${TARGET_URL}${MOVE_PATHS.receive}`;
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}?ticket=${ticket.ticket}`, {
+      method: 'POST',
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    SOURCE_PEER,
+  );
 
-  const sendPart = (headers: Readonly<Record<string, string>>, peer = SOURCE_PEER, at = url) =>
-    ctx.targetApp.moves.handle(
-      new Request(at, { method: 'POST', headers, body: new Uint8Array([9, 0, 0, 0, 0]) }),
-      peer,
-    );
+  const body: unknown = await response.json();
 
-  const inUrl = await sendPart({}, SOURCE_PEER, `${url}?ticket=${ticket.ticket}`);
-  const offTailnet = await sendPart(buildTicketHeader(ticket.ticket), '192.168.1.5');
-  const first = await sendPart(buildTicketHeader(ticket.ticket));
-  const second = await sendPart(buildTicketHeader(ticket.ticket));
+  expect(response.status).toBe(401);
 
-  expect(inUrl.status).toBe(401);
-  expect(offTailnet.status).toBe(403);
-  expect(first.status).toBe(202);
-  expect(second.status).toBe(409);
+  expect(body).toStrictEqual({
+    error: 'no move ticket in the Authorization header',
+  });
 });
 
-test('a ticket is refused for a name the target has, or a stream past its window', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses a ticket the target never issued', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  const forged = `${ticket.ticket.slice(0, ticket.ticket.indexOf('.'))}.not-the-secret`;
+
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: buildTicketHeader(forged),
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    SOURCE_PEER,
+  );
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(401);
+  expect(body).toStrictEqual({ error: 'unknown move ticket' });
+});
+
+test('it refuses a stream from off the tailnet', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: buildTicketHeader(ticket.ticket),
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    '192.168.1.5',
+  );
+
+  expect(response.status).toBe(403);
+});
+
+test('it takes the first part of a stream from the tailnet', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: buildTicketHeader(ticket.ticket),
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    SOURCE_PEER,
+  );
+
+  expect(response.status).toBe(202);
+});
+
+test('it refuses a second stream on a ticket', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: buildTicketHeader(ticket.ticket),
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    SOURCE_PEER,
+  );
+
+  const second = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: buildTicketHeader(ticket.ticket),
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    SOURCE_PEER,
+  );
+
+  const body: unknown = await second.json();
+
+  expect(second.status).toBe(409);
+
+  expect(body).toStrictEqual({
+    error: 'the move ticket was used for a stream already',
+  });
+});
+
+test('it refuses a part that comes before the first', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: { ...buildTicketHeader(ticket.ticket), [MOVE_PART_HEADER]: '1' },
+      body: new Uint8Array([9, 0, 0, 0, 0]),
+    }),
+    SOURCE_PEER,
+  );
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(409);
+  expect(body).toStrictEqual({ error: 'part 1 is out of order' });
+});
+
+test('it refuses a finish for a ticket with no stream', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.receive}`, {
+      method: 'POST',
+      headers: { ...buildTicketHeader(ticket.ticket), [MOVE_FINISH_HEADER]: '1' },
+    }),
+    SOURCE_PEER,
+  );
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(409);
+  expect(body).toStrictEqual({ error: 'no stream to finish for this ticket' });
+});
+
+test('it refuses a commit for a ticket with no receipt', async () => {
+  const ctx = await setupTest();
+  const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1024 });
+
+  const response = await ctx.targetApp.moves.handle(
+    new Request(`${TARGET_URL}${MOVE_PATHS.commit}`, {
+      method: 'POST',
+      headers: buildTicketHeader(ticket.ticket),
+    }),
+    SOURCE_PEER,
+  );
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(409);
+
+  expect(body).toStrictEqual({
+    error: 'nothing to commit: no receipt for this ticket',
+  });
+});
+
+test('it refuses a ticket for a name the target has', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.target);
 
   await ctx.targetApp.client.imps.create({ name: 'taken', image: 'ubuntu' });
 
-  const taken = await readRejection(
-    ctx.targetApp.client.moves.receive({ name: 'taken', bytes: 1 }),
-  );
+  expect(ctx.targetApp.client.moves.receive({ name: 'taken', bytes: 1 })).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
+});
 
+test('it refuses a stream that starts past its ticket window', async () => {
+  const ctx = await setupTest();
   const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 1 });
 
   ctx.target.advance(11 * 60 * 1000);
@@ -355,77 +697,120 @@ test('a ticket is refused for a name the target has, or a stream past its window
     SOURCE_PEER,
   );
 
-  expect(taken).toMatchObject({ code: 'CONFLICT' });
+  const body: unknown = await late.json();
+
   expect(late.status).toBe(410);
+
+  expect(body).toStrictEqual({
+    error: 'the move ticket expired before its stream started',
+  });
 });
 
-test('a stream longer than its ticket is cut off and leaves nothing on the target', async () => {
-  const ctx = await setupMoveTest();
+test('it cuts off a stream longer than its ticket and leaves nothing on the target', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
   const ticket = await ctx.targetApp.client.moves.receive({ name: 'dev', bytes: 3 });
 
   await ctx.sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
 
-  const status = await ctx.waitForMove();
+  const status = await ctx.waitForMove('dev');
+  const target = await findImpByName(ctx.target.db, 'dev');
+  const source = await findImpByName(ctx.source.db, 'dev');
 
-  expect(status.error).toContain('longer than its ticket');
-
-  const gone = await findImpByName(ctx.target.db, 'dev');
-
-  expect(gone).toBeUndefined();
-
-  const left = await findImpByName(ctx.source.db, 'dev');
-
-  expect(left?.moveState).toBeNull();
+  expect(status.error).toContain('the stream is longer than its ticket allows');
+  expect(target).toBeUndefined();
+  expect(source?.moveState).toBeNull();
 });
 
-test('a peer URL off the tailnet, or a name, is refused before any byte goes', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses a peer URL off the tailnet before any byte goes', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
-  const lan = await readRejection(
+  expect(
     ctx.sourceApp.client.moves.send({ name: 'dev', to: 'http://192.168.1.5:7070', ticket: 'a.b' }),
-  );
-
-  const named = await readRejection(
-    ctx.sourceApp.client.moves.send({ name: 'dev', to: 'http://imp-b:7070', ticket: 'a.b' }),
-  );
-
-  expect(lan).toMatchObject({ code: 'BAD_REQUEST' });
-  expect(named).toMatchObject({ code: 'BAD_REQUEST' });
+  ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 });
 
-test('the image goes along when the target lacks it, and only grants of known secrets carry', async () => {
-  const ctx = await setupMoveTest(undefined, { hasImage: false });
+test('it refuses a peer URL that names a host before any byte goes', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  expect(
+    ctx.sourceApp.client.moves.send({ name: 'dev', to: 'http://imp-b:7070', ticket: 'a.b' }),
+  ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+});
+
+test('it files the image a target lacks under the digest of what arrived', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const image = await findImageByName(ctx.target.db, 'ubuntu');
+
+  invariant(image);
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+  expect(image.digest).toStartWith('sha256:');
+
+  // filed under what arrived, never the source's claim
+  expect(image.digest).not.toBe('sha256:ubuntu');
+
+  const hex = image.digest.slice('sha256:'.length);
+  const rootfs = readFileSync(join(ctx.target.dataDir, 'images', hex, 'rootfs.ext4'));
+
+  expect(rootfs.toString()).toStartWith('rootfs');
+});
+
+test('it carries only the grants of secrets the target has', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.source.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.source.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_real' });
   await ctx.source.broker.addGrant('dev', 'gh');
   await ctx.source.broker.addGrant('dev', 'npm');
   await ctx.target.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_other' });
 
-  const status = await ctx.runMove();
-  const images = await ctx.targetApp.client.images.list();
-
-  const digest = images.find((image) => image.name === 'ubuntu')?.digest ?? '';
-  const image = buildImagePaths(ctx.target.dataDir, digest);
-
+  const status = await ctx.runMove('dev');
   const grants = await ctx.target.broker.listGrants('dev');
 
   expect(status).toMatchObject({ isDone: true, error: null });
-
-  // filed under what arrived, never the source's claim
-  expect(digest).toStartWith('sha256:');
-  expect(digest).not.toBe('sha256:ubuntu');
-  expect(readFileSync(image.rootfs, 'utf8').startsWith('rootfs')).toBe(true);
-  expect(grants).toEqual(['gh']);
+  expect(grants).toStrictEqual(['gh']);
 });
 
-test('a template copy keeps its owed identity reset, and its template stays a template', async () => {
-  const ctx = await setupMoveTest(undefined, { hasImage: false });
+test('it keeps the owed identity reset of a template copy, and its template stays a template', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
   await ctx.source.db
     .updateTable('images')
@@ -436,10 +821,10 @@ test('a template copy keeps its owed identity reset, and its template stays a te
   await ctx.source.db
     .updateTable('imps')
     .set({ identity_reset_pending: 1 })
-    .where('id', '=', ctx.impId)
+    .where('id', '=', created.id)
     .execute();
 
-  const status = await ctx.runMove();
+  const status = await ctx.runMove('dev');
   const image = await findImageByName(ctx.target.db, 'ubuntu');
   const moved = await findImpByName(ctx.target.db, 'dev');
 
@@ -448,50 +833,46 @@ test('a template copy keeps its owed identity reset, and its template stays a te
   expect(moved?.isIdentityResetPending).toBe(true);
 });
 
-test('an elastic imp keeps its max memory', async () => {
-  const ctx = await setupMoveTest();
+test('it keeps the max memory of an elastic imp', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
   await ctx.source.db
     .updateTable('imps')
     .set({ memory_mib: 256, max_memory_mib: 1024 })
-    .where('id', '=', ctx.impId)
+    .where('id', '=', created.id)
     .execute();
 
-  const status = await ctx.runMove();
+  const status = await ctx.runMove('dev');
   const moved = await findImpByName(ctx.target.db, 'dev');
 
   expect(status).toMatchObject({ isDone: true, error: null });
   expect(moved).toMatchObject({ memoryMib: 256, maxMemoryMib: 1024 });
 });
 
-// a target from before elastic memory: its offer reply has no keepsMaxMemory
-async function removeKeepsMaxMemory(
-  request: Request,
-  forward: () => Promise<Response>,
-): Promise<Response> {
-  const response = await forward();
+test('it refuses to move an elastic imp to a target that would drop its max memory', async () => {
+  const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsMaxMemory') });
 
-  if (!request.url.endsWith(MOVE_PATHS.offer)) {
-    return response;
-  }
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  const body: unknown = await response.json();
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  const { keepsMaxMemory: _dropped, ...older } = MoveOfferReplySchema.parse(body);
-
-  return Response.json(older);
-}
-
-test('an elastic imp is refused a move to a target that would drop its max memory', async () => {
-  const ctx = await setupMoveTest(removeKeepsMaxMemory);
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
   await ctx.source.db
     .updateTable('imps')
     .set({ memory_mib: 256, max_memory_mib: 1024 })
-    .where('id', '=', ctx.impId)
+    .where('id', '=', created.id)
     .execute();
 
-  const status = await ctx.runMove();
+  const status = await ctx.runMove('dev');
   const landed = await findImpByName(ctx.target.db, 'dev');
   const source = await findImpByName(ctx.source.db, 'dev');
 
@@ -502,117 +883,144 @@ test('an elastic imp is refused a move to a target that would drop its max memor
   expect(landed).toBeUndefined();
 });
 
-test('a running elastic imp that --stop halted runs again when the target refuses its max memory', async () => {
-  const ctx = await setupMoveTest(removeKeepsMaxMemory);
+test('it starts a running elastic imp again that --stop halted when the target refuses its max memory', async () => {
+  const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsMaxMemory') });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   await ctx.source.db
     .updateTable('imps')
     .set({ memory_mib: 256, max_memory_mib: 1024 })
-    .where('id', '=', ctx.impId)
+    .where('id', '=', created.id)
     .execute();
 
-  await ctx.sourceApp.client.imps.start({ name: 'dev' });
-
-  const status = await ctx.runMoveWith(true);
+  const status = await ctx.runMove('dev', true);
   const source = await findImpByName(ctx.source.db, 'dev');
+  const landed = await findImpByName(ctx.target.db, 'dev');
 
   expect(status.error).toContain('predates elastic memory');
   expect(source).toMatchObject({ state: 'running', moveState: null });
-
-  const landed = await findImpByName(ctx.target.db, 'dev');
-
   expect(landed).toBeUndefined();
 });
 
-test('a GC while the stream goes keeps every file the send reads', async () => {
-  const hooks: { beforeStream: (() => Promise<unknown>) | null } = { beforeStream: null };
-
-  const ctx = await setupMoveTest(async (request, forward) => {
-    const isFirstPart = request.headers.get(MOVE_PART_HEADER) === '0';
-
-    if (request.url.endsWith(MOVE_PATHS.receive) && isFirstPart) {
-      await hooks.beforeStream?.();
-    }
-
-    return forward();
-  });
-
+test('it keeps every file the send reads through a GC while the stream goes', async () => {
   const runs: (readonly unknown[])[] = [];
 
-  hooks.beforeStream = async () => {
-    const result = await ctx.sourceApp.client.system.gc({});
+  const ctx = await setupTest({
+    hook: async (request, forward, hosts) => {
+      if (
+        request.url.endsWith(MOVE_PATHS.receive) &&
+        request.headers.get(MOVE_PART_HEADER) === '0'
+      ) {
+        const result = await hosts.sourceApp.client.system.gc({});
 
-    runs.push(result.dropped);
-  };
+        runs.push(result.dropped);
+      }
 
-  const status = await ctx.runMove();
+      return forward();
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
 
   expect(status).toMatchObject({ isDone: true, error: null });
-  expect(runs).toEqual([[]]);
+  expect(runs).toStrictEqual([[]]);
 });
 
-test('a marked imp refuses grant and egress changes, which the send already read', async () => {
-  const ctx = await setupMoveTest();
+test('it refuses a grant change to a marked imp', async () => {
+  const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.source.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
-  const grant = await readRejection(ctx.source.broker.addGrant('dev', 'gh'));
-
-  const policy = await readRejection(
-    ctx.source.egress.setPolicy('dev', { mode: 'none', allow: [] }),
-  );
-
-  expect(grant).toMatchObject({ code: 'MOVING' });
-  expect(policy).toMatchObject({ code: 'MOVING' });
+  expect(ctx.source.broker.addGrant('dev', 'gh')).rejects.toMatchObject({ code: 'MOVING' });
 });
 
-test('a restart undoes a send cut short, and finishes one the target has verified', async () => {
-  const lost = { commits: 1 };
+test('it refuses an egress policy change to a marked imp', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupMoveTest((request, forward) => {
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-      lost.commits -= 1;
+  await createUbuntuImage(ctx.source);
 
-      return Promise.reject(new Error('impd stopped'));
-    }
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
 
-    return forward();
+  expect(ctx.source.egress.setPolicy('dev', { mode: 'none', allow: [] })).rejects.toMatchObject({
+    code: 'MOVING',
   });
+});
 
+test('it undoes on restart a send cut short', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
   await ctx.sourceApp.moves.recover();
 
   // recovery runs in the background
-  await waitUntil(async () => {
+  const undone = await waitFor(async () => {
     const imp = await findImpByName(ctx.source.db, 'dev');
 
-    return imp?.moveState === null;
+    if (imp?.moveState !== null) {
+      throw new Error('the mark is still on');
+    }
+
+    return imp;
   });
 
-  const undone = await findImpByName(ctx.source.db, 'dev');
+  expect(undone.moveState).toBeNull();
+});
 
-  await ctx.runMove();
+test('it finishes on restart a send the target has verified', async () => {
+  // the commit a restart cut short
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const failed = await ctx.runMove('dev');
+
   await ctx.sourceApp.moves.recover();
 
-  await waitUntil(async () => {
+  // recovery runs in the background
+  await waitFor(async () => {
     const imp = await findImpByName(ctx.source.db, 'dev');
 
-    return imp === undefined;
+    if (imp !== undefined) {
+      throw new Error('the source copy is still here');
+    }
   });
 
   const live = await ctx.targetApp.client.imps.get({ name: 'dev' });
 
-  expect(undone?.moveState).toBeNull();
-
-  const gone = await findImpByName(ctx.source.db, 'dev');
-
-  expect(gone).toBeUndefined();
+  expect(failed.error).toContain('dropped the commit');
   expect(live.move).toBeUndefined();
 });
 
-test('a target restart removes a stream cut short and tickets never used', async () => {
-  const ctx = await setupMoveTest();
+test('it removes on a target restart a stream cut short and tickets never used', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.target);
 
   const staged = await ctx.target.imps.createImp({
     name: 'half',
@@ -624,19 +1032,15 @@ test('a target restart removes a stream cut short and tickets never used', async
 
   await ctx.target.db
     .insertInto('move_tickets')
-    .values({
-      id: 'cut',
-      secret_sha256: 'x'.repeat(64),
-      name: 'half',
-      bytes: 1,
-      imp_id: staged.id,
-      issued_at: now,
-      stream_by: now + 1000,
-      stream_used_at: now,
-      receipt: null,
-      commit_until: null,
-      committed_at: null,
-    })
+    .values(
+      buildMockMoveTicketRow({
+        name: 'half',
+        imp_id: staged.id,
+        issued_at: now,
+        stream_by: now + 1000,
+        stream_used_at: now,
+      }),
+    )
     .execute();
 
   await ctx.targetApp.client.moves.receive({ name: 'later', bytes: 1 });
@@ -649,230 +1053,902 @@ test('a target restart removes a stream cut short and tickets never used', async
   const gone = await findImpByName(ctx.target.db, 'half');
 
   expect(gone).toBeUndefined();
-  expect(rows).toEqual([]);
+  expect(rows).toStrictEqual([]);
 });
 
-const ZFS_ROOT = 'tank/imp';
+test('it counts a target that holds the imp unmarked as committed', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
-// an impd's storage on a fake ZFS pool, and the pool once it is made
-function buildFakeZfsHost() {
-  const pool: { zfs: StubZfs | null } = { zfs: null };
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  const createStorage = (dataDir: string): StorageBackend => {
-    const zfs = buildStubZfs({ root: ZFS_ROOT, rootDir: dataDir });
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-    pool.zfs = zfs;
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
 
-    const backend = createZfsBackend({
-      dataDir,
-      root: ZFS_ROOT,
-      run: zfs.run,
-      streams: zfs.streams,
-      readMounts: zfs.readMounts,
-      readModuleVersion: () => '2.2.2-0ubuntu9',
-      log: () => {},
-    });
+  // as a crash between the mark and the ticket would have left it
+  await updateImpMove(ctx.target.db, created.id, null);
 
-    // the fake pool keeps no files: a new disk gets one, as a clone would
-    const writeDisk = (impId: string) => {
-      const disk = backend.resolveImpPaths(impId).disk;
+  const aborted = await ctx.sourceApp.client.moves.abort({ name: 'dev' });
+  const gone = await findImpByName(ctx.source.db, 'dev');
 
-      if (!existsSync(disk)) {
-        writeFileSync(disk, 'disk');
+  expect(aborted.isDone).toBe(true);
+  expect(gone).toBeUndefined();
+});
+
+test('it refuses a resume whose received copy is gone, and the source keeps its copy', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
+  await ctx.target.imps.destroyImp('dev', { isMove: true });
+
+  expect(ctx.sourceApp.client.moves.resume({ name: 'dev' })).rejects.toMatchObject({
+    code: 'BAD_GATEWAY',
+    message: 'commit: the target answered 409 nothing to commit: the received copy is gone',
+  });
+
+  const kept = await findImpByName(ctx.source.db, 'dev');
+
+  expect(kept?.moveState).toBe('moved');
+});
+
+test('it refuses a resume past the commit window, and the source keeps its copy', async () => {
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
+
+  ctx.target.advance(24 * 60 * 60 * 1000 + 60_000);
+
+  expect(ctx.sourceApp.client.moves.resume({ name: 'dev' })).rejects.toMatchObject({
+    code: 'BAD_GATEWAY',
+    message: 'commit: the target answered 410 the commit window ended; reissue the ticket',
+  });
+
+  const kept = await findImpByName(ctx.source.db, 'dev');
+
+  expect(kept?.moveState).toBe('moved');
+});
+
+test('it fails a send whose target answers the commit as not committed', async () => {
+  const ctx = await setupTest({
+    hook: (request, forward) =>
+      request.url.endsWith(MOVE_PATHS.commit)
+        ? Promise.resolve(Response.json({ isCommitted: false }))
+        : forward(),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  expect(status.error).toContain('commit: the target did not commit');
+  expect(source?.moveState).toBe('moved');
+});
+
+test('it moves the imp to the target when its commit lands before a racing abort', async () => {
+  const dropped = buildStubDroppedCommit();
+  const committed = Promise.withResolvers<undefined>();
+
+  const ctx = await setupTest({
+    hook: async (request, forward, hosts) => {
+      // the abort reaches the target only once the resume's commit landed
+      if (request.url.endsWith(MOVE_PATHS.abort)) {
+        await committed.promise;
       }
-    };
 
-    return {
-      ...backend,
-      createImpDisk: async (impId, source) => {
-        await backend.createImpDisk(impId, source);
+      const response = await dropped(request, forward, hosts);
 
-        writeDisk(impId);
-      },
-      receiveMoveSnapshots: async (impId, steps, readStep, buildId) => {
-        const received = await backend.receiveMoveSnapshots(impId, steps, readStep, buildId);
+      if (request.url.endsWith(MOVE_PATHS.commit)) {
+        committed.resolve(undefined);
+      }
 
-        writeDisk(impId);
-
-        return received;
-      },
-    };
-  };
-
-  return { pool, createStorage };
-}
-
-// the fake pool keeps no files: the image is a dataset only
-async function createZfsImage(host: Readonly<Pick<ImpTest, 'db' | 'dataDir' | 'storage'>>) {
-  await host.storage.start({
-    impIds: new Set(),
-    checkpointIds: new Set(),
-    imageDigests: new Set(),
+      return response;
+    },
   });
 
-  await host.storage.createImage('sha256:ubuntu', () => Promise.resolve());
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').rootfs, 'rootfs');
-  writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').config, '{}');
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
 
-  await createImage(host.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
+  const settled = await Promise.allSettled([
+    ctx.sourceApp.client.moves.abort({ name: 'dev' }),
+    ctx.sourceApp.client.moves.resume({ name: 'dev' }),
+  ]);
+
+  const source = await findImpByName(ctx.source.db, 'dev');
+  const target = await findImpByName(ctx.target.db, 'dev');
+
+  expect(settled.map((result) => result.status)).toStrictEqual(['fulfilled', 'fulfilled']);
+  expect(source).toBeUndefined();
+  expect(target?.moveState).toBeNull();
+});
+
+test('it keeps the imp on the source when a racing abort reaches the target before the commit', async () => {
+  const dropped = buildStubDroppedCommit();
+  const aborted = Promise.withResolvers<undefined>();
+  const commits = { sent: 0 };
+
+  const ctx = await setupTest({
+    hook: async (request, forward, hosts) => {
+      // the resume's commit, the second, reaches the network only once the
+      // abort is through; the first is the one the network drops
+      if (request.url.endsWith(MOVE_PATHS.commit)) {
+        commits.sent += 1;
+      }
+
+      if (request.url.endsWith(MOVE_PATHS.commit) && commits.sent > 1) {
+        await aborted.promise;
+      }
+
+      const response = await dropped(request, forward, hosts);
+
+      if (request.url.endsWith(MOVE_PATHS.abort)) {
+        aborted.resolve(undefined);
+      }
+
+      return response;
+    },
   });
-}
 
-// two impds, the target on a fake ZFS pool and the source too unless `isSourceXfs`
-async function setupZfsMove(options: Readonly<{ hook?: FetchHook; isSourceXfs?: boolean }> = {}) {
-  const isSourceXfs = options.isSourceXfs === true;
-  const sourceHost = buildFakeZfsHost();
-  const targetHost = buildFakeZfsHost();
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  const hosts = await setupMoveHosts({
-    ...(options.hook !== undefined && { hook: options.hook }),
-    ...(!isSourceXfs && { source: { createStorage: sourceHost.createStorage } }),
-    target: { createStorage: targetHost.createStorage },
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
+
+  const settled = await Promise.allSettled([
+    ctx.sourceApp.client.moves.resume({ name: 'dev' }),
+    ctx.sourceApp.client.moves.abort({ name: 'dev' }),
+  ]);
+
+  const source = await findImpByName(ctx.source.db, 'dev');
+  const target = await findImpByName(ctx.target.db, 'dev');
+
+  expect(settled.map((result) => result.status)).toStrictEqual(['rejected', 'fulfilled']);
+  expect(source?.moveState).toBeNull();
+  expect(target).toBeUndefined();
+});
+
+test('it takes a receive with a token that manages the whole host', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.targetApp.client.tokens.create({ name: 'mover', scope: 'manage' });
+
+  const app = buildTestApp(ctx.target, ctx.target, made.secret);
+
+  const ticket = await app.client.moves.receive({ name: 'dev', bytes: 1 });
+
+  expect(ticket.peerUrl).toBe(TARGET_URL);
+});
+
+test('it refuses a receive with a token scoped to imps', async () => {
+  const ctx = await setupTest();
+
+  const made = await ctx.targetApp.client.tokens.create({
+    name: 'mover',
+    scope: 'manage',
+    imps: ['dev'],
   });
 
-  await (isSourceXfs ? createUbuntuImage(hosts.source) : createZfsImage(hosts.source));
-  await createZfsImage(hosts.target);
+  const app = buildTestApp(ctx.target, ctx.target, made.secret);
 
-  if (targetHost.pool.zfs === null) {
-    throw new Error('no pool');
-  }
+  expect(app.client.moves.receive({ name: 'dev', bytes: 1 })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+  });
+});
 
-  // an XFS source has no pool
-  return { ...hosts, sourcePool: sourceHost.pool.zfs, targetPool: targetHost.pool.zfs };
-}
+test('it refuses a reissue with a token scoped to imps', async () => {
+  const ctx = await setupTest();
 
-test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', async () => {
-  const ctx = await setupZfsMove();
+  const made = await ctx.targetApp.client.tokens.create({
+    name: 'mover',
+    scope: 'manage',
+    imps: ['dev'],
+  });
+
+  const app = buildTestApp(ctx.target, ctx.target, made.secret);
+
+  expect(app.client.moves.reissue({ name: 'dev' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it refuses an exec in a marked imp', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  expect(ctx.source.imps.openExec('dev', { argv: ['true'], tty: false })).rejects.toMatchObject({
+    code: 'MOVING',
+  });
+});
+
+test('it writes each /move step of the target to its audit log as the tailnet', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.runMove('dev');
+
+  const calls = await ctx.targetApp.client.audit.calls({});
+
+  const steps = calls.filter((call) => call.procedure.startsWith('move.'));
+
+  expect(steps.map((call) => call.procedure)).toContain('move.commit');
+  expect(steps).toIncludeAllPartialMembers([{ imp: 'dev', actor: 'tailnet' }]);
+  expect(steps.filter((call) => call.imp !== 'dev' || call.actor !== 'tailnet')).toStrictEqual([]);
+});
+
+test('it goes on with a stream longer than 10 minutes while its parts keep coming', async () => {
+  const ctx = await setupTest({
+    partBytes: 4096,
+    hook: (request, forward, hosts) => {
+      // 50 s between parts, on the target's clock
+      if (request.headers.has(MOVE_PART_HEADER)) {
+        hosts.target.advance(50_000);
+      }
+
+      return forward();
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  writeFileSync(ctx.source.storage.resolveImpPaths(created.id).disk, 'x'.repeat(64 * 1024));
+
+  const status = await ctx.runMove('dev');
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+});
+
+test('it ends the stream when a part comes more than 60 s after the last', async () => {
+  const ctx = await setupTest({
+    partBytes: 4096,
+    hook: (request, forward, hosts) => {
+      if (request.headers.get(MOVE_PART_HEADER) === '1') {
+        hosts.target.advance(61_000);
+      }
+
+      return forward();
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  writeFileSync(ctx.source.storage.resolveImpPaths(created.id).disk, 'x'.repeat(64 * 1024));
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('the next part of the move stream came too late');
+  expect(staged).toBeUndefined();
+});
+
+test('it refuses a stream that does not start with its header', async () => {
+  const ctx = await setupTest({ hook: buildStubMoveStreamRewrite((frames) => frames.slice(1)) });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('the stream does not start with its header');
+  expect(staged).toBeUndefined();
+});
+
+test('it refuses a stream whose header names another imp than its ticket', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        return buildJsonMoveFrame(frame.type, { ...header, imp: { ...header.imp, name: 'other' } });
+      }),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('the ticket is for dev, not other');
+});
+
+test('it refuses a stream for an imp id the target has', async () => {
+  const taken = { id: '' };
+
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        return buildJsonMoveFrame(frame.type, { ...header, imp: { ...header.imp, id: taken.id } });
+      }),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const other = await ctx.targetApp.client.imps.create({ name: 'other', image: 'ubuntu' });
+
+  taken.id = other.id;
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain(`this host has an imp with id ${other.id}`);
+});
+
+test('it refuses a stream that leaves out an image the target lacks', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        return buildJsonMoveFrame(frame.type, {
+          ...header,
+          image: { ...header.image, isIncluded: false },
+        });
+      }),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('this host has no image sha256:ubuntu');
+});
+
+test('it refuses a stream that ends after its header', async () => {
+  const ctx = await setupTest({ hook: buildStubMoveStreamRewrite((frames) => frames.slice(0, 1)) });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('the stream has no checkpoint file');
+});
+
+test('it refuses a stream that sends one file where another goes', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) =>
+        frame.type === MOVE_FRAMES.file
+          ? buildJsonMoveFrame(frame.type, {
+              ...MoveFileSchema.parse(readJsonPayload(frame.payload)),
+              kind: 'disk',
+            })
+          : frame,
+      ),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('the stream sent disk where checkpoint goes');
+});
+
+test('it refuses a stream that ends inside a file', async () => {
+  const ctx = await setupTest({ hook: buildStubMoveStreamRewrite((frames) => frames.slice(0, 2)) });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('the stream ended inside a file');
+});
+
+test('it refuses a file whose sha256 does not match its data', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) =>
+        frame.type === MOVE_FRAMES.fileEnd
+          ? buildJsonMoveFrame(frame.type, {
+              ...FileEndSchema.parse(readJsonPayload(frame.payload)),
+              sha256: '0'.repeat(64),
+            })
+          : frame,
+      ),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('checkpoint: the sha256 does not match the data');
+});
+
+test('it refuses a frame inside a file that is neither data nor its end', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) => [
+      ...frames.slice(0, 2),
+      buildJsonMoveFrame(MOVE_FRAMES.end, {}),
+    ]),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain(`an unexpected frame ${String(MOVE_FRAMES.end)} in a file`);
+});
+
+test('it refuses a data frame past the end of its file', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) =>
+        frame.type === MOVE_FRAMES.file
+          ? buildJsonMoveFrame(frame.type, {
+              ...MoveFileSchema.parse(readJsonPayload(frame.payload)),
+              sizeBytes: 0,
+            })
+          : frame,
+      ),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('a DATA frame past the end of its file');
+});
+
+test('it refuses a stream that does not end with END', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.filter((frame) => frame.type !== MOVE_FRAMES.end),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('the stream does not end with END');
+  expect(staged).toBeUndefined();
+});
+
+test('it refuses ZFS streams that do not name each checkpoint once', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        return buildJsonMoveFrame(frame.type, { ...header, streams: [] });
+      }),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('the streams do not name each checkpoint once');
+});
+
+test('it refuses ZFS streams on a target that is not on ZFS', async () => {
+  const ctx = await setupTest({
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        return buildJsonMoveFrame(frame.type, {
+          ...header,
+          streams: [
+            { checkpoint: 0, dataset: 0, base: null },
+            { checkpoint: null, dataset: 0, base: 0 },
+          ],
+        });
+      }),
+    ),
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev');
+
+  expect(status.error).toContain('this host is not on ZFS: it takes a move as files only');
+});
+
+test('it sends the disk and its checkpoints between two ZFS hosts as ZFS streams', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
   const status = await ctx.runMove('dev', true);
   const checkpoints = await ctx.targetApp.client.checkpoints.list({ name: 'dev' });
-
-  const received = ctx.targetPool.commands.filter((command) => command.startsWith('zfs recv'));
-
   const moved = await ctx.targetApp.client.imps.get({ name: 'dev' });
   const left = await findImpByName(ctx.source.db, 'dev');
 
+  const received = targetZfs
+    .readPool()
+    .commands.filter((command) => command.startsWith('zfs recv'));
+
+  invariant(checkpoints[0]);
+
   expect(status.error).toBeNull();
-  expect(checkpoints.map((checkpoint) => checkpoint.label)).toEqual(['one']);
+  expect(checkpoints.map((checkpoint) => checkpoint.label)).toStrictEqual(['one']);
   expect(received).toHaveLength(2);
 
-  expect(ctx.targetPool.listSnapshots()).toContain(
-    `${ZFS_ROOT}/disks/${moved.id}@${checkpoints[0]?.id ?? ''}`,
+  expect(targetZfs.readPool().listSnapshots()).toContain(
+    `tank/imp/disks/${moved.id}@${checkpoints[0].id}`,
   );
 
   expect(left).toBeUndefined();
 });
 
-test('after a move between ZFS hosts, a GC on either host finds nothing to drop or keep', async () => {
-  const ctx = await setupZfsMove();
+test.each([
+  ['source', false],
+  ['source', true],
+  ['target', false],
+  ['target', true],
+] as const)(
+  'it finds nothing for a GC on the %s to drop or keep after a ZFS move (orphans: %p)',
+  async (host, orphans) => {
+    const sourceZfs = buildStubZfsStorage('tank/imp');
+    const targetZfs = buildStubZfsStorage('tank/imp');
+
+    const ctx = await setupTest({
+      source: { createStorage: sourceZfs.createStorage },
+      target: { createStorage: targetZfs.createStorage },
+    });
+
+    await createZfsUbuntuImage(ctx.source);
+    await createZfsUbuntuImage(ctx.target);
+
+    await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+    await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+    await ctx.runMove('dev', true);
+
+    const sweep = await (host === 'source' ? ctx.sourceApp : ctx.targetApp).client.system.gc({
+      orphans,
+    });
+
+    expect(sweep.dropped).toStrictEqual([]);
+    expect(sweep.kept).toStrictEqual([]);
+  },
+);
+
+test('it leaves no move snapshot and no staging dataset in either pool after a ZFS move', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
   const status = await ctx.runMove('dev', true);
 
-  const sweeps = [];
-
-  for (const app of [ctx.sourceApp, ctx.targetApp]) {
-    const kept = await app.client.system.gc({});
-    const retired = await app.client.system.gc({ orphans: true });
-
-    sweeps.push(kept, retired);
-  }
-
-  const pools = [ctx.sourcePool, ctx.targetPool].filter((pool) => pool !== null);
+  const snapshots = [sourceZfs, targetZfs].flatMap((zfs) => zfs.readPool().listSnapshots());
+  const datasets = [sourceZfs, targetZfs].flatMap((zfs) => zfs.readPool().listDatasets());
 
   expect(status.error).toBeNull();
-  expect(sweeps.map((sweep) => [sweep.dropped, sweep.kept])).toEqual(sweeps.map(() => [[], []]));
-
-  expect(pools.flatMap((pool) => pool.listSnapshots())).not.toContainEqual(
-    expect.stringContaining('@mv-'),
-  );
-
-  expect(
-    pools.flatMap((pool) => pool.listDatasets()).filter((name) => name.includes('/staging/')),
-  ).toEqual([]);
+  expect(snapshots).not.toContainEqual(expect.stringContaining('@mv-'));
+  expect(datasets).not.toContainEqual(expect.stringContaining('/staging/'));
 });
 
-// the first FILE_END frame's sum, one hex digit changed: a frame is a type
-// byte, a 4-byte big-endian length, then the payload
-function writeWrongSum(body: Uint8Array): boolean {
-  const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+test('it never commits a ZFS stream whose sum does not match', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
 
-  for (let at = 0; at + 5 <= body.length; at += 5 + view.getUint32(at + 1)) {
-    if (body[at] === 4) {
-      const sumAt = at + 5 + '{"sha256":"'.length;
-
-      body[sumAt] = body[sumAt] === 0x30 ? 0x31 : 0x30;
-
-      return true;
-    }
-  }
-
-  return false;
-}
-
-test('a ZFS stream whose sum does not match never commits, and the move can go again', async () => {
-  const state = { isCorrupted: false };
-
-  const ctx = await setupZfsMove({
-    hook: async (request, forward) => {
-      if (state.isCorrupted || request.headers.get(MOVE_PART_HEADER) === null) {
-        return forward();
-      }
-
-      const read = await request.arrayBuffer();
-
-      const body = new Uint8Array(read);
-
-      state.isCorrupted = writeWrongSum(body);
-
-      const changed = new Request(request.url, {
-        method: 'POST',
-        headers: request.headers,
-        body,
-      });
-
-      return ctx.targetApp.moves.handle(changed, SOURCE_PEER);
-    },
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) =>
+        frame.type === MOVE_FRAMES.fileEnd
+          ? buildJsonMoveFrame(frame.type, {
+              ...FileEndSchema.parse(readJsonPayload(frame.payload)),
+              sha256: '0'.repeat(64),
+            })
+          : frame,
+      ),
+    ),
   });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev', true);
+
+  const pool = targetZfs.readPool();
+  const received = pool.commands.filter((command) => command.startsWith('zfs recv'));
+
+  // nothing to clean up: `zfs recv` never saw the stream's end
+  const cleaned = pool.commands.filter(
+    (command) => command.includes('/staging/mvin-') && !command.startsWith('zfs recv'),
+  );
+
+  const absent = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('ZFS stream 0: the sha256 does not match');
+  expect(received).toHaveLength(1);
+  expect(pool.listDatasets()).not.toContainEqual(expect.stringContaining('/staging/'));
+  expect(cleaned).toStrictEqual([]);
+  expect(absent).toBeUndefined();
+});
+
+test('it moves an imp between ZFS hosts again after a stream whose sum did not match', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+  const corrupt = { remaining: 1 };
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.fileEnd || corrupt.remaining === 0) {
+          return frame;
+        }
+
+        corrupt.remaining -= 1;
+
+        return buildJsonMoveFrame(frame.type, { sha256: '0'.repeat(64) });
+      }),
+    ),
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
   const failed = await ctx.runMove('dev', true);
 
-  const staged = ctx.targetPool.listDatasets().filter((name) => name.includes('/staging/'));
-  const received = ctx.targetPool.commands.filter((command) => command.startsWith('zfs recv'));
-
-  // nothing to clean up: `zfs recv` never saw the stream's end
-  const cleaned = ctx.targetPool.commands.filter((command) => command.includes('/staging/mvin-'));
-
-  const absent = await findImpByName(ctx.target.db, 'dev');
-
   await ctx.sourceApp.client.moves.abort({ name: 'dev' });
 
   const retried = await ctx.runMove('dev', true);
 
-  expect(state.isCorrupted).toBe(true);
-  expect(failed.error).toContain('the sha256 does not match');
-  expect(received).toHaveLength(1);
-  expect(staged).toEqual([]);
-  expect(cleaned.filter((command) => !command.startsWith('zfs recv'))).toEqual([]);
-  expect(absent).toBeUndefined();
+  expect(failed.error).toContain('ZFS stream 0: the sha256 does not match');
   expect(retried).toMatchObject({ isDone: true, error: null });
 });
 
-test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots', async () => {
-  const ctx = await setupZfsMove({ isSourceXfs: true });
+test('it refuses a ZFS move whose stream leaves out a ZFS stream', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.filter((frame) => frame.type !== MOVE_FRAMES.file),
+    ),
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const status = await ctx.runMove('dev', true);
+
+  expect(status.error).toContain('the stream has no ZFS stream 0');
+});
+
+test('it refuses a ZFS stream that ends before its sum', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) =>
+        frame.type === MOVE_FRAMES.fileEnd ? buildJsonMoveFrame(MOVE_FRAMES.end, {}) : frame,
+      ),
+    ),
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const status = await ctx.runMove('dev', true);
+
+  expect(status.error).toContain('ZFS stream 0 ended early');
+});
+
+test('it refuses a ZFS stream whose data frames come out of order', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.data) {
+          return frame;
+        }
+
+        const payload = new Uint8Array(frame.payload);
+
+        // the 8-byte big-endian offset that opens a DATA payload
+        new DataView(payload.buffer).setBigUint64(0, 1n);
+
+        return { type: frame.type, payload };
+      }),
+    ),
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const status = await ctx.runMove('dev', true);
+
+  expect(status.error).toContain('ZFS stream 0: a DATA frame out of order');
+});
+
+test('it fails a ZFS move to a target that left ZFS since the prepare', async () => {
+  const sourceZfs = buildStubZfsStorage('tank/imp');
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({
+    source: { createStorage: sourceZfs.createStorage },
+    target: { createStorage: targetZfs.createStorage },
+    hook: buildStubSwitchedStorageTarget('xfs'),
+  });
+
+  await createZfsUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const status = await ctx.runMove('dev', true);
+
+  expect(status.error).toContain('the target is not on ZFS any more; prepare the move again');
+});
+
+test('it moves an imp from an XFS host to a ZFS host as files, its checkpoints as snapshots', async () => {
+  const targetZfs = buildStubZfsStorage('tank/imp');
+
+  const ctx = await setupTest({ target: { createStorage: targetZfs.createStorage } });
+
+  await createUbuntuImage(ctx.source);
+  await createZfsUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
@@ -884,175 +1960,15 @@ test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots'
   const status = await ctx.runMove('dev');
   const checkpoints = await ctx.targetApp.client.checkpoints.list({ name: 'dev' });
 
-  const disk = readFileSync(ctx.target.storage.resolveImpPaths(created.id).disk, 'utf8');
+  invariant(checkpoints[0]);
 
   expect(status.error).toBeNull();
-  expect(disk.startsWith('hello')).toBe(true);
 
-  expect(ctx.targetPool.listSnapshots()).toContain(
-    `${ZFS_ROOT}/disks/${created.id}@${checkpoints[0]?.id ?? ''}`,
-  );
-});
-
-test('a stream longer than 10 minutes goes on while its parts keep coming', async () => {
-  const clock: { advance: (ms: number) => void } = { advance: () => {} };
-
-  const ctx = await setupMoveTest(
-    (request, forward) => {
-      // 50 s between parts, on the target's clock
-      if (request.headers.has(MOVE_PART_HEADER)) {
-        clock.advance(50_000);
-      }
-
-      return forward();
-    },
-    { partBytes: 4096 },
+  expect(readFileSync(ctx.target.storage.resolveImpPaths(created.id).disk, 'utf8')).toStartWith(
+    'hello',
   );
 
-  clock.advance = ctx.target.advance;
-
-  writeFileSync(ctx.source.storage.resolveImpPaths(ctx.impId).disk, 'x'.repeat(64 * 1024));
-
-  const status = await ctx.runMove();
-
-  expect(status).toMatchObject({ isDone: true, error: null });
-});
-
-test('a part that comes more than 60 s after the last ends the stream', async () => {
-  const clock: { advance: (ms: number) => void } = { advance: () => {} };
-
-  const ctx = await setupMoveTest(
-    (request, forward) => {
-      if (request.headers.get(MOVE_PART_HEADER) === '1') {
-        clock.advance(61_000);
-      }
-
-      return forward();
-    },
-    { partBytes: 4096 },
+  expect(targetZfs.readPool().listSnapshots()).toContain(
+    `tank/imp/disks/${created.id}@${checkpoints[0].id}`,
   );
-
-  clock.advance = ctx.target.advance;
-
-  writeFileSync(ctx.source.storage.resolveImpPaths(ctx.impId).disk, 'x'.repeat(64 * 1024));
-
-  const status = await ctx.runMove();
-  const staged = await findImpByName(ctx.target.db, 'dev');
-
-  expect(status.error).toContain('came too late');
-  expect(staged).toBeUndefined();
-});
-
-test('a target that holds the imp unmarked counts as committed', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupMoveTest((request, forward) => {
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-      lost.commits -= 1;
-
-      return Promise.reject(new Error('the network dropped the commit'));
-    }
-
-    return forward();
-  });
-
-  await ctx.runMove();
-
-  // as a crash between the mark and the ticket would have left it
-  await updateImpMove(ctx.target.db, ctx.impId, null);
-
-  const aborted = await ctx.sourceApp.client.moves.abort({ name: 'dev' });
-  const gone = await findImpByName(ctx.source.db, 'dev');
-
-  expect(aborted.isDone).toBe(true);
-  expect(gone).toBeUndefined();
-});
-
-test('a commit with the received copy gone is refused, and the source keeps its copy', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupMoveTest((request, forward) => {
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-      lost.commits -= 1;
-
-      return Promise.reject(new Error('the network dropped the commit'));
-    }
-
-    return forward();
-  });
-
-  await ctx.runMove();
-  await ctx.target.imps.destroyImp('dev', { isMove: true });
-
-  const refused = await readRejection(ctx.sourceApp.client.moves.resume({ name: 'dev' }));
-  const kept = await findImpByName(ctx.source.db, 'dev');
-
-  expect(String(refused)).toContain('the received copy is gone');
-  expect(kept?.moveState).toBe('moved');
-});
-
-test('a resume and an abort at once leave the imp live on exactly one host', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupMoveTest((request, forward) => {
-    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-      lost.commits -= 1;
-
-      return Promise.reject(new Error('the network dropped the commit'));
-    }
-
-    return forward();
-  });
-
-  await ctx.runMove();
-
-  await Promise.allSettled([
-    ctx.sourceApp.client.moves.resume({ name: 'dev' }),
-    ctx.sourceApp.client.moves.abort({ name: 'dev' }),
-  ]);
-
-  const source = await findImpByName(ctx.source.db, 'dev');
-  const target = await findImpByName(ctx.target.db, 'dev');
-
-  const isMoved = source === undefined && target?.moveState === null;
-  const isKept = source?.moveState === null && target === undefined;
-
-  expect(isMoved || isKept).toBe(true);
-});
-
-test('a receive takes a token with manage on the whole host', async () => {
-  const ctx = await setupMoveTest();
-
-  const made = await ctx.targetApp.client.tokens.create({
-    name: 'mover',
-    scope: 'manage',
-    imps: ['dev'],
-  });
-
-  const scoped = buildTestApp(ctx.target, ctx.target, made.secret);
-
-  const receive = await readRejection(scoped.client.moves.receive({ name: 'dev', bytes: 1 }));
-  const reissue = await readRejection(scoped.client.moves.reissue({ name: 'dev' }));
-
-  expect(receive).toMatchObject({ code: 'FORBIDDEN' });
-  expect(reissue).toMatchObject({ code: 'FORBIDDEN' });
-});
-
-test('a marked imp refuses an exec, and each /move step is in the audit log', async () => {
-  const ctx = await setupMoveTest();
-
-  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
-
-  const exec = await readRejection(ctx.source.imps.openExec('dev', { argv: ['true'], tty: false }));
-
-  await ctx.sourceApp.client.moves.abort({ name: 'dev' });
-  await ctx.runMove();
-
-  const calls = await ctx.targetApp.client.audit.calls({});
-
-  const steps = calls.filter((call) => call.procedure.startsWith('move.'));
-
-  expect(exec).toMatchObject({ code: 'MOVING' });
-  expect(steps.map((call) => call.procedure)).toContain('move.commit');
-  expect(steps.every((call) => call.imp === 'dev' && call.actor === 'tailnet')).toBe(true);
 });

@@ -608,9 +608,17 @@ export async function runMigrations(db: Kysely<DatabaseSchema>): Promise<void> {
   requireMigrated(result);
 }
 
-// up to and including `name`, for a test that writes rows as an older impd did
-export async function runMigrationsTo(db: Kysely<DatabaseSchema>, name: string): Promise<void> {
-  const migrator = new Migrator({ db, provider: PROVIDER });
+// up to and including `name`, for a test that writes rows as an older impd
+// did; a test of a failed migration passes its own `migrations`
+export async function runMigrationsTo(
+  db: Kysely<DatabaseSchema>,
+  name: string,
+  migrations: Readonly<Record<string, Readonly<Migration>>> = MIGRATIONS,
+): Promise<void> {
+  const migrator = new Migrator({
+    db,
+    provider: { getMigrations: () => Promise.resolve({ ...migrations }) },
+  });
 
   const result = await migrator.migrateTo(name);
 

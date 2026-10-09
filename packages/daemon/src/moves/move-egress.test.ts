@@ -1,42 +1,27 @@
 import { expect, test } from 'bun:test';
 import { findImpByName } from '../db/imps';
-import { MOVE_PATHS, MoveOfferReplySchema } from './move-header';
+import { buildStubOlderMoveTarget } from '../test-utils/build-stub-older-move-target';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
-import type { FetchHook } from './test-moves';
+import type { MoveHostsOptions } from './test-moves';
 
-// An offer reply as a target from before the public egress policy answers it
-async function removeKeepsPublic(request: Request, forward: () => Promise<Response>) {
-  const response = await forward();
-
-  if (!request.url.endsWith(MOVE_PATHS.offer)) {
-    return response;
-  }
-
-  const body: unknown = await response.json();
-
-  const { keepsPublicEgress: _dropped, ...older } = MoveOfferReplySchema.parse(body);
-
-  return Response.json(older);
+// two impds, the source's move routes reaching the target's in process
+function setupTest(config: Readonly<MoveHostsOptions> = {}) {
+  return setupMoveHosts(config);
 }
 
-async function setupEgressMove(hook?: FetchHook) {
-  const hosts = await setupMoveHosts({ ...(hook !== undefined && { hook }) });
+test('it refuses a public imp a target that predates the policy, before any byte goes', async () => {
+  const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsPublicEgress') });
 
-  await createUbuntuImage(hosts.source);
-  await createUbuntuImage(hosts.target);
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
-  await hosts.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  await hosts.sourceApp.client.imps.setPolicy({
+  await ctx.sourceApp.client.imps.setPolicy({
     name: 'dev',
     policy: { mode: 'public', allow: [] },
   });
 
-  return hosts;
-}
-
-test('a public imp is refused a target that predates the policy, before any byte goes', async () => {
-  const ctx = await setupEgressMove(removeKeepsPublic);
   const status = await ctx.runMove('dev', true);
   const imp = await findImpByName(ctx.source.db, 'dev');
   const landed = await findImpByName(ctx.target.db, 'dev');
@@ -47,11 +32,22 @@ test('a public imp is refused a target that predates the policy, before any byte
   expect(landed).toBeUndefined();
 });
 
-test('a public imp lands public on a target that knows the policy', async () => {
-  const ctx = await setupEgressMove();
+test('it lands a public imp public on a target that knows the policy', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.setPolicy({
+    name: 'dev',
+    policy: { mode: 'public', allow: [] },
+  });
+
   const status = await ctx.runMove('dev', true);
   const policy = await ctx.target.egress.readPolicy('dev');
 
   expect(status).toMatchObject({ isDone: true, error: null });
-  expect(policy).toEqual({ mode: 'public', allow: [] });
+  expect(policy).toStrictEqual({ mode: 'public', allow: [] });
 });
