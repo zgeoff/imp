@@ -1,666 +1,1854 @@
-import { expect, test } from 'bun:test';
-import { createSecret, findSecret, removeSecret } from '../db/secrets';
-import { setupImpTest } from '../imps/test-imps';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildMockBrokerRule } from '@imp/api/test-utils/build-mock-broker-rule';
+import { buildMockOAuthConfig } from '@imp/api/test-utils/build-mock-oauth-config';
+import { invariant } from '@imp/test-utils/invariant';
+import { server } from '@imp/test-utils/mock-server';
+import { HttpResponse, delay, http } from 'msw';
+import { createSecret, removeSecret } from '../db/secrets';
+import { buildMockOAuthStateFile } from '../test-utils/build-mock-oauth-state-file';
+import { buildQueryGate } from '../test-utils/build-query-gate';
+import { buildStubBrokerJwt } from '../test-utils/build-stub-broker-jwt';
+import { buildStubBrokerTokenEndpoint } from '../test-utils/build-stub-broker-token-endpoint';
+import { createTestDatabase } from '../test-utils/create-test-database';
+import { startStubBrokerTlsUpstream } from '../test-utils/start-stub-broker-tls-upstream';
+import { loadOrCreateBrokerCa } from './broker-ca';
 import { createOAuthRefresher, isDue } from './oauth-refresher';
-import type { OAuthRequest } from './oauth-refresher';
 import { buildPendingState, formatOAuthState, parseOAuthState } from './oauth-state';
-import type { OAuthStateFile } from './oauth-state';
 import { buildValueFile, createSecretFiles } from './secret-files';
 
-// Every token here is made up, and the token endpoint is a function.
+// Every token here is made up; the token endpoint answers through MSW.
 
-const HOUR = 3_600_000;
-const T0 = Date.parse('2030-01-01T00:00:00Z');
-const RULES = [{ host: 'api.example.com', header: 'authorization', scheme: 'bearer' as const }];
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-interface Call {
-  readonly url: string;
-  readonly contentType: string | null;
-  readonly accept: string | null;
-  readonly body: string;
-  readonly redirect: string;
+  onTestFinished(() => stack.disposeAsync());
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'oauth-refresher-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const testDatabase = await createTestDatabase();
+
+  return { stack, db: testDatabase.db, dataDir, files: createSecretFiles(dataDir) };
 }
 
-type Reply = () => Response | Promise<Response>;
+test('it sends the refresh token and the client id as a form', async () => {
+  const ctx = await setupTest();
 
-function buildReply(status: number, body: unknown): Reply {
-  return () => Response.json(body, { status });
-}
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
-function encodeSegment(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
 
-function buildJwt(claims: Readonly<Record<string, unknown>>): string {
-  return `${encodeSegment({ alg: 'none' })}.${encodeSegment(claims)}.fake`;
-}
+  const valueFile = buildValueFile('codex');
 
-function buildReadyState(overrides: Partial<OAuthStateFile> = {}): OAuthStateFile {
-  return {
-    v: 1,
-    refreshToken: 'fake-refresh-0',
-    accessToken: 'fake-access-0',
-    idToken: 'fake-id-0',
-    expiresAt: T0 + 240 * HOUR,
-    refreshedAt: T0,
-    status: 'ready',
-    error: null,
-    ...overrides,
-  };
-}
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
 
-async function setupTest(options: { readonly format?: 'json' | 'form' } = {}) {
-  const harness = await setupImpTest();
-
-  const files = createSecretFiles(harness.dataDir);
-  const logs: string[] = [];
-  const calls: Call[] = [];
-  const replies: Reply[] = [];
-  const clock = { now: T0 };
-  const hold = { gate: null as Promise<void> | null };
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({
+      tokenUrl: 'https://auth.example.com/oauth/token',
+      clientId: 'fake-client',
+      tokenFormat: 'form',
+    }),
+    valueFile,
+  });
 
   const refresher = createOAuthRefresher({
-    db: harness.db,
-    files,
-    log: (message) => {
-      logs.push(message);
-    },
-    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
-    now: () => clock.now,
-    fetch: async (url: string, init: OAuthRequest) => {
-      calls.push({
-        url,
-        contentType: init.headers.get('content-type'),
-        accept: init.headers.get('accept'),
-        body: init.body,
-        redirect: init.redirect,
-      });
-
-      if (hold.gate !== null) {
-        await hold.gate;
-      }
-
-      const next = replies.shift();
-
-      if (next === undefined) {
-        throw new Error('no reply queued');
-      }
-
-      return next();
-    },
-  });
-
-  const writeState = async (state: OAuthStateFile, name = 'codex') => {
-    const valueFile = buildValueFile(name);
-
-    files.write(valueFile, formatOAuthState(state));
-
-    await createSecret(harness.db, {
-      name,
-      kind: 'oauth',
-      rules: RULES,
-      oauth: {
-        tokenUrl: 'https://auth.example.com/oauth/token',
-        clientId: 'fake-client',
-        tokenFormat: options.format ?? 'form',
-      },
-      valueFile,
-    });
-
-    return valueFile;
-  };
-
-  const readState = async (name = 'codex'): Promise<OAuthStateFile | null> => {
-    const secret = await findSecret(harness.db, name);
-
-    const text = secret === undefined ? null : files.read(secret.valueFile);
-
-    return text === null ? null : parseOAuthState(text);
-  };
-
-  return {
-    ...harness,
-    files,
-    logs,
-    calls,
-    replies,
-    clock,
-    hold,
-    refresher,
-    writeState,
-    readState,
-  };
-}
-
-// no log line, state or error of the refresher may carry a token
-function assertNoTokens(logs: readonly string[]): void {
-  expect(logs.join('\n')).not.toMatch(/fake-(?:access|refresh|id)/);
-}
-
-test('a refresh sends the form, stores the rotated tokens and logs no token', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.replies.push(
-    buildReply(200, {
-      access_token: 'fake-access-1',
-      refresh_token: 'fake-refresh-1',
-      id_token: 'fake-id-1',
-      expires_in: 7200,
-    }),
-  );
-
-  const outcome = await ctx.refresher.refresh('codex', true);
-
-  expect(outcome).toEqual({ kind: 'refreshed', rotated: true });
-
-  expect(ctx.calls).toEqual([
-    {
-      url: 'https://auth.example.com/oauth/token',
-      contentType: 'application/x-www-form-urlencoded',
-      accept: 'application/json',
-      body: 'grant_type=refresh_token&refresh_token=fake-refresh-0&client_id=fake-client',
-      redirect: 'manual',
-    },
-  ]);
-
-  const state = await ctx.readState();
-
-  expect(state).toEqual({
-    v: 1,
-    refreshToken: 'fake-refresh-1',
-    accessToken: 'fake-access-1',
-    idToken: 'fake-id-1',
-    expiresAt: T0 + 2 * HOUR,
-    refreshedAt: T0,
-    status: 'ready',
-    error: null,
-  });
-
-  expect(ctx.logs).toEqual([
-    'impd: broker: oauth secret codex refreshed; refresh token rotated: yes; expires 2030-01-01T02:00:00.000Z',
-  ]);
-
-  assertNoTokens(ctx.logs);
-});
-
-test('the json format sends a json body', async () => {
-  await using ctx = await setupTest({ format: 'json' });
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 60 }));
-
-  await ctx.refresher.refresh('codex', true);
-
-  expect(ctx.calls[0]?.contentType).toBe('application/json');
-
-  expect(JSON.parse(ctx.calls[0]?.body ?? '')).toEqual({
-    grant_type: 'refresh_token',
-    refresh_token: 'fake-refresh-0',
-    client_id: 'fake-client',
-  });
-});
-
-test('a field the answer leaves out keeps its old value, and an unrotated refresh token is logged as such', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildReadyState());
-
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 3600 }));
-
-  const outcome = await ctx.refresher.refresh('codex', true);
-
-  expect(outcome).toEqual({ kind: 'refreshed', rotated: false });
-
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({
-    refreshToken: 'fake-refresh-0',
-    accessToken: 'fake-access-1',
-    idToken: 'fake-id-0',
-  });
-
-  expect(ctx.logs[0]).toContain('refresh token rotated: no');
-
-  // an answer with only a new refresh token keeps the access token
-  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-2' }));
-
-  await ctx.refresher.refresh('codex', true);
-
-  const state2 = await ctx.readState();
-
-  expect(state2).toMatchObject({
-    refreshToken: 'fake-refresh-2',
-    accessToken: 'fake-access-1',
-  });
-
-  assertNoTokens(ctx.logs);
-});
-
-test('the expiry is expires_in, else the access token exp, else unknown', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  const exp = Math.floor((T0 + 10 * HOUR) / 1000);
-
-  ctx.replies.push(
-    buildReply(200, { access_token: buildJwt({ exp }), expires_in: 3600 }),
-    buildReply(200, { access_token: buildJwt({ exp }) }),
-    buildReply(200, { access_token: 'fake-access-opaque' }),
-  );
-
-  await ctx.refresher.refresh('codex', true);
-
-  const expiry1 = await ctx.readState();
-
-  expect(expiry1?.expiresAt).toBe(T0 + HOUR);
-
-  await ctx.refresher.refresh('codex', true);
-
-  const expiry2 = await ctx.readState();
-
-  expect(expiry2?.expiresAt).toBe(T0 + 10 * HOUR);
-
-  await ctx.refresher.refresh('codex', true);
-
-  const expiry3 = await ctx.readState();
-
-  expect(expiry3?.expiresAt).toBeNull();
-});
-
-test('an expiry no date can hold is unknown, and the rotated tokens are kept', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.replies.push(
-    buildReply(200, {
-      access_token: 'fake-access-1',
-      refresh_token: 'fake-refresh-1',
-      expires_in: 1e20,
-    }),
-  );
-
-  await ctx.refresher.refresh('codex', true);
-
-  const state = await ctx.readState();
-
-  expect(state?.status).toBe('ready');
-  expect(state?.expiresAt).toBeNull();
-  expect(state?.refreshToken).toBe('fake-refresh-1');
-  expect(state?.accessToken).toBe('fake-access-1');
-});
-
-test('an expires_in of 0 is due now, not unknown', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 0 }));
-
-  await ctx.refresher.refresh('codex', true);
-
-  const state = await ctx.readState();
-
-  expect(state?.expiresAt).toBe(T0);
-});
-
-test('a 200 with no token is a transient failure that changes nothing', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildReadyState());
-
-  const before = await ctx.readState();
-
-  ctx.replies.push(buildReply(200, {}));
-
-  await ctx.refresher.refresh('codex', true);
-
-  const after = await ctx.readState();
-
-  expect(after?.status).toBe('ready');
-  expect(after?.refreshedAt).toBe(before?.refreshedAt ?? -1);
-  expect(after?.accessToken).toBe(before?.accessToken ?? '');
-  expect(after?.error).toBe('no token in the response');
-});
-
-test('expires_in with no new access token leaves the old expiry', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildReadyState({ expiresAt: T0 + 10_000 }));
-
-  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-1', expires_in: 3600 }));
-
-  await ctx.refresher.refresh('codex', true);
-
-  const state = await ctx.readState();
-
-  expect(state?.refreshToken).toBe('fake-refresh-1');
-  expect(state?.expiresAt).toBe(T0 + 10_000);
-});
-
-test('when a refresh is due', () => {
-  const ready = buildReadyState();
-
-  // a 240 h token is refreshed with 24 h left
-  expect(isDue(ready, T0 + 215 * HOUR)).toBe(false);
-  expect(isDue(ready, T0 + 217 * HOUR)).toBe(true);
-
-  // a short one at half its lifetime
-  const short = buildReadyState({ expiresAt: T0 + 2 * HOUR });
-
-  expect(isDue(short, T0 + 0.9 * HOUR)).toBe(false);
-  expect(isDue(short, T0 + 1.1 * HOUR)).toBe(true);
-
-  // a token shorter than a tick and a token call is due at once
-  const brief = buildReadyState({ expiresAt: T0 + 60_000 });
-
-  expect(isDue(brief, T0)).toBe(true);
-  expect(isDue(buildReadyState({ expiresAt: T0 + 60_000, refreshedAt: null }), T0)).toBe(true);
-
-  // no expiry: older than an hour
-  const unknown = buildReadyState({ expiresAt: null });
-
-  expect(isDue(unknown, T0 + 0.9 * HOUR)).toBe(false);
-  expect(isDue(unknown, T0 + 1.1 * HOUR)).toBe(true);
-
-  // nothing to send yet
-  expect(isDue(buildPendingState('fake-refresh-0'), T0)).toBe(true);
-  expect(isDue(buildReadyState({ accessToken: null }), T0)).toBe(true);
-
-  // a dead refresh token is never tried again by the timer
-  expect(isDue(buildReadyState({ status: 'needs_login' }), T0 + 1000 * HOUR)).toBe(false);
-});
-
-test('the timer refreshes a secret that is due and leaves the others', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildReadyState(), 'codex');
-  await ctx.writeState(buildReadyState({ refreshToken: 'fake-refresh-b' }), 'other');
-
-  ctx.clock.now = T0 + 230 * HOUR;
-
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 3600 }));
-
-  await ctx.refresher.tick();
-
-  expect(ctx.calls).toHaveLength(2);
-
-  // a second check finds both fresh
-  await ctx.refresher.tick();
-
-  expect(ctx.calls).toHaveLength(2);
-});
-
-test('a transient error keeps the tokens and the status, and backs off 1, 2, 4 minutes up to 30', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildReadyState());
-
-  ctx.clock.now = T0 + 230 * HOUR;
-
-  const writeFailure = async (): Promise<void> => {
-    ctx.replies.push(buildReply(503, { error: 'server_error', detail: 'fake-refresh-0' }));
-
-    await ctx.refresher.tick();
-  };
-
-  await writeFailure();
-
-  expect(ctx.calls).toHaveLength(1);
-
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({
-    status: 'ready',
-    error: 'HTTP 503',
-    refreshToken: 'fake-refresh-0',
-    accessToken: 'fake-access-0',
-  });
-
-  // inside the first minute: no call
-  ctx.clock.now += 59_000;
-
-  await ctx.refresher.tick();
-
-  expect(ctx.calls).toHaveLength(1);
-
-  // after it, a call that fails again waits two minutes
-  ctx.clock.now += 2000;
-
-  await writeFailure();
-
-  expect(ctx.calls).toHaveLength(2);
-
-  ctx.clock.now += 119_000;
-
-  await ctx.refresher.tick();
-
-  expect(ctx.calls).toHaveLength(2);
-
-  ctx.clock.now += 2000;
-
-  await writeFailure();
-
-  expect(ctx.calls).toHaveLength(3);
-
-  // the wait doubles up to 30 minutes
-  for (let index = 0; index < 8; index += 1) {
-    ctx.clock.now += 31 * 60_000;
-
-    await writeFailure();
-  }
-
-  expect(ctx.logs.at(-1)).toContain('trying again in 30 min');
-
-  // a success clears it
-  ctx.clock.now += 31 * 60_000;
-
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 7200 }));
-
-  await ctx.refresher.tick();
-
-  const state2 = await ctx.readState();
-
-  expect(state2).toMatchObject({ status: 'ready', error: null });
-
-  assertNoTokens(ctx.logs);
-});
-
-test('an error on a pending secret leaves it pending', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.replies.push(() => {
-    throw new Error('connect ECONNREFUSED');
-  });
-
-  const outcome = await ctx.refresher.refresh('codex', true);
-
-  expect(outcome).toEqual({ kind: 'transient', error: 'network error' });
-
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({ status: 'pending', error: 'network error' });
-});
-
-test('a redirect, an unparseable answer and an answer without a usable token are transient', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildReadyState());
-
-  const answers: readonly [Reply, string][] = [
-    [
-      () => new Response(null, { status: 302, headers: { location: 'https://evil.example.com' } }),
-      'HTTP 302',
-    ],
-    [() => new Response('<html>nope</html>'), 'invalid response'],
-    [buildReply(200, { access_token: 'has space' }), 'invalid response'],
-    [buildReply(200, { access_token: 'bad\r\nx-evil: 1' }), 'invalid response'],
-  ];
-
-  for (const [answer, error] of answers) {
-    ctx.replies.push(answer);
-
-    const outcome = await ctx.refresher.refresh('codex', true);
-
-    expect(outcome).toEqual({ kind: 'transient', error });
-  }
-
-  // the old tokens are still the live ones
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({
-    refreshToken: 'fake-refresh-0',
-    accessToken: 'fake-access-0',
-  });
-});
-
-test('a call that outlasts the timeout is transient', async () => {
-  await using ctx = await setupTest();
-
-  const timed = createOAuthRefresher({
     db: ctx.db,
     files: ctx.files,
     log: () => {},
     resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
-    timeoutMs: 20,
-    fetch: (_url, init) =>
-      new Promise<Response>((_resolve, reject) => {
-        init.signal.addEventListener('abort', () => {
-          const reason: unknown = init.signal.reason;
-          const failure = reason instanceof Error ? reason : new Error('aborted');
-
-          reject(failure);
-        });
-      }),
   });
 
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
+  await refresher.refresh('codex', true);
 
-  const outcome = await timed.refresh('codex', true);
-
-  expect(outcome).toEqual({ kind: 'transient', error: 'timeout' });
+  expect(endpoint.requests).toStrictEqual([
+    {
+      contentType: 'application/x-www-form-urlencoded',
+      accept: 'application/json',
+      body: 'grant_type=refresh_token&refresh_token=fake-refresh-0&client_id=fake-client',
+      refreshToken: 'fake-refresh-0',
+    },
+  ]);
 });
 
-test('each permanent error shape needs a new sign-in, once, and the timer stops', async () => {
-  const permanent: readonly [Reply, string][] = [
-    [buildReply(401, { message: 'no' }), 'HTTP 401'],
-    [
-      buildReply(400, { error: 'invalid_grant', error_description: 'fake-refresh-0' }),
-      'invalid_grant',
-    ],
-    [
-      buildReply(400, { error: { code: 'refresh_token_reused', message: 'x' } }),
-      'refresh_token_reused',
-    ],
-    [buildReply(401, { error: { code: 'refresh_token_expired' } }), 'refresh_token_expired'],
-    [buildReply(400, { error: 'refresh_token_invalidated' }), 'refresh_token_invalidated'],
-  ];
+test('it sends a JSON body for the json format', async () => {
+  const ctx = await setupTest();
 
-  for (const [answer, error] of permanent) {
-    await using ctx = await setupTest();
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
-    await ctx.writeState(buildReadyState());
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 60 });
 
-    ctx.clock.now = T0 + 230 * HOUR;
+  const valueFile = buildValueFile('codex');
 
-    ctx.replies.push(answer);
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
 
-    await ctx.refresher.tick();
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({
+      tokenUrl: 'https://auth.example.com/oauth/token',
+      clientId: 'fake-client',
+      tokenFormat: 'json',
+    }),
+    valueFile,
+  });
 
-    const state = await ctx.readState();
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
 
-    expect(state).toMatchObject({
-      status: 'needs_login',
-      error,
+  await refresher.refresh('codex', true);
+
+  expect(endpoint.requests).toStrictEqual([
+    {
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: '{"grant_type":"refresh_token","refresh_token":"fake-refresh-0","client_id":"fake-client"}',
       refreshToken: 'fake-refresh-0',
-      accessToken: 'fake-access-0',
+    },
+  ]);
+});
+
+test('it sends the token request to the test upstream that stands in for the token host', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://upstream.test:9443/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: () => ({ origin: 'https://upstream.test:9443', ca: ['TEST CA'] }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'refreshed', rotated: false });
+  expect(endpoint.requests).toHaveLength(1);
+});
+
+test('it refreshes over TLS from a test upstream that the test CA signed', async () => {
+  const ctx = await setupTest();
+
+  const upstream = await startStubBrokerTlsUpstream(ctx.stack, {
+    dir: ctx.dataDir,
+    fetch: () => Response.json({ access_token: 'fake-access-1', expires_in: 3600 }),
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: () => ({ origin: upstream.origin, ca: [upstream.caPem] }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'refreshed', rotated: false });
+});
+
+test('it treats a test upstream whose certificate the test CA did not sign as a network error', async () => {
+  const ctx = await setupTest();
+
+  const upstream = await startStubBrokerTlsUpstream(ctx.stack, {
+    dir: ctx.dataDir,
+    fetch: () => Response.json({ access_token: 'fake-access-1', expires_in: 3600 }),
+  });
+
+  const other = await loadOrCreateBrokerCa(join(ctx.dataDir, 'other-ca'));
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: () => ({ origin: upstream.origin, ca: [other.certPem] }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'network error' });
+});
+
+test('it stores the rotated tokens with the expiry expires_in gives', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    id_token: 'fake-id-1',
+    expires_in: 7200,
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'refreshed', rotated: true });
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    v: 1,
+    refreshToken: 'fake-refresh-1',
+    accessToken: 'fake-access-1',
+    idToken: 'fake-id-1',
+    expiresAt: startedAt + 2 * 3_600_000,
+    refreshedAt: startedAt,
+    status: 'ready',
+    error: null,
+  });
+});
+
+test('it logs a refresh with whether the token rotated and its expiry, and no token', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const logs: string[] = [];
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    id_token: 'fake-id-1',
+    expires_in: 7200,
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (message) => {
+      logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => Date.parse('2030-01-01T00:00:00Z'),
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(logs).toStrictEqual([
+    'impd: broker: oauth secret codex refreshed; refresh token rotated: yes; expires 2030-01-01T02:00:00.000Z',
+  ]);
+});
+
+test('it keeps the old value of a field the answer leaves out', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        accessToken: 'fake-access-0',
+        idToken: 'fake-id-0',
+        expiresAt: startedAt + 240 * 3_600_000,
+        refreshedAt: startedAt,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'refreshed', rotated: false });
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    v: 1,
+    refreshToken: 'fake-refresh-0',
+    accessToken: 'fake-access-1',
+    idToken: 'fake-id-0',
+    expiresAt: startedAt + 3_600_000,
+    refreshedAt: startedAt,
+    status: 'ready',
+    error: null,
+  });
+});
+
+test('it logs a refresh whose refresh token did not rotate as such', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const logs: string[] = [];
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(buildMockOAuthStateFile({ refreshToken: 'fake-refresh-0' })),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (message) => {
+      logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => Date.parse('2030-01-01T00:00:00Z'),
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(logs).toStrictEqual([
+    'impd: broker: oauth secret codex refreshed; refresh token rotated: no; expires 2030-01-01T01:00:00.000Z',
+  ]);
+});
+
+test('it takes the expiry from expires_in over the access token exp', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: buildStubBrokerJwt({ exp: Math.floor((startedAt + 10 * 3_600_000) / 1000) }),
+    expires_in: 3600,
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.expiresAt).toBe(startedAt + 3_600_000);
+});
+
+test('it takes the expiry from the access token exp without expires_in', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: buildStubBrokerJwt({ exp: Math.floor((startedAt + 10 * 3_600_000) / 1000) }),
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.expiresAt).toBe(
+    startedAt + 10 * 3_600_000,
+  );
+});
+
+test('it stores no expiry for an opaque access token without expires_in', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-opaque' });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => Date.parse('2030-01-01T00:00:00Z'),
+  });
+
+  await refresher.refresh('codex', true);
+
+  const state = parseOAuthState(ctx.files.read(valueFile) ?? '');
+
+  invariant(state);
+
+  expect(state.expiresAt).toBeNull();
+});
+
+test('it stores no expiry for an expires_in no date can hold, and keeps the rotated tokens', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 1e20,
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    v: 1,
+    refreshToken: 'fake-refresh-1',
+    accessToken: 'fake-access-1',
+    idToken: null,
+    expiresAt: null,
+    refreshedAt: startedAt,
+    status: 'ready',
+    error: null,
+  });
+});
+
+test.each([[0], [-60]])(
+  'it stores an expires_in of %i as due now, not unknown',
+  async (expiresIn) => {
+    const ctx = await setupTest();
+
+    const startedAt = Date.parse('2030-01-01T00:00:00Z');
+    const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+    server.use(endpoint.handler);
+    endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: expiresIn });
+
+    const valueFile = buildValueFile('codex');
+
+    ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+    await createSecret(ctx.db, {
+      name: 'codex',
+      kind: 'oauth',
+      rules: [buildMockBrokerRule()],
+      oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+      valueFile,
     });
 
-    expect(ctx.logs).toEqual([`impd: broker: oauth secret codex needs a new sign-in: ${error}`]);
+    const refresher = createOAuthRefresher({
+      db: ctx.db,
+      files: ctx.files,
+      log: () => {},
+      resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+      now: () => startedAt,
+    });
 
-    // never tried again by the timer
-    ctx.clock.now += 100 * HOUR;
+    await refresher.refresh('codex', true);
 
-    await ctx.refresher.tick();
+    expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.expiresAt).toBe(startedAt);
+  },
+);
 
-    expect(ctx.calls).toHaveLength(1);
+test('it keeps the access token and its expiry when the answer has only a rotated refresh token', async () => {
+  const ctx = await setupTest();
 
-    assertNoTokens(ctx.logs);
-  }
-});
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
-test('a forced refresh tries a needs_login secret once, and a good answer signs it in again', async () => {
-  await using ctx = await setupTest();
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { refresh_token: 'fake-refresh-1', expires_in: 3600 });
 
-  await ctx.writeState(buildReadyState({ status: 'needs_login', error: 'invalid_grant' }));
+  const valueFile = buildValueFile('codex');
 
-  // the timer's refresh is a no-op for it
-  const outcome = await ctx.refresher.refresh('codex', false);
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        accessToken: 'fake-access-0',
+        idToken: 'fake-id-0',
+        expiresAt: startedAt + 5 * 3_600_000,
+        refreshedAt: startedAt - 3_600_000,
+      }),
+    ),
+  );
 
-  expect(outcome).toEqual({
-    kind: 'needs-login',
-    error: 'invalid_grant',
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
   });
 
-  expect(ctx.calls).toHaveLength(0);
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
 
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 3600 }));
+  await refresher.refresh('codex', true);
 
-  await ctx.refresher.refresh('codex', true);
-
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({ status: 'ready', error: null });
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    v: 1,
+    refreshToken: 'fake-refresh-1',
+    accessToken: 'fake-access-0',
+    idToken: 'fake-id-0',
+    expiresAt: startedAt + 5 * 3_600_000,
+    refreshedAt: startedAt,
+    status: 'ready',
+    error: null,
+  });
 });
 
-test('a forced refresh while one runs waits for it and answers its outcome', async () => {
-  await using ctx = await setupTest();
+test('it keeps a rotated refresh token alone on a pending secret and stays pending', async () => {
+  const ctx = await setupTest();
 
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { refresh_token: 'fake-refresh-1' });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => Date.parse('2030-01-01T00:00:00Z'),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'no access token in the response' });
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    v: 1,
+    refreshToken: 'fake-refresh-1',
+    accessToken: null,
+    idToken: null,
+    expiresAt: null,
+    refreshedAt: null,
+    status: 'pending',
+    error: 'no access token in the response',
+  });
+});
+
+test('it records a 200 with no token as a transient error that changes nothing else', async () => {
+  const ctx = await setupTest();
+
+  const state = buildMockOAuthStateFile({ status: 'ready', error: null });
+
+  server.use(http.post('https://auth.example.com/oauth/token', () => HttpResponse.json({})));
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(state));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'no token in the response' });
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    ...state,
+    error: 'no token in the response',
+  });
+});
+
+test('it leaves the old expiry when expires_in comes with no new access token', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { refresh_token: 'fake-refresh-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  const state = buildMockOAuthStateFile({
+    refreshToken: 'fake-refresh-0',
+    expiresAt: startedAt + 10_000,
+  });
+
+  ctx.files.write(valueFile, formatOAuthState(state));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    ...state,
+    refreshToken: 'fake-refresh-1',
+    expiresAt: startedAt + 10_000,
+    refreshedAt: startedAt,
+  });
+});
+
+test('it holds a 240 hour token not due with more than 24 hours left', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+  const state = buildMockOAuthStateFile({ refreshedAt, expiresAt: refreshedAt + 240 * 3_600_000 });
+
+  expect(isDue(state, refreshedAt + 215 * 3_600_000)).toBeFalse();
+});
+
+test('it holds a 240 hour token due with less than 24 hours left', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+  const state = buildMockOAuthStateFile({ refreshedAt, expiresAt: refreshedAt + 240 * 3_600_000 });
+
+  expect(isDue(state, refreshedAt + 217 * 3_600_000)).toBeTrue();
+});
+
+test('it holds a short token not due before half its lifetime', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+  const state = buildMockOAuthStateFile({ refreshedAt, expiresAt: refreshedAt + 2 * 3_600_000 });
+
+  expect(isDue(state, refreshedAt + 0.9 * 3_600_000)).toBeFalse();
+});
+
+test('it holds a short token due past half its lifetime', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+  const state = buildMockOAuthStateFile({ refreshedAt, expiresAt: refreshedAt + 2 * 3_600_000 });
+
+  expect(isDue(state, refreshedAt + 1.1 * 3_600_000)).toBeTrue();
+});
+
+test('it is due at once for a token shorter than a tick and a token call', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+
+  expect(
+    isDue(buildMockOAuthStateFile({ refreshedAt, expiresAt: refreshedAt + 60_000 }), refreshedAt),
+  ).toBeTrue();
+});
+
+test('it is due at once for a short token never refreshed', () => {
+  const at = Date.parse('2030-01-01T00:00:00Z');
+
+  expect(
+    isDue(buildMockOAuthStateFile({ refreshedAt: null, expiresAt: at + 60_000 }), at),
+  ).toBeTrue();
+});
+
+test('it holds a token with no expiry not due within an hour of a refresh', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+  const state = buildMockOAuthStateFile({ refreshedAt, expiresAt: null });
+
+  expect(isDue(state, refreshedAt + 0.9 * 3_600_000)).toBeFalse();
+});
+
+test('it holds a token with no expiry due an hour after a refresh', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+  const state = buildMockOAuthStateFile({ refreshedAt, expiresAt: null });
+
+  expect(isDue(state, refreshedAt + 1.1 * 3_600_000)).toBeTrue();
+});
+
+test('it is due at once for a pending secret', () => {
+  expect(isDue(buildPendingState('fake-refresh-0'), Date.parse('2030-01-01T00:00:00Z'))).toBeTrue();
+});
+
+test('it is due at once for a secret with no access token', () => {
+  const at = Date.parse('2030-01-01T00:00:00Z');
+
+  expect(isDue(buildMockOAuthStateFile({ accessToken: null, refreshedAt: at }), at)).toBeTrue();
+});
+
+test('it is never due for a secret that needs a new sign-in', () => {
+  const refreshedAt = Date.parse('2030-01-01T00:00:00Z');
+
+  const state = buildMockOAuthStateFile({
+    status: 'needs_login',
+    refreshedAt,
+    expiresAt: refreshedAt + 240 * 3_600_000,
+  });
+
+  expect(isDue(state, refreshedAt + 1000 * 3_600_000)).toBeFalse();
+});
+
+test('it refreshes a secret that is due on a tick and leaves one that is not', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-due', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const dueFile = buildValueFile('due');
+  const freshFile = buildValueFile('fresh');
+
+  ctx.files.write(
+    dueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-due',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  ctx.files.write(
+    freshFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-fresh',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 480 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'due',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile: dueFile,
+  });
+
+  await createSecret(ctx.db, {
+    name: 'fresh',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile: freshFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 230 * 3_600_000,
+  });
+
+  await refresher.tick();
+
+  expect(endpoint.requests.map((request) => request.refreshToken)).toStrictEqual([
+    'fake-refresh-due',
+  ]);
+});
+
+test('it sends nothing on the next tick after a refresh', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt,
+  });
+
+  await refresher.tick();
+  await refresher.tick();
+
+  expect(endpoint.requests).toHaveLength(1);
+});
+
+test('it keeps the tokens and the status on a transient error and records the error', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+
+  const state = buildMockOAuthStateFile({
+    refreshedAt: startedAt,
+    expiresAt: startedAt + 240 * 3_600_000,
+  });
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ error: 'server_error' }, { status: 503 }),
+    ),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(state));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 230 * 3_600_000,
+  });
+
+  await refresher.tick();
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    ...state,
+    error: 'HTTP 503',
+  });
+});
+
+test('it logs a transient error without the body it came with', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const logs: string[] = [];
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ error: 'server_error', detail: 'fake-refresh-0' }, { status: 503 }),
+    ),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (message) => {
+      logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 230 * 3_600_000,
+  });
+
+  await refresher.tick();
+
+  expect(logs).toStrictEqual([
+    'impd: broker: oauth secret codex could not refresh: HTTP 503; trying again in 1 min',
+  ]);
+});
+
+test('it sends nothing for a minute after a transient error', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const clock = { nowMs: startedAt + 230 * 3_600_000 };
+  const requests: string[] = [];
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', (info) => {
+      requests.push(info.request.url);
+
+      return HttpResponse.json({ error: 'server_error' }, { status: 503 });
+    }),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({ refreshedAt: startedAt, expiresAt: startedAt + 240 * 3_600_000 }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => clock.nowMs,
+  });
+
+  await refresher.tick();
+
+  clock.nowMs += 59_000;
+
+  await refresher.tick();
+
+  expect(requests).toHaveLength(1);
+});
+
+test('it tries again a minute after a transient error', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const clock = { nowMs: startedAt + 230 * 3_600_000 };
+  const requests: string[] = [];
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', (info) => {
+      requests.push(info.request.url);
+
+      return HttpResponse.json({ error: 'server_error' }, { status: 503 });
+    }),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({ refreshedAt: startedAt, expiresAt: startedAt + 240 * 3_600_000 }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => clock.nowMs,
+  });
+
+  await refresher.tick();
+
+  clock.nowMs += 61_000;
+
+  await refresher.tick();
+
+  expect(requests).toHaveLength(2);
+});
+
+test('it waits two minutes after a second transient error', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const clock = { nowMs: startedAt + 230 * 3_600_000 };
+  const requests: string[] = [];
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', (info) => {
+      requests.push(info.request.url);
+
+      return HttpResponse.json({ error: 'server_error' }, { status: 503 });
+    }),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({ refreshedAt: startedAt, expiresAt: startedAt + 240 * 3_600_000 }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => clock.nowMs,
+  });
+
+  await refresher.tick();
+
+  clock.nowMs += 61_000;
+
+  await refresher.tick();
+
+  clock.nowMs += 119_000;
+
+  await refresher.tick();
+
+  expect(requests).toHaveLength(2);
+});
+
+test('it caps the wait between transient errors at 30 minutes', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const clock = { nowMs: startedAt + 230 * 3_600_000 };
+  const logs: string[] = [];
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () =>
+      HttpResponse.json({ error: 'server_error' }, { status: 503 }),
+    ),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({ refreshedAt: startedAt, expiresAt: startedAt + 240 * 3_600_000 }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (message) => {
+      logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => clock.nowMs,
+  });
+
+  // past the 1, 2, 4, 8 and 16 minute waits, each tick fails once more
+  for (let index = 0; index < 6; index += 1) {
+    await refresher.tick();
+
+    clock.nowMs += 31 * 60_000;
+  }
+
+  expect(logs.map((line) => line.split('; ').at(-1))).toStrictEqual([
+    'trying again in 1 min',
+    'trying again in 2 min',
+    'trying again in 4 min',
+    'trying again in 8 min',
+    'trying again in 16 min',
+    'trying again in 30 min',
+  ]);
+});
+
+test('it clears the error once a refresh after a transient error succeeds', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const clock = { nowMs: startedAt + 230 * 3_600_000 };
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () => HttpResponse.json({ error: 'server_error' }, { status: 503 }),
+      { once: true },
+    ),
+  );
+
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 7200 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => clock.nowMs,
+  });
+
+  await refresher.tick();
+
+  const failed = parseOAuthState(ctx.files.read(valueFile) ?? '');
+
+  clock.nowMs += 61_000;
+
+  await refresher.tick();
+
+  const recovered = parseOAuthState(ctx.files.read(valueFile) ?? '');
+
+  expect(failed?.error).toBe('HTTP 503');
+  expect(recovered?.error).toBeNull();
+  expect(recovered?.accessToken).toBe('fake-access-1');
+});
+
+test('it leaves a pending secret pending on a network error', async () => {
+  const ctx = await setupTest();
+
+  server.use(http.post('https://auth.example.com/oauth/token', () => HttpResponse.error()));
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'network error' });
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    ...buildPendingState('fake-refresh-0'),
+    error: 'network error',
+  });
+});
+
+test('it treats a redirect as transient and keeps the live tokens', async () => {
+  const ctx = await setupTest();
+
+  const state = buildMockOAuthStateFile();
+
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () =>
+        new HttpResponse(null, { status: 302, headers: { location: 'https://evil.example.com' } }),
+    ),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(state));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'HTTP 302' });
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+    ...state,
+    error: 'HTTP 302',
+  });
+});
+
+test('it treats an answer that is not JSON as an invalid response and keeps the stored tokens', async () => {
+  const ctx = await setupTest();
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', () => HttpResponse.html('<html>nope</html>')),
+  );
+
+  const state = buildMockOAuthStateFile();
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(state));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  const stored = parseOAuthState(ctx.files.read(valueFile) ?? '');
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'invalid response' });
+  expect(stored?.refreshToken).toBe(state.refreshToken);
+  expect(stored?.accessToken).toBe(state.accessToken);
+  expect(stored?.idToken).toBe(state.idToken);
+});
+
+test.each([['has space'], ['bad\r\nx-evil: 1']])(
+  'it treats the access token %j, which could split a header, as invalid and keeps the stored tokens',
+  async (accessToken) => {
+    const ctx = await setupTest();
+
+    server.use(
+      http.post('https://auth.example.com/oauth/token', () =>
+        HttpResponse.json({ access_token: accessToken }),
+      ),
+    );
+
+    const state = buildMockOAuthStateFile();
+    const valueFile = buildValueFile('codex');
+
+    ctx.files.write(valueFile, formatOAuthState(state));
+
+    await createSecret(ctx.db, {
+      name: 'codex',
+      kind: 'oauth',
+      rules: [buildMockBrokerRule()],
+      oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+      valueFile,
+    });
+
+    const refresher = createOAuthRefresher({
+      db: ctx.db,
+      files: ctx.files,
+      log: () => {},
+      resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    });
+
+    const outcome = await refresher.refresh('codex', true);
+
+    const stored = parseOAuthState(ctx.files.read(valueFile) ?? '');
+
+    expect(outcome).toStrictEqual({ kind: 'transient', error: 'invalid response' });
+    expect(stored?.refreshToken).toBe(state.refreshToken);
+    expect(stored?.accessToken).toBe(state.accessToken);
+    expect(stored?.idToken).toBe(state.idToken);
+  },
+);
+
+test('it treats a call that outlasts the timeout as transient', async () => {
+  const ctx = await setupTest();
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', async () => {
+      await delay('infinite');
+
+      return HttpResponse.json({});
+    }),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  // a deadline that has passed by the time the call is under way
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    timeoutMs: 0,
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'timeout' });
+});
+
+test.each([
+  [401, { message: 'no' }, 'HTTP 401'],
+  [400, { error: 'invalid_grant', error_description: 'fake-refresh-0' }, 'invalid_grant'],
+  [400, { error: { code: 'refresh_token_reused', message: 'x' } }, 'refresh_token_reused'],
+  [401, { error: { code: 'refresh_token_expired' } }, 'refresh_token_expired'],
+  [400, { error: 'refresh_token_invalidated' }, 'refresh_token_invalidated'],
+  [400, { error: { error: 'invalid_grant' } }, 'invalid_grant'],
+  [401, { error: 'server_busy' }, 'server_busy'],
+])(
+  'it marks the secret as needing a new sign-in on a %i answer of %j',
+  async (status, body, error) => {
+    const ctx = await setupTest();
+
+    const state = buildMockOAuthStateFile({ refreshToken: 'fake-refresh-0' });
+    const logs: string[] = [];
+
+    server.use(
+      http.post('https://auth.example.com/oauth/token', () => HttpResponse.json(body, { status })),
+    );
+
+    const valueFile = buildValueFile('codex');
+
+    ctx.files.write(valueFile, formatOAuthState(state));
+
+    await createSecret(ctx.db, {
+      name: 'codex',
+      kind: 'oauth',
+      rules: [buildMockBrokerRule()],
+      oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+      valueFile,
+    });
+
+    const refresher = createOAuthRefresher({
+      db: ctx.db,
+      files: ctx.files,
+      log: (message) => {
+        logs.push(message);
+      },
+      resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    });
+
+    const outcome = await refresher.refresh('codex', true);
+
+    expect(outcome).toStrictEqual({ kind: 'needs-login', error });
+
+    expect(parseOAuthState(ctx.files.read(valueFile) ?? '')).toStrictEqual({
+      ...state,
+      status: 'needs_login',
+      error,
+    });
+
+    expect(logs).toStrictEqual([`impd: broker: oauth secret codex needs a new sign-in: ${error}`]);
+  },
+);
+
+test('it never sends a secret that needs a new sign-in on a tick', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        status: 'needs_login',
+        error: 'invalid_grant',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 1000 * 3_600_000,
+  });
+
+  await refresher.tick();
+
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it answers an unforced refresh of a secret that needs a new sign-in without a call', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(buildMockOAuthStateFile({ status: 'needs_login', error: 'invalid_grant' })),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', false);
+
+  expect(outcome).toStrictEqual({ kind: 'needs-login', error: 'invalid_grant' });
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it signs a secret that needs a new sign-in in again on a forced refresh with a good answer', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        status: 'needs_login',
+        error: 'invalid_grant',
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  await refresher.refresh('codex', true);
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.status).toBe('ready');
+});
+
+test('it logs nothing when a secret that already needs a new sign-in is refused again', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const logs: string[] = [];
+
+  server.use(endpoint.handler);
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-dead',
+        status: 'needs_login',
+        error: 'invalid_grant',
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (message) => {
+      logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'needs-login', error: 'invalid_grant' });
+  expect(logs).toStrictEqual([]);
+});
+
+test('it answers a forced refresh while one runs with that one, sending one request', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const reached = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
 
-  ctx.hold.gate = gate.promise;
+  server.use(endpoint.handler);
 
-  ctx.replies.push(buildReply(200, { access_token: 'fake-access-1', expires_in: 3600 }));
+  server.use(
+    http.post('https://auth.example.com/oauth/token', async () => {
+      reached.resolve();
 
-  const first = ctx.refresher.refresh('codex', false);
-  const second = ctx.refresher.refresh('codex', true);
+      await gate.promise;
+    }),
+  );
+
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const first = refresher.refresh('codex', false);
+
+  await reached.promise;
+
+  const second = refresher.refresh('codex', true);
 
   gate.resolve();
 
   const outcomes = await Promise.all([first, second]);
 
-  expect(outcomes[0]).toEqual({ kind: 'refreshed', rotated: false });
-  expect(outcomes[1]).toEqual(outcomes[0]);
-  expect(ctx.calls).toHaveLength(1);
+  expect(outcomes).toStrictEqual([
+    { kind: 'refreshed', rotated: false },
+    { kind: 'refreshed', rotated: false },
+  ]);
+
+  expect(endpoint.requests).toHaveLength(1);
 });
 
-test('a result is dropped when the secret was deleted during the call', async () => {
-  await using ctx = await setupTest();
+test('it drops a result when the secret was deleted during the call', async () => {
+  const ctx = await setupTest();
 
-  const valueFile = await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  const before = ctx.files.read(valueFile);
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const reached = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
+  const logs: string[] = [];
 
-  ctx.hold.gate = gate.promise;
+  server.use(endpoint.handler);
 
-  ctx.replies.push(
-    buildReply(200, { access_token: 'fake-access-1', refresh_token: 'fake-refresh-1' }),
+  server.use(
+    http.post('https://auth.example.com/oauth/token', async () => {
+      reached.resolve();
+
+      await gate.promise;
+    }),
   );
 
-  const running = ctx.refresher.refresh('codex', true);
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+  });
 
-  while (ctx.calls.length === 0) {
-    await Bun.sleep(1);
-  }
+  const valueFile = buildValueFile('codex');
+  const before = formatOAuthState(buildPendingState('fake-refresh-0'));
+
+  ctx.files.write(valueFile, before);
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (message) => {
+      logs.push(message);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const running = refresher.refresh('codex', true);
+
+  await reached.promise;
 
   // outside the lock, as a bug or a restore would
   await removeSecret(ctx.db, 'codex');
@@ -669,283 +1857,464 @@ test('a result is dropped when the secret was deleted during the call', async ()
 
   const outcome = await running;
 
-  expect(outcome).toEqual({ kind: 'dropped' });
-  expect(ctx.files.read(valueFile)).toBe(before);
-  expect(ctx.logs.join('\n')).toContain('its result was dropped');
+  expect(outcome).toStrictEqual({ kind: 'dropped' });
+  expect(ctx.files.read(valueFile)).toStrictEqual(before);
 
-  assertNoTokens(ctx.logs);
-});
-
-test('a result that cannot be written is kept and written before the next call', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  let failing = true;
-
-  const flaky = createOAuthRefresher({
-    db: ctx.db,
-    files: {
-      read: ctx.files.read,
-      rewrite: (file, value) => {
-        if (failing) {
-          throw new Error('ENOSPC: no space left on device');
-        }
-
-        ctx.files.rewrite(file, value);
-      },
-    },
-    log: (message) => {
-      ctx.logs.push(message);
-    },
-    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
-    now: () => ctx.clock.now,
-    fetch: (_url, init) => {
-      ctx.calls.push({
-        url: _url,
-        contentType: null,
-        accept: null,
-        body: init.body,
-        redirect: 'manual',
-      });
-
-      return Promise.resolve(
-        Response.json({ access_token: 'fake-access-1', refresh_token: 'fake-refresh-1' }),
-      );
-    },
-  });
-
-  await flaky.refresh('codex', true);
-
-  failing = false;
-
-  await flaky.refresh('codex', true);
-
-  // the second call sent the rotated token, from memory, after writing it
-  expect(ctx.calls[1]?.body).toContain('refresh_token=fake-refresh-1');
-
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({ refreshToken: 'fake-refresh-1' });
-
-  assertNoTokens(ctx.logs);
-});
-
-test('a missing value file is reported, not refreshed', async () => {
-  await using ctx = await setupTest();
-
-  const valueFile = await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.files.remove(valueFile);
-
-  const unreadable = await ctx.refresher.refresh('codex', true);
-  const gone = await ctx.refresher.refresh('nothing', true);
-
-  expect(unreadable).toEqual({ kind: 'unreadable' });
-  expect(gone).toEqual({ kind: 'gone' });
-  expect(ctx.calls).toHaveLength(0);
-});
-
-test('an answer with only a rotated refresh token keeps the access token and its expiry', async () => {
-  await using ctx = await setupTest();
-
-  const expiresAt = T0 + 5 * HOUR;
-
-  await ctx.writeState(buildReadyState({ expiresAt }));
-
-  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-1' }));
-
-  await ctx.refresher.refresh('codex', true);
-
-  const state = await ctx.readState();
-
-  expect(state).toMatchObject({
-    refreshToken: 'fake-refresh-1',
-    accessToken: 'fake-access-0',
-    expiresAt,
-  });
-});
-
-test('a tick writes a result an earlier write failed on, though the secret is not due', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  const failing = { on: true };
-
-  const flaky = createOAuthRefresher({
-    db: ctx.db,
-    files: {
-      read: ctx.files.read,
-      rewrite: (file, value) => {
-        if (failing.on) {
-          throw new Error('ENOSPC: no space left on device');
-        }
-
-        ctx.files.rewrite(file, value);
-      },
-    },
-    log: (message) => {
-      ctx.logs.push(message);
-    },
-    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
-    now: () => ctx.clock.now,
-    fetch: () =>
-      Promise.resolve(
-        Response.json({
-          access_token: 'fake-access-1',
-          refresh_token: 'fake-refresh-1',
-          expires_in: 240 * 3600,
-        }),
-      ),
-  });
-
-  await flaky.refresh('codex', true);
-
-  const before = await ctx.readState();
-
-  expect(before).toMatchObject({ status: 'pending', refreshToken: 'fake-refresh-0' });
-
-  failing.on = false;
-
-  await flaky.tick();
-
-  const after = await ctx.readState();
-
-  expect(after).toMatchObject({ status: 'ready', refreshToken: 'fake-refresh-1' });
-});
-
-test('stop waits for a refresh under way and starts no other', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  const gate = Promise.withResolvers<void>();
-
-  ctx.hold.gate = gate.promise;
-
-  ctx.replies.push(
-    buildReply(200, { access_token: 'fake-access-1', refresh_token: 'fake-refresh-1' }),
-  );
-
-  const running = ctx.refresher.refresh('codex', true);
-  const stopped = ctx.refresher.stop();
-
-  const early = await Promise.race([
-    stopped.then(() => 'stopped'),
-    Bun.sleep(20).then(() => 'waiting'),
+  expect(logs).toStrictEqual([
+    'impd: broker: oauth secret codex was replaced or deleted during a refresh; its result was dropped',
   ]);
-
-  expect(early).toBe('waiting');
-
-  gate.resolve();
-
-  await stopped;
-
-  const outcome = await running;
-  const state = await ctx.readState();
-  const later = await ctx.refresher.refresh('codex', true);
-
-  expect(outcome).toEqual({ kind: 'refreshed', rotated: true });
-  expect(state).toMatchObject({ refreshToken: 'fake-refresh-1' });
-  expect(later).toMatchObject({ kind: 'transient' });
-  expect(ctx.calls).toHaveLength(1);
 });
 
-test('a rotated refresh token alone on a pending secret is kept, not dropped', async () => {
-  await using ctx = await setupTest();
-
-  await ctx.writeState(buildPendingState('fake-refresh-0'));
-
-  ctx.replies.push(buildReply(200, { refresh_token: 'fake-refresh-1' }));
-
-  const outcome = await ctx.refresher.refresh('codex', true);
-  const state = await ctx.readState();
-
-  expect(outcome).toMatchObject({ kind: 'transient' });
-  expect(state).toMatchObject({ status: 'pending', refreshToken: 'fake-refresh-1' });
-});
-
-// a refresher whose writes fail while `failing.on` and are counted
-async function setupFlakyTest() {
+test('it keeps a result it could not write and sends its rotated token on the next call', async () => {
   const ctx = await setupTest();
 
-  const failing = { on: true };
-  const writes: string[] = [];
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const valueFile = buildValueFile('codex');
+  const valuePath = join(ctx.dataDir, 'secrets', valueFile);
+
+  server.use(endpoint.handler);
+
+  // read by then: a directory where the file goes fails the write's rename
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () => {
+        rmSync(valuePath);
+        mkdirSync(valuePath);
+        writeFileSync(join(valuePath, 'keep'), 'x');
+      },
+      { once: true },
+    ),
+  );
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+  });
+
+  endpoint.issue('fake-refresh-1', {
+    access_token: 'fake-access-2',
+    refresh_token: 'fake-refresh-2',
+  });
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
 
   const refresher = createOAuthRefresher({
     db: ctx.db,
-    files: {
-      read: ctx.files.read,
-      rewrite: (file, value) => {
-        if (failing.on) {
-          throw new Error('ENOSPC: no space left on device');
-        }
-
-        writes.push(file);
-        ctx.files.rewrite(file, value);
-      },
-    },
-    log: (message) => {
-      ctx.logs.push(message);
-    },
+    files: ctx.files,
+    log: () => {},
     resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
-    now: () => ctx.clock.now,
-    fetch: () =>
-      Promise.resolve(
-        Response.json({
-          access_token: 'fake-access-1',
-          refresh_token: 'fake-refresh-1',
-          expires_in: 240 * 3600,
-        }),
-      ),
   });
 
-  return {
-    ctx,
-    failing,
-    writes,
-    refresher,
-    [Symbol.asyncDispose]: () => ctx[Symbol.asyncDispose](),
-  };
-}
+  await refresher.refresh('codex', true);
 
-test('stop writes a result an earlier write failed on', async () => {
-  await using flaky = await setupFlakyTest();
+  rmSync(valuePath, { recursive: true });
 
-  await flaky.ctx.writeState(buildPendingState('fake-refresh-0'));
-  await flaky.refresher.refresh('codex', true);
+  await refresher.refresh('codex', true);
 
-  flaky.failing.on = false;
+  expect(endpoint.requests.map((request) => request.refreshToken)).toStrictEqual([
+    'fake-refresh-0',
+    'fake-refresh-1',
+  ]);
 
-  await flaky.refresher.stop();
-
-  const state = await flaky.ctx.readState();
-
-  expect(state).toMatchObject({ status: 'ready', refreshToken: 'fake-refresh-1' });
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.refreshToken).toBe('fake-refresh-2');
 });
 
-test('an unsaved result is not written for a secret deleted while the tick waited', async () => {
-  await using flaky = await setupFlakyTest();
+test('it answers a refresh whose earlier result still cannot be written without a call', async () => {
+  const ctx = await setupTest();
 
-  await flaky.ctx.writeState(buildPendingState('fake-refresh-0'));
-  await flaky.refresher.refresh('codex', true);
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const valueFile = buildValueFile('codex');
+  const valuePath = join(ctx.dataDir, 'secrets', valueFile);
 
-  flaky.failing.on = false;
+  server.use(endpoint.handler);
 
-  // hold the lock so the tick has listed the row and waits behind it
+  // read by then: a directory where the file goes fails the write's rename
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () => {
+        rmSync(valuePath);
+        mkdirSync(valuePath);
+        writeFileSync(join(valuePath, 'keep'), 'x');
+      },
+      { once: true },
+    ),
+  );
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+  });
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  await refresher.refresh('codex', true);
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'value file not writable' });
+  expect(endpoint.requests).toHaveLength(1);
+});
+
+test('it writes on a tick a result an earlier write failed on, though the secret is not due', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const valueFile = buildValueFile('codex');
+  const valuePath = join(ctx.dataDir, 'secrets', valueFile);
+
+  server.use(endpoint.handler);
+
+  // read by then: a directory where the file goes fails the write's rename
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () => {
+        rmSync(valuePath);
+        mkdirSync(valuePath);
+        writeFileSync(join(valuePath, 'keep'), 'x');
+      },
+      { once: true },
+    ),
+  );
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 240 * 3600,
+  });
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  await refresher.refresh('codex', true);
+
+  rmSync(valuePath, { recursive: true });
+
+  await refresher.tick();
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.refreshToken).toBe('fake-refresh-1');
+});
+
+test('it writes on stop a result an earlier write failed on', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const valueFile = buildValueFile('codex');
+  const valuePath = join(ctx.dataDir, 'secrets', valueFile);
+
+  server.use(endpoint.handler);
+
+  // read by then: a directory where the file goes fails the write's rename
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () => {
+        rmSync(valuePath);
+        mkdirSync(valuePath);
+        writeFileSync(join(valuePath, 'keep'), 'x');
+      },
+      { once: true },
+    ),
+  );
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 240 * 3600,
+  });
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  await refresher.refresh('codex', true);
+
+  rmSync(valuePath, { recursive: true });
+
+  await refresher.stop();
+
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.refreshToken).toBe('fake-refresh-1');
+});
+
+test('it never writes an unsaved result for a secret deleted after the tick listed it', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const valueFile = buildValueFile('codex');
+  const valuePath = join(ctx.dataDir, 'secrets', valueFile);
+  const gate = buildQueryGate('secrets');
+
+  server.use(endpoint.handler);
+
+  // read by then: a directory where the file goes fails the write's rename
+  server.use(
+    http.post(
+      'https://auth.example.com/oauth/token',
+      () => {
+        rmSync(valuePath);
+        mkdirSync(valuePath);
+        writeFileSync(join(valuePath, 'keep'), 'x');
+      },
+      { once: true },
+    ),
+  );
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 240 * 3600,
+  });
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db.withPlugin(gate.plugin),
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  await refresher.refresh('codex', true);
+
+  rmSync(valuePath, { recursive: true });
+
+  // the tick's list of secrets is held until the row is gone
+  gate.arm();
+
+  const ticking = refresher.tick();
+
+  await gate.reached;
+  await removeSecret(ctx.db, 'codex');
+
+  gate.release();
+
+  await ticking;
+
+  expect(ctx.files.read(valueFile)).toBeNull();
+});
+
+test('it answers stop only after the refresh under way has ended', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const reached = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
-  const holder = flaky.refresher.withLock('codex', () => gate.promise);
-  const ticking = flaky.refresher.tick();
+  const settled: string[] = [];
 
-  await Bun.sleep(20);
+  server.use(endpoint.handler);
 
-  await removeSecret(flaky.ctx.db, 'codex');
+  server.use(
+    http.post('https://auth.example.com/oauth/token', async () => {
+      reached.resolve();
+
+      await gate.promise;
+    }),
+  );
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const running = (async () => {
+    const outcome = await refresher.refresh('codex', true);
+
+    settled.push(`refresh ${outcome.kind}`);
+  })();
+
+  await reached.promise;
+
+  const stopped = (async () => {
+    await refresher.stop();
+
+    settled.push('stop');
+  })();
 
   gate.resolve();
 
-  await holder;
-  await ticking;
+  await Promise.all([running, stopped]);
 
-  expect(flaky.writes).toHaveLength(0);
+  expect(settled).toStrictEqual(['refresh refreshed', 'stop']);
+});
+
+test('it answers a refresh after stop as transient without a call', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(valueFile, formatOAuthState(buildPendingState('fake-refresh-0')));
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  await refresher.stop();
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'transient', error: 'impd is stopping' });
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it reports a secret whose value file is missing as unreadable without a call', async () => {
+  const ctx = await setupTest();
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile: buildValueFile('codex'),
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('codex', true);
+
+  expect(outcome).toStrictEqual({ kind: 'unreadable' });
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it reports a secret that does not exist as gone', async () => {
+  const ctx = await setupTest();
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('nothing', true);
+
+  expect(outcome).toStrictEqual({ kind: 'gone' });
+});
+
+test('it reports a secret of another kind as gone', async () => {
+  const ctx = await setupTest();
+
+  const valueFile = buildValueFile('gh');
+
+  ctx.files.write(valueFile, 'ghp_value');
+
+  await createSecret(ctx.db, {
+    name: 'gh',
+    kind: 'custom',
+    rules: [buildMockBrokerRule()],
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const outcome = await refresher.refresh('gh', true);
+
+  expect(outcome).toStrictEqual({ kind: 'gone' });
 });

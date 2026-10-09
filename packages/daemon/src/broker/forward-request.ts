@@ -21,7 +21,7 @@ export interface Upstream {
 }
 
 // what the forwarder hands fetch: Bun's init, narrowed to what it sets
-export interface UpstreamInit {
+interface UpstreamInit {
   readonly method: string;
   readonly headers: Headers;
   readonly body: ReadableStream<Uint8Array> | null;

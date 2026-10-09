@@ -37,8 +37,11 @@ export interface BrokerCa {
 }
 
 // The CA in <dir>: ca.pem (the certificate) and ca.key (0600), made on the
-// first start.
-export async function loadOrCreateBrokerCa(dir: string): Promise<BrokerCa> {
+// first start; `now` dates the CA and each leaf.
+export async function loadOrCreateBrokerCa(
+  dir: string,
+  now: () => number = Date.now,
+): Promise<BrokerCa> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
 
@@ -46,7 +49,7 @@ export async function loadOrCreateBrokerCa(dir: string): Promise<BrokerCa> {
   const keyPath = join(dir, 'ca.key');
 
   if (!existsSync(certPath) || !existsSync(keyPath)) {
-    const created = await createCa();
+    const created = await createCa(now());
 
     writeFileSync(keyPath, created.keyPem, { mode: 0o600 });
     writeFileSync(certPath, created.certPem, { mode: 0o644 });
@@ -64,8 +67,10 @@ export async function loadOrCreateBrokerCa(dir: string): Promise<BrokerCa> {
     issueLeaf: async (host) => {
       const keys = await crypto.subtle.generateKey(ALGORITHM, true, ['sign', 'verify']);
 
-      const notBefore = new Date(Date.now() - DAY_MS);
-      const notAfter = new Date(Date.now() + LEAF_DAYS * DAY_MS);
+      const at = now();
+
+      const notBefore = new Date(at - DAY_MS);
+      const notAfter = new Date(at + LEAF_DAYS * DAY_MS);
 
       const leaf = await x509.X509CertificateGenerator.create({
         serialNumber: createSerialNumber(),
@@ -94,18 +99,20 @@ export async function loadOrCreateBrokerCa(dir: string): Promise<BrokerCa> {
         notAfter,
       };
     },
-    isDue: (leaf, now) => leaf.notAfter.getTime() - now < LEAF_RENEW_MS,
+    isDue: (leaf, at) => leaf.notAfter.getTime() - at < LEAF_RENEW_MS,
   };
 }
 
-async function createCa(): Promise<{ readonly certPem: string; readonly keyPem: string }> {
+async function createCa(
+  at: number,
+): Promise<{ readonly certPem: string; readonly keyPem: string }> {
   const keys = await crypto.subtle.generateKey(ALGORITHM, true, ['sign', 'verify']);
 
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
     serialNumber: createSerialNumber(),
     name: 'CN=imp credential broker CA, O=imp',
-    notBefore: new Date(Date.now() - DAY_MS),
-    notAfter: new Date(Date.now() + CA_DAYS * DAY_MS),
+    notBefore: new Date(at - DAY_MS),
+    notAfter: new Date(at + CA_DAYS * DAY_MS),
     keys,
     signingAlgorithm: ALGORITHM,
     extensions: [

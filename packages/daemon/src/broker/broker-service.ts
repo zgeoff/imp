@@ -211,8 +211,9 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const db = deps.db;
   const log = deps.log;
   const brokerDir = join(config.dataDir, 'broker');
+  const now = deps.now ?? Date.now;
 
-  const ca = await loadOrCreateBrokerCa(join(brokerDir, 'ca'));
+  const ca = await loadOrCreateBrokerCa(join(brokerDir, 'ca'), now);
 
   const blocked6: { check: ((address: string) => boolean) | null; readAt: number } = {
     check: null,
@@ -228,11 +229,11 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return null;
     }
 
-    if (blocked6.check === null || Date.now() - blocked6.readAt > CONNECTED_CACHE_MS) {
+    if (blocked6.check === null || now() - blocked6.readAt > CONNECTED_CACHE_MS) {
       const connected = await readConnectedPrefixes6();
 
       blocked6.check = createRangeChecker6([...BLOCKED_RANGES6, ipv6.prefix.text, ...connected]);
-      blocked6.readAt = Date.now();
+      blocked6.readAt = now();
     }
 
     return blocked6.check;
@@ -248,7 +249,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   // as its firewall refuses it: the container's IPv4 networks (can be
   // public), IMP_EGRESS_DENY and the IPv6 ranges refused to public only
   const readPublicRefused = async (): Promise<(address: string) => boolean> => {
-    if (publicRefused.readAt === 0 || Date.now() - publicRefused.readAt > CONNECTED_CACHE_MS) {
+    if (publicRefused.readAt === 0 || now() - publicRefused.readAt > CONNECTED_CACHE_MS) {
       const connected = await readConnectedPrefixes4();
 
       publicRefused.uplinks = await readUplinks();
@@ -264,7 +265,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         ],
       );
 
-      publicRefused.readAt = Date.now();
+      publicRefused.readAt = now();
     }
 
     return publicRefused.check;
@@ -295,7 +296,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   // A value no row and no record names is kept aside, not deleted: it may be
   // a secret added after the database copy a restore put back, or a write
   // whose row never came. A record that failed again keeps its file here.
-  const orphans = files.keepOrphansExcept(new Set([...valueFiles, ...pending]), new Date());
+  const orphans = files.keepOrphansExcept(new Set([...valueFiles, ...pending]), new Date(now()));
 
   for (const file of orphans.files) {
     log(
@@ -364,7 +365,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const terminators = createTerminators({
     socketDir: join(brokerDir, 'run'),
     issueLeaf: ca.issueLeaf,
-    isLeafDue: (leaf) => ca.isDue(leaf, Date.now()),
+    isLeafDue: (leaf) => ca.isDue(leaf, now()),
     createHandler: (key) =>
       createForwarder({
         impId: key.impId,

@@ -1,133 +1,281 @@
-import { expect, test } from 'bun:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { sql } from 'kysely';
+import { loadConfig } from '../config';
 import { openDatabase } from '../db/open-database';
 import { findSecret, listFileRemovals } from '../db/secrets';
-import { setupImpTest } from '../imps/test-imps';
 import { createBroker } from './broker-service';
-import type { Broker } from './broker-service';
-import { createSecretFiles } from './secret-files';
-import type { SecretFiles } from './secret-files';
 
 // A restore puts back an older database: the values of secrets added since
 // have no row, and the start keeps them aside rather than delete them
 // (docs/guides/connectors.md#value-files).
 
-test('a start on an older database keeps the newer secret values, and logs each', async () => {
-  await using ctx = await setupImpTest();
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  const first = await createBroker({ config: ctx.config, db: ctx.db, log: () => {} });
+  onTestFinished(() => stack.disposeAsync());
 
-  const copyPath = join(ctx.dataDir, 'older.sqlite');
+  const dataDir = await mkdtemp(join(tmpdir(), 'orphaned-secrets-'));
 
-  try {
-    await first.addSecret({ name: 'early', kind: 'github', value: 'ghp_EARLY' });
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-    // the copy a restore would put back, taken before the later secret
-    await sql`VACUUM INTO ${copyPath}`.execute(ctx.db);
-    await first.addSecret({ name: 'late', kind: 'npm', value: 'npm_LATE' });
-  } finally {
-    await first.stop();
-  }
+  const db = await openDatabase(':memory:');
 
-  const late = await findSecret(ctx.db, 'late');
-  const older = await openDatabase(copyPath);
+  stack.defer(() => db.destroy());
 
-  const logs: string[] = [];
+  const config = loadConfig({ IMP_DATA_DIR: dataDir });
 
-  try {
-    const restored = await createBroker({
-      config: ctx.config,
-      db: older,
-      log: (message) => {
-        logs.push(message);
-      },
-    });
+  return { stack, config, db, dataDir };
+}
 
-    await restored.stop();
-  } finally {
-    await older.destroy();
-  }
-
-  const secrets = join(ctx.dataDir, 'secrets');
-  const [kept] = readdirSync(join(secrets, '.orphaned'));
-  const file = late?.valueFile ?? '';
-
-  expect(readFileSync(join(secrets, '.orphaned', kept ?? '', file), 'utf8')).toBe('npm_LATE');
-  expect(readdirSync(secrets)).not.toContain(file);
-  expect(logs.join('\n')).toContain(`kept secret value file ${file}, which no database row names`);
-  expect(logs.join('\n')).not.toContain('npm_LATE');
-});
-
-// A delete or a replace records the file it displaced in its transaction: a
-// crash before the file goes leaves the record, and the next start removes
-// the file rather than keep a deleted value aside.
-test.each([
-  ['a delete', (broker: Broker) => broker.deleteSecret('gone')],
-  [
-    'a replace',
-    (broker: Broker) =>
-      broker.addSecret({ name: 'gone', kind: 'github', value: 'ghp_NEW', replace: true }),
-  ],
-])('%s that stopped before removing the old file: the next start removes it', async (_, change) => {
-  await using ctx = await setupImpTest();
-
-  const real = createSecretFiles(ctx.dataDir);
-
-  // impd stops between the commit and the removal
-  const crashing: SecretFiles = {
-    ...real,
-    remove: () => {
-      throw new Error('stopped');
-    },
-  };
+test('it keeps aside a value no row of an older database names', async () => {
+  const ctx = await setupTest();
 
   const first = await createBroker({
     config: ctx.config,
     db: ctx.db,
     log: () => {},
-    secretFiles: crashing,
+    runOAuthTimer: false,
   });
 
-  try {
-    await first.addSecret({ name: 'gone', kind: 'github', value: 'ghp_OLD' });
-  } finally {
-    await first.stop();
-  }
+  ctx.stack.defer(() => first.stop());
 
-  const saved = await findSecret(ctx.db, 'gone');
+  await first.addSecret({ name: 'early', kind: 'github', value: 'ghp_EARLY' });
 
-  const old = saved?.valueFile ?? '';
+  // the copy a restore would put back, taken before the later secret
+  const copyPath = join(ctx.dataDir, 'older.sqlite');
 
-  const second = await createBroker({
+  await sql`VACUUM INTO ${copyPath}`.execute(ctx.db);
+  await first.addSecret({ name: 'late', kind: 'npm', value: 'npm_LATE' });
+  await first.stop();
+
+  const late = await findSecret(ctx.db, 'late');
+
+  invariant(late);
+
+  const older = await openDatabase(copyPath);
+
+  ctx.stack.defer(() => older.destroy());
+
+  const logs: string[] = [];
+
+  const restored = await createBroker({
+    config: ctx.config,
+    db: older,
+    runOAuthTimer: false,
+    now: () => Date.parse('2026-10-04T05:30:00.000Z'),
+    log: (message) => {
+      logs.push(message);
+    },
+  });
+
+  ctx.stack.defer(() => restored.stop());
+
+  const kept = join(ctx.dataDir, 'secrets', '.orphaned', '2026-10-04T05-30-00.000Z');
+
+  const value = await readFile(join(kept, late.valueFile), 'utf8');
+  const left = await readdir(join(ctx.dataDir, 'secrets'));
+
+  expect(value).toBe('npm_LATE');
+  expect(left).toIncludeSameMembers(['.orphaned', expect.toStartWith('early.')]);
+
+  expect(logs).toStrictEqual([
+    `impd: broker: kept secret value file ${late.valueFile}, which no database row names, in ${kept}`,
+  ]);
+});
+
+test('it removes the old file of a delete that stopped before removing it, on the next start', async () => {
+  const ctx = await setupTest();
+
+  const first = await createBroker({
     config: ctx.config,
     db: ctx.db,
     log: () => {},
-    secretFiles: crashing,
+    runOAuthTimer: false,
   });
 
-  try {
-    await change(second);
-  } finally {
-    await second.stop();
-  }
+  ctx.stack.defer(() => first.stop());
 
-  const secrets = join(ctx.dataDir, 'secrets');
+  await first.addSecret({ name: 'gone', kind: 'github', value: 'ghp_OLD' });
 
+  const saved = await findSecret(ctx.db, 'gone');
+
+  invariant(saved);
+
+  const oldFile = join(ctx.dataDir, 'secrets', saved.valueFile);
+
+  // a directory where the value file was: the delete's removal of it fails
+  await rm(oldFile);
+  await mkdir(oldFile);
+  await writeFile(join(oldFile, 'held'), 'x');
+
+  await first.deleteSecret('gone');
+  await first.stop();
+
+  // the next start finds the file again
+  await rm(oldFile, { recursive: true });
+  await writeFile(oldFile, 'ghp_OLD');
+
+  const restarted = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: () => {},
+    runOAuthTimer: false,
+  });
+
+  ctx.stack.defer(() => restarted.stop());
+
+  const files = await readdir(join(ctx.dataDir, 'secrets'));
   const recorded = await listFileRemovals(ctx.db);
 
-  expect(readdirSync(secrets)).toContain(old);
-  expect(recorded).toEqual([old]);
+  expect(files).toStrictEqual([]);
+  expect(recorded).toStrictEqual([]);
+});
 
-  const restarted = await createBroker({ config: ctx.config, db: ctx.db, log: () => {} });
+test('it removes the old file of a replace that stopped before removing it, on the next start', async () => {
+  const ctx = await setupTest();
 
-  await restarted.stop();
+  const first = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: () => {},
+    runOAuthTimer: false,
+  });
 
-  expect(readdirSync(secrets)).not.toContain(old);
+  ctx.stack.defer(() => first.stop());
 
-  const left = await listFileRemovals(ctx.db);
+  await first.addSecret({ name: 'gone', kind: 'github', value: 'ghp_OLD' });
 
-  expect(readdirSync(secrets)).not.toContain('.orphaned');
-  expect(left).toEqual([]);
+  const saved = await findSecret(ctx.db, 'gone');
+
+  invariant(saved);
+
+  const oldFile = join(ctx.dataDir, 'secrets', saved.valueFile);
+
+  // a directory where the value file was: the replace's removal of it fails
+  await rm(oldFile);
+  await mkdir(oldFile);
+  await writeFile(join(oldFile, 'held'), 'x');
+
+  await first.addSecret({ name: 'gone', kind: 'github', value: 'ghp_NEW', replace: true });
+  await first.stop();
+
+  // the next start finds the file again
+  await rm(oldFile, { recursive: true });
+  await writeFile(oldFile, 'ghp_OLD');
+
+  const restarted = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: () => {},
+    runOAuthTimer: false,
+  });
+
+  ctx.stack.defer(() => restarted.stop());
+
+  const current = await findSecret(ctx.db, 'gone');
+
+  invariant(current);
+
+  const files = await readdir(join(ctx.dataDir, 'secrets'));
+  const recorded = await listFileRemovals(ctx.db);
+
+  expect(files).toStrictEqual([current.valueFile]);
+  expect(recorded).toStrictEqual([]);
+});
+
+test('it keeps the record of a file whose removal fails again, and keeps the file aside of the orphans', async () => {
+  const ctx = await setupTest();
+
+  const first = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: () => {},
+    runOAuthTimer: false,
+  });
+
+  ctx.stack.defer(() => first.stop());
+
+  await first.addSecret({ name: 'gone', kind: 'github', value: 'ghp_OLD' });
+
+  const saved = await findSecret(ctx.db, 'gone');
+
+  invariant(saved);
+
+  const oldFile = join(ctx.dataDir, 'secrets', saved.valueFile);
+
+  // a directory where the value file was: every removal of it fails
+  await rm(oldFile);
+  await mkdir(oldFile);
+  await writeFile(join(oldFile, 'held'), 'x');
+
+  await first.deleteSecret('gone');
+  await first.stop();
+
+  const logs: string[] = [];
+
+  const restarted = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    runOAuthTimer: false,
+    log: (message) => {
+      logs.push(message);
+    },
+  });
+
+  ctx.stack.defer(() => restarted.stop());
+
+  const files = await readdir(join(ctx.dataDir, 'secrets'));
+  const recorded = await listFileRemovals(ctx.db);
+
+  expect(files).toStrictEqual([saved.valueFile]);
+  expect(recorded).toStrictEqual([saved.valueFile]);
+
+  expect(logs).toStrictEqual([
+    expect.toStartWith('impd: broker: could not remove an old secret value file: '),
+  ]);
+});
+
+test('it never removes a recorded file that a row still names', async () => {
+  const ctx = await setupTest();
+
+  const first = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: () => {},
+    runOAuthTimer: false,
+  });
+
+  ctx.stack.defer(() => first.stop());
+
+  await first.addSecret({ name: 'kept', kind: 'github', value: 'ghp_KEPT' });
+  await first.stop();
+
+  const saved = await findSecret(ctx.db, 'kept');
+
+  invariant(saved);
+
+  // a record naming the live file, as a bug or a hand edit would leave
+  await ctx.db
+    .insertInto('secret_file_removals')
+    .values({ value_file: saved.valueFile, created_at: Date.now() })
+    .execute();
+
+  const restarted = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: () => {},
+    runOAuthTimer: false,
+  });
+
+  ctx.stack.defer(() => restarted.stop());
+
+  const value = await readFile(join(ctx.dataDir, 'secrets', saved.valueFile), 'utf8');
+  const recorded = await listFileRemovals(ctx.db);
+
+  expect(value).toBe('ghp_KEPT');
+  expect(recorded).toStrictEqual([]);
 });

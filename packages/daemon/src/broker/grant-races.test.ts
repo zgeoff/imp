@@ -1,235 +1,471 @@
-import { expect, test } from 'bun:test';
-import { listImps } from '../db/imps';
-import type { ImpDatabase } from '../db/open-database';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ImpContract } from '@imp/api';
+import { buildMockBrokerRule } from '@imp/api/test-utils/build-mock-broker-rule';
+import { invariant } from '@imp/test-utils/invariant';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import { createImage } from '../db/images';
+import { findImpByName } from '../db/imps';
+import { openDatabase } from '../db/open-database';
 import { listGrantNames, listGrantedRules } from '../db/secrets';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
 
 // Grants made, revoked, copied and changed at the same time: each race ends
 // as one serial order would, and no imp ever holds two credentials for one
 // host (docs/guides/connectors.md#secrets-and-grants).
 
-const VALUE = 'sk-synthetic-126-race';
-
 async function setupTest() {
-  const harness = await setupImpTest();
+  const stack = new AsyncDisposableStack();
 
-  await harness.createTestImage('base');
+  onTestFinished(() => stack.disposeAsync());
 
-  const ctx = { ...harness, ...buildTestApp(harness, harness) };
+  const dataDir = await mkdtemp(join(tmpdir(), 'grant-races-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // no jailer, no boot template; each resolver takes a free port; a new
+  // disk stays the size of its image, as small as /tmp needs
+  const config = {
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_JAILER: 'false',
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    }),
+    defaultDiskBytes: 0,
+  };
+
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  // the default image, which every imp the tests create boots
+  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+
+  const vmm = buildStubVmm();
+
+  // impd's log lines, which say why a fork went without a grant
+  const logs: string[] = [];
+
+  const impd = await createImpd(config, {
+    db,
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: (line) => {
+      logs.push(line);
+    },
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: (request) => impd.api.app.handle(request),
+    }),
+  );
+
+  return { db, impd, client, logs };
+}
+
+test('it makes exactly one of two clashing grants made at once, and refuses the other', async () => {
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
-
-  // gh and gh-api both cover api.github.com
-  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-race' });
 
   await ctx.client.secrets.add({
     name: 'gh-api',
     kind: 'custom',
-    value: VALUE,
-    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
   });
 
-  // other, granted to dev, on its own host; then rebound onto gh's host
-  const setupOther = async (): Promise<void> => {
-    await ctx.client.secrets.add({
-      name: 'other',
-      kind: 'custom',
-      value: VALUE,
-      rules: [{ host: 'other.example.com', header: 'authorization', scheme: 'bearer' }],
-    });
-
-    await ctx.client.grants.add({ name: 'dev', secret: 'other' });
-  };
-
-  const updateOtherHost = () =>
-    readCode(
-      ctx.client.secrets.add({
-        name: 'other',
-        kind: 'custom',
-        value: `${VALUE}-2`,
-        rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
-        replace: true,
-        rebind: true,
-      }),
-    );
-
-  return { ...ctx, setupOther, updateOtherHost };
-}
-
-// each imp whose grants cover one host twice
-async function findDoubleHosts(db: ImpDatabase): Promise<string[]> {
-  const doubled: string[] = [];
-
-  const imps = await listImps(db);
-
-  for (const imp of imps) {
-    const granted = await listGrantedRules(db, imp.id);
-
-    const hosts = granted.map((each) => each.rule.host);
-
-    for (const host of new Set(hosts)) {
-      if (hosts.filter((each) => each === host).length > 1) {
-        doubled.push(`${imp.name} ${host}`);
-      }
-    }
-  }
-
-  return doubled;
-}
-
-async function readCode(call: Promise<unknown>): Promise<string> {
-  try {
-    await call;
-
-    return 'ok';
-  } catch (error) {
-    return typeof error === 'object' && error !== null && 'code' in error
-      ? String(error.code)
-      : 'thrown';
-  }
-}
-
-test('two grants that clash, at once: exactly one is made and the other is CONFLICT', async () => {
-  await using ctx = await setupTest();
-
-  const codes = await Promise.all([
-    readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh' })),
-    readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh-api' })),
+  const results = await Promise.allSettled([
+    ctx.client.grants.add({ name: 'dev', secret: 'gh' }),
+    ctx.client.grants.add({ name: 'dev', secret: 'gh-api' }),
   ]);
 
-  const left = await ctx.client.grants.list({ name: 'dev' });
-  const doubled = await findDoubleHosts(ctx.db);
+  const dev = await findImpByName(ctx.db, 'dev');
 
-  expect(codes.toSorted()).toEqual(['CONFLICT', 'ok']);
-  expect(left).toHaveLength(1);
-  expect(doubled).toEqual([]);
+  invariant(dev);
+
+  const granted = await listGrantedRules(ctx.db, dev.id);
+
+  const hosts = granted.map((each) => each.rule.host);
+
+  const left = await ctx.client.grants.list({ name: 'dev' });
+
+  expect(results).toIncludeSameMembers([
+    { status: 'fulfilled', value: {} },
+    { status: 'rejected', reason: expect.toContainEntry(['code', 'CONFLICT']) },
+  ]);
+
+  expect(left).toStrictEqual([expect.toBeOneOf(['gh', 'gh-api'])]);
+  expect(new Set(hosts).size).toBe(hosts.length);
 });
 
-test('a grant and a revoke at once end as one of the two orders', async () => {
-  await using ctx = await setupTest();
+test('it ends a grant and a revoke made at once as one of the two orders', async () => {
+  const ctx = await setupTest();
 
-  const [added, removed] = await Promise.all([
-    readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh' })),
-    readCode(ctx.client.grants.delete({ name: 'dev', secret: 'gh' })),
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-race' });
+
+  const results = await Promise.allSettled([
+    ctx.client.grants.add({ name: 'dev', secret: 'gh' }),
+    ctx.client.grants.delete({ name: 'dev', secret: 'gh' }),
   ]);
 
   const left = await ctx.client.grants.list({ name: 'dev' });
 
-  // grant then revoke leaves nothing; revoke first finds no grant
-  const serial = [
-    { added: 'ok', removed: 'ok', left: [] },
-    { added: 'ok', removed: 'NOT_FOUND', left: ['gh'] },
-  ];
+  // one outcome of one order: grant then revoke leaves nothing; revoke first
+  // finds no grant and the grant stays, so the results and the grants left
+  // are checked together
+  const outcome: unknown = { results, left };
 
-  expect(serial).toContainEqual({ added, removed, left });
+  expect(outcome).toBeOneOf([
+    {
+      results: [
+        { status: 'fulfilled', value: {} },
+        { status: 'fulfilled', value: {} },
+      ],
+      left: [],
+    },
+    {
+      results: [
+        { status: 'fulfilled', value: {} },
+        { status: 'rejected', reason: expect.toContainEntry(['code', 'NOT_FOUND']) },
+      ],
+      left: ['gh'],
+    },
+  ]);
 });
 
-test('a grant on a fork while its source’s grants are copied skips the clashing copy', async () => {
-  await using ctx = await setupTest();
+test('it skips the clashing copy when a fork gets a grant while its source’s are copied', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+  const copy = await ctx.client.imps.create({ name: 'copy' });
 
-  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: VALUE });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-race' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-race' });
+
+  await ctx.client.secrets.add({
+    name: 'gh-api',
+    kind: 'custom',
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
+  });
+
   await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
-
-  const fork = await ctx.client.imps.create({ name: 'copy' });
-  const dev = await ctx.client.imps.get({ name: 'dev' });
 
   // the copy as a fork makes it, a grant on the fork, and a grant on the
   // source, all at once
-  const codes = await Promise.all([
-    readCode(ctx.broker.createForkGrants(dev, fork, null)),
-    readCode(ctx.client.grants.add({ name: 'copy', secret: 'gh-api' })),
-    readCode(ctx.client.grants.add({ name: 'dev', secret: 'npm' })),
+  const results = await Promise.allSettled([
+    ctx.impd.broker.createForkGrants(dev, copy, null),
+    ctx.client.grants.add({ name: 'copy', secret: 'gh-api' }),
+    ctx.client.grants.add({ name: 'dev', secret: 'npm' }),
   ]);
 
-  const copy = await ctx.client.grants.list({ name: 'copy' });
-  const doubled = await findDoubleHosts(ctx.db);
+  const granted = await listGrantedRules(ctx.db, copy.id);
 
-  // the copy never throws; whichever of gh and gh-api came first holds the host
-  expect(codes[0]).toBe('ok');
-  expect(copy.filter((name) => name.startsWith('gh'))).toHaveLength(1);
-  expect(doubled).toEqual([]);
+  const hosts = granted.map((each) => each.rule.host);
 
-  if (codes[1] === 'ok' && !copy.includes('gh')) {
-    expect(ctx.logs.join('\n')).toContain('forked without grant gh of dev');
-  }
+  const copied = await ctx.client.grants.list({ name: 'copy' });
 
-  // the source's new grant came before the copy or after it, whole
-  expect([['gh'], ['gh', 'npm'], ['gh-api'], ['gh-api', 'npm']]).toContainEqual(copy);
+  const skipped = ctx.logs.filter((line) => line.includes('forked without grant'));
+
+  // the copy, the fork's own grant and the skip log follow from one serial
+  // order (copy first, or the fork's gh-api first; npm before or after), so
+  // they are checked together
+  const outcome: unknown = {
+    copy: results[0],
+    forkGrant: results[1],
+    copied,
+    skipped,
+  };
+
+  expect(outcome).toBeOneOf([
+    {
+      copy: { status: 'fulfilled', value: { notCopied: [], error: null } },
+      forkGrant: { status: 'rejected', reason: expect.toContainEntry(['code', 'CONFLICT']) },
+      copied: ['gh'],
+      skipped: [],
+    },
+    {
+      copy: { status: 'fulfilled', value: { notCopied: [], error: null } },
+      forkGrant: { status: 'rejected', reason: expect.toContainEntry(['code', 'CONFLICT']) },
+      copied: ['gh', 'npm'],
+      skipped: [],
+    },
+    {
+      copy: {
+        status: 'fulfilled',
+        value: { notCopied: [{ secret: 'gh', reason: 'clash' }], error: null },
+      },
+      forkGrant: { status: 'fulfilled', value: {} },
+      copied: ['gh-api'],
+      skipped: [
+        'impd: copy: forked without grant gh of dev: it has another credential for that host',
+      ],
+    },
+    {
+      copy: {
+        status: 'fulfilled',
+        value: { notCopied: [{ secret: 'gh', reason: 'clash' }], error: null },
+      },
+      forkGrant: { status: 'fulfilled', value: {} },
+      copied: ['gh-api', 'npm'],
+      skipped: [
+        'impd: copy: forked without grant gh of dev: it has another credential for that host',
+      ],
+    },
+  ]);
+
+  expect(results[2]).toStrictEqual({ status: 'fulfilled', value: {} });
+  expect(new Set(hosts).size).toBe(hosts.length);
 });
 
-test('a rebind onto a granted host, before or after that grant, never doubles the host', async () => {
-  const outcomes: string[] = [];
+test('it drops the old grant of a rebind onto a host granted before it', async () => {
+  const ctx = await setupTest();
 
-  for (const order of ['grant first', 'rebind first']) {
-    await using ctx = await setupTest();
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-race' });
 
-    await ctx.setupOther();
+  await ctx.client.secrets.add({
+    name: 'other',
+    kind: 'custom',
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'other.example.com' })],
+  });
 
-    const steps =
-      order === 'grant first'
-        ? [
-            await readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh' })),
-            await ctx.updateOtherHost(),
-          ]
-        : [
-            await ctx.updateOtherHost(),
-            await readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh' })),
-          ];
+  await ctx.client.grants.add({ name: 'dev', secret: 'other' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-    const left = await ctx.client.grants.list({ name: 'dev' });
-    const doubled = await findDoubleHosts(ctx.db);
+  await ctx.client.secrets.add({
+    name: 'other',
+    kind: 'custom',
+    value: 'sk-synthetic-race-2',
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
+    replace: true,
+    rebind: true,
+  });
 
-    outcomes.push(`${order}: ${steps.join(' ')} -> ${left.join(',')} ${String(doubled.length)}`);
-  }
+  const left = await ctx.client.grants.list({ name: 'dev' });
 
-  // the rebind drops other's grant, so neither order clashes
-  expect(outcomes).toEqual(['grant first: ok ok -> gh 0', 'rebind first: ok ok -> gh 0']);
+  expect(left).toStrictEqual(['gh']);
 });
 
-test('a rebind and a revoke at once end as one of the two orders', async () => {
-  await using ctx = await setupTest();
+test('it grants a host after a rebind onto it dropped the old grant', async () => {
+  const ctx = await setupTest();
 
-  await ctx.setupOther();
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-race' });
 
-  const [rebound, revoked] = await Promise.all([
-    ctx.updateOtherHost(),
-    readCode(ctx.client.grants.delete({ name: 'dev', secret: 'other' })),
+  await ctx.client.secrets.add({
+    name: 'other',
+    kind: 'custom',
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'other.example.com' })],
+  });
+
+  await ctx.client.grants.add({ name: 'dev', secret: 'other' });
+
+  await ctx.client.secrets.add({
+    name: 'other',
+    kind: 'custom',
+    value: 'sk-synthetic-race-2',
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
+    replace: true,
+    rebind: true,
+  });
+
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+
+  const left = await ctx.client.grants.list({ name: 'dev' });
+
+  expect(left).toStrictEqual(['gh']);
+});
+
+test('it ends a rebind and a revoke made at once with no grant left', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.client.secrets.add({
+    name: 'other',
+    kind: 'custom',
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'other.example.com' })],
+  });
+
+  await ctx.client.grants.add({ name: 'dev', secret: 'other' });
+
+  const results: unknown = await Promise.allSettled([
+    ctx.client.secrets.add({
+      name: 'other',
+      kind: 'custom',
+      value: 'sk-synthetic-race-2',
+      rules: [buildMockBrokerRule({ host: 'api.github.com' })],
+      replace: true,
+      rebind: true,
+    }),
+    ctx.client.grants.delete({ name: 'dev', secret: 'other' }),
   ]);
 
   const left = await ctx.client.grants.list({ name: 'dev' });
 
   // revoke first, then a rebind with nothing to drop; or the rebind drops
   // the grant and the revoke finds none
-  expect(left).toEqual([]);
-  expect(rebound).toBe('ok');
-  expect(['ok', 'NOT_FOUND']).toContain(revoked);
+  expect(results).toBeOneOf([
+    [
+      {
+        status: 'fulfilled',
+        value: {
+          name: 'other',
+          kind: 'custom',
+          rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+          imps: [],
+          createdAt: expect.any(Date) as unknown,
+          droppedGrants: 0,
+        },
+      },
+      { status: 'fulfilled', value: {} },
+    ],
+    [
+      {
+        status: 'fulfilled',
+        value: {
+          name: 'other',
+          kind: 'custom',
+          rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+          imps: [],
+          createdAt: expect.any(Date) as unknown,
+          droppedGrants: 1,
+        },
+      },
+      { status: 'rejected', reason: expect.toContainEntry(['code', 'NOT_FOUND']) },
+    ],
+  ]);
+
+  expect(left).toStrictEqual([]);
 });
 
-test('a refused or clashing grant leaves what was there, and a retry makes one row', async () => {
-  await using ctx = await setupTest();
+test('it keeps the grant that was there when a clashing one is refused', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-race' });
+
+  await ctx.client.secrets.add({
+    name: 'gh-api',
+    kind: 'custom',
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
+  });
 
   await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-  const clash = await readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh-api' }));
+  const clash = ctx.client.grants.add({ name: 'dev', secret: 'gh-api' });
+
+  expect(clash).rejects.toMatchObject({ code: 'CONFLICT' });
+
   const kept = await ctx.client.grants.list({ name: 'dev' });
 
-  expect(clash).toBe('CONFLICT');
-  expect(kept).toEqual(['gh']);
+  expect(kept).toStrictEqual(['gh']);
+});
 
-  await ctx.client.grants.delete({ name: 'dev', secret: 'gh' });
+test('it makes one row for the same grant made twice at once', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
 
-  const retries = await Promise.all([
+  await ctx.client.secrets.add({
+    name: 'gh-api',
+    kind: 'custom',
+    value: 'sk-synthetic-race',
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
+  });
+
+  const results = await Promise.all([
     ctx.client.grants.add({ name: 'dev', secret: 'gh-api' }),
     ctx.client.grants.add({ name: 'dev', secret: 'gh-api' }),
   ]);
 
-  expect(retries).toEqual([{}, {}]);
+  const rows = await listGrantNames(ctx.db, dev.id);
 
-  const imps = await listImps(ctx.db);
-
-  const imp = imps.find((each) => each.name === 'dev');
-
-  const rows = await listGrantNames(ctx.db, imp?.id ?? '');
-
-  expect(rows).toEqual(['gh-api']);
+  expect(results).toStrictEqual([{}, {}]);
+  expect(rows).toStrictEqual(['gh-api']);
 });

@@ -1,93 +1,86 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { createConnection, createServer } from 'node:net';
-import type { Socket } from 'node:net';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ImpContract } from '@imp/api';
+import { buildMockBrokerRule } from '@imp/api/test-utils/build-mock-broker-rule';
+import { server } from '@imp/test-utils/mock-server';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { HttpResponse, http } from 'msw';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
 import { listAuditEntries } from '../db/broker-audit';
-import { findImpByName } from '../db/imps';
+import { createImage } from '../db/images';
+import { openDatabase } from '../db/open-database';
 import { findSecret, listGrantNames, removeCheckedGrant } from '../db/secrets';
-import { setupImpTest } from '../imps/test-imps';
-import { readRejection } from '../read-rejection';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubBrokerGuest } from '../test-utils/build-stub-broker-guest';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubBrokerGuestSocket } from '../test-utils/start-stub-broker-guest-socket';
+import { startStubBrokerHoldTarget } from '../test-utils/start-stub-broker-hold-target';
+import { startStubBrokerPlainUpstream } from '../test-utils/start-stub-broker-plain-upstream';
+import { startStubBrokerReplyTarget } from '../test-utils/start-stub-broker-reply-target';
+import { startStubBrokerTlsUpstream } from '../test-utils/start-stub-broker-tls-upstream';
+import { startStubBrokerTunnel } from '../test-utils/start-stub-broker-tunnel';
 import { loadOrCreateBrokerCa } from './broker-ca';
-import type { Broker } from './broker-service';
 
 // The broker end to end on loopback: with IMP_SUBNET 127.0.0.0/16, curl
 // bound to 127.0.0.2 is slot 0's guest, and 127.0.0.1 its gateway. A fake
 // upstream serves the granted host through the test-upstreams file.
 
-interface Seen {
-  readonly method: string;
-  readonly path: string;
-  readonly authorization: string | null;
-  readonly bodyBytes: number;
-}
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-interface BrokerOptions {
-  readonly afterRuleRead?: () => Promise<void>;
-}
+  onTestFinished(() => stack.disposeAsync());
 
-async function setupBroker(options: BrokerOptions = {}) {
-  // the broker reads the file when a request comes, so it is written below
-  const fixtures = mkdtempSync(join(tmpdir(), 'imp-broker-'));
-  const upstreams = join(fixtures, 'upstreams.json');
+  const dataDir = await mkdtemp(join(tmpdir(), 'broker-'));
 
-  // the real host past a plain tunnel, with a CA nobody trusts
-  const realCa = await loadOrCreateBrokerCa(join(fixtures, 'real-ca'));
-  const realLeaf = await realCa.issueLeaf('api.github.com');
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  const tunnelled: Seen[] = [];
+  const db = await openDatabase(':memory:');
 
-  const realHost = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    tls: { cert: realLeaf.certPem, key: realLeaf.keyPem },
+  stack.defer(() => db.destroy());
+
+  // the real host past a plain tunnel, with a CA nobody trusts: the guest
+  // must see a certificate the broker CA did not sign
+  const tunnelled: { method: string; path: string; authorization: string | null }[] = [];
+
+  const realHost = await startStubBrokerTlsUpstream(stack, {
+    dir: join(dataDir, 'real-host'),
+    host: 'api.github.com',
     fetch: (request) => {
       tunnelled.push({
         method: request.method,
         path: new URL(request.url).pathname,
         authorization: request.headers.get('authorization'),
-        bodyBytes: 0,
       });
 
       return new Response('from the real host');
     },
   });
 
-  const realPort = realHost.port ?? 0;
-
-  // plain tunnels stay on loopback, and port 443 goes to the real host
-  const ctx = await setupImpTest({
-    env: { IMP_SUBNET: '127.0.0.0/16', IMP_BROKER_TEST_UPSTREAMS: upstreams },
-    resolveTunnelTarget: () => Promise.resolve('127.0.0.1'),
-    dialTunnel: (address, port) =>
-      createConnection({ host: address, port: port === 443 ? realPort : port }),
-    ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
-  });
-
-  await ctx.createTestImage('base');
-  await ctx.imps.createImp({ name: 'dev' });
-
-  const seen: Seen[] = [];
-
-  // what the upstream does on a path before it answers
-  const beforeAnswer = new Map<string, () => Promise<void>>();
-
   // the fake upstream, with its own CA the broker is told to trust
-  const upstreamCa = await loadOrCreateBrokerCa(join(ctx.dataDir, 'upstream-ca'));
-  const upstreamLeaf = await upstreamCa.issueLeaf('localhost');
+  const seen: { method: string; path: string; authorization: string | null; bodyBytes: number }[] =
+    [];
 
-  const upstream = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    tls: { cert: upstreamLeaf.certPem, key: upstreamLeaf.keyPem },
-    maxRequestBodySize: 64 * 1024 ** 2,
+  // a test's own answer for a path; any other path gets 'from upstream'
+  const answers = new Map<string, () => Response | Promise<Response>>();
+
+  const upstream = await startStubBrokerTlsUpstream(stack, {
+    dir: join(dataDir, 'upstream'),
     fetch: async (request) => {
       const body = await request.arrayBuffer();
 
       const path = new URL(request.url).pathname;
 
-      await beforeAnswer.get(path)?.();
+      const response = await (answers.get(path) ?? (() => new Response('from upstream')))();
 
       seen.push({
         method: request.method,
@@ -96,589 +89,830 @@ async function setupBroker(options: BrokerOptions = {}) {
         bodyBytes: body.byteLength,
       });
 
-      const statuses: Readonly<Record<string, ResponseInit>> = {
-        '/none': { status: 204 },
-        '/same': { status: 304 },
-        '/moved': { status: 302, headers: { location: 'https://objects.example.com/x' } },
-      };
-
-      const init = statuses[path];
-
-      return init === undefined ? new Response('from upstream') : new Response(null, init);
+      return response;
     },
   });
 
-  writeFileSync(
-    upstreams,
-    JSON.stringify({
-      ca: upstreamCa.certPem,
-      upstreams: { 'api.github.com': `https://localhost:${String(upstream.port)}` },
-    }),
+  // the broker reads the file when a request comes
+  const upstreamsFile = join(dataDir, 'upstreams.json');
+  const upstreamOrigin = upstream.origin;
+
+  await writeFile(
+    upstreamsFile,
+    JSON.stringify({ ca: upstream.caPem, upstreams: { 'api.github.com': upstreamOrigin } }),
   );
 
-  const port = await ctx.broker.listen(0);
+  // a loopback subnet, so a local address stands for a guest; the stub VMM
+  // runs no jailer; each impd's resolver takes a free port
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    IMP_SUBNET: '127.0.0.0/16',
+    IMP_BROKER_TEST_UPSTREAMS: upstreamsFile,
+  });
 
-  const caFile = join(ctx.dataDir, 'broker', 'ca', 'ca.pem');
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-  // curl as the guest: from 127.0.0.2 (or `from`) through the gateway
-  const runCurl = async (
-    url: string,
-    extra: readonly string[] = [],
-    from = '127.0.0.2',
-  ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> => {
-    const child = Bun.spawn(
-      [
-        'curl',
-        '-sS',
-        '--max-time',
-        '10',
-        '--interface',
-        from,
-        '--proxy',
-        `http://127.0.0.1:${String(port)}`,
-        '--cacert',
-        caFile,
-        ...extra,
-        url,
-      ],
-      { stdout: 'pipe', stderr: 'pipe' },
-    );
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
+  const vmm = buildStubVmm();
 
-    return { code, stdout, stderr };
-  };
+  // what a request does between its rule read and its value read
+  const ruleRead = { hook: (): Promise<void> => Promise.resolve() };
 
-  // a CONNECT from slot 0's guest that stays open: `established` once the
-  // broker answers 200, `closed` when either end ends it; with `holdHead`
-  // the head waits for sendHead
-  const startTunnel = (target: string, holdHead = false) => {
-    const established = Promise.withResolvers<void>();
-    const connected = Promise.withResolvers<void>();
-    const closed = Promise.withResolvers<void>();
-    const state = { open: true };
+  // plain tunnels stay on loopback, and port 443 goes to the real host
+  const tunnelPorts = new Map([[443, realHost.port]]);
 
-    const sendHead = (): void => {
-      socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
-    };
-
-    const socket = createConnection({ host: '127.0.0.1', port, localAddress: '127.0.0.2' }, () => {
-      connected.resolve();
-
-      if (!holdHead) {
-        sendHead();
-      }
-    });
-
-    socket.on('data', (chunk: Buffer) => {
-      if (chunk.toString().startsWith('HTTP/1.1 200')) {
-        established.resolve();
-      } else {
-        established.reject(new Error(chunk.toString()));
-      }
-    });
-
-    socket.on('error', () => {});
-
-    socket.once('close', () => {
-      state.open = false;
-
-      closed.resolve();
-    });
-
-    return {
-      connected: connected.promise,
-      established: established.promise,
-      closed: closed.promise,
-      sendHead,
-      isOpen: () => state.open,
-      end: () => {
-        socket.destroy();
+  const impd = await createImpd(config, {
+    db,
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
       },
-    };
-  };
+    },
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.resolve('127.0.0.1'),
+      dialTunnel: (address, port) =>
+        createConnection({ host: address, port: tunnelPorts.get(port) ?? port }),
+      afterRuleRead: () => ruleRead.hook(),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // the image every imp boots from
+  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+
+  const proxyPort = await impd.broker.listen(0);
+
+  const caFile = join(dataDir, 'broker', 'ca', 'ca.pem');
+
+  const link = new RPCLink({
+    url: 'http://impd.test/rpc',
+    headers: { authorization: 'Bearer root-token' },
+    fetch: (request) => impd.api.app.handle(request),
+  });
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
   return {
-    ...ctx,
+    stack,
+    db,
+    dataDir,
+    impd,
+    client,
     seen,
-    beforeAnswer,
     tunnelled,
-    runCurl,
-    startTunnel,
-    [Symbol.asyncDispose]: async () => {
-      await upstream.stop(true);
-      await realHost.stop(true);
-      await ctx[Symbol.asyncDispose]();
+    answers,
+    ruleRead,
+    upstreamsFile,
+    upstreamOrigin,
+    proxyPort,
+    caFile,
 
-      rmSync(fixtures, { recursive: true, force: true });
-    },
+    // slot 0's guest
+    guest: buildStubBrokerGuest({ proxyPort, caFile, address: '127.0.0.2' }),
   };
 }
 
-type BrokerTest = Awaited<ReturnType<typeof setupBroker>>;
+test('it sends the real credential in place of the placeholder to a granted host', async () => {
+  const ctx = await setupTest();
 
-// a custom secret's one rule: the value as a bearer token for the host
-function buildBearerRules(host: string) {
-  return [{ host, header: 'authorization', scheme: 'bearer' as const }];
-}
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
 
-// polls until the check holds
-async function waitUntil(check: () => Promise<boolean>): Promise<void> {
-  while (!(await check())) {
-    await Bun.sleep(5);
-  }
-}
-
-async function createGithubGrant(broker: Broker): Promise<void> {
-  await broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
-  await broker.addGrant('dev', 'gh');
-}
-
-test('a granted host gets the real credential in place of the placeholder', async () => {
-  await using ctx = await setupBroker();
-
-  await createGithubGrant(ctx.broker);
-
-  const result = await ctx.runCurl('https://api.github.com/user?x=1', [
+  const result = await ctx.guest.curl('https://api.github.com/user?x=1', [
     '-H',
     'Authorization: Bearer imp-broker-placeholder',
   ]);
 
-  expect(result).toMatchObject({ code: 0, stdout: 'from upstream' });
+  expect(result).toStrictEqual({ code: 0, stdout: 'from upstream', stderr: '' });
 
-  expect(ctx.seen).toEqual([
+  expect(ctx.seen).toStrictEqual([
     { method: 'GET', path: '/user', authorization: 'Bearer ghp_real', bodyBytes: 0 },
   ]);
-
-  const imp = await findImpByName(ctx.db, 'dev');
-  const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10, null);
-
-  expect(audit).toMatchObject([{ imp: 'dev', secret: 'gh', path: '/user', status: 200 }]);
 });
 
-test('a large upload streams through and is counted', async () => {
-  await using ctx = await setupBroker();
+test('it records an audit row for a forwarded request', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
 
-  await createGithubGrant(ctx.broker);
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+  await ctx.guest.curl('https://api.github.com/user?x=1');
+
+  const audit: unknown = await waitFor(async () => {
+    const rows = await listAuditEntries(ctx.db, dev.id, 10, null);
+
+    expect(rows).toHaveLength(1);
+
+    return rows;
+  });
+
+  expect(audit).toStrictEqual([
+    {
+      at: expect.toBeValidDate() as unknown,
+      imp: 'dev',
+      secret: 'gh',
+      method: 'GET',
+      host: 'api.github.com',
+      path: '/user',
+      status: 200,
+      requestBytes: 0,
+      responseBytes: 'from upstream'.length,
+      durationMs: expect.toBeNumber() as unknown,
+    },
+  ]);
+});
+
+test('it streams a large upload through and counts its bytes', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
 
   const body = join(ctx.dataDir, 'pack');
-  const size = 3 * 1024 * 1024 + 17;
 
-  writeFileSync(body, Buffer.alloc(size, 7));
+  await writeFile(body, Buffer.alloc(3 * 1024 * 1024 + 17, 7));
 
-  const result = await ctx.runCurl('https://api.github.com/upload', ['--data-binary', `@${body}`]);
+  await ctx.guest.curl('https://api.github.com/upload', ['--data-binary', `@${body}`]);
 
-  expect(result.code).toBe(0);
-  expect(ctx.seen[0]?.bodyBytes).toBe(size);
+  const audit = await waitFor(async () => {
+    const rows = await listAuditEntries(ctx.db, null, 10, null);
 
-  const audit = await listAuditEntries(ctx.db, null, 10, null);
+    expect(rows).toHaveLength(1);
 
-  expect(audit[0]?.requestBytes).toBe(size);
+    return rows;
+  });
+
+  expect(ctx.seen.map((entry) => entry.bodyBytes)).toStrictEqual([3 * 1024 * 1024 + 17]);
+  expect(audit.map((row) => row.requestBytes)).toStrictEqual([3 * 1024 * 1024 + 17]);
 });
 
-test('without a grant the host is tunnelled, and the guest sees the real certificate', async () => {
-  await using ctx = await setupBroker();
+test('it tunnels an ungranted host, whose real certificate the guest does not trust', async () => {
+  const ctx = await setupTest();
 
-  const placeholder = ['-H', 'Authorization: Bearer imp-broker-placeholder'];
+  await ctx.client.imps.create({ name: 'dev' });
 
-  // no grant: the guest reaches the real host, whose certificate the broker
-  // CA did not sign (curl's 60), and no credential is added
-  const untrusted = await ctx.runCurl('https://api.github.com/user', placeholder);
+  const result = await ctx.guest.curl('https://api.github.com/user');
 
-  expect(untrusted.code).toBe(60);
+  expect(result).toStrictEqual({ code: 60, stdout: '', stderr: expect.toStartWith('curl: (60) ') });
+  expect(ctx.tunnelled).toStrictEqual([]);
+  expect(ctx.seen).toStrictEqual([]);
+});
 
-  const insecure = await ctx.runCurl('https://api.github.com/user', ['-k', ...placeholder]);
+test('it adds no credential to an ungranted host the guest reaches past the certificate', async () => {
+  const ctx = await setupTest();
 
-  expect(insecure).toMatchObject({ code: 0, stdout: 'from the real host' });
+  await ctx.client.imps.create({ name: 'dev' });
 
-  expect(ctx.tunnelled).toEqual([
-    { method: 'GET', path: '/user', authorization: 'Bearer imp-broker-placeholder', bodyBytes: 0 },
+  const result = await ctx.guest.curl('https://api.github.com/user', [
+    '-k',
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
   ]);
 
-  expect(ctx.seen).toHaveLength(0);
+  expect(result).toStrictEqual({ code: 0, stdout: 'from the real host', stderr: '' });
+
+  expect(ctx.tunnelled).toStrictEqual([
+    { method: 'GET', path: '/user', authorization: 'Bearer imp-broker-placeholder' },
+  ]);
+
+  expect(ctx.seen).toStrictEqual([]);
 });
 
-test('a plain tunnel dials the checked address, and a closed egress policy refuses it', async () => {
-  const echo = createServer((socket) => {
-    socket.end('HTTP/1.1 200 OK\r\ncontent-length: 6\r\nconnection: close\r\n\r\ntunnel');
+test('it dials the checked address for a plain tunnel under an open policy', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const result = await ctx.guest.curl(`http://plain.test:${String(target.port)}/`, [
+    '--proxytunnel',
+  ]);
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'tunnel', stderr: '' });
+});
+
+test('it relays the guest’s bytes to the tunnel target', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.guest.curl(`http://plain.test:${String(target.port)}/hello`, ['--proxytunnel']);
+
+  // curl adds its own headers after the Host line
+  expect(target.received).toStrictEqual([
+    expect.toStartWith(`GET /hello HTTP/1.1\r\nHost: plain.test:${String(target.port)}\r\n`),
+  ]);
+});
+
+test('it tunnels to a host a box policy lists', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['plain.test'] });
+
+  const result = await ctx.guest.curl(`http://plain.test:${String(target.port)}/`, [
+    '--proxytunnel',
+  ]);
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'tunnel', stderr: '' });
+});
+
+test('it refuses a tunnel to a host a box policy does not list', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['other.test'] });
+
+  const guest = await startStubBrokerGuestSocket(ctx.stack, {
+    port: ctx.proxyPort,
+    address: '127.0.0.2',
   });
 
-  const listening = Promise.withResolvers<void>();
+  guest.write(
+    `CONNECT plain.test:${String(target.port)} HTTP/1.1\r\nHost: plain.test:${String(target.port)}\r\n\r\n`,
+  );
 
-  echo.listen(0, '127.0.0.1', listening.resolve);
+  const reply = await guest.reply;
 
-  await listening.promise;
-
-  const address = echo.address();
-  const port = typeof address === 'object' && address !== null ? address.port : 0;
-
-  try {
-    await using ctx = await setupBroker();
-
-    const url = `http://plain.test:${String(port)}/`;
-
-    const open = await ctx.runCurl(url, ['--proxytunnel']);
-
-    expect(open).toMatchObject({ code: 0, stdout: 'tunnel' });
-
-    // a box reaches the hosts its list names, and no other
-    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['plain.test'] });
-
-    const boxed = await ctx.runCurl(url, ['--proxytunnel']);
-
-    expect(boxed).toMatchObject({ code: 0, stdout: 'tunnel' });
-
-    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['other.test'] });
-
-    const outside = await ctx.runCurl(url, ['--proxytunnel']);
-
-    expect(outside.code).not.toBe(0);
-    expect(outside.stderr).toContain('403');
-
-    await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
-
-    const closed = await ctx.runCurl(url, ['--proxytunnel']);
-
-    expect(closed.code).not.toBe(0);
-    expect(closed.stderr).toContain('403');
-  } finally {
-    echo.close();
-  }
+  expect(reply).toBe(
+    'HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\ncontent-length: 63\r\n' +
+      "connection: close\r\n\r\negress to plain.test is not allowed by the imp's egress policy\n",
+  );
 });
 
-test('a tighter policy ends the open tunnels it denies, and keeps the rest', async () => {
-  // a server that holds every connection open until the test ends
-  const held = new Set<Socket>();
+test('it refuses every tunnel under a closed egress policy', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');
 
-  const hold = createServer((socket) => {
-    held.add(socket);
-    socket.on('error', () => {});
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+  const guest = await startStubBrokerGuestSocket(ctx.stack, {
+    port: ctx.proxyPort,
+    address: '127.0.0.2',
   });
 
-  const listening = Promise.withResolvers<void>();
+  guest.write(
+    `CONNECT plain.test:${String(target.port)} HTTP/1.1\r\nHost: plain.test:${String(target.port)}\r\n\r\n`,
+  );
 
-  hold.listen(0, '127.0.0.1', listening.resolve);
+  const reply = await guest.reply;
 
-  await listening.promise;
-
-  const address = hold.address();
-  const port = typeof address === 'object' && address !== null ? address.port : 0;
-
-  try {
-    await using ctx = await setupBroker();
-
-    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test', 'drop.test'] });
-
-    const keep = ctx.startTunnel(`keep.test:${String(port)}`);
-    const drop = ctx.startTunnel(`drop.test:${String(port)}`);
-
-    await Promise.all([keep.established, drop.established]);
-    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test'] });
-
-    await drop.closed;
-
-    expect(keep.isOpen()).toBeTrue();
-
-    keep.end();
-  } finally {
-    for (const socket of held) {
-      socket.destroy();
-    }
-
-    hold.close();
-  }
+  expect(reply).toBe(
+    'HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\ncontent-length: 63\r\n' +
+      "connection: close\r\n\r\negress to plain.test is not allowed by the imp's egress policy\n",
+  );
 });
 
-test('a connection opened under an open policy gets no tunnel once a tighter one is set', async () => {
-  await using ctx = await setupBroker();
+test('it ends the open tunnels a tighter policy denies, and keeps the rest', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerHoldTarget(ctx.stack);
 
-  const early = ctx.startTunnel('late.test:9', true);
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test', 'drop.test'] });
 
-  await early.connected;
+  const keep = await startStubBrokerTunnel(ctx.stack, {
+    proxyPort: ctx.proxyPort,
+    address: '127.0.0.2',
+    target: `keep.test:${String(target.port)}`,
+  });
 
-  // the broker has accepted it and is waiting for the head
-  await Bun.sleep(100);
-  await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
+  const drop = await startStubBrokerTunnel(ctx.stack, {
+    proxyPort: ctx.proxyPort,
+    address: '127.0.0.2',
+    target: `drop.test:${String(target.port)}`,
+  });
+
+  keep.sendHead();
+  drop.sendHead();
+
+  await Promise.all([keep.established, drop.established]);
+  await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test'] });
+
+  await drop.closed;
+
+  expect(keep.isOpen()).toBeTrue();
+});
+
+test('it gives no tunnel to a connection opened under an open policy once a tighter one is set', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const early = await startStubBrokerTunnel(ctx.stack, {
+    proxyPort: ctx.proxyPort,
+    address: '127.0.0.2',
+    target: 'late.test:9',
+  });
+
+  await ctx.impd.egress.setPolicy('dev', { mode: 'none', allow: [] });
 
   early.sendHead();
 
-  const refused = await readRejection(early.established);
-
-  expect(String(refused)).toContain('403 Forbidden');
+  expect(early.established).rejects.toThrow('HTTP/1.1 403 Forbidden');
 });
 
-test('a guest on another imp’s gateway, or a request that is not CONNECT, gets nothing', async () => {
-  await using ctx = await setupBroker();
+test('it closes the connection of a guest on another imp’s gateway without a reply', async () => {
+  const ctx = await setupTest();
 
-  await createGithubGrant(ctx.broker);
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
 
   // 127.0.0.6 is slot 1's guest, dialling slot 0's gateway
-  const other = await ctx.runCurl('https://api.github.com/user', [], '127.0.0.6');
+  const other = await startStubBrokerGuestSocket(ctx.stack, {
+    port: ctx.proxyPort,
+    address: '127.0.0.6',
+  });
 
-  expect(other.code).not.toBe(0);
+  other.write('CONNECT api.github.com:443 HTTP/1.1\r\nHost: api.github.com:443\r\n\r\n');
 
-  // a plain proxy GET, not a tunnel
-  const get = await ctx.runCurl('http://api.github.com/user');
+  const reply = await other.reply;
 
-  expect(get.stdout).toContain('only CONNECT');
-  expect(ctx.seen).toHaveLength(0);
+  expect(reply).toBe('');
 });
 
-test('a revoke stops the credential at once', async () => {
-  await using ctx = await setupBroker();
+test('it refuses a proxy request that is not a CONNECT', async () => {
+  const ctx = await setupTest();
 
-  await createGithubGrant(ctx.broker);
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
 
-  const before = await ctx.runCurl('https://api.github.com/a');
+  const result = await ctx.guest.curl('http://api.github.com/user');
 
-  expect(before.code).toBe(0);
+  expect(result).toStrictEqual({ code: 0, stdout: 'only CONNECT is served\n', stderr: '' });
+  expect(ctx.seen).toStrictEqual([]);
+});
 
-  await ctx.broker.removeGrant('dev', 'gh');
+test('it stops sending the credential as soon as the grant is revoked', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+  await ctx.guest.curl('https://api.github.com/a');
+  await ctx.impd.broker.removeGrant('dev', 'gh');
 
   // now a plain tunnel: the real host's certificate, which the guest does
   // not trust
-  const after = await ctx.runCurl('https://api.github.com/b');
+  const result = await ctx.guest.curl('https://api.github.com/b');
 
-  expect(after.code).toBe(60);
-  expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
-  expect(ctx.tunnelled).toHaveLength(0);
+  expect(result.code).toBe(60);
+  expect(ctx.tunnelled).toStrictEqual([]);
+  expect(ctx.seen.map((entry) => entry.path)).toStrictEqual(['/a']);
 });
 
-test('bodiless answers and redirects pass through as they are', async () => {
-  await using ctx = await setupBroker();
+test('it passes a 204 through without a body', async () => {
+  const ctx = await setupTest();
 
-  await createGithubGrant(ctx.broker);
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
 
-  for (const [path, code] of [
-    ['/none', '204'],
-    ['/same', '304'],
-    ['/moved', '302'],
-  ] as const) {
-    const result = await ctx.runCurl(`https://api.github.com${path}`, [
-      '-o',
-      '/dev/null',
-      '-w',
-      '%{http_code} %{redirect_url}',
-    ]);
+  ctx.answers.set('/none', () => new Response(null, { status: 204 }));
 
-    const location = path === '/moved' ? 'https://objects.example.com/x' : '';
+  const result = await ctx.guest.curl('https://api.github.com/none', [
+    '-w',
+    '%{http_code} %{size_download}',
+  ]);
 
-    expect({ path, stdout: result.stdout.trim() }).toEqual({
-      path,
-      stdout: `${code} ${location}`.trim(),
-    });
-  }
+  expect(result).toStrictEqual({ code: 0, stdout: '204 0', stderr: '' });
 });
 
-// /a then /b in one curl run, on one connection when it can: each line is
-// the body, the status and the new connections that request made
-function readTwice(runCurl: BrokerTest['runCurl']) {
-  return runCurl('https://api.github.com/b', [
+test('it passes a 304 through without a body', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+
+  ctx.answers.set('/same', () => new Response(null, { status: 304 }));
+
+  const result = await ctx.guest.curl('https://api.github.com/same', [
+    '-w',
+    '%{http_code} %{size_download}',
+  ]);
+
+  expect(result).toStrictEqual({ code: 0, stdout: '304 0', stderr: '' });
+});
+
+test('it passes a redirect through without following it', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+
+  ctx.answers.set(
+    '/moved',
+    () =>
+      new Response(null, { status: 302, headers: { location: 'https://objects.example.com/x' } }),
+  );
+
+  const result = await ctx.guest.curl('https://api.github.com/moved', [
+    '-w',
+    '%{http_code} %{redirect_url}',
+  ]);
+
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: '302 https://objects.example.com/x',
+    stderr: '',
+  });
+
+  expect(ctx.seen.map((entry) => entry.path)).toStrictEqual(['/moved']);
+});
+
+test('it gives no credential to the next request on a connection whose grant is gone', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+
+  // the row goes while the upstream handles /a, and no prune runs, so the
+  // connection stays: the lookup on each request is what refuses /b
+  ctx.answers.set('/a', async () => {
+    await removeCheckedGrant(ctx.db, dev.id, 'gh', null);
+
+    return new Response('from upstream');
+  });
+
+  // /a then /b in one curl run, on one connection when it can
+  const result = await ctx.guest.curl('https://api.github.com/b', [
     '-w',
     ' %{http_code} %{num_connects}\n',
     'https://api.github.com/a',
   ]);
-}
 
-test('a grant gone while a connection stays open: the next request on it gets no credential', async () => {
-  await using ctx = await setupBroker();
-
-  await createGithubGrant(ctx.broker);
-
-  const imp = await findImpByName(ctx.db, 'dev');
-
-  // the row goes while the upstream handles /a, and no prune runs, so the
-  // connection stays: the lookup on each request is what refuses /b
-  ctx.beforeAnswer.set('/a', async () => {
-    await removeCheckedGrant(ctx.db, imp?.id ?? '', 'gh', null);
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: 'from upstream 200 1\nno credential is granted for api.github.com\n 403 0\n',
+    stderr: '',
   });
 
-  const result = await readTwice(ctx.runCurl);
-
-  expect(result.stdout).toBe(
-    'from upstream 200 1\nno credential is granted for api.github.com\n 403 0\n',
-  );
-
-  expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
+  expect(ctx.seen.map((entry) => entry.path)).toStrictEqual(['/a']);
 });
 
-test('a revoke lets the request under way finish, and the next gets no credential', async () => {
-  await using ctx = await setupBroker();
+test('it lets the request under way finish on a revoke, and the next gets no credential', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
 
-  await createGithubGrant(ctx.broker);
-
-  const imp = await findImpByName(ctx.db, 'dev');
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
 
   // the revoke lands while the upstream handles /a; it waits for the grant
   // to go, not for the revoke's prune, which waits for /a to end
-  const revoke: { done: Promise<void> | null } = { done: null };
+  const revoke = { done: Promise.resolve() };
 
-  ctx.beforeAnswer.set('/a', async () => {
-    revoke.done = ctx.broker.removeGrant('dev', 'gh');
+  ctx.answers.set('/a', async () => {
+    revoke.done = ctx.impd.broker.removeGrant('dev', 'gh');
 
-    await waitUntil(async () => {
-      const names = await listGrantNames(ctx.db, imp?.id ?? '');
+    await waitFor(async () => {
+      const names = await listGrantNames(ctx.db, dev.id);
 
-      return names.length === 0;
+      expect(names).toStrictEqual([]);
     });
+
+    return new Response('from upstream');
   });
 
-  const result = await readTwice(ctx.runCurl);
+  const result = await ctx.guest.curl('https://api.github.com/b', [
+    '-w',
+    ' %{http_code} %{num_connects}\n',
+    'https://api.github.com/a',
+  ]);
 
   await revoke.done;
 
-  // the prune closed the connection once /a was done: /b dialled again,
-  // got a plain tunnel to the real host, and never trusted it (curl's 60)
-  expect(result.code).toBe(60);
-  expect(result.stdout).toBe('from upstream 200 1\n 000 1\n');
-  expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
-  expect(ctx.tunnelled).toHaveLength(0);
-});
-
-test('a rebind to another host never sends the new value to the old', async () => {
-  const held = { armed: false, reached: Promise.withResolvers<void>() };
-  const release = Promise.withResolvers<void>();
-
-  // holds the one request between its rule read and its value read
-  await using ctx = await setupBroker({
-    afterRuleRead: async () => {
-      if (held.armed) {
-        held.reached.resolve();
-
-        await release.promise;
-      }
-    },
+  // the prune closed the connection once /a was done: /b dialled again, got
+  // a plain tunnel to the real host, and never trusted it (curl's 60)
+  expect(result).toStrictEqual({
+    code: 60,
+    stdout: 'from upstream 200 1\n 000 1\n',
+    stderr: expect.toStartWith('curl: (60) '),
   });
 
-  await ctx.broker.addSecret({
+  expect(ctx.seen.map((entry) => entry.path)).toStrictEqual(['/a']);
+  expect(ctx.tunnelled).toStrictEqual([]);
+});
+
+test('it never sends a rebound value to the host the secret had before', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
     name: 'api',
     kind: 'custom',
     value: 'old-value',
-    rules: buildBearerRules('api.github.com'),
+    rules: [buildMockBrokerRule({ host: 'api.github.com' })],
   });
 
-  await ctx.broker.addGrant('dev', 'api');
+  await ctx.impd.broker.addGrant('dev', 'api');
 
-  held.armed = true;
+  // the request holds between its rule read and its value read
+  const reached = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
 
-  const request = ctx.runCurl('https://api.github.com/x');
+  ctx.ruleRead.hook = async () => {
+    reached.resolve();
 
-  // the request read the old host's rule; the replace lands before its value read
-  await held.reached.promise;
+    await release.promise;
+  };
 
-  const replaced = ctx.broker.addSecret({
+  const request = ctx.guest.curl('https://api.github.com/x');
+
+  await reached.promise;
+
+  const replaced = ctx.impd.broker.addSecret({
     name: 'api',
     kind: 'custom',
     value: 'new-value',
-    rules: buildBearerRules('other.example.com'),
+    rules: [buildMockBrokerRule({ host: 'other.example.com' })],
     replace: true,
     rebind: true,
   });
 
   // the row has switched and the old file is gone; the replace itself then
   // waits for the held request, as a revoke's prune does
-  await waitUntil(async () => {
+  await waitFor(async () => {
     const secret = await findSecret(ctx.db, 'api');
+    const files = await readdir(join(ctx.dataDir, 'secrets'));
 
-    return secret?.rules[0]?.host === 'other.example.com';
+    expect(secret?.rules[0]?.host).toBe('other.example.com');
+    expect(files).toHaveLength(1);
   });
-
-  await waitUntil(() => Promise.resolve(readdirSync(join(ctx.dataDir, 'secrets')).length === 1));
 
   release.resolve();
 
   const [result] = await Promise.all([request, replaced]);
 
-  expect(result.stdout).toBe('no credential is granted for api.github.com\n');
-  expect(ctx.seen).toEqual([]);
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: 'no credential is granted for api.github.com\n',
+    stderr: '',
+  });
+
+  expect(ctx.seen).toStrictEqual([]);
 });
 
-test('a rotation sends the new value on the next request, with the grant kept', async () => {
-  await using ctx = await setupBroker();
+test('it sends the rotated value on the next request, with the grant kept', async () => {
+  const ctx = await setupTest();
 
-  await createGithubGrant(ctx.broker);
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+  await ctx.guest.curl('https://api.github.com/one');
 
-  const first = await ctx.runCurl('https://api.github.com/one');
+  await ctx.impd.broker.addSecret({
+    name: 'gh',
+    kind: 'github',
+    value: 'ghp_rotated',
+    replace: true,
+  });
 
-  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_rotated', replace: true });
+  const result = await ctx.guest.curl('https://api.github.com/two');
 
-  const second = await ctx.runCurl('https://api.github.com/two');
+  expect(result.code).toBe(0);
 
-  expect([first.code, second.code]).toEqual([0, 0]);
-
-  expect(ctx.seen.map((entry) => `${entry.path} ${String(entry.authorization)}`)).toEqual([
+  expect(ctx.seen.map((entry) => `${entry.path} ${String(entry.authorization)}`)).toStrictEqual([
     '/one Bearer ghp_real',
     '/two Bearer ghp_rotated',
   ]);
 });
 
-test('a rule’s upstream takes the request of a host with no public name', async () => {
-  await using ctx = await setupBroker();
+test('it sends the request of a host with no public name to its rule’s upstream', async () => {
+  const ctx = await setupTest();
 
-  const plain = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    fetch: (request) =>
-      new Response(
-        `plain ${request.headers.get('authorization') ?? '-'} ${request.headers.get('host') ?? '-'}`,
-      ),
+  const received: { authorization: string | null; url: string }[] = [];
+
+  server.use(
+    http.get('http://svc-upstream.test:18081/v1/ping', (info) => {
+      received.push({
+        authorization: info.request.headers.get('authorization'),
+        url: info.request.url,
+      });
+
+      return HttpResponse.text('from the rule upstream');
+    }),
+  );
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'op',
+    kind: 'custom',
+    value: 'real-token',
+    rules: [
+      buildMockBrokerRule({ host: 'svc.imp.internal', upstream: 'http://svc-upstream.test:18081' }),
+    ],
   });
 
-  try {
-    await ctx.broker.addSecret({
-      name: 'op',
-      kind: 'custom',
-      value: 'real-token',
-      rules: [
-        {
-          host: 'svc.imp.internal',
-          header: 'authorization',
-          scheme: 'bearer',
-          upstream: `http://127.0.0.1:${String(plain.port)}`,
-        },
-      ],
-    });
+  await ctx.impd.broker.addGrant('dev', 'op');
 
-    await ctx.broker.addGrant('dev', 'op');
+  const result = await ctx.guest.curl('https://svc.imp.internal/v1/ping', [
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
+  ]);
 
-    const result = await ctx.runCurl('https://svc.imp.internal/v1/ping', [
-      '-H',
-      'Authorization: Bearer imp-broker-placeholder',
-    ]);
+  expect(result).toStrictEqual({ code: 0, stdout: 'from the rule upstream', stderr: '' });
 
-    // the upstream's own authority is its Host, not the guest's name
-    expect(result).toMatchObject({
-      code: 0,
-      stdout: `plain Bearer real-token 127.0.0.1:${String(plain.port)}`,
-    });
+  expect(received).toStrictEqual([
+    { authorization: 'Bearer real-token', url: 'http://svc-upstream.test:18081/v1/ping' },
+  ]);
 
-    expect(ctx.seen).toEqual([]);
+  expect(ctx.seen).toStrictEqual([]);
+});
 
-    const imp = await findImpByName(ctx.db, 'dev');
-    const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10, null);
+test('it gives a rule’s upstream its own authority as the Host', async () => {
+  const ctx = await setupTest();
 
-    expect(audit).toMatchObject([{ secret: 'op', host: 'svc.imp.internal', path: '/v1/ping' }]);
+  const hosts: (string | null)[] = [];
 
-    // a rebind without an upstream applies to the next request, and the grant goes
-    await ctx.broker.addSecret({
-      name: 'op',
-      kind: 'custom',
-      value: 'real-token',
-      rules: buildBearerRules('svc.imp.internal'),
-      replace: true,
-      rebind: true,
-    });
+  const upstream = startStubBrokerPlainUpstream(ctx.stack, (request) => {
+    hosts.push(request.headers.get('host'));
 
-    await ctx.broker.addGrant('dev', 'op');
+    return new Response('from the rule upstream');
+  });
 
-    const after = await ctx.runCurl('https://svc.imp.internal/v1/ping');
+  await ctx.client.imps.create({ name: 'dev' });
 
-    expect(after.stdout).not.toContain('plain');
-  } finally {
-    await plain.stop(true);
-  }
+  await ctx.impd.broker.addSecret({
+    name: 'op',
+    kind: 'custom',
+    value: 'real-token',
+    rules: [buildMockBrokerRule({ host: 'svc.imp.internal', upstream: upstream.origin })],
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'op');
+  await ctx.guest.curl('https://svc.imp.internal/v1/ping');
+
+  expect(hosts).toStrictEqual([`127.0.0.1:${String(upstream.port)}`]);
+});
+
+test('it audits a request sent to a rule’s upstream under the guest’s host', async () => {
+  const ctx = await setupTest();
+
+  server.use(
+    http.get('http://svc-upstream.test:18081/v1/ping', () =>
+      HttpResponse.text('from the rule upstream'),
+    ),
+  );
+
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'op',
+    kind: 'custom',
+    value: 'real-token',
+    rules: [
+      buildMockBrokerRule({ host: 'svc.imp.internal', upstream: 'http://svc-upstream.test:18081' }),
+    ],
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'op');
+  await ctx.guest.curl('https://svc.imp.internal/v1/ping');
+
+  const audit = await waitFor(async () => {
+    const rows = await listAuditEntries(ctx.db, dev.id, 10, null);
+
+    expect(rows).toHaveLength(1);
+
+    return rows;
+  });
+
+  expect(audit.map((row) => [row.secret, row.host, row.path])).toStrictEqual([
+    ['op', 'svc.imp.internal', '/v1/ping'],
+  ]);
+});
+
+test('it sends the next request to the host’s own origin once a rebind drops the upstream', async () => {
+  const ctx = await setupTest();
+
+  const received: string[] = [];
+
+  server.use(
+    http.get('http://svc-upstream.test:18081/v1/ping', () =>
+      HttpResponse.text('from the rule upstream'),
+    ),
+    http.get('https://svc.imp.internal/v1/ping', (info) => {
+      received.push(info.request.headers.get('authorization') ?? '');
+
+      return HttpResponse.text('from the host itself');
+    }),
+  );
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'op',
+    kind: 'custom',
+    value: 'real-token',
+    rules: [
+      buildMockBrokerRule({ host: 'svc.imp.internal', upstream: 'http://svc-upstream.test:18081' }),
+    ],
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'op');
+  await ctx.guest.curl('https://svc.imp.internal/v1/ping');
+
+  await ctx.impd.broker.addSecret({
+    name: 'op',
+    kind: 'custom',
+    value: 'real-token',
+    rules: [buildMockBrokerRule({ host: 'svc.imp.internal' })],
+    replace: true,
+    rebind: true,
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'op');
+
+  const result = await ctx.guest.curl('https://svc.imp.internal/v1/ping');
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'from the host itself', stderr: '' });
+  expect(received).toStrictEqual(['Bearer real-token']);
+});
+
+test('it refuses a test upstream whose certificate the file’s CA did not sign', async () => {
+  const ctx = await setupTest();
+  const otherCa = await loadOrCreateBrokerCa(join(ctx.dataDir, 'other-ca'));
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: otherCa.certPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+
+  const result = await ctx.guest.curl('https://api.github.com/user');
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'could not reach api.github.com\n', stderr: '' });
+  expect(ctx.seen).toStrictEqual([]);
 });

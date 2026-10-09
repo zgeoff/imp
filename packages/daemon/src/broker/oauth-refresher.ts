@@ -13,7 +13,7 @@ import type { SecretFiles } from './secret-files';
 // #oauth-secrets). It never logs or returns a token: a log line says only
 // whether the refresh token rotated and when the access token expires.
 
-export interface OAuthRequest {
+interface OAuthRequest {
   readonly method: 'POST';
   readonly headers: Headers;
   readonly body: string;

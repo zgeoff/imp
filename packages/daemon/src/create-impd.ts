@@ -142,6 +142,9 @@ export interface ImpdDeps {
 
   readonly log?: (message: string) => void;
 
+  // the API's unexpected RPC failures; stderr by default
+  readonly logRpcFailure?: AppDeps['logRpcFailure'];
+
   // leases', the RAM governor's, egress's, the broker's injected and the
   // API services' clock; Date.now by default. project-testing names what
   // still reads Date.now itself
@@ -566,6 +569,7 @@ export function buildImpdApp(
     isReady: parts.isReady,
     now,
     log: deps.log ?? printLog,
+    ...(deps.logRpcFailure !== undefined && { logRpcFailure: deps.logRpcFailure }),
     audit: parts.services.audit,
     buildContexts: createBuildContextRoute({
       config,
