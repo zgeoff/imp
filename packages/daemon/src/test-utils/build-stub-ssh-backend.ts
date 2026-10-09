@@ -123,6 +123,12 @@ export function buildStubSshBackend() {
     execError: Error | null;
     dialError: Error | null;
     listenError: Error | null;
+
+    // listens asked for, counted before a held one opens
+    listenCalls: number;
+
+    // while set, each listen waits for it before it opens, as a slow guest
+    listenGate: Promise<void> | null;
     onExec: ((exec: StubExec) => void) | null;
   } = {
     wakes: 0,
@@ -132,6 +138,8 @@ export function buildStubSshBackend() {
     execError: null,
     dialError: null,
     listenError: null,
+    listenCalls: 0,
+    listenGate: null,
     onExec: null,
   };
 
@@ -216,9 +224,13 @@ export function buildStubSshBackend() {
     return Promise.resolve(stream);
   };
 
-  const openListener: SshBackend['openListener'] = (_name, spec) => {
+  const openListener: SshBackend['openListener'] = async (_name, spec) => {
+    stub.listenCalls += 1;
+
+    await stub.listenGate;
+
     if (stub.listenError !== null) {
-      return Promise.reject(stub.listenError);
+      throw stub.listenError;
     }
 
     const queue = createEventQueue<number>();
@@ -247,7 +259,7 @@ export function buildStubSshBackend() {
       },
     };
 
-    return Promise.resolve(listener);
+    return listener;
   };
 
   const openAccept: SshBackend['openAccept'] = (_name, listener, id) => {

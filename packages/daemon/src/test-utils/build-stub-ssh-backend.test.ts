@@ -278,6 +278,30 @@ test('it rejects a listen with the listen error a test sets', () => {
   expect(listen).rejects.toThrowWithMessage(Error, 'agent outdated');
 });
 
+test('it counts a held listen before it opens', () => {
+  const ssh = buildStubSshBackend();
+
+  ssh.stub.listenGate = Promise.withResolvers<void>().promise;
+  void ssh.backend.openListener('box', { network: 'ssh-agent' }, 'ssh');
+  expect(ssh.stub.listenCalls).toBe(1);
+  expect(ssh.listeners).toStrictEqual([]);
+});
+
+test('it opens a held listen once the gate opens', async () => {
+  const ssh = buildStubSshBackend();
+  const gate = Promise.withResolvers<void>();
+
+  ssh.stub.listenGate = gate.promise;
+
+  const listen = ssh.backend.openListener('box', { network: 'ssh-agent' }, 'ssh');
+
+  gate.resolve();
+
+  const listener = await listen;
+
+  expect(listener.id).toBe('stub1');
+});
+
 test('it relays what a test sends for a guest client, and records what comes back', async () => {
   const ssh = buildStubSshBackend();
 
