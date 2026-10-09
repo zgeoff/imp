@@ -404,7 +404,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Agent dial and accept relay  | `test-utils/build-stub-dial-stream.ts` (`buildStubDialStream`)                                     | A `DialStream`: records writes, sends guest events, holds `drained`                |
 | Guest listener               | `test-utils/build-stub-guest-listener.ts` (`buildStubGuestListener`)                               | A `GuestListener` for tunnel listens and reverse forwards                          |
 | Wake proxy's listen          | `test-utils/build-stub-proxy-listen.ts` (`buildStubProxyListen`)                                   | The wake proxy's port binds, so a test can make one fail                           |
-| HTTPS tickers                | `test-utils/build-stub-ticker.ts` (`buildStubTicker`)                                              | `startTicker` for the HTTPS service: a task runs only when the test fires it       |
+| Ticker timers                | `test-utils/build-stub-ticker-timer.ts` (`buildStubTickerTimer`)                                   | The timers `startTicker` waits on: a tick runs only when the test fires its label  |
 | mount                        | `test-utils/build-stub-mounts.ts` (`buildStubMounts`)                                              | `mount` and `umount` for the jailer, over a `/proc/self/mounts` table              |
 | Jail user processes          | `test-utils/build-stub-uid-processes.ts` (`buildStubUidProcesses`)                                 | The kill of a jail's cgroup and its uid's processes                                |
 | cgroups and `/proc`          | Temp dirs as `root` and `procRoot` (5)                                                             | The cgroup tree and `/proc`                                                        |
@@ -586,9 +586,11 @@ ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in
 
 The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
 each test through `test/e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
-`imp-acme-it-<pid>-<random>`, with a cert store in a temp dir. `bun run test:pebble` first pulls the
-pinned images (`PEBBLE_IMAGES` in that helper) with `scripts/pull-pebble-images.ts`, so no test pays
-for a pull.
+`imp-acme-it-<pid>-<random>`, with a cert store in a temp dir. `startPebbleStack` returns once
+Pebble's directory and challtestsrv's management API both answer, and logs each phase's time to
+stderr (containers started, Pebble ready, challtestsrv ready); the first test also logs its issue
+time. `bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
+`scripts/pull-pebble-images.ts`, so no test pays for a pull.
 
 ### Booting impd
 
@@ -607,24 +609,24 @@ timings (`performance.now`), the disk usage cache, backups or the builders' engi
 on the wall clock: a known gap. `imps.sleepTiming` (`now` and `sleep`, `performance.now` and
 `Bun.sleep` by default) is the clock of a sleep's `prepareMs` and `durationMs` and the pause of its
 young-guest wait; `events/imp-events.test.ts` passes `buildStubClock`'s. A field left out takes the
-host's real one. With tailnet names configured, `buildTailnetNames` serves through the host's own
-`tailscale` CLI, which no dep replaces, so `tailnet-names.test.ts`'s two service URL tests still
-boot `setupImpTest`. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`,
-`startGovernedImps`, `loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are
-exported for `createImpTest`, which wires them without the start steps into a caller's stack;
-`setupImpTest` wraps it with its own stack, and the client smoke's `run-stub-impd.ts` runs it
-outside a test. Its clock is the wall clock plus what `advance` adds; with `frozenClockMs` it starts
-there and is also `imps.sleepTiming`'s clock, and each young-guest pause moves it at once by the
-pause's length instead of waiting. `packages/daemon/src/create-impd.test.ts` boots it whole on the
-stubs. The egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one
-from `test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's
-ephemeral range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands
-out with an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in
-parallel processes never hand out the same port. A process that binds a port without a claim can
-still take one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by
-default), so a test fires a sweep by calling the function it was handed. A `createImpd` test whose
-storage clones with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file
-and a checkpoint's copy takes minutes.
+host's real one. With tailnet names configured, `runCommand` also reaches `buildTailnetNames`'
+`tailscale serve` calls, so `tailnet-names.test.ts` boots named impds on `buildStubTailscaleServe`'s
+`run`. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`,
+`loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for
+`createImpTest`, which wires them without the start steps into a caller's stack; `setupImpTest`
+wraps it with its own stack, and the client smoke's `run-stub-impd.ts` runs it outside a test. Its
+clock is the wall clock plus what `advance` adds; with `frozenClockMs` it starts there and is also
+`imps.sleepTiming`'s clock, and each young-guest pause moves it at once by the pause's length
+instead of waiting. `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The
+egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
+`test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's ephemeral
+range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands out with
+an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in parallel
+processes never hand out the same port. A process that binds a port without a claim can still take
+one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by default), so a
+test fires a sweep by calling the function it was handed. A `createImpd` test whose storage clones
+with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
+checkpoint's copy or a fork takes minutes (`networks/network-service.test.ts` forks).
 
 `moves/test-moves.ts` (tested in `test-moves.test.ts`) builds two impds on `createImpTest`. Its
 `hook` gets each request the source sends, a `forward(replacement?)` to the target's move routes,
