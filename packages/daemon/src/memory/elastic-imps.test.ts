@@ -1,85 +1,239 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findImpByName } from '../db/imps';
-import { buildTestApp, createImpTest } from '../imps/test-imps';
+import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import type { ImpdDeps } from '../create-impd';
+import { createImage } from '../db/images';
+import { openDatabase } from '../db/open-database';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImpPaths } from '../storage/data-layout';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
 import { buildMemoryMax, createCpuCgroups } from '../vmm/cpu-cgroups';
-import type { CpuCgroups } from '../vmm/cpu-cgroups';
 
-// Elastic imps through the router, on the fake VMs. A test whose cgroup root
-// must outlive the harness passes the stack that holds it; registering the
-// same stack's release twice does nothing.
-async function setupElasticTest(
-  env: Readonly<Record<string, string>> = {},
-  cgroups?: CpuCgroups,
-  stack: Readonly<AsyncDisposableStack> = new AsyncDisposableStack(),
-) {
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
+
   onTestFinished(() => stack.disposeAsync());
 
-  const harness = await createImpTest(stack, { env, ...(cgroups !== undefined && { cgroups }) });
+  const dataDir = await mkdtemp(join(tmpdir(), 'elastic-imps-'));
 
-  await harness.createTestImage('ubuntu');
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  const app = buildTestApp(harness, harness);
+  const db = await openDatabase(':memory:');
 
-  const findPaths = async (name: string) => {
-    const imp = await findImpByName(harness.db, name);
+  stack.defer(() => db.destroy());
 
-    return buildImpPaths(harness.dataDir, imp?.id ?? '');
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = {
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_JAILER: 'false',
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    }),
+
+    // a new disk stays the size of its image, so a fork copies a few bytes
+    defaultDiskBytes: 0,
   };
 
-  return { ...harness, client: app.client, findPaths };
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  // the image every imp boots from: a create needs one
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const vmm = buildStubVmm();
+  const cgroups = buildStubCpuCgroups();
+  const logs: string[] = [];
+
+  const deps: ImpdDeps = {
+    db,
+
+    // the bearer the test's client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: (message) => {
+      logs.push(message);
+    },
+
+    // Firecracker, the kernel and the CPU as this host reports them, which a
+    // snapshot must match to load
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: cgroups.cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+
+      // the host grows a new disk's filesystem, so no guest boot has to
+      growFilesystem: () => Promise.resolve(true),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  };
+
+  const impd = await createImpd(config, deps);
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: (request) => impd.api.app.handle(request),
+    }),
+  );
+
+  return { config, deps, db, dataDir, vmm, cgroups, logs, impd, client, stack };
 }
 
-test('a max above 4 × memory, or below it, is refused at create', async () => {
-  const ctx = await setupElasticTest();
+test('it refuses a max above 4 × the memory at create', async () => {
+  const ctx = await setupTest();
 
-  const tooBig = await ctx.client.imps
-    .create({ name: 'big', memoryMib: 256, maxMemoryMib: 1025 })
-    .catch((error: unknown) => error);
+  const creating = ctx.client.imps.create({ name: 'big', memoryMib: 256, maxMemoryMib: 1025 });
 
-  const tooSmall = await ctx.client.imps
-    .create({ name: 'small', memoryMib: 512, maxMemoryMib: 256 })
-    .catch((error: unknown) => error);
+  expect(creating).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  expect(creating).rejects.toThrow('more than 4 × the memory (1024 MiB)');
+});
 
-  expect(tooBig).toMatchObject({ code: 'BAD_REQUEST' });
-  expect(String(tooBig)).toContain('more than 4 × the memory (1024 MiB)');
-  expect(tooSmall).toMatchObject({ code: 'BAD_REQUEST' });
+test('it refuses a max below the memory at create', async () => {
+  const ctx = await setupTest();
 
+  expect(
+    ctx.client.imps.create({ name: 'small', memoryMib: 512, maxMemoryMib: 256 }),
+  ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+});
+
+test('it creates an imp with a max of 4 × its memory', async () => {
+  const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
-  const plain = await ctx.client.imps.create({ name: 'plain', memoryMib: 256 });
 
   expect(created).toMatchObject({ memoryMib: 256, maxMemoryMib: 1024 });
-  expect(plain.maxMemoryMib).toBeUndefined();
+});
 
-  // a fork grows as its source does
+test('it creates an imp with no max when the create asks for none', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'plain', memoryMib: 256 });
+
+  expect(created).not.toHaveProperty('maxMemoryMib');
+});
+
+test('it forks an imp with the max of its source', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+
   const fork = await ctx.client.imps.fork({ source: 'dev', name: 'twin' });
 
   expect(fork).toMatchObject({ memoryMib: 256, maxMemoryMib: 1024 });
 });
 
-test('an imp whose max is larger than the whole RAM budget never boots', async () => {
-  const ctx = await setupElasticTest({ IMP_RAM_BUDGET_MIB: '1024' });
+test('it never boots an imp whose max is larger than the whole RAM budget', async () => {
+  const ctx = await setupTest();
 
-  // its memory fits, but the guest could grow past the budget
-  const refused = await ctx.client.imps
-    .create({ name: 'big', memoryMib: 512, maxMemoryMib: 2048 })
-    .catch((error: unknown) => error);
+  // an impd with a budget the imp's memory fits but its max does not
+  const impd = await createImpd(
+    { ...ctx.config, ramBudgetMib: 1024, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
 
-  expect(refused).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
-  expect(String(refused)).toContain('at its max (2048 MiB)');
+  ctx.stack.defer(() => impd.broker.stop());
+
+  ctx.stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  const creating = impd.imps.createImp({ name: 'big', memoryMib: 512, maxMemoryMib: 2048 });
+
+  expect(creating).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(creating).rejects.toThrow('at its max (2048 MiB)');
 });
 
-test('a sleep unplugs what the guest can spare, and the wake allows what it kept', async () => {
-  const ctx = await setupElasticTest();
+test('it unplugs on a sleep what the guest can spare', async () => {
+  const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
-  const paths = await ctx.findPaths('dev');
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
   // 512 plugged, 100 used: the target is 228, but the guest stops at 256
-  ctx.fake.guestMemory.set(paths.dir, {
+  ctx.vmm.guestMemory.set(paths.dir, {
     baseMib: 256,
     pluggedMib: 512,
     requestedMib: 512,
@@ -90,25 +244,41 @@ test('a sleep unplugs what the guest can spare, and the wake allows what it kept
   await ctx.client.imps.sleep({ name: 'dev' });
 
   expect(readSnapshotMeta(paths)).toMatchObject({ memoryMib: 256, pluggedMib: 256 });
-  expect(ctx.fake.guestMemory.get(paths.dir)?.requestedMib).toBe(256);
-  expect(ctx.logs.some((line) => line.includes('256 MiB plugged'))).toBe(true);
+  expect(ctx.vmm.guestMemory.get(paths.dir)?.requestedMib).toBe(256);
+  expect(ctx.logs).toSatisfyAny((line: string) => line.includes('256 MiB plugged'));
+});
 
+test('it allows on a wake what the guest kept plugged at its sleep', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
+
+  ctx.vmm.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 512,
+    requestedMib: 512,
+    usedMib: 100,
+    unplugFloorMib: 256,
+  });
+
+  await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
 
   // the boot's limit, then the wake's, before the load
-  expect(ctx.memoryLimits.filter((limit) => limit.impId === created.id)).toEqual([
-    { impId: created.id, guestMib: 256 },
-    { impId: created.id, guestMib: 512 },
-  ]);
+  expect(
+    ctx.cgroups.calls.filter((call) => call.startsWith(`memory ${created.id} `)),
+  ).toStrictEqual([`memory ${created.id} 256`, `memory ${created.id} 512`]);
 });
 
-test('a sleep during a plug records what the plug asked for, so the wake allows it', async () => {
-  const ctx = await setupElasticTest();
+test('it records what a plug under way asked for at a sleep', async () => {
+  const ctx = await setupTest();
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
-  const paths = await ctx.findPaths('dev');
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
   // 256 plugged of 512 asked, and nothing to spare
-  ctx.fake.guestMemory.set(paths.dir, {
+  ctx.vmm.guestMemory.set(paths.dir, {
     baseMib: 256,
     pluggedMib: 256,
     requestedMib: 512,
@@ -119,77 +289,86 @@ test('a sleep during a plug records what the plug asked for, so the wake allows 
   await ctx.client.imps.sleep({ name: 'dev' });
 
   expect(readSnapshotMeta(paths)).toMatchObject({ pluggedMib: 512 });
-
-  await ctx.client.imps.wake({ name: 'dev' });
-
-  expect(ctx.memoryLimits.findLast((limit) => limit.impId === created.id)).toEqual({
-    impId: created.id,
-    guestMib: 768,
-  });
 });
 
-test('an imp that does not grow sleeps without asking its guest', async () => {
-  const ctx = await setupElasticTest();
+test('it allows on a wake what a plug under way at the sleep asked for', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
 
-  await ctx.client.imps.create({ name: 'plain', memoryMib: 256 });
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
-  const paths = await ctx.findPaths('plain');
+  ctx.vmm.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 256,
+    requestedMib: 512,
+    usedMib: 400,
+    unplugFloorMib: 0,
+  });
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(ctx.cgroups.calls.findLast((call) => call.startsWith(`memory ${created.id} `))).toBe(
+    `memory ${created.id} 768`,
+  );
+});
+
+test('it sleeps an imp that does not grow without asking its guest', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'plain', memoryMib: 256 });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
   await ctx.client.imps.sleep({ name: 'plain' });
 
-  expect(ctx.fake.guestMemory.has(paths.dir)).toBe(false);
-  expect(readSnapshotMeta(paths)?.pluggedMib).toBeUndefined();
+  const meta = readSnapshotMeta(paths);
+
+  invariant(meta);
+
+  expect(ctx.vmm.guestMemory.has(paths.dir)).toBeFalse();
+  expect(meta).not.toHaveProperty('pluggedMib');
 });
 
-// a cgroup root in a temp dir with the cpu and memory controllers handed to
-// imps/, as setup-cgroups.sh leaves it; removed by `stack`
-function setupCgroupRoot(stack: Readonly<AsyncDisposableStack>) {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-elastic-cgroups-'));
+test('it raises memory.max with a grow of the guest', async () => {
+  const ctx = await setupTest();
 
-  stack.defer(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  // a cgroup root with the cpu and memory controllers handed to imps/, as
+  // setup-cgroups.sh leaves it; it goes after the impd that writes it
+  const root = await mkdtemp(join(tmpdir(), 'imp-elastic-cgroups-'));
 
-  mkdirSync(join(dir, 'imps'), { recursive: true });
-  writeFileSync(join(dir, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+  ctx.stack.defer(() => rm(root, { recursive: true, force: true }));
 
-  // the cgroup writer of the impd running now; a restart gets a new one,
-  // which knows nothing of the sizes the last one set
-  const current = { cgroups: createCpuCgroups({ root: dir, log: () => {} }) };
+  await mkdir(join(root, 'imps'));
+  await writeFile(join(root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
 
-  const cgroups = new Proxy(current.cgroups, {
-    get: (_target, key: keyof CpuCgroups) => current.cgroups[key],
-  });
-
-  return {
-    cgroups,
-    restart: () => {
-      current.cgroups = createCpuCgroups({ root: dir, log: () => {} });
+  const impd = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    {
+      ...ctx.deps,
+      cgroups: createCpuCgroups({ root, log: () => {} }),
+      vms: ctx.vmm.startGeneration(),
     },
-    readMemoryMax: (impId: string) => readFileSync(join(dir, 'imps', impId, 'memory.max'), 'utf8'),
-  };
-}
+  );
 
-test("memory.max follows the guest: its memory at boot, raised by a grow, the plug's size at wake", async () => {
-  // one stack: the harness goes before the cgroup root it writes
-  const stack = new AsyncDisposableStack();
+  ctx.stack.defer(() => impd.broker.stop());
 
-  onTestFinished(() => stack.disposeAsync());
+  ctx.stack.defer(() => {
+    impd.egress.stop();
+  });
 
-  const root = setupCgroupRoot(stack);
-
-  const ctx = await setupElasticTest({}, root.cgroups, stack);
+  ctx.stack.defer(() => {
+    impd.diskUsage.stop();
+  });
 
   // an agent that moves its container's limit with the guest
-  ctx.fake.agent.version = '0.17.0';
+  ctx.vmm.agent.version = '0.17.0';
 
-  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
-  const paths = await ctx.findPaths('dev');
+  const created = await impd.imps.createImp({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
 
-  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(256));
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
   // 56 MiB available, under the 128 MiB mark: the next tick plugs a step
-  ctx.fake.guestMemory.set(paths.dir, {
+  ctx.vmm.guestMemory.set(paths.dir, {
     baseMib: 256,
     pluggedMib: 0,
     requestedMib: 0,
@@ -197,39 +376,138 @@ test("memory.max follows the guest: its memory at boot, raised by a grow, the pl
     unplugFloorMib: 0,
   });
 
-  await ctx.memory.runTick();
+  await impd.governed.memory.runTick();
 
-  expect(ctx.fake.guestMemory.get(paths.dir)?.pluggedMib).toBe(256);
-  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(512));
+  expect(ctx.vmm.guestMemory.get(paths.dir)?.pluggedMib).toBe(256);
 
-  // the guest has nothing to spare, so it sleeps with the step plugged
-  await ctx.client.imps.sleep({ name: 'dev' });
-  await ctx.client.imps.wake({ name: 'dev' });
+  const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
 
-  expect(readSnapshotMeta(paths)).toBeNull();
-  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(512));
-
-  // a stop forgets the size: the next cold boot starts at the memory again
-  await ctx.client.imps.stop({ name: 'dev' });
-  await ctx.client.imps.start({ name: 'dev' });
-
-  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(256));
+  expect(memoryMax).toBe(buildMemoryMax(512));
 });
 
-test('after a restart, adopt allows what the guest holds before a sleep can set up its cgroup', async () => {
-  // one stack: the harness goes before the cgroup root it writes
-  const stack = new AsyncDisposableStack();
+test('it keeps memory.max at the plugged size across a sleep and a wake', async () => {
+  const ctx = await setupTest();
+  const root = await mkdtemp(join(tmpdir(), 'imp-elastic-cgroups-'));
 
-  onTestFinished(() => stack.disposeAsync());
+  ctx.stack.defer(() => rm(root, { recursive: true, force: true }));
 
-  const root = setupCgroupRoot(stack);
+  await mkdir(join(root, 'imps'));
+  await writeFile(join(root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
 
-  const ctx = await setupElasticTest({}, root.cgroups, stack);
-  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
-  const paths = await ctx.findPaths('dev');
+  const impd = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    {
+      ...ctx.deps,
+      cgroups: createCpuCgroups({ root, log: () => {} }),
+      vms: ctx.vmm.startGeneration(),
+    },
+  );
+
+  ctx.stack.defer(() => impd.broker.stop());
+
+  ctx.stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  ctx.vmm.agent.version = '0.17.0';
+
+  const created = await impd.imps.createImp({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
+
+  ctx.vmm.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 0,
+    requestedMib: 0,
+    usedMib: 200,
+    unplugFloorMib: 0,
+  });
+
+  await impd.governed.memory.runTick();
+
+  // the guest has nothing to spare, so it sleeps with the step plugged
+  await impd.imps.sleepImp('dev');
+  await impd.imps.wakeImp('dev');
+
+  const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
+
+  expect(memoryMax).toBe(buildMemoryMax(512));
+});
+
+test('it sets memory.max back to the memory on a cold boot after a stop', async () => {
+  const ctx = await setupTest();
+  const root = await mkdtemp(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  ctx.stack.defer(() => rm(root, { recursive: true, force: true }));
+
+  await mkdir(join(root, 'imps'));
+  await writeFile(join(root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const impd = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    {
+      ...ctx.deps,
+      cgroups: createCpuCgroups({ root, log: () => {} }),
+      vms: ctx.vmm.startGeneration(),
+    },
+  );
+
+  ctx.stack.defer(() => impd.broker.stop());
+
+  ctx.stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  ctx.vmm.agent.version = '0.17.0';
+
+  const created = await impd.imps.createImp({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
+
+  ctx.vmm.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 0,
+    requestedMib: 0,
+    usedMib: 200,
+    unplugFloorMib: 0,
+  });
+
+  await impd.governed.memory.runTick();
+  await impd.imps.stopImp('dev');
+  await impd.imps.startImp('dev');
+
+  const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
+
+  expect(memoryMax).toBe(buildMemoryMax(256));
+});
+
+test('it allows on adopt after a restart what the guest holds', async () => {
+  const ctx = await setupTest();
+  const root = await mkdtemp(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  ctx.stack.defer(() => rm(root, { recursive: true, force: true }));
+
+  await mkdir(join(root, 'imps'));
+  await writeFile(join(root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const created = await ctx.impd.imps.createImp({
+    name: 'dev',
+    memoryMib: 256,
+    maxMemoryMib: 1024,
+  });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
   // 512 plugged, none of it free to unplug
-  ctx.fake.guestMemory.set(paths.dir, {
+  ctx.vmm.guestMemory.set(paths.dir, {
     baseMib: 256,
     pluggedMib: 512,
     requestedMib: 512,
@@ -237,29 +515,90 @@ test('after a restart, adopt allows what the guest holds before a sleep can set 
     unplugFloorMib: 512,
   });
 
-  root.restart();
+  // a new impd, whose cgroup writer knows nothing of the sizes set before
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    {
+      ...ctx.deps,
+      cgroups: createCpuCgroups({ root, log: () => {} }),
+      vms: ctx.vmm.startGeneration(),
+    },
+  );
 
-  const impd = ctx.restartImpd();
+  ctx.stack.defer(() => restarted.broker.stop());
 
-  await impd.imps.reconcileImps();
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+  });
 
-  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(768));
+  ctx.stack.defer(() => {
+    restarted.diskUsage.stop();
+  });
 
-  // before any tick of the new impd's controller
-  await impd.imps.sleepImp('dev');
+  const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
 
-  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(768));
+  expect(memoryMax).toBe(buildMemoryMax(768));
+});
+
+test('it keeps the adopted memory.max through a sleep before any tick after a restart', async () => {
+  const ctx = await setupTest();
+  const root = await mkdtemp(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  ctx.stack.defer(() => rm(root, { recursive: true, force: true }));
+
+  await mkdir(join(root, 'imps'));
+  await writeFile(join(root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const created = await ctx.impd.imps.createImp({
+    name: 'dev',
+    memoryMib: 256,
+    maxMemoryMib: 1024,
+  });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
+
+  ctx.vmm.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 512,
+    requestedMib: 512,
+    usedMib: 700,
+    unplugFloorMib: 512,
+  });
+
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    {
+      ...ctx.deps,
+      cgroups: createCpuCgroups({ root, log: () => {} }),
+      vms: ctx.vmm.startGeneration(),
+    },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
+    restarted.diskUsage.stop();
+  });
+
+  await restarted.imps.sleepImp('dev');
+
+  const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
+
+  expect(memoryMax).toBe(buildMemoryMax(768));
   expect(readSnapshotMeta(paths)).toMatchObject({ pluggedMib: 512 });
 });
 
-test('an elastic imp whose agent predates elastic memory is not grown, and the log says why', async () => {
-  const ctx = await setupElasticTest();
+test('it never grows an elastic imp whose agent predates elastic memory, and logs why', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
 
-  await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+  const paths = buildImpPaths(ctx.dataDir, created.id);
 
-  const paths = await ctx.findPaths('dev');
-
-  ctx.fake.guestMemory.set(paths.dir, {
+  ctx.vmm.guestMemory.set(paths.dir, {
     baseMib: 256,
     pluggedMib: 0,
     requestedMib: 0,
@@ -267,11 +606,11 @@ test('an elastic imp whose agent predates elastic memory is not grown, and the l
     unplugFloorMib: 0,
   });
 
-  await ctx.memory.runTick();
+  await ctx.impd.governed.memory.runTick();
 
-  expect(ctx.fake.guestMemory.get(paths.dir)?.pluggedMib).toBe(0);
+  expect(ctx.vmm.guestMemory.get(paths.dir)?.pluggedMib).toBe(0);
 
-  const refusal = ctx.logs.find((line) => line.includes('dev: memory low, not grown'));
-
-  expect(refusal).toContain("the imp's agent has no elastic memory");
+  expect(ctx.logs).toSatisfyAny((line: string) =>
+    /dev: memory low, not grown.*the imp's agent has no elastic memory/.test(line),
+  );
 });
