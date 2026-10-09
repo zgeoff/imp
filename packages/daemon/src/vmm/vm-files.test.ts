@@ -108,7 +108,7 @@ test('it refuses to read through a symlink', () => {
   writeFileSync(target, 'untouched');
   symlinkSync(target, link);
 
-  expect(() => readRegularFile(link)).toThrow(expect.objectContaining({ code: 'ELOOP' }));
+  expect(() => readRegularFile(link)).toThrow('ELOOP');
 });
 
 test('it refuses to read a FIFO without blocking', () => {

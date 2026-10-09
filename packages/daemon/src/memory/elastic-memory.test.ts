@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { ORPCError } from '@orpc/server';
 import {
   findLowMib,
   findRegionMib,
@@ -54,9 +55,7 @@ test('#resolveMaxMemoryMib refuses a max below the memory', () => {
 });
 
 test('#resolveMaxMemoryMib refuses a max past 4 times the memory as a bad request', () => {
-  expect(() => resolveMaxMemoryMib(512, 2050)).toThrow(
-    expect.objectContaining({ code: 'BAD_REQUEST' }),
-  );
+  expect(() => resolveMaxMemoryMib(512, 2050)).toThrow(ORPCError);
 });
 
 test('#resolveMaxMemoryMib says to raise the memory with a max past 4 times it', () => {

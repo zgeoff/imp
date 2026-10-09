@@ -86,8 +86,9 @@ anything the test registers after calling it. These utils register their own: `s
 `startStubExecAgent`, `startStubSessionAgent` and `startStubAttachAgent` (through `startStubAgent`,
 so each also takes `{ stack }`), `startStubDnsUpstream`, `createTestDatabase`,
 `createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely closes a driver only
-after a query started it), `buildQueryGate` (it releases a held select), `setupImpTest` and
-`setupMoveHosts`.
+after a query started it), `buildQueryGate` (it releases a held select), `setupImpTest`,
+`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
+`startStubFirecracker`.
 
 `setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
 branches that hold them with `await using`; a later GEO-135 PR removes it once those branches land.
