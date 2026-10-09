@@ -391,6 +391,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | ZFS for moves                | `test-utils/build-stub-zfs-storage.ts` (`buildStubZfsStorage`)                                     | An impd's ZFS backend on `buildStubZfs`, as a harness's `createStorage`            |
 | Storage faults               | `test-utils/build-stub-storage-faults.ts` (`buildStubStorageFaults`)                               | A backend whose next `openMoveSource` rejects                                      |
 | Older move target            | `test-utils/build-stub-older-move-target.ts` (`buildStubOlderMoveTarget`)                          | A target whose offer reply lacks a `keeps*` field, as a `setupMoveHosts` hook      |
+| Switched storage             | `test-utils/build-stub-switched-storage-target.ts`                                                 | A target whose offer reply names another storage backend                           |
+| Lost commits                 | `test-utils/build-stub-dropped-commit.ts` (`buildStubDroppedCommit`)                               | A network that drops a move's first commits, or their answers                      |
+| lseek and fstat              | `test-utils/build-stub-lseek.ts`                                                                   | `SEEK_DATA`/`SEEK_HOLE` over chosen extents, for `findDataBlocks`                  |
 | Move stream faults           | `test-utils/build-stub-move-stream-rewrite.ts`                                                     | A hook that rewrites the frames of a move's first stream part                      |
 | Part pipe timer              | `test-utils/build-stub-timer.ts` (`buildStubTimer`)                                                | `createPartPipe`'s `PartTimer`: a clock and timers that move only on `advance`     |
 | Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
@@ -559,7 +562,10 @@ and the target's `advance` and the source's client; `waitForMove` polls with `wa
 `createZfsUbuntuImage` puts the `ubuntu` image on a ZFS host. The stub VMM numbers VMs from 1 on
 each host, so boot ids of two hosts collide. Time seams for moves: `createPartPipe(waitMs, timer)`
 takes a `PartTimer`, `createIdleLoop` takes `now`, and `createCheckpointService` takes `random` for
-its ids; each defaults to the wall clock or `Math.random`.
+its ids; each defaults to the wall clock or `Math.random`. `runMigrationsTo(db, name, migrations)`
+takes a test's own migrations, so a test can run one that fails; it defaults to impd's. The move
+sender's `waitForRecovery()` settles once the background recovery that `recover` started has run, so
+a test waits for it before teardown.
 
 ## Connectors
 
