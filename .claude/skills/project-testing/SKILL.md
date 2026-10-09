@@ -355,11 +355,14 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 
 | Boundary                     | Stand-in                                                                                           | What it replaces                                                                   |
 | ---------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| VMM                          | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)                                                    | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step                          |
+| VMM                          | `test-utils/build-stub-vmm.ts` (`buildStubVmm`) (12)                                               | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step                          |
 | impd                         | `create-impd.ts` (`createImpd`) with stubs as its deps                                             | The host: see Booting impd below                                                   |
 | Governed imps                | `imps/test-imps.ts` (`setupImpTest`, `createImpTest`, `buildTestApp`)                              | A shim over createImpd's parts, without its start steps                            |
-| Firecracker API              | `Bun.serve({ unix })` (1); a Bun script (2)                                                        | Firecracker's HTTP API on its socket                                               |
-| Firecracker process          | `bash` run under the name `firecracker` (3)                                                        | A process whose cmdline matches Firecracker's                                      |
+| Firecracker API              | `test-utils/start-stub-firecracker-api.ts` (1); `test-utils/start-stub-firecracker.ts` (2)         | Firecracker's HTTP API on its socket                                               |
+| Firecracker process          | `test-utils/start-stub-firecracker-process.ts` (3)                                                 | A process whose cmdline matches Firecracker's                                      |
+| Jails for the runner         | `test-utils/build-stub-jails.ts` (`buildStubJails`)                                                | The `Jails` a runner prepares and seals; each call in order, refusals on request   |
+| Template agent               | `test-utils/start-stub-parked-agent.ts`                                                            | A template guest's agent, parked until a claim                                     |
+| KSM merge wrapper            | `test-utils/create-stub-ksm-exec.ts`                                                               | The wrapper that turns on merging for Firecracker: records its argv and fails      |
 | Guest agent                  | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                                | The agent on the vsock socket: CONNECT and frames                                  |
 | Builder guest                | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                                | A builder's agent: output and exit per exec                                        |
 | zfs                          | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                                    | `zfs`, send and receive, and the mount table                                       |
@@ -382,9 +385,13 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Host routes                  | `test-utils/build-stub-host-routes.ts` (`buildStubHostRoutes`)                                     | The container's links and default routes egress reads                              |
 | Tunnel far end               | `test-utils/start-stub-echo-server.ts` (`startStubEchoServer`)                                     | A host a broker tunnel dials: it echoes and holds open                             |
 | ip and sysctl                | `buildFakeIp` in `net/tap-devices.test.ts`                                                         | `ip` and `sysctl -n`, as `createTapDevices`'s `run`                                |
-| mount                        | A `run` with a mount table in `vmm/jail.test.ts`                                                   | `mount` and `umount` for the jailer                                                |
+| mount                        | `test-utils/build-stub-mounts.ts` (`buildStubMounts`)                                              | `mount` and `umount` for the jailer, over a `/proc/self/mounts` table              |
+| Jail user processes          | `test-utils/build-stub-uid-processes.ts` (`buildStubUidProcesses`)                                 | The kill of a jail's cgroup and its uid's processes                                |
 | cgroups and `/proc`          | Temp dirs as `root` and `procRoot` (5)                                                             | The cgroup tree and `/proc`                                                        |
 | cgroups for impd             | `test-utils/build-stub-cpu-cgroups.ts`                                                             | `CpuCgroups`: an in-memory tree that records each change                           |
+| Guest virtio-mem             | `test-utils/build-stub-guest-memory.ts`; `test-utils/build-stub-elastic-guest.ts` (13)             | `readGuestMemory` and `requestPluggedMib` of running guests                        |
+| Governor's host              | `test-utils/build-stub-governed-host.ts` (`buildStubGovernedHost`) (14)                            | The awake imps, their RSS, sleeps and reclaims, as the RAM governor's deps         |
+| Timers and sleeps            | `test-utils/build-stub-clock.ts` (`buildStubClock`)                                                | A clock that moves only when the test runs it, for injected timers and sleeps      |
 | restic                       | `test-utils/build-stub-restic.ts` (`buildStubRestic`)                                              | `Restic` over a directory: snapshots in `snapshots.json`, which two hosts share    |
 | restic's process             | `test-utils/build-stub-restic-runner.ts`, `build-stub-restic-lock-runner.ts`                       | `createRestic`'s runner: queued results; restic's lock rule, held until stopped    |
 | ZFS for moves                | `test-utils/build-stub-zfs-storage.ts` (`buildStubZfsStorage`)                                     | An impd's ZFS backend on `buildStubZfs`, as a harness's `createStorage`            |
@@ -425,9 +432,12 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Tunnel targets               | `test-utils/start-stub-broker-reply-target.ts`, `start-stub-broker-hold-target.ts`                 | The far end of a plain tunnel: a reply after the request, or a held socket         |
 | Guest's raw socket           | `test-utils/start-stub-broker-guest-socket.ts`                                                     | A guest's socket to the front port, read until it closes                           |
 
-1. `vmm/firecracker-client.test.ts`, `vmm/vm-runner.test.ts`.
-2. `vmm/template-vm.test.ts` spawns it as the VMM process.
-3. `vmm/firecracker-process.test.ts`, `vmm/vm-runner.test.ts`.
+1. `vmm/firecracker-client.test.ts`: a `Bun.serve({ unix })` that records each call and answers from
+   a table, or never answers.
+2. `vmm/template-vm.test.ts` and `vmm/vm-runner.test.ts` run
+   `test-utils/run-stub-firecracker-api.ts` as the VMM process, with the API socket in its argv.
+3. `vmm/firecracker-process.test.ts`, `vmm/vm-stats.test.ts`: `bash` run under the name
+   `firecracker`; it serves nothing.
 4. `startStubDockerEngine`: a `Bun.serve({ unix })` in the test's temp dir, over `@msw/data`
    collections of containers and images; a call it does not model gets a 500 that names it and lands
    in `unexpected`, which each test that uses it asserts empty. It reads image names as the engine
@@ -450,6 +460,13 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
 10. `setupImpTest`'s default `runNft` still records scripts for the suites that use it.
 11. An MSW handler a test adds with `server.use`; an unissued refresh token gets `invalid_grant`.
+12. `countHungCalls` and `countParkedCalls` count the calls that wait on a `hang` or on a runner of
+    an older generation; a test waits for them with `waitFor` before it peeks at the call.
+13. `buildStubGuestMemory` finds each plug or unplug done on the next read, for the memory
+    controller; `buildStubElasticGuest` unplugs one step per read, for `memory/shrink-guest.ts`.
+14. `governor/ram-governor.property.test.ts` draws its cases from
+    `test-utils/build-mock-governor-arbitraries.ts`. Each case builds its own host and governor,
+    which hold nothing to release.
 
 The mcp package's tests boot impd's real app with `createImpd` and reach it through the real
 `@zgeoff/imp-client`, whose `fetch` is `impd.api.app.handle`. A test that needs a tool call to wait
