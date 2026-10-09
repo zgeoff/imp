@@ -40,10 +40,10 @@ async function readMoveFrames(body: Uint8Array): Promise<MoveFrame[]> {
 
 // A faulty source: the first part's frames go through `rewrite`. The whole
 // stream must fit that part, as a small imp's does at the default part size;
-// a second part fails the send. The finish and other routes go as sent.
+// a second part fails the send; other requests go as sent. It reads no host.
 export function buildStubMoveStreamRewrite(
   rewrite: (frames: readonly MoveFrame[]) => readonly MoveFrame[],
-): FetchHook {
+): (request: Request, forward: Parameters<FetchHook>[1]) => Promise<Response> {
   return async (request, forward) => {
     const part = request.headers.get(MOVE_PART_HEADER);
 

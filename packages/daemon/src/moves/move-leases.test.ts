@@ -9,39 +9,43 @@ import { listLeases, writeLease } from '../db/leases';
 import { createIdleLoop } from '../idle/idle-loop';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
+import { buildStubDroppedCommit } from '../test-utils/build-stub-dropped-commit';
 import { buildStubOlderMoveTarget } from '../test-utils/build-stub-older-move-target';
 import { buildStubStorageFaults } from '../test-utils/build-stub-storage-faults';
-import { MOVE_PART_HEADER, MOVE_PATHS } from './move-header';
+import { MOVE_PART_HEADER } from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { MoveHostsOptions } from './test-moves';
 
-// Two impds whose frozen clocks are an hour apart, so a lease's end on the
-// target shows whose clock it followed. The source's storage is XFS on plain
-// files, as the harness's, with faults a test can set.
-async function setupTest(config: Pick<MoveHostsOptions, 'hook' | 'isShared' | 'partBytes'> = {}) {
+interface SetupConfig extends Pick<MoveHostsOptions, 'hook' | 'isShared' | 'partBytes'> {
+  // each host's frozen clock; left out, a host reads the wall clock
+  readonly source?: Pick<NonNullable<MoveHostsOptions['source']>, 'frozenClockMs'>;
+  readonly target?: Pick<NonNullable<MoveHostsOptions['target']>, 'frozenClockMs'>;
+}
+
+// Two impds. The source's storage is XFS on plain files, as the harness's,
+// with faults a test can set.
+async function setupTest(config: SetupConfig = {}) {
   const sourceFaults = buildStubStorageFaults();
 
   const hosts = await setupMoveHosts({
     ...config,
     source: {
-      frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z'),
+      ...config.source,
       createStorage: (dataDir) =>
         sourceFaults.wrap(
           createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
         ),
     },
-    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
   });
-
-  // the image a create on either host reads
-  await createUbuntuImage(hosts.source);
-  await createUbuntuImage(hosts.target);
 
   return { ...hosts, sourceFaults };
 }
 
 test('it refuses a stop move of a leased running imp without force, before it halts or marks it', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -70,6 +74,9 @@ test('it refuses a stop move of a leased running imp without force, before it ha
 
 test('it refuses a stop move of a leased sleeping imp without force, and leaves it asleep', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -97,7 +104,15 @@ test('it refuses a stop move of a leased sleeping imp without force, and leaves 
 });
 
 test('it ends the leases from leases.* on a forced stop move, and moves the hold with its time left', async () => {
-  const ctx = await setupTest();
+  // clocks an hour apart, so a lease's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -148,7 +163,16 @@ test('it ends the leases from leases.* on a forced stop move, and moves the hold
 });
 
 test('it keeps each lease of a warm move, with its owner and its time left on the target clock', async () => {
-  const ctx = await setupTest({ isShared: true });
+  // clocks an hour apart, so a lease's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    isShared: true,
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -207,7 +231,15 @@ test('it keeps each lease of a warm move, with its owner and its time left on th
 });
 
 test('it holds a warm-moved imp past a century while its legacy hold has no end', async () => {
-  const ctx = await setupTest({ isShared: true });
+  const ctx = await setupTest({
+    isShared: true,
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -236,7 +268,16 @@ test('it holds a warm-moved imp past a century while its legacy hold has no end'
 });
 
 test('it lets the same tailnet node renew its warm-moved lease on the target', async () => {
-  const ctx = await setupTest({ isShared: true });
+  // clocks an hour apart, so the renewed end shows it follows the target's clock
+  const ctx = await setupTest({
+    isShared: true,
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -266,6 +307,10 @@ test('it lets the same tailnet node renew its warm-moved lease on the target', a
 
 test("it refuses a target token the warm-moved lease of the source's token", async () => {
   const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -299,7 +344,15 @@ test("it refuses a target token the warm-moved lease of the source's token", asy
 });
 
 test('it keeps the hold of a stopped imp on a cold move, and says the commit is held', async () => {
-  const ctx = await setupTest();
+  // clocks an hour apart, so the hold's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -341,7 +394,10 @@ test('it keeps the hold of a stopped imp on a cold move, and says the commit is 
 });
 
 test('it ends each lease from when the target read the header, and leaves out one that ended during the disk', async () => {
+  // clocks an hour apart, so each end on the target shows whose clock it followed
   const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
     partBytes: 4096,
 
     // the disk's later parts come 30 s after the header, on the target's clock
@@ -353,6 +409,9 @@ test('it ends each lease from when the target read the header, and leaves out on
       return forward();
     },
   });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -398,6 +457,9 @@ test('it ends each lease from when the target read the header, and leaves out on
 
 test('it keeps the leases and runs the imp again when a forced prepare fails after the halt', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -431,6 +493,10 @@ test('it keeps the leases and runs the imp again when a forced prepare fails aft
 
 test('it moves the imp once the fault that failed its forced prepare is gone', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -466,6 +532,10 @@ test.each([
   async (_hold, principal, display) => {
     // a target from before moving leases
     const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsLeases') });
+
+    await createUbuntuImage(ctx.source);
+    await createUbuntuImage(ctx.target);
+
     const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
     const sourceNow = ctx.source.now();
@@ -510,6 +580,9 @@ test('it moves an imp with no lease to an older target', async () => {
   // a target from before moving leases
   const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsLeases') });
 
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const status = await ctx.runMove('dev', true);
@@ -518,20 +591,11 @@ test('it moves an imp with no lease to an older target', async () => {
 });
 
 test('it keeps the source leases and leaves the target none on an abort after the receipt', async () => {
-  const lost = { commits: 1 };
+  // the network drops the first commit
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
-  const ctx = await setupTest({
-    // the network drops the first commit
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -566,13 +630,13 @@ test('it keeps the source leases and leaves the target none on an abort after th
 });
 
 test("it removes a staged imp's leases with it when the target restarts before the receipt", async () => {
+  // the network drops every commit
   const ctx = await setupTest({
-    // the network drops every commit
-    hook: (request, forward) =>
-      request.url.endsWith(MOVE_PATHS.commit)
-        ? Promise.reject(new Error('the network dropped the commit'))
-        : forward(),
+    hook: buildStubDroppedCommit({ count: Number.POSITIVE_INFINITY }),
   });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
 
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -598,6 +662,7 @@ test("it removes a staged imp's leases with it when the target restarts before t
   // a crash before the receipt: the stream counts as cut short
   await ctx.target.db.updateTable('move_tickets').set({ receipt: null }).execute();
   await ctx.targetApp.moves.recover();
+  await ctx.targetApp.moves.waitForRecovery();
 
   const gone = await findImpByName(ctx.target.db, 'dev');
   const left = await ctx.target.db.selectFrom('imp_leases').selectAll().execute();
@@ -608,7 +673,15 @@ test("it removes a staged imp's leases with it when the target restarts before t
 });
 
 test('it keeps the leases of a committed imp when the target restarts', async () => {
-  const ctx = await setupTest();
+  // clocks an hour apart, so the hold's end on the target shows whose clock it followed
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -629,6 +702,7 @@ test('it keeps the leases of a committed imp when the target restarts', async ()
 
   await ctx.runMove('dev');
   await ctx.targetApp.moves.recover();
+  await ctx.targetApp.moves.waitForRecovery();
 
   const leases = await listLeases(ctx.target.db, ctx.target.now(), [created.id]);
 
@@ -637,6 +711,8 @@ test('it keeps the leases of a committed imp when the target restarts', async ()
 
 test('it refuses a lease acquire on a marked imp with MOVING', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
@@ -654,6 +730,8 @@ test('it refuses a lease acquire on a marked imp with MOVING', async () => {
 test('it refuses a lease renew on a marked imp with MOVING', async () => {
   const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
@@ -665,6 +743,8 @@ test('it refuses a lease renew on a marked imp with MOVING', async () => {
 
 test('it refuses a lease release on a marked imp with MOVING', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
 
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
@@ -678,6 +758,8 @@ test('it refuses a lease release on a marked imp with MOVING', async () => {
 test('it refuses a hold on a marked imp with MOVING', async () => {
   const ctx = await setupTest();
 
+  await createUbuntuImage(ctx.source);
+
   await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
@@ -689,6 +771,10 @@ test('it refuses a hold on a marked imp with MOVING', async () => {
 
 test("it leaves a warm-moved leased imp awake through the target's idle loop", async () => {
   const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -710,9 +796,7 @@ test("it leaves a warm-moved leased imp awake through the target's idle loop", a
   await ctx.targetApp.client.imps.wake({ name: 'dev' });
 
   // idle for a day: only the lease keeps it awake
-  const lastActive = new Date(ctx.target.now() - 86_400_000);
-
-  await updateImpActivity(ctx.target.db, created.id, lastActive);
+  await updateImpActivity(ctx.target.db, created.id, new Date(ctx.target.now() - 86_400_000));
 
   const idle = createIdleLoop({
     config: ctx.target.config,
@@ -729,8 +813,42 @@ test("it leaves a warm-moved leased imp awake through the target's idle loop", a
   expect(imp?.state).toBe('running');
 });
 
+test("it sleeps a warm-moved imp with no lease through the target's idle loop", async () => {
+  const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+  await ctx.runMove('dev');
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  // idle for a day, with no lease to keep it awake
+  await updateImpActivity(ctx.target.db, created.id, new Date(ctx.target.now() - 86_400_000));
+
+  const idle = createIdleLoop({
+    config: ctx.target.config,
+    db: ctx.target.db,
+    imps: ctx.target.imps,
+    log: () => {},
+    now: ctx.target.now,
+  });
+
+  await idle.runCheck();
+
+  const imp = await findImpByName(ctx.target.db, 'dev');
+
+  expect(imp?.state).toBe('sleeping');
+});
+
 test('it refuses a RAM admission that needs a warm-moved leased imp asleep on the target', async () => {
   const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -764,8 +882,39 @@ test('it refuses a RAM admission that needs a warm-moved leased imp asleep on th
   expect(admitted).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 });
 
+test('it admits a RAM reservation by sleeping a warm-moved imp with no lease on the target', async () => {
+  const ctx = await setupTest({ isShared: true });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+  await ctx.runMove('dev');
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  // room for all but 100 MiB of the budget needs dev's RAM back
+  const reserveMib = ctx.target.config.ramBudgetMib - 100;
+
+  const admitted = ctx.target.governor.admit({
+    id: 'x',
+    name: 'x',
+    reserveMib,
+    memoryMib: reserveMib,
+  });
+
+  await expect(admitted).toResolve();
+
+  const imp = await findImpByName(ctx.target.db, 'dev');
+
+  expect(imp?.state).toBe('sleeping');
+});
+
 test('it undoes the mark, keeps the leases and runs the imp when an expose lands between the halt and the mark', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -803,6 +952,10 @@ test('it undoes the mark, keeps the leases and runs the imp when an expose lands
 
 test('it refuses at the offer an imp with more leases than a move carries, and runs it again', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -835,6 +988,10 @@ test('it refuses at the offer an imp with more leases than a move carries, and r
 
 test('it refuses at the offer a lease whose owner is longer than a header carries, and runs the imp again', async () => {
   const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();
@@ -864,7 +1021,14 @@ test('it refuses at the offer a lease whose owner is longer than a header carrie
 });
 
 test('it moves a hold that ends past 100 years with 100 years left', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({
+    source: { frozenClockMs: Date.parse('2026-10-03T12:00:00.000Z') },
+    target: { frozenClockMs: Date.parse('2026-10-03T13:00:00.000Z') },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   const sourceNow = ctx.source.now();

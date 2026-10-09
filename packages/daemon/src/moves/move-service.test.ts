@@ -7,20 +7,16 @@ import { findImageByName } from '../db/images';
 import { findImpByName, updateImpExposure, updateImpMove } from '../db/imps';
 import { TEST_TOKEN, buildTestApp } from '../imps/test-imps';
 import { buildMockMoveTicketRow } from '../test-utils/build-mock-move-ticket-row';
+import { buildStubDroppedCommit } from '../test-utils/build-stub-dropped-commit';
 import {
   buildJsonMoveFrame,
   buildStubMoveStreamRewrite,
 } from '../test-utils/build-stub-move-stream-rewrite';
 import { buildStubOlderMoveTarget } from '../test-utils/build-stub-older-move-target';
+import { buildStubSwitchedStorageTarget } from '../test-utils/build-stub-switched-storage-target';
 import { buildStubZfsStorage } from '../test-utils/build-stub-zfs-storage';
 import { FileEndSchema, MOVE_FRAMES, MoveFileSchema, readJsonPayload } from './move-frames';
-import {
-  MOVE_FINISH_HEADER,
-  MOVE_PART_HEADER,
-  MOVE_PATHS,
-  MoveHeaderSchema,
-  MoveOfferReplySchema,
-} from './move-header';
+import { MOVE_FINISH_HEADER, MOVE_PART_HEADER, MOVE_PATHS, MoveHeaderSchema } from './move-header';
 import {
   ReceiptSchema,
   buildReceipt,
@@ -416,19 +412,7 @@ test('it reports no error for a failed send while its abort still goes', async (
 });
 
 test('it keeps both copies marked when the commit is lost after the receipt', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -446,19 +430,7 @@ test('it keeps both copies marked when the commit is lost after the receipt', as
 });
 
 test('it refuses a start on the target of a copy whose commit was lost', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -473,19 +445,7 @@ test('it refuses a start on the target of a copy whose commit was lost', async (
 });
 
 test('it commits on resume after a lost commit, and the source copy goes', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -507,20 +467,7 @@ test('it commits on resume after a lost commit, and the source copy goes', async
 // #167: main counts the received disk on this hook, so a repeat must not
 // fire it again
 test('it fires onCommitted once when a commit whose answer was lost resumes', async () => {
-  const lost = { answers: 1 };
-
-  const ctx = await setupTest({
-    hook: async (request, forward) => {
-      const response = await forward();
-
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.answers > 0) {
-        lost.answers -= 1;
-        throw new Error('the network dropped the answer');
-      }
-
-      return response;
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit({ drops: 'answer' }) });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -537,21 +484,8 @@ test('it fires onCommitted once when a commit whose answer was lost resumes', as
 });
 
 test('it destroys the source copy on an abort after the target committed', async () => {
-  const lost = { answers: 1 };
-
-  const ctx = await setupTest({
-    hook: async (request, forward) => {
-      const response = await forward();
-
-      // the commit lands, but its answer never reaches the source
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.answers > 0) {
-        lost.answers -= 1;
-        throw new Error('the answer was lost');
-      }
-
-      return response;
-    },
-  });
+  // the commit lands, but its answer never reaches the source
+  const ctx = await setupTest({ hook: buildStubDroppedCommit({ drops: 'answer' }) });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -564,7 +498,7 @@ test('it destroys the source copy on an abort after the target committed', async
   const source = await findImpByName(ctx.source.db, 'dev');
   const target = await ctx.targetApp.client.imps.get({ name: 'dev' });
 
-  expect(failed.error).toContain('the answer was lost');
+  expect(failed.error).toContain('dropped the answer');
   expect(aborted.isDone).toBe(true);
   expect(source).toBeUndefined();
   expect(target.move).toBeUndefined();
@@ -1055,19 +989,8 @@ test('it undoes on restart a send cut short', async () => {
 });
 
 test('it finishes on restart a send the target has verified', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('impd stopped'));
-      }
-
-      return forward();
-    },
-  });
+  // the commit a restart cut short
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -1090,7 +1013,7 @@ test('it finishes on restart a send the target has verified', async () => {
 
   const live = await ctx.targetApp.client.imps.get({ name: 'dev' });
 
-  expect(failed.error).toContain('impd stopped');
+  expect(failed.error).toContain('dropped the commit');
   expect(live.move).toBeUndefined();
 });
 
@@ -1134,19 +1057,7 @@ test('it removes on a target restart a stream cut short and tickets never used',
 });
 
 test('it counts a target that holds the imp unmarked as committed', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -1167,19 +1078,7 @@ test('it counts a target that holds the imp unmarked as committed', async () => 
 });
 
 test('it refuses a resume whose received copy is gone, and the source keeps its copy', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -1200,19 +1099,7 @@ test('it refuses a resume whose received copy is gone, and the source keeps its 
 });
 
 test('it refuses a resume past the commit window, and the source keeps its copy', async () => {
-  const lost = { commits: 1 };
-
-  const ctx = await setupTest({
-    hook: (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-
-        return Promise.reject(new Error('the network dropped the commit'));
-      }
-
-      return forward();
-    },
-  });
+  const ctx = await setupTest({ hook: buildStubDroppedCommit() });
 
   await createUbuntuImage(ctx.source);
   await createUbuntuImage(ctx.target);
@@ -1255,22 +1142,17 @@ test('it fails a send whose target answers the commit as not committed', async (
 });
 
 test('it moves the imp to the target when its commit lands before a racing abort', async () => {
-  const lost = { commits: 1 };
+  const dropped = buildStubDroppedCommit();
   const committed = Promise.withResolvers<undefined>();
 
   const ctx = await setupTest({
-    hook: async (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-        throw new Error('the network dropped the commit');
-      }
-
+    hook: async (request, forward, hosts) => {
       // the abort reaches the target only once the resume's commit landed
       if (request.url.endsWith(MOVE_PATHS.abort)) {
         await committed.promise;
       }
 
-      const response = await forward();
+      const response = await dropped(request, forward, hosts);
 
       if (request.url.endsWith(MOVE_PATHS.commit)) {
         committed.resolve(undefined);
@@ -1301,22 +1183,23 @@ test('it moves the imp to the target when its commit lands before a racing abort
 });
 
 test('it keeps the imp on the source when a racing abort reaches the target before the commit', async () => {
-  const lost = { commits: 1 };
+  const dropped = buildStubDroppedCommit();
   const aborted = Promise.withResolvers<undefined>();
+  const commits = { sent: 0 };
 
   const ctx = await setupTest({
-    hook: async (request, forward) => {
-      if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
-        lost.commits -= 1;
-        throw new Error('the network dropped the commit');
+    hook: async (request, forward, hosts) => {
+      // the resume's commit, the second, reaches the network only once the
+      // abort is through; the first is the one the network drops
+      if (request.url.endsWith(MOVE_PATHS.commit)) {
+        commits.sent += 1;
       }
 
-      // the resume's commit reaches the target only once the abort is through
-      if (request.url.endsWith(MOVE_PATHS.commit)) {
+      if (request.url.endsWith(MOVE_PATHS.commit) && commits.sent > 1) {
         await aborted.promise;
       }
 
-      const response = await forward();
+      const response = await dropped(request, forward, hosts);
 
       if (request.url.endsWith(MOVE_PATHS.abort)) {
         aborted.resolve(undefined);
@@ -2045,19 +1928,7 @@ test('it fails a ZFS move to a target that left ZFS since the prepare', async ()
   const ctx = await setupTest({
     source: { createStorage: sourceZfs.createStorage },
     target: { createStorage: targetZfs.createStorage },
-    hook: async (request, forward) => {
-      const response = await forward();
-
-      if (!request.url.endsWith(MOVE_PATHS.offer)) {
-        return response;
-      }
-
-      const answer: unknown = await response.json();
-
-      const reply = MoveOfferReplySchema.parse(answer);
-
-      return Response.json({ ...reply, storage: 'xfs' });
-    },
+    hook: buildStubSwitchedStorageTarget('xfs'),
   });
 
   await createZfsUbuntuImage(ctx.source);

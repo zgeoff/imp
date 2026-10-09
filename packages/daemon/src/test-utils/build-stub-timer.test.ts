@@ -71,6 +71,37 @@ test('it runs the timers due in one advance in the order of their due times', ()
   expect(order).toStrictEqual(['early', 'late']);
 });
 
+test('it runs a timer that a running timer schedules when it falls due in the same advance', () => {
+  const timer = buildStubTimer();
+  const runs: number[] = [];
+
+  timer.schedule(() => {
+    runs.push(timer.now());
+
+    timer.schedule(() => {
+      runs.push(timer.now());
+    }, 5);
+  }, 10);
+
+  timer.advance(20);
+
+  expect(runs).toStrictEqual([10, 15]);
+});
+
+test('it holds a timer that a running timer schedules past the end of the advance', () => {
+  const timer = buildStubTimer();
+  const run = mock<() => void>();
+
+  timer.schedule(() => {
+    timer.schedule(run, 15);
+  }, 10);
+
+  timer.advance(20);
+
+  expect(run).not.toHaveBeenCalled();
+  expect(timer.countPending()).toBe(1);
+});
+
 test('it counts the timers that have not run yet', () => {
   const timer = buildStubTimer();
 

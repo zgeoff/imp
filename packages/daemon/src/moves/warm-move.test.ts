@@ -780,6 +780,11 @@ test('it grows the guest at the first wake on the target after a warm move with 
 
   const grown = await findImpByName(ctx.target.db, 'dev');
 
+  expect(ctx.target.filesystemGrows).toStrictEqual([
+    ctx.target.storage.resolveImpPaths(created.id).disk,
+  ]);
+
+  expect(ctx.source.filesystemGrows).toStrictEqual([]);
   expect(grown?.isDiskGrowPending).toBe(false);
 });
 
@@ -857,7 +862,7 @@ test('it carries the cold boots with a warm move', async () => {
   expect(carried).toStrictEqual(before);
 });
 
-test('it adds no cold boot when the first wake on the target finds the boot the guest slept in', async () => {
+test("it adds no cold boot when the target records the carried boot as a memory wake's report of it", async () => {
   const ctx = await setupTest({ isShared: true });
   const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -871,7 +876,9 @@ test('it adds no cold boot when the first wake on the target finds the boot the 
 
   await ctx.runMove('dev');
 
-  // the wake as a real agent answers it: the boot the guest slept in
+  // the write a memory wake makes when the agent reports the boot the guest
+  // slept in; the stub VMM keeps boot ids per host, so a wake on the target
+  // cannot report the source's
   await writeUnknownBoot(ctx.target.db, created.id, slept.bootId, new Date());
 
   const after = await listColdBoots(ctx.target.db, created.id);
