@@ -1,123 +1,154 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import type { ImpEvent } from '@imp/api';
-import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
-import type { AuditedCall } from '../audit/api-audit';
+import type { ApiAudit } from '../audit/api-audit';
 import { createEventBus } from '../events/event-bus';
+import { buildStubAgentExecStream } from '../test-utils/build-stub-agent-exec-stream';
+import { buildStubExecBackend } from '../test-utils/build-stub-exec-backend';
 import { buildAuditedBackend } from './audited-backend';
-import type { ExecBackend } from './exec-session';
 
-test('a terminal exec is audited as a console, a plain one as an exec, a tar tool as cp', async () => {
-  const calls: [AuditedCall, unknown][] = [];
+test('it audits a terminal exec as a console, with what it failed with', () => {
+  const failure = new Error('dev is stopped');
 
-  const backend: ExecBackend = {
-    openExec: () => Promise.reject(new Error('dev is stopped')),
-    openAttach: () => Promise.reject(new Error('no such session')),
-    recordActivity: () => Promise.resolve(),
-  };
+  const stub = buildStubExecBackend({ exec: failure });
+  const record = mock<ApiAudit['record']>();
 
   const audited = buildAuditedBackend(
-    backend,
-    {
-      record: (call, failure) => {
-        calls.push([call, failure]);
-      },
-    },
+    stub.backend,
+    { record },
     { kind: 'dashboard', name: 'laptop' },
     createEventBus(),
     () => 5,
   );
 
-  const opens = [
-    audited.openExec('dev', { argv: ['bash'], tty: true }),
-    audited.openExec('dev', { argv: ['ls'], tty: false }),
-    audited.openExec('dev', { argv: ['imp-agent', 'tar'], tty: false }, 'cp'),
-    audited.openAttach('dev', { session: 's1' }),
-  ];
+  expect(audited.openExec('dev', { argv: ['bash'], tty: true })).rejects.toBe(failure);
 
-  const failures = await Promise.allSettled(opens);
-
-  expect(failures.map((failure) => failure.status)).toEqual([
-    'rejected',
-    'rejected',
-    'rejected',
-    'rejected',
-  ]);
-
-  expect(
-    calls.map(([call, failure]) => [
-      call.procedure,
-      call.actor.kind,
-      call.impName,
-      failure !== null,
-    ]),
-  ).toEqual([
-    ['console', 'dashboard', 'dev', true],
-    ['exec', 'dashboard', 'dev', true],
-    ['cp', 'dashboard', 'dev', true],
-    ['attach', 'dashboard', 'dev', true],
-  ]);
+  expect(record).toHaveBeenCalledExactlyOnceWith(
+    {
+      procedure: 'console',
+      actor: { kind: 'dashboard', name: 'laptop' },
+      impName: 'dev',
+      startedAt: 5,
+    },
+    failure,
+  );
 });
 
-// a stream that ends at once
-async function* readNoEvents(): AsyncGenerator<ExecEvent, void, undefined> {}
+test('it audits a plain exec as an exec, with no failure once it opens', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const record = mock<ApiAudit['record']>();
 
-function buildOuterRequest(argv: readonly string[]): AgentExecRequest {
-  return { argv, tty: true, outer: true };
-}
+  const audited = buildAuditedBackend(
+    stub.backend,
+    { record },
+    { kind: 'dashboard', name: 'laptop' },
+    createEventBus(),
+    () => 5,
+  );
 
-test('an exec in the agent is audited as exec-agent, and is an event once the agent took it', async () => {
-  const calls: AuditedCall[] = [];
-  const events: ImpEvent[] = [];
+  await audited.openExec('dev', { argv: ['ls'], tty: false });
+
+  expect(record).toHaveBeenCalledExactlyOnceWith(
+    {
+      procedure: 'exec',
+      actor: { kind: 'dashboard', name: 'laptop' },
+      impName: 'dev',
+      startedAt: 5,
+    },
+    null,
+  );
+});
+
+test('it audits the tar tool as cp', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const record = mock<ApiAudit['record']>();
+
+  const audited = buildAuditedBackend(
+    stub.backend,
+    { record },
+    { kind: 'dashboard', name: 'laptop' },
+    createEventBus(),
+    () => 5,
+  );
+
+  await audited.openExec('dev', { argv: ['imp-agent', 'tar'], tty: false }, 'cp');
+
+  expect(record).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ procedure: 'cp' }),
+    null,
+  );
+});
+
+test('it audits an attach as an attach', () => {
+  const failure = new Error('no such session');
+
+  const stub = buildStubExecBackend({ attach: failure });
+  const record = mock<ApiAudit['record']>();
+
+  const audited = buildAuditedBackend(
+    stub.backend,
+    { record },
+    { kind: 'dashboard', name: 'laptop' },
+    createEventBus(),
+    () => 5,
+  );
+
+  expect(audited.openAttach('dev', { session: 's1' })).rejects.toBe(failure);
+
+  expect(record).toHaveBeenCalledExactlyOnceWith(
+    {
+      procedure: 'attach',
+      actor: { kind: 'dashboard', name: 'laptop' },
+      impName: 'dev',
+      startedAt: 5,
+    },
+    failure,
+  );
+});
+
+test('it audits an exec in the agent as exec-agent', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const record = mock<ApiAudit['record']>();
+
+  const audited = buildAuditedBackend(
+    stub.backend,
+    { record },
+    { kind: 'token', name: 'admin' },
+    createEventBus(),
+    () => 5,
+  );
+
+  await audited.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec');
+
+  expect(record).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ procedure: 'exec-agent' }),
+    null,
+  );
+});
+
+test('it publishes an exec in the agent once the agent took it, naming only the command', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
   const bus = createEventBus();
+  const events: ImpEvent[] = [];
 
   bus.subscribe((event) => {
     events.push(event);
   });
 
-  // the stream is never read
-  const stream: ExecStream = {
-    pid: 7,
-    session: null,
-    created: false,
-    groupKill: false,
-    output: null,
-    writeStdin: () => {},
-    stdinDrained: () => Promise.resolve(),
-    closeStdin: () => {},
-    resize: () => {},
-    sendSignal: () => {},
-    events: readNoEvents,
-    close: () => {},
-  };
-
-  const backend: ExecBackend = {
-    openExec: (_name, request) =>
-      request.argv[0] === 'refused'
-        ? Promise.reject(new Error('AGENT_OUTDATED'))
-        : Promise.resolve(stream),
-    openAttach: () => Promise.reject(new Error('unused')),
-    recordActivity: () => Promise.resolve(),
-  };
-
   const audited = buildAuditedBackend(
-    backend,
-    {
-      record: (call) => {
-        calls.push(call);
-      },
-    },
+    stub.backend,
+    { record: mock<ApiAudit['record']>() },
     { kind: 'token', name: 'admin' },
     bus,
     () => 5,
   );
 
-  await audited.openExec('dev', buildOuterRequest(['sh', '-c', 'secret args']), 'outer-exec');
-  await audited.openExec('dev', buildOuterRequest(['refused']), 'outer-exec').catch(() => null);
-  await audited.openExec('dev', { argv: ['ls'], tty: false });
+  await audited.openExec(
+    'dev',
+    { argv: ['sh', '-c', 'secret args'], tty: true, outer: true },
+    'outer-exec',
+  );
 
-  expect(calls.map((call) => call.procedure)).toEqual(['exec-agent', 'exec-agent', 'exec']);
-
-  expect(events).toEqual([
+  expect(events).toStrictEqual([
     {
       v: 1,
       at: new Date(5),
@@ -129,4 +160,52 @@ test('an exec in the agent is audited as exec-agent, and is an event once the ag
       command: 'sh',
     },
   ]);
+});
+
+test('it publishes nothing for an exec in the agent that the agent refused', () => {
+  const failure = new Error('AGENT_OUTDATED');
+
+  const stub = buildStubExecBackend({ exec: failure });
+  const bus = createEventBus();
+  const events: ImpEvent[] = [];
+
+  bus.subscribe((event) => {
+    events.push(event);
+  });
+
+  const audited = buildAuditedBackend(
+    stub.backend,
+    { record: mock<ApiAudit['record']>() },
+    { kind: 'token', name: 'admin' },
+    bus,
+    () => 5,
+  );
+
+  expect(
+    audited.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).rejects.toBe(failure);
+
+  expect(events).toStrictEqual([]);
+});
+
+test('it publishes nothing for a plain exec', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const bus = createEventBus();
+  const events: ImpEvent[] = [];
+
+  bus.subscribe((event) => {
+    events.push(event);
+  });
+
+  const audited = buildAuditedBackend(
+    stub.backend,
+    { record: mock<ApiAudit['record']>() },
+    { kind: 'token', name: 'admin' },
+    bus,
+    () => 5,
+  );
+
+  await audited.openExec('dev', { argv: ['ls'], tty: false });
+
+  expect(events).toStrictEqual([]);
 });
