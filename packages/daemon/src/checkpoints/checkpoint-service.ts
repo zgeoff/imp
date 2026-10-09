@@ -28,7 +28,7 @@ import type { DiskFreezer } from './consistent-disk';
 
 // Short, typeable and global, so the existing primary key holds them without
 // a migration, and an id never comes back after a delete (unlike v1, v2…).
-const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+export const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 const CHECKPOINT_ID_PREFIX = 'cp-';
 const ID_ATTEMPTS = 3;
 

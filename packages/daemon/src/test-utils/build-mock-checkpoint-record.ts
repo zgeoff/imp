@@ -1,4 +1,5 @@
 import { faker } from '@faker-js/faker';
+import { CHECKPOINT_ID_ALPHABET } from '../checkpoints/checkpoint-service';
 import type { CheckpointRecord } from '../db/checkpoints';
 
 // A checkpoint as the checkpoints table reads it, labelled and sized; its id
@@ -8,7 +9,7 @@ export function buildMockCheckpointRecord(
   overrides: Partial<CheckpointRecord> = {},
 ): CheckpointRecord {
   return {
-    id: `cp-${faker.string.fromCharacters('abcdefghijkmnpqrstuvwxyz23456789', 6)}`,
+    id: `cp-${faker.string.fromCharacters(CHECKPOINT_ID_ALPHABET, 6)}`,
     impId: faker.string.uuid(),
     label: faker.word.noun(),
     createdAt: faker.date.past(),

@@ -1,9 +1,13 @@
 import { expect, test } from 'bun:test';
+import { CHECKPOINT_ID_ALPHABET } from '../checkpoints/checkpoint-service';
 import { buildMockCheckpointRecord } from './build-mock-checkpoint-record';
 
 test('it builds a default checkpoint record', () => {
   expect(buildMockCheckpointRecord()).toStrictEqual({
-    id: expect.toSatisfy((id: string) => /^cp-[a-hj-km-np-z2-9]{6}$/v.test(id)),
+    // shaped as buildCheckpointId makes one: six characters of its alphabet
+    id: expect.toSatisfy((id: string) =>
+      new RegExp(`^cp-[${CHECKPOINT_ID_ALPHABET}]{6}$`, 'v').test(id),
+    ),
     impId: expect.toBeString(),
     label: expect.toBeString(),
     createdAt: expect.toBeValidDate(),
@@ -14,7 +18,7 @@ test('it builds a default checkpoint record', () => {
 
 test('it applies overrides on top of the defaults', () => {
   const checkpoint = buildMockCheckpointRecord({
-    id: 'cp-1',
+    id: 'cp-3ibiv5',
     impId: 'imp-1',
     label: null,
     createdAt: new Date(1_800_000_000_000),
@@ -23,7 +27,7 @@ test('it applies overrides on top of the defaults', () => {
   });
 
   expect(checkpoint).toStrictEqual({
-    id: 'cp-1',
+    id: 'cp-3ibiv5',
     impId: 'imp-1',
     label: null,
     createdAt: new Date(1_800_000_000_000),
