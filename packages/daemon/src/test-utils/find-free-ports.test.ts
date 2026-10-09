@@ -175,9 +175,14 @@ test('it releases its claim on each port when the test ends', () => {
 });
 
 test('it never hands two pickers in separate processes the same port', async () => {
+  // the pickers stop before their directory goes
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const dir = await mkdtemp(join(tmpdir(), 'find-free-ports-'));
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
   // ports the kernel found free, which no picker has claimed; both pickers try them in this order
   const probes = [0, 0, 0, 0].map(() =>
@@ -228,7 +233,7 @@ test('it picks two ports and holds them until released', async () => {
     stderr: 'ignore',
   });
 
-  onTestFinished(() => {
+  stack.defer(() => {
     first.kill();
   });
 
@@ -245,7 +250,7 @@ test('it picks two ports and holds them until released', async () => {
     stderr: 'ignore',
   });
 
-  onTestFinished(() => {
+  stack.defer(() => {
     second.kill();
   });
 

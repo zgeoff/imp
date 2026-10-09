@@ -1,6 +1,6 @@
 import { onTestFinished } from 'bun:test';
 import { randomInt } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 // How many ports below the kernel's ephemeral range a test picks from
 const PICK_SPAN = 4000;
@@ -20,7 +20,8 @@ function readEphemeralStart(): number {
 function readBusyPorts(): ReadonlySet<number> {
   const busy = new Set<number>();
 
-  for (const table of SOCKET_TABLES) {
+  // a kernel without IPv6 has no tcp6 or udp6 table
+  for (const table of SOCKET_TABLES.filter((path) => existsSync(path))) {
     // the header line, then one socket per line: `sl local_address ...`,
     // where local_address is `<hex address>:<hex port>`
     const lines = readFileSync(table, 'utf8').trim().split('\n');
