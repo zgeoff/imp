@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { sql } from 'kysely';
 import { createSecretFiles } from '../broker/secret-files';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
@@ -28,10 +29,54 @@ test('#runMigrations refuses a database a newer impd migrated, naming both versi
   await sql`INSERT INTO kysely_migration (name, timestamp)
     VALUES ('999_from_a_newer_impd', '2030-01-01T00:00:00.000Z')`.execute(db);
 
+  const last = Object.keys(MIGRATIONS).toSorted().at(-1);
+
+  invariant(last);
+
   expect(runMigrations(db)).rejects.toThrowWithMessage(
     Error,
-    /^the database is at migration 999_from_a_newer_impd, newer than this impd's last, \d{3}_\w+: start the impd that wrote it or a newer one, or restore an older database copy \(docs\/guides\/operations\.md#database-copy-and-restore\)$/v,
+    `the database is at migration 999_from_a_newer_impd, newer than this impd's last, ${last}: start the impd that wrote it or a newer one, or restore an older database copy (docs/guides/operations.md#database-copy-and-restore)`,
   );
+});
+
+test('#runMigrations runs nothing on a database file a newer impd migrated', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-migrate-'));
+
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const db = createUnmigratedDatabase(join(dir, 'imp.sqlite'));
+  const names = Object.keys(MIGRATIONS).toSorted();
+  const older = names.at(-2);
+
+  invariant(older);
+
+  // a newer impd's database, one migration short of this impd's last and
+  // holding one this impd never had
+  await runMigrationsTo(db, older);
+
+  await sql`INSERT INTO kysely_migration (name, timestamp)
+    VALUES ('999_from_a_newer_impd', '2030-01-01T00:00:00.000Z')`.execute(db);
+
+  const last = names.at(-1);
+
+  invariant(last);
+
+  // the refusal's own message: Kysely also rejects a migration it does not
+  // know, so only the message shows that impd refused before Kysely ran
+  expect(runMigrations(db)).rejects.toThrow(
+    `the database is at migration 999_from_a_newer_impd, newer than this impd's last, ${last}: start the impd that wrote it or a newer one, or restore an older database copy (docs/guides/operations.md#database-copy-and-restore)`,
+  );
+
+  const ran = await sql<{ name: string }>`SELECT name FROM kysely_migration ORDER BY name`.execute(
+    db,
+  );
+
+  expect(ran.rows.map((row) => row.name)).toStrictEqual([
+    ...names.slice(0, -1),
+    '999_from_a_newer_impd',
+  ]);
 });
 
 test('#runMigrations rethrows the error of a migration that fails', async () => {

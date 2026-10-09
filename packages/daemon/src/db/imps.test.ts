@@ -575,14 +575,19 @@ test('#updateImpState keeps the awake span of a running imp marked running again
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
-  const running = await updateImpState(ctx.db, imp.id, { reason: 'booted', state: 'running' });
 
-  invariant(running.awakeSince);
+  const awakeSince = Date.now() - 3_600_000;
 
-  // impd stopped while the imp ran: the row still says running
+  // impd stopped while the imp ran, awake an hour: the row still says running
+  await ctx.db
+    .updateTable('imps')
+    .set({ state: 'running', awake_since: awakeSince })
+    .where('id', '=', imp.id)
+    .execute();
+
   const adopted = await updateImpState(ctx.db, imp.id, { reason: 'adopted', state: 'running' });
 
-  expect(adopted.awakeSince).toStrictEqual(running.awakeSince);
+  expect(adopted.awakeSince).toStrictEqual(new Date(awakeSince));
 });
 
 test('#updateImpStateIf adds no awake time when a repair ends the span before its start', async () => {

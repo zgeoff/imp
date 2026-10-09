@@ -3,7 +3,7 @@ import { buildMockCheckpointRecord } from './build-mock-checkpoint-record';
 
 test('it builds a default checkpoint record', () => {
   expect(buildMockCheckpointRecord()).toStrictEqual({
-    id: expect.toSatisfy((id: string) => /^[a-z0-9]{8}$/v.test(id)),
+    id: expect.toSatisfy((id: string) => /^cp-[a-hj-km-np-z2-9]{6}$/v.test(id)),
     impId: expect.toBeString(),
     label: expect.toBeString(),
     createdAt: expect.toBeValidDate(),

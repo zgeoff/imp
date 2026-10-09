@@ -7,7 +7,7 @@ import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-databa
 import { createImage } from './images';
 import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
-import { createImp, findImpById } from './imps';
+import { createImp, findImpById, removeImp } from './imps';
 import { isBlockingLease, listLeases, removeLeases, writeLease, writeMovedLeases } from './leases';
 import { runMigrations, runMigrationsTo } from './run-migrations';
 
@@ -515,13 +515,13 @@ test('#writeMovedLeases emits nothing', async () => {
 });
 
 test.each([
-  ['token:a', 'job', true],
-  ['token:a', 'hold', false],
-  ['legacy', 'job', false],
-  ['legacy', 'hold', false],
+  ['token:a', 'job', 'blocking', true],
+  ['token:a', 'hold', 'not blocking', false],
+  ['legacy', 'job', 'not blocking', false],
+  ['legacy', 'hold', 'not blocking', false],
 ])(
-  '#isBlockingLease reports a %s lease labelled %s as blocking: %p',
-  (principal, label, expected) => {
+  '#isBlockingLease reports a %s lease labelled %s as %s',
+  (principal, label, _verdict, expected) => {
     expect(isBlockingLease({ principal, label })).toBe(expected);
   },
 );
@@ -536,7 +536,7 @@ test('#removeImp takes the imp’s leases with it', async () => {
     reason: 'held',
   });
 
-  await ctx.db.deleteFrom('imps').where('id', '=', imp.id).execute();
+  await removeImp(ctx.db, imp.id);
 
   const leases = await listLeases(ctx.db, 1_800_000_000_000);
 

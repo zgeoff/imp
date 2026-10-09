@@ -11,8 +11,9 @@ import { writeConsistentCopy, writeDatabaseCopy } from './database-copy';
 import { openDatabase } from './open-database';
 import { MIGRATIONS, runMigrationsTo } from './run-migrations';
 
-// a data dir for the copies, and impd's database, injected as the copy takes
-// it; both gone when the test finishes
+// a data dir with impd's database in it, a WAL file as impd keeps it, so a
+// copy taken while writes run reads past the log; both gone when the test
+// finishes
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -24,7 +25,7 @@ async function setupTest() {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  const db = await openDatabase(':memory:');
+  const db = await openDatabase(join(dataDir, 'imp.sqlite'));
 
   stack.defer(() => db.destroy());
 

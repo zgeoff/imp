@@ -55,3 +55,9 @@ test('it opens the stream window after the issue', () => {
 
   expect(row.stream_by).toBeGreaterThan(row.issued_at);
 });
+
+test('it opens the stream window after an overridden issue', () => {
+  const row = buildMockMoveTicketRow({ issued_at: 1_800_000_000_000 });
+
+  expect(row.stream_by).toBeWithin(1_800_000_001_000, 1_800_000_600_001);
+});
