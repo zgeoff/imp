@@ -8,6 +8,8 @@ import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
 import { writeMember, writeNetwork } from '../db/networks';
 import { createCheckedGrant, createSecret } from '../db/secrets';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { readDatabaseCopy } from './read-database-copy';
 
@@ -22,44 +24,30 @@ async function setupTest() {
 
 test('it copies the user imps and leaves out image builders', async () => {
   const ctx = await setupTest();
+  const image = await createImage(ctx.db, buildMockNewImage());
 
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  const dev = await createImp(ctx.db, {
-    name: 'dev',
+  const newDev = buildMockNewImp({
     imageId: image.id,
     vcpus: 2,
     memoryMib: 1024,
     maxMemoryMib: 2048,
     slot: 1,
-    ip: '10.42.0.2',
     httpPort: 8080,
     diskBytes: 4096,
     egress: { mode: 'box', allow: ['github.com'] },
     isIdentityResetPending: true,
   });
 
-  await createImp(ctx.db, {
-    name: 'imp-build-x',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 2,
-    ip: '10.42.0.3',
-    kind: 'builder',
-  });
+  const dev = await createImp(ctx.db, newDev);
+
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2, kind: 'builder' }));
 
   const copy = await readDatabaseCopy(ctx.db, join(ctx.dir, 'copy.sqlite'));
 
   expect(copy.imps).toStrictEqual([
     {
       id: dev.id,
-      name: 'dev',
+      name: newDev.name,
       imageId: image.id,
       state: 'creating',
       vcpus: 2,
@@ -76,22 +64,8 @@ test('it copies the user imps and leaves out image builders', async () => {
 
 test('it copies the checkpoints oldest first', async () => {
   const ctx = await setupTest();
-
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  const imp = await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 1,
-    ip: '10.42.0.2',
-  });
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   await createCheckpoint(ctx.db, {
     id: 'cp-newer',
@@ -134,64 +108,39 @@ test('it copies the checkpoints oldest first', async () => {
 test('it copies the images by name', async () => {
   const ctx = await setupTest();
 
-  const ubuntu = await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:24.04',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 600,
-  });
+  const newUbuntu = buildMockNewImage({ name: 'ubuntu' });
+  const newSaved = buildMockNewImage({ name: 'saved', source: 'imp', sourceImp: 'dev' });
 
-  const saved = await createImage(ctx.db, {
-    name: 'saved',
-    ref: 'saved',
-    digest: 'sha256:saved',
-    sizeBytes: 700,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
-
+  const ubuntu = await createImage(ctx.db, newUbuntu);
+  const saved = await createImage(ctx.db, newSaved);
   const copy = await readDatabaseCopy(ctx.db, join(ctx.dir, 'copy.sqlite'));
 
   expect(copy.images).toStrictEqual([
     {
       id: saved.id,
       name: 'saved',
-      ref: 'saved',
-      digest: 'sha256:saved',
+      ref: newSaved.ref,
+      digest: newSaved.digest,
       source: 'imp',
       sourceImp: 'dev',
-      sizeBytes: 700,
+      sizeBytes: newSaved.sizeBytes,
     },
     {
       id: ubuntu.id,
       name: 'ubuntu',
-      ref: 'ubuntu:24.04',
-      digest: 'sha256:ubuntu',
+      ref: newUbuntu.ref,
+      digest: newUbuntu.digest,
       source: 'oci',
       sourceImp: null,
-      sizeBytes: 600,
+      sizeBytes: newUbuntu.sizeBytes,
     },
   ]);
 });
 
 test('it copies the grants by secret name', async () => {
   const ctx = await setupTest();
-
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  const imp = await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 1,
-    ip: '10.42.0.2',
-  });
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   await createSecret(ctx.db, { name: 'npm', kind: 'github', rules: [], valueFile: 'npm' });
   await createSecret(ctx.db, { name: 'gh', kind: 'github', rules: [], valueFile: 'gh' });
@@ -208,23 +157,8 @@ test('it copies the grants by secret name', async () => {
 
 test('it copies the network members by network name', async () => {
   const ctx = await setupTest();
-
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  const imp = await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 1,
-    ip: '10.42.0.2',
-  });
-
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
   const web = await writeNetwork(ctx.db, 'web');
   const db = await writeNetwork(ctx.db, 'db');
 

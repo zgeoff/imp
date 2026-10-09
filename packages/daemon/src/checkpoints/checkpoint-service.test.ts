@@ -22,6 +22,8 @@ import {
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { createZfsBackend } from '../storage/zfs/zfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { buildQueryGate } from '../test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
@@ -207,8 +209,11 @@ test('it makes an id of cp- and six letters that read unambiguously', () => {
   expect(buildCheckpointId()).toMatch(/^cp-[a-km-z2-9]{6}$/);
 });
 
-test('it picks each letter of an id from the random source', () => {
-  expect(buildCheckpointId(() => 0)).toBe('cp-aaaaaa');
+test('it picks each letter of an id from its own draw of the random source', () => {
+  // the 1st, 11th, 12th, 24th, 25th and 32nd of the 32 letters, in turn
+  const draws = [0, 10 / 32, 11 / 32, 23 / 32, 24 / 32, 31 / 32];
+
+  expect(buildCheckpointId(() => draws.shift() ?? Number.NaN)).toBe('cp-akmz29');
 });
 
 test.each([
@@ -223,12 +228,7 @@ test('it freezes a running imp around the clone and records the checkpoint', asy
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -256,12 +256,7 @@ test('it clones a stopped imp without freezing it', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -280,12 +275,7 @@ test('it thaws and leaves no checkpoint when the clone fails', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -317,12 +307,7 @@ test('it rejects a label another checkpoint of the imp holds', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.checkpoints.createCheckpoint('dev', 'clean');
@@ -338,12 +323,7 @@ test('it rejects a label shaped like a checkpoint id', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -358,12 +338,7 @@ test('it restores a running imp: kill, swap the disk, drop the snapshot, boot', 
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -395,12 +370,7 @@ test('it restores a stopped imp and leaves it stopped', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   const checkpoint = await ctx.impd.checkpoints.createCheckpoint('dev', undefined);
@@ -422,12 +392,7 @@ test('it forks a checkpoint into a new slot with its source’s shape', async ()
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const source = await ctx.impd.imps.createImp({
     name: 'dev',
@@ -463,12 +428,7 @@ test('it forks the live disk, frozen, into a new imp with no checkpoints', async
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const source = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -497,12 +457,7 @@ test('it creates no imp when the fork’s checkpoint is unknown', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -533,12 +488,7 @@ test('it deletes a checkpoint by its label and keeps the others', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   const first = await ctx.impd.checkpoints.createCheckpoint('dev', 'one');
@@ -559,12 +509,7 @@ test('it removes an imp’s checkpoints with the imp', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -588,23 +533,10 @@ test('it rejects a listing of an imp that does not exist', async () => {
 
 test('it rejects a restore of an imp still being created', async () => {
   const ctx = await setupTest({ storage: 'xfs' });
-
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  const image = await createImage(ctx.db, buildMockNewImage());
 
   // a row a create left in `creating`, with a checkpoint to restore
-  const imp = await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 1,
-    ip: '10.42.0.2',
-  });
+  const imp = await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
 
   await createCheckpoint(ctx.db, { id: 'cp-aaaaaa', impId: imp.id, label: 'v1', sizeBytes: 0 });
 
@@ -615,23 +547,10 @@ test('it rejects a restore of an imp still being created', async () => {
 
 test('it rejects a fork of the live disk of an imp still being created', async () => {
   const ctx = await setupTest({ storage: 'xfs' });
-
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  const image = await createImage(ctx.db, buildMockNewImage());
 
   // a row a create left in `creating`
-  await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 1,
-    ip: '10.42.0.2',
-  });
+  await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
 
   expect(ctx.impd.checkpoints.forkImp({ source: 'dev', name: 'copy' })).rejects.toMatchObject({
     code: 'INVALID_STATE',
@@ -647,12 +566,7 @@ test('it leaves a sleeping imp asleep with its memory when a restore’s clone f
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -681,12 +595,7 @@ test('it leaves a running imp running on its own disk when a restore’s clone f
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -715,12 +624,7 @@ test('it leaves the imp stopped on its old disk when a restore’s swap fails af
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -757,12 +661,7 @@ test('it refuses a fork whose source is destroyed before the disk copy and leave
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -793,12 +692,7 @@ test('it refuses a fork whose source is made again under its name before the dis
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -831,12 +725,10 @@ test('it leaves an imp that took a refused fork’s name before the fork’s cle
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  const image = await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base' }),
+  );
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -902,12 +794,7 @@ test('it draws a new id when the pool holds a snapshot by the drawn one', async 
 
   writeFileSync(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const impId = '01890000-0000-7000-8000-000000000001';
   const disk = ctx.storage.resolveImpPaths(impId).disk;
@@ -959,21 +846,16 @@ test('it draws a new id when the pool holds a snapshot by the drawn one', async 
   expect(second.id).toBe('cp-bbbbbb');
 });
 
-test('it gives up when every drawn id names a snapshot in the pool', async () => {
+test('it draws a new id when a deleted checkpoint’s snapshot stays for a fork', async () => {
   const ctx = await setupTest({ storage: 'zfs' });
 
-  // the stub pool keeps no files: the image is a dataset only, and the
+  // the stub pool keeps no files: the image is a dataset only, and each
   // imp's disk file is there before its clone
   await ctx.storage.createImage('sha256:base', () => Promise.resolve());
 
   writeFileSync(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
 
   const impId = '01890000-0000-7000-8000-000000000001';
   const disk = ctx.storage.resolveImpPaths(impId).disk;
@@ -983,7 +865,12 @@ test('it gives up when every drawn id names a snapshot in the pool', async () =>
 
   await ctx.impd.imps.createImp({ id: impId, name: 'dev', image: 'base' });
 
-  // every draw is 0: every id is cp-aaaaaa
+  // six draws of 0 make cp-aaaaaa, six of 1/32 make cp-bbbbbb
+  const draws = [
+    ...Array.from({ length: 12 }, () => 0),
+    ...Array.from({ length: 6 }, () => 1 / 32),
+  ];
+
   const checkpoints = createCheckpointService({
     config: ctx.config,
     db: ctx.db,
@@ -994,7 +881,73 @@ test('it gives up when every drawn id names a snapshot in the pool', async () =>
 
     // the guest's fsfreeze; the stub VMM's guest has no agent to run it
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
-    random: () => 0,
+    random: () => draws.shift() ?? Number.NaN,
+  });
+
+  await checkpoints.createCheckpoint('dev', 'v1');
+
+  // the fork's disk file, written as its row lands and before its clone
+  const unwatch = subscribeImpWrites(ctx.db, (write) => {
+    unwatch();
+
+    // a throw here fails the fork's insert, and with it the test
+    if (write.kind !== 'added') {
+      throw new Error(`the first write was ${write.kind}, not the fork's row`);
+    }
+
+    const forkDisk = ctx.storage.resolveImpPaths(write.imp.id).disk;
+
+    mkdirSync(dirname(forkDisk), { recursive: true });
+    writeFileSync(forkDisk, 'rootfs');
+  });
+
+  onTestFinished(unwatch);
+
+  await checkpoints.forkImp({ source: 'dev', name: 'copy', checkpoint: 'v1' });
+  await checkpoints.deleteCheckpoint('dev', 'v1');
+
+  const created = await checkpoints.createCheckpoint('dev', 'v2');
+
+  expect(created.id).toBe('cp-bbbbbb');
+});
+
+test('it gives up after three drawn ids that each name a snapshot in the pool', async () => {
+  const ctx = await setupTest({ storage: 'zfs' });
+
+  // the stub pool keeps no files: the image is a dataset only, and the
+  // imp's disk file is there before its clone
+  await ctx.storage.createImage('sha256:base', () => Promise.resolve());
+
+  writeFileSync(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
+
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
+
+  const impId = '01890000-0000-7000-8000-000000000001';
+  const disk = ctx.storage.resolveImpPaths(impId).disk;
+
+  mkdirSync(dirname(disk), { recursive: true });
+  writeFileSync(disk, 'rootfs');
+
+  await ctx.impd.imps.createImp({ id: impId, name: 'dev', image: 'base' });
+
+  // The first checkpoint and the next three tries draw cp-aaaaaa; a fourth
+  // try would draw the free cp-bbbbbb.
+  const draws = [
+    ...Array.from({ length: 24 }, () => 0),
+    ...Array.from({ length: 6 }, () => 1 / 32),
+  ];
+
+  const checkpoints = createCheckpointService({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    storage: ctx.storage,
+    diskBudget: ctx.impd.diskBudget,
+    log: () => {},
+
+    // the guest's fsfreeze; the stub VMM's guest has no agent to run it
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+    random: () => draws.shift() ?? Number.NaN,
   });
 
   await checkpoints.createCheckpoint('dev', 'first');
