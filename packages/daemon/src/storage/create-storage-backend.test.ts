@@ -69,6 +69,27 @@ test('#checkStorageMarker reads a data dir with imps and no marker as xfs', asyn
   }).toThrowWithMessage(Error, /holds xfs storage, but IMP_STORAGE_BACKEND is zfs/);
 });
 
+test('#checkStorageMarker accepts a data dir with imps and no marker for xfs', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'imps', 'some-imp'), { recursive: true });
+
+  expect(() => {
+    checkStorageMarker(ctx.dataDir, 'xfs');
+  }).not.toThrow();
+});
+
+test.each(['xfs', 'zfs'] as const)(
+  '#checkStorageMarker accepts a data dir with no imps dir and no marker for %s',
+  async (kind) => {
+    const ctx = await setupTest();
+
+    expect(() => {
+      checkStorageMarker(ctx.dataDir, kind);
+    }).not.toThrow();
+  },
+);
+
 test.each(['xfs', 'zfs'] as const)(
   '#checkStorageMarker accepts an empty data dir with no marker for %s',
   async (kind) => {
@@ -156,6 +177,27 @@ test('#createStorageBackend marks the data dir xfs once start succeeds', async (
   });
 
   await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  expect(readFileSync(join(ctx.dataDir, 'storage-backend'), 'utf8')).toBe('xfs\n');
+});
+
+test('#createStorageBackend accepts a data dir with imps and no marker, and marks it xfs', async () => {
+  const ctx = await setupTest();
+
+  // a data dir from before the marker: an imp's disk and nothing else
+  await mkdir(join(ctx.dataDir, 'imps', 'some-imp'), { recursive: true });
+
+  writeFileSync(join(ctx.dataDir, 'imps', 'some-imp', 'disk.ext4'), '');
+
+  const backend = createStorageBackend(loadConfig({ IMP_DATA_DIR: ctx.dataDir }), {
+    xfsReserveFileBytes: 0,
+  });
+
+  await backend.start({
+    impIds: new Set(['some-imp']),
+    checkpointIds: new Set(),
+    imageDigests: new Set(),
+  });
 
   expect(readFileSync(join(ctx.dataDir, 'storage-backend'), 'utf8')).toBe('xfs\n');
 });

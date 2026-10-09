@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import type { Extent, readExtents } from '../storage/fiemap';
 
 // readExtents over real files: the extents a test sets (none by default), a
@@ -8,11 +8,17 @@ export function buildStubFiemap() {
   const extents = new Map<string, readonly Extent[]>();
   const cuts = new Set<string>();
   const failures = new Map<string, Error>();
+  const removals = new Set<string>();
 
   const reads: string[] = [];
 
   const readFileExtents: typeof readExtents = (path) => {
     reads.push(path);
+
+    // removed between the listing and the read, as by a destroy mid-pass
+    if (removals.has(path)) {
+      rmSync(path, { force: true });
+    }
 
     const failure = failures.get(path);
 
@@ -47,6 +53,11 @@ export function buildStubFiemap() {
     },
     failAt: (path: string, error: Error) => {
       failures.set(path, error);
+    },
+
+    // the file at `path` goes just before its read
+    removeBefore: (path: string) => {
+      removals.add(path);
     },
   };
 }

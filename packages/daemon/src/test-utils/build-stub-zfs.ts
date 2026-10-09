@@ -399,15 +399,16 @@ export function buildStubZfs(options: FakeZfsOptions) {
       return buildSuccess();
     }
 
-    // umount -R <dir>: the dir and every mount beneath it, deepest first
+    // umount -R <dir>: the dir and every mount beneath it, deepest first; as
+    // util-linux, the dir itself must be a mount
     if (tool === 'umount' && verb === '-R') {
+      if (!mounts.has(last)) {
+        return buildFailure(`umount: ${last}: not mounted.`);
+      }
+
       const under = [...mounts.keys()]
         .filter((dir) => dir === last || dir.startsWith(`${last}/`))
         .toSorted((a, b) => b.length - a.length);
-
-      if (under.length === 0) {
-        return buildFailure(`umount: ${last}: not mounted.`);
-      }
 
       for (const dir of under) {
         mounts.delete(dir);

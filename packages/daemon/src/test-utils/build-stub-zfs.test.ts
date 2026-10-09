@@ -652,6 +652,23 @@ test('#buildStubZfs unmounts a dir and every mount beneath it under -R', async (
   expect(fake.readMountedAt('/var/lib/imp/ab')).toBe('tank/imp/c');
 });
 
+test('#buildStubZfs refuses to unmount under -R a dir that is not a mount itself, though one is beneath it', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  await fake.run(['zfs', 'create', 'tank/imp/a']);
+  await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/x/a']);
+
+  const result = await fake.run(['umount', '-R', '/var/lib/imp/x']);
+
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'umount: /var/lib/imp/x: not mounted.',
+  });
+
+  expect(fake.readMountedAt('/var/lib/imp/x/a')).toBe('tank/imp/a');
+});
+
 test('#buildStubZfs refuses to unmount a dir with no mount under -R', async () => {
   const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 

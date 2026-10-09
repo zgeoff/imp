@@ -8,8 +8,6 @@ import { createTestDatabase } from '../test-utils/create-test-database';
 import { createDiskUsageCache } from './disk-usage-cache';
 import type { DiskUsageReport, StorageBackend } from './storage-backend';
 
-type MeasureUsage = StorageBackend['measureUsage'];
-
 async function setupTest() {
   const database = await createTestDatabase();
 
@@ -37,7 +35,7 @@ test('it measures every imp with its checkpoints', async () => {
 
   await createCheckpoint(ctx.db, { id: 'cp-1', impId: imp.id, label: null, sizeBytes: null });
 
-  const measureUsage = mock<MeasureUsage>(() =>
+  const measureUsage = mock<StorageBackend['measureUsage']>(() =>
     Promise.resolve({ imps: new Map(), isPartial: false }),
   );
 
@@ -79,13 +77,20 @@ test('it keeps each count with the time its pass started', async () => {
 
   const usage = buildMockImpDiskUsage();
 
+  // the measure takes four seconds of the clock
+  const clock = { now: new Date(5000) };
+
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: {
-      measureUsage: () => Promise.resolve({ imps: new Map([[imp.id, usage]]), isPartial: true }),
+      measureUsage: () => {
+        clock.now = new Date(9000);
+
+        return Promise.resolve({ imps: new Map([[imp.id, usage]]), isPartial: true });
+      },
     },
     log: mock<(message: string) => void>(),
-    now: () => new Date(5000),
+    now: () => clock.now,
   });
 
   onTestFinished(() => {
@@ -180,7 +185,7 @@ test('it shares a pass under way with a second caller', async () => {
     measured.resolve({ imps: new Map(), isPartial: false });
   });
 
-  const measureUsage = mock<MeasureUsage>(() => measured.promise);
+  const measureUsage = mock<StorageBackend['measureUsage']>(() => measured.promise);
 
   const cache = createDiskUsageCache({
     db: ctx.db,
@@ -221,7 +226,7 @@ test('it keeps the last count when a pass fails', async () => {
     ip: '10.66.0.2',
   });
 
-  const measureUsage = mock<MeasureUsage>(() =>
+  const measureUsage = mock<StorageBackend['measureUsage']>(() =>
     Promise.resolve({
       imps: new Map([[imp.id, buildMockImpDiskUsage({ exclusiveBytes: 10 })]]),
       isPartial: false,
@@ -288,7 +293,7 @@ test('it keeps the last count of an imp a cut-short pass did not reach', async (
 
   const clock = { ms: 1000 };
 
-  const measureUsage = mock<MeasureUsage>(() =>
+  const measureUsage = mock<StorageBackend['measureUsage']>(() =>
     Promise.resolve({
       imps: new Map([[imp.id, buildMockImpDiskUsage({ exclusiveBytes: 10 })]]),
       isPartial: false,
@@ -380,7 +385,7 @@ test('it runs a refresh asked for during a pass as a pass of its own after it', 
     firstMeasured.resolve({ imps: new Map(), isPartial: false });
   });
 
-  const measureUsage = mock<MeasureUsage>(() => {
+  const measureUsage = mock<StorageBackend['measureUsage']>(() => {
     secondStarted.resolve();
 
     return Promise.resolve({ imps: new Map(), isPartial: false });

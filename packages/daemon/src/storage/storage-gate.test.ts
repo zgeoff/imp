@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createStorageGate } from './storage-gate';
 
@@ -107,6 +107,37 @@ test('it gives up a task alone when operations keep the gate busy past its timeo
 
   expect(alone).toStrictEqual({ ran: false });
   expect(inFlight).toBe(1);
+});
+
+test('it gives up a task alone whose wait runs out while an operation stays in flight', async () => {
+  const gate = createStorageGate();
+  const stuck = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    stuck.resolve();
+  });
+
+  const op = gate.join(() => stuck.promise);
+  const task = mock(() => Promise.resolve('never'));
+
+  // a short real wait, long enough to see it start: then its deadline passes
+  const alone = gate.runAlone(task, 200);
+
+  await waitFor(() => {
+    expect(gate.countWaiting()).toBe(1);
+  });
+
+  const result = await alone;
+
+  const waitingAfter = gate.countWaiting();
+
+  stuck.resolve();
+
+  await op;
+
+  expect(result).toStrictEqual({ ran: false });
+  expect(task).not.toHaveBeenCalled();
+  expect(waitingAfter).toBe(0);
 });
 
 test('it counts a task alone as waiting until the operations in flight end', async () => {

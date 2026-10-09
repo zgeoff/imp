@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { buildStubMoveStream } from '../../test-utils/build-stub-move-stream';
 import { StubZfsCrashError, buildStubZfs } from '../../test-utils/build-stub-zfs';
 import { buildWatchdogSlot } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
@@ -1285,7 +1286,24 @@ test('#dropUnnamed with orphans retires every orphan of a lost database', async 
 
   await restarted.waitForReclaim();
 
-  expect(retired.dropped).toHaveLength(13);
+  expect(retired).toStrictEqual({
+    dropped: [
+      { kind: 'checkpoint', id: 'cp-1' },
+      { kind: 'checkpoint', id: 'cp-2' },
+      { kind: 'checkpoint', id: 'cp-b' },
+      { kind: 'snapshot', id: 'tank/imp/disks/b@fork-left' },
+      { kind: 'snapshot', id: 'tank/imp/disks/a@bk-r1-a' },
+      { kind: 'image', id: '9f2c' },
+      { kind: 'image', id: '7e1d' },
+      { kind: 'image', id: 'half' },
+      { kind: 'imp', id: 'a' },
+      { kind: 'imp', id: 'b' },
+      { kind: 'imp', id: 'v1' },
+      { kind: 'memory', id: 'a' },
+      { kind: 'memory', id: 'm1' },
+    ],
+    kept: [],
+  });
 
   expect(
     ctx.fake.listDatasets().filter((name) => name.startsWith('tank/imp/retired/')),
@@ -1373,7 +1391,27 @@ test('#dropUnnamed drops what a crash left, keeps an unnamed disk and leaves sta
 
   await ctx.backend.waitForReclaim();
 
-  expect(dropped.dropped).toStrictEqual([{ kind: 'memory', id: 'gone' }]);
+  expect(dropped).toStrictEqual({
+    dropped: [{ kind: 'memory', id: 'gone' }],
+    kept: [
+      {
+        kind: 'imp',
+        id: 'b',
+        location: 'tank/imp/disks/b',
+        bytes: 1_048_576,
+        createdAt: ctx.fake.readCreatedAt('tank/imp/disks/b'),
+        snapshots: [],
+      },
+      {
+        kind: 'checkpoint',
+        id: 'cp-lost',
+        location: 'tank/imp/disks/a@cp-lost',
+        bytes: 65_536,
+        createdAt: ctx.fake.readCreatedAt('tank/imp/disks/a@cp-lost'),
+        snapshots: [],
+      },
+    ],
+  });
 
   expect(ctx.fake.listDatasets()).toIncludeAllMembers([
     'tank/imp/disks/a',
@@ -1464,6 +1502,11 @@ test('#createCheckpoint and a live fork run while a reclaim waits on its promote
   await ctx.backend.waitForReclaim();
 
   expect(hasPromoted).toBeFalse();
+
+  expect(
+    ctx.fake.listDatasets().filter((name) => name.startsWith('tank/imp/retired/')),
+  ).toStrictEqual([]);
+
   expect(ctx.fake.listSnapshots()).toContain('tank/imp/disks/b@cp-frozen');
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'imps', 'c', 'disk'))).toBe('tank/imp/disks/c');
 });
@@ -2047,47 +2090,40 @@ test('#receiveMoveSnapshots keeps the received disk snapshot through a GC before
     throw new Error('expected a ZFS move source');
   }
 
-  const steps = source.steps;
+  const [checkpointStep, diskStep] = source.steps;
+
+  invariant(checkpointStep);
+  invariant(diskStep);
+
   const dropped: unknown[] = [];
 
   // the last stream stays open after `zfs recv` committed it, while a GC runs
+  const streams = [
+    checkpointStep.open().stdout,
+    buildStubMoveStream(diskStep.open().stdout, {
+      onEnd: async () => {
+        const swept = await ctx.peer.backend.dropUnnamed(
+          { impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() },
+          { isDryRun: false, isOrphans: false },
+        );
+
+        dropped.push(swept.dropped);
+      },
+    }),
+  ];
+
   const received = await ctx.peer.backend.receiveMoveSnapshots(
     'a',
-    steps.map((step) => ({
+    source.steps.map((step) => ({
       isCheckpoint: step.checkpointId !== null,
       dataset: step.dataset,
       base: step.base,
     })),
-    (index) => {
-      const reader = steps[index]?.open().stdout.getReader();
-
-      return new ReadableStream<Uint8Array>({
-        pull: async (controller) => {
-          const read = await reader?.read();
-
-          if (read?.done !== false) {
-            const swept =
-              index === steps.length - 1
-                ? await ctx.peer.backend.dropUnnamed(
-                    { impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() },
-                    { isDryRun: false, isOrphans: false },
-                  )
-                : { dropped: 'not swept' };
-
-            dropped.push(swept.dropped);
-            controller.close();
-
-            return;
-          }
-
-          controller.enqueue(read.value);
-        },
-      });
-    },
+    (index) => streams[index] ?? new ReadableStream(),
     () => 'cp-moved1',
   );
 
-  expect(dropped).toStrictEqual(['not swept', []]);
+  expect(dropped).toStrictEqual([[]]);
   expect(received.map((checkpoint) => checkpoint.id)).toStrictEqual(['cp-moved1']);
 
   expect(ctx.peer.fake.readMountedAt(join(ctx.peer.dataDir, 'imps', 'a', 'disk'))).toBe(
@@ -2141,24 +2177,25 @@ test('#receiveMoveSnapshots leaves nothing in staging and no disk when a stream 
     throw new Error('expected a ZFS move source');
   }
 
-  const steps = source.steps;
+  const [checkpointStep] = source.steps;
+
+  invariant(checkpointStep);
+
+  // the disk's stream breaks before its first byte
+  const streams = [
+    checkpointStep.open().stdout,
+    buildStubMoveStream(new Blob([]).stream(), { failAtEnd: new Error('the stream broke') }),
+  ];
 
   expect(
     ctx.peer.backend.receiveMoveSnapshots(
       'a',
-      steps.map((step) => ({
+      source.steps.map((step) => ({
         isCheckpoint: step.checkpointId !== null,
         dataset: step.dataset,
         base: step.base,
       })),
-      (index) =>
-        index === 0
-          ? (steps[0]?.open().stdout ?? new ReadableStream())
-          : new ReadableStream({
-              pull: (controller) => {
-                controller.error(new Error('the stream broke'));
-              },
-            }),
+      (index) => streams[index] ?? new ReadableStream(),
       () => 'cp-new',
     ),
   ).rejects.toThrowWithMessage(Error, 'the stream broke');
@@ -2200,26 +2237,22 @@ test('#receiveMoveSnapshots leaves nothing in the way of a retry when a first st
     base: step.base,
   }));
 
-  // the whole stream, so `zfs recv` commits it, then an error
+  const [checkpointStep] = steps;
+
+  invariant(checkpointStep);
+
+  // the first stream whole, so `zfs recv` commits it, then an error
+  const streams = [
+    buildStubMoveStream(checkpointStep.open().stdout, {
+      failAtEnd: new Error('the sum does not match'),
+    }),
+  ];
+
   expect(
     ctx.peer.backend.receiveMoveSnapshots(
       'a',
       receiveSteps,
-      (index) => {
-        const reader = (steps[index]?.open().stdout ?? new ReadableStream()).getReader();
-
-        return new ReadableStream({
-          pull: async (controller) => {
-            const next = await reader.read();
-
-            if (next.done) {
-              controller.error(new Error('the sum does not match'));
-            } else {
-              controller.enqueue(next.value);
-            }
-          },
-        });
-      },
+      (index) => streams[index] ?? new ReadableStream(),
       () => 'cp-new',
     ),
   ).rejects.toThrowWithMessage(Error, 'the sum does not match');
@@ -2252,8 +2285,10 @@ test('#receiveMoveSnapshots destroys each clone before its origin, whatever the 
   // them; each stream is whole, so `zfs recv` commits it, and the second then
   // fails
   const streams = [
-    { guid: 'g-one', baseGuid: null },
-    { guid: 'g-two', baseGuid: 'g-one' },
+    buildStubMoveStream(new Blob([JSON.stringify({ guid: 'g-one', baseGuid: null })]).stream()),
+    buildStubMoveStream(new Blob([JSON.stringify({ guid: 'g-two', baseGuid: 'g-one' })]).stream(), {
+      failAtEnd: new Error('the sum does not match'),
+    }),
   ];
 
   expect(
@@ -2263,25 +2298,7 @@ test('#receiveMoveSnapshots destroys each clone before its origin, whatever the 
         { isCheckpoint: true, dataset: 1, base: null },
         { isCheckpoint: false, dataset: 0, base: 0 },
       ],
-      (index) => {
-        const whole = new TextEncoder().encode(JSON.stringify(streams[index]));
-
-        const sent = { isWhole: false };
-
-        return new ReadableStream({
-          pull: (controller) => {
-            if (!sent.isWhole) {
-              sent.isWhole = true;
-
-              controller.enqueue(whole);
-            } else if (index === 1) {
-              controller.error(new Error('the sum does not match'));
-            } else {
-              controller.close();
-            }
-          },
-        });
-      },
+      (index) => streams[index] ?? new ReadableStream(),
       () => 'cp-new',
     ),
   ).rejects.toThrowWithMessage(Error, 'the sum does not match');

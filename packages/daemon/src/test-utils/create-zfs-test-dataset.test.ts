@@ -65,6 +65,50 @@ test('it releases every mount under its dir, then the dataset with its children,
   expect(existsSync(dataset.dataDir)).toBeFalse();
 });
 
+test('it leaves a sibling dataset under the same parent when it releases its own', async () => {
+  const ctx = setupTest();
+
+  // another owner's dataset beside this run's
+  await ctx.fake.run(['zfs', 'create', 'tank/imp/other']);
+
+  const dataset = await createZfsTestDataset(ctx.stack, {
+    parent: 'tank/imp',
+    parentDir: ctx.parentDir,
+    run: ctx.fake.run,
+  });
+
+  await ctx.fake.run(['zfs', 'snapshot', `${dataset.root}@one`]);
+  await ctx.stack.disposeAsync();
+
+  expect(ctx.fake.listDatasets()).toStrictEqual(['tank/imp', 'tank/imp/other']);
+  expect(ctx.fake.listSnapshots()).toStrictEqual([]);
+});
+
+test('it reports a failed unmount, keeps the mounted dataset and still removes the dir', async () => {
+  const ctx = setupTest();
+
+  const dataset = await createZfsTestDataset(ctx.stack, {
+    parent: 'tank/imp',
+    parentDir: ctx.parentDir,
+    run: ctx.fake.run,
+  });
+
+  ctx.fake.failOnce((command) => command.startsWith('umount -R'));
+
+  expect(ctx.stack.disposeAsync()).rejects.toMatchObject({
+    error: {
+      message: `zfs destroy -R ${dataset.root} exited 1: cannot destroy '${dataset.root}': dataset is busy`,
+    },
+    suppressed: {
+      message: `umount -R ${dataset.dataDir} exited 1: fake zfs: umount -R ${dataset.dataDir} failed`,
+    },
+  });
+
+  expect(ctx.fake.listDatasets()).toStrictEqual(['tank/imp', dataset.root]);
+  expect(ctx.fake.readMountedAt(dataset.dataDir)).toBe(dataset.root);
+  expect(readdirSync(ctx.parentDir)).toStrictEqual([]);
+});
+
 test('it refuses a dataset name zfs already shows and never touches that dataset', async () => {
   const ctx = setupTest();
 

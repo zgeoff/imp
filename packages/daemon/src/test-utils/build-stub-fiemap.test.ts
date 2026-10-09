@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -90,6 +90,25 @@ test('it rejects a read of a missing file, as the real FIEMAP read does', async 
   expect(readExtents(join(ctx.dir, 'gone.ext4'), Number.POSITIVE_INFINITY)).rejects.toThrow(
     /^ENOENT: no such file or directory/,
   );
+});
+
+test('it removes a file marked to go just before its read, and rejects the read as missing', async () => {
+  const ctx = await setupTest();
+
+  const fiemap = buildStubFiemap();
+
+  writeFileSync(join(ctx.dir, 'disk.ext4'), 'disk');
+
+  fiemap.removeBefore(join(ctx.dir, 'disk.ext4'));
+
+  expect(
+    fiemap.readFileExtents(join(ctx.dir, 'disk.ext4'), Number.POSITIVE_INFINITY),
+  ).rejects.toThrowWithMessage(
+    Error,
+    `ENOENT: no such file or directory, open '${join(ctx.dir, 'disk.ext4')}'`,
+  );
+
+  expect(existsSync(join(ctx.dir, 'disk.ext4'))).toBeFalse();
 });
 
 test('it records each path it reads, in order', async () => {

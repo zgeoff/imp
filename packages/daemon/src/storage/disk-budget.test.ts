@@ -187,10 +187,13 @@ test('it holds the largest total a growing write has asked for', async () => {
     seen.push(regrown.pendingBytes);
   });
 
+  const after = await budget.readStatus();
+
   expect(seen).toStrictEqual([1024 ** 3, 5 * 1024 ** 3]);
+  expect(after.pendingBytes).toBe(0);
 });
 
-test('it refuses a growing write that grows past the reserve', () => {
+test('it refuses a growing write that grows past the reserve and frees what it held', async () => {
   const budget = createDiskBudget({
     storage: {
       readUsage: () =>
@@ -213,6 +216,10 @@ test('it refuses a growing write that grows past the reserve', () => {
       requestedBytes: 2 * 1024 ** 3,
     },
   });
+
+  const status = await budget.readStatus();
+
+  expect(status.pendingBytes).toBe(0);
 });
 
 test('it frees all a growing write held when its task throws', async () => {
@@ -276,13 +283,16 @@ test('it counts one growing write against another and frees only the refused one
     data: { availableBytes: 4 * 1024 ** 3, requestedBytes: 1024 ** 3 },
   });
 
-  const status = await budget.readStatus();
+  const during = await budget.readStatus();
 
   firstEnds.resolve();
 
   await first;
 
-  expect(status.pendingBytes).toBe(4 * 1024 ** 3);
+  const after = await budget.readStatus();
+
+  expect(during.pendingBytes).toBe(4 * 1024 ** 3);
+  expect(after.pendingBytes).toBe(0);
 });
 
 test('it refuses a write with an estimate of 0 once the reserve is reached', () => {
@@ -398,13 +408,20 @@ test('it logs low disk once per episode, not on each refusal', async () => {
     log,
   });
 
-  // two refusals
-  await Promise.allSettled([budget.requireRoom(4 * 1024 ** 3), budget.requireRoom(4 * 1024 ** 3)]);
+  const refusals = await Promise.allSettled([
+    budget.requireRoom(4 * 1024 ** 3),
+    budget.requireRoom(4 * 1024 ** 3),
+  ]);
 
   usage.availableBytes = 20 * 1024 ** 3;
 
   await budget.readStatus();
   await budget.readStatus();
+
+  expect(refusals).toMatchObject([
+    { status: 'rejected', reason: { code: 'DISK_FULL' } },
+    { status: 'rejected', reason: { code: 'DISK_FULL' } },
+  ]);
 
   expect(log.mock.calls).toStrictEqual([
     ['impd: warning: low on disk: 6 GiB free, the reserve is 4 GiB'],

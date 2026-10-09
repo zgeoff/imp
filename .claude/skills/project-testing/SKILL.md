@@ -264,7 +264,10 @@ this checkout whatever its `-C` says.
   txg-based `creation` (`readCreatedAt`), with fixed space numbers, and answers `umount -R` and
   `zfs destroy -R`. It exposes `blockBefore` (its `reached` resolves once a matching command waits;
   `release` lets it run), `failOnce`, `crashBefore`, and `restart`. `zfs-backend.ts` takes it
-  through those injected deps, and `createStorageBackend` passes them through its `zfs` boundary.
+  through those injected deps, and `createStorageBackend` passes them through its `zfs` boundary. As
+  util-linux does, its `umount -R` refuses a dir that is not itself a mount.
+  `test-utils/build-stub-move-stream.ts` (`buildStubMoveStream`) is a peer's move stream: a source's
+  bytes, then an `onEnd` hook and a close, or a `failAtEnd` error.
 - **The real-pool tests.** `zfs-backend.real.test.ts`, `zfs-move.real.test.ts`, and
   `zfs-move-flow.real.test.ts` skip unless `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`)
   finds `IMP_TEST_ZFS_ROOT` (a dataset) and `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test
@@ -359,7 +362,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Guest agent                  | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                                | The agent on the vsock socket: CONNECT and frames                                  |
 | Builder guest                | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                                | A builder's agent: output and exit per exec                                        |
 | zfs                          | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                                    | `zfs`, send and receive, and the mount table                                       |
-| FIEMAP                       | `test-utils/build-stub-fiemap.ts` (`buildStubFiemap`)                                              | `readFileExtents` of the XFS backend: extents, cuts and failures per path          |
+| FIEMAP                       | `test-utils/build-stub-fiemap.ts` (`buildStubFiemap`)                                              | `readFileExtents` of the XFS backend: extents, cuts, failures, removals per path   |
 | Loop device host             | Temp dirs as `procDir` and `sysDir` (`storage/loop-backing-file.ts`)                               | `/proc/self/mountinfo` and a loop device's `backing_file` in `/sys`                |
 | Docker engine                | `test-utils/start-stub-docker-engine.ts` (4)                                                       | The engine API on its unix socket                                                  |
 | Docker CLI                   | `test-utils/build-stub-docker-cli.ts` (`buildStubDockerCli`)                                       | The host's `docker` binary, first on `PATH`                                        |

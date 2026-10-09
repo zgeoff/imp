@@ -161,37 +161,151 @@ test.each([
   expect(buildReceiveArgv('tank/imp/staging/mv-a', origin)).toStrictEqual(expected);
 });
 
-test('#createZfsCommands runs each change as one exact command', async () => {
+test('#create makes a dataset with the properties given', async () => {
   const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
-  const zfs = createZfsCommands(run);
 
-  await zfs.create('tank/imp/disks', { recordsize: '16K' });
-  await zfs.snapshot('tank/imp/disks/a@cp-abc234');
-  await zfs.clone('tank/imp/disks/a@cp-abc234', 'tank/imp/disks/b');
-  await zfs.clone('tank/imp/disks/a@cp-abc234', 'tank/imp/disks/c', { recordsize: '16K' });
-  await zfs.rename('tank/imp/disks/a', 'tank/imp/retired/r');
-  await zfs.promote('tank/imp/disks/b');
-  await zfs.destroy('tank/imp/retired/r');
-  await zfs.destroyDeferred('tank/imp/disks/b@cp-abc234');
-  await zfs.destroyRecursive('tank/imp/staging/restore-a');
-  await zfs.mount('tank/imp/disks/b', '/var/lib/imp/imps/b/disk');
-  await zfs.unmount('/var/lib/imp/imps/b/disk');
-  await zfs.mount('tank/imp/staging/bk-b', '/var/lib/imp/backup/tree/b', { isReadOnly: true });
+  await createZfsCommands(run).create('tank/imp/disks', { recordsize: '16K' });
 
-  expect(run.mock.calls.map(([argv]) => argv.join(' '))).toStrictEqual([
-    'zfs create -o recordsize=16K tank/imp/disks',
-    'zfs snapshot tank/imp/disks/a@cp-abc234',
-    'zfs clone tank/imp/disks/a@cp-abc234 tank/imp/disks/b',
-    'zfs clone -o recordsize=16K tank/imp/disks/a@cp-abc234 tank/imp/disks/c',
-    'zfs rename tank/imp/disks/a tank/imp/retired/r',
-    'zfs promote tank/imp/disks/b',
-    'zfs destroy tank/imp/retired/r',
-    'zfs destroy -d tank/imp/disks/b@cp-abc234',
-    'zfs destroy -r tank/imp/staging/restore-a',
-    'mount -t zfs tank/imp/disks/b /var/lib/imp/imps/b/disk',
-    'umount /var/lib/imp/imps/b/disk',
-    'mount -t zfs -o ro tank/imp/staging/bk-b /var/lib/imp/backup/tree/b',
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'zfs',
+    'create',
+    '-o',
+    'recordsize=16K',
+    'tank/imp/disks',
   ]);
+});
+
+test('#snapshot takes a snapshot', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).snapshot('tank/imp/disks/a@cp-abc234');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith(['zfs', 'snapshot', 'tank/imp/disks/a@cp-abc234']);
+});
+
+test('#clone clones a snapshot', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).clone('tank/imp/disks/a@cp-abc234', 'tank/imp/disks/b');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'zfs',
+    'clone',
+    'tank/imp/disks/a@cp-abc234',
+    'tank/imp/disks/b',
+  ]);
+});
+
+test('#clone clones a snapshot with the properties given', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).clone('tank/imp/disks/a@cp-abc234', 'tank/imp/disks/c', {
+    recordsize: '16K',
+  });
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'zfs',
+    'clone',
+    '-o',
+    'recordsize=16K',
+    'tank/imp/disks/a@cp-abc234',
+    'tank/imp/disks/c',
+  ]);
+});
+
+test('#rename renames a dataset', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).rename('tank/imp/disks/a', 'tank/imp/retired/r');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'zfs',
+    'rename',
+    'tank/imp/disks/a',
+    'tank/imp/retired/r',
+  ]);
+});
+
+test('#promote promotes a clone', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).promote('tank/imp/disks/b');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith(['zfs', 'promote', 'tank/imp/disks/b']);
+});
+
+test('#destroy destroys a dataset', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).destroy('tank/imp/retired/r');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith(['zfs', 'destroy', 'tank/imp/retired/r']);
+});
+
+test('#destroyDeferred marks a snapshot for deferred destroy', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).destroyDeferred('tank/imp/disks/b@cp-abc234');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'zfs',
+    'destroy',
+    '-d',
+    'tank/imp/disks/b@cp-abc234',
+  ]);
+});
+
+test('#destroyRecursive destroys a dataset with its snapshots', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).destroyRecursive('tank/imp/staging/restore-a');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'zfs',
+    'destroy',
+    '-r',
+    'tank/imp/staging/restore-a',
+  ]);
+});
+
+test('#mount mounts a dataset with a legacy mount', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).mount('tank/imp/disks/b', '/var/lib/imp/imps/b/disk');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'mount',
+    '-t',
+    'zfs',
+    'tank/imp/disks/b',
+    '/var/lib/imp/imps/b/disk',
+  ]);
+});
+
+test('#mount mounts a dataset read-only when asked', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).mount('tank/imp/staging/bk-b', '/var/lib/imp/backup/tree/b', {
+    isReadOnly: true,
+  });
+
+  expect(run).toHaveBeenCalledExactlyOnceWith([
+    'mount',
+    '-t',
+    'zfs',
+    '-o',
+    'ro',
+    'tank/imp/staging/bk-b',
+    '/var/lib/imp/backup/tree/b',
+  ]);
+});
+
+test('#unmount unmounts a dir', async () => {
+  const run = mock<CommandRunner>(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }));
+
+  await createZfsCommands(run).unmount('/var/lib/imp/imps/b/disk');
+
+  expect(run).toHaveBeenCalledExactlyOnceWith(['umount', '/var/lib/imp/imps/b/disk']);
 });
 
 test('#list lists the tree oldest first', async () => {
@@ -339,7 +453,7 @@ test('#readWritten refuses a size that is not an exact byte count', () => {
   );
 });
 
-test('#createZfsCommands fails a command with the stderr of zfs', () => {
+test('#destroy fails with the stderr of zfs when zfs exits non-zero', () => {
   const run = mock<CommandRunner>(() =>
     Promise.resolve({
       exitCode: 1,
@@ -354,7 +468,7 @@ test('#createZfsCommands fails a command with the stderr of zfs', () => {
   );
 });
 
-test('#createZfsCommands fails a command with its stdout when its stderr is empty', () => {
+test('#destroy fails with the stdout of zfs when its stderr is empty', () => {
   const run = mock<CommandRunner>(() =>
     Promise.resolve({ exitCode: 2, stdout: 'usage: zfs destroy ...\n', stderr: '' }),
   );

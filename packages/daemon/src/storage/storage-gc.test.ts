@@ -627,6 +627,8 @@ test('it leaves the secret values kept aside out of a GC that does not ask for t
 
   const unasked = await ctx.client.system.gc({ orphans: true });
 
+  invariant(unasked.kept);
+
   expect(unasked.kept).not.toPartiallyContain({ kind: 'secrets' });
   expect(unasked.dropped).not.toPartiallyContain({ kind: 'secrets' });
 });
@@ -667,6 +669,8 @@ test('it only lists the secret values kept aside when asked for orphans alone', 
   const kept = files.keepOrphansExcept(new Set(), new Date('2026-10-04T05:30:00.000Z'));
 
   const orphans = await ctx.client.system.gc({ secretFiles: true, orphans: true });
+
+  invariant(orphans.kept);
 
   expect(orphans.kept).toPartiallyContain({ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' });
   expect(orphans.dropped).not.toPartiallyContain({ kind: 'secrets' });
