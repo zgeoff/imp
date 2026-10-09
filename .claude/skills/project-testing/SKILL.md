@@ -69,7 +69,9 @@ reads a call's input in a per-test MSW handler.
 
 The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
 `packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores
-every `updateEnv` override after each test, and runs one MSW server
+every `updateEnv` override after each test, registers the run's one tracer provider
+(`register-tracing.ts`: a `BasicTracerProvider` over `spanExporter`, an `InMemorySpanExporter` that
+a test reads and the preload resets after each test), and runs one MSW server
 (`packages/test-utils/src/mock-server.ts`) for the whole run with `onUnhandledRequest: 'error'`. The
 server intercepts `fetch` only; `node:http` clients and WebSockets stay native. While it listens,
 the global `fetch` sends a request to a loopback host or over a unix socket to the native fetch
@@ -87,8 +89,8 @@ anything the test registers after calling it. These utils register their own: `s
 (through `startStubAgent`, so each also takes `{ stack }`), `startStubDnsUpstream`,
 `createTestDatabase`, `createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely
 closes a driver only after a query started it), `buildQueryGate` (it releases a held select),
-`findFreePorts` (it releases its port claims), `startInMemoryMetrics` and `startInMemoryTracing`
-(each unregisters its global provider), `setupImpTest`, `setupMoveHosts`,
+`findFreePorts` (it releases its port claims), `startInMemoryMetrics` (it unregisters its meter
+provider, and throws when another is registered), `setupImpTest`, `setupMoveHosts`,
 `startStubFirecrackerApi`, `startStubFirecrackerProcess` and `startStubFirecracker`.
 
 `setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
@@ -405,7 +407,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Move stream faults           | `test-utils/build-stub-move-stream-rewrite.ts`                                                     | A hook that rewrites the frames of a move's first stream part                      |
 | Part pipe timer              | `test-utils/build-stub-timer.ts` (`buildStubTimer`)                                                | `createPartPipe`'s `PartTimer`: a clock and timers that move only on `advance`     |
 | Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
-| Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                 | An agent that runs, takes over and resumes sessions, and answers `activity`        |
+| Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                 | Runs, takes over, resumes and kills sessions; `release` makes it an older agent    |
 | Attach agent                 | `test-utils/start-stub-attach-agent.ts` (`startStubAttachAgent`)                                   | A 0.15.0 agent: a ping with a boot id, then scripted session replies               |
 | Disk clone and grow          | `test-utils/build-stub-disk-tools.ts` (`buildStubDiskTools`)                                       | `createImpTest`'s `cloneDisk` and `growFilesystem`: fail, land empty, or hold      |
 | Imp exec agent               | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                       | An imp's agent on its vsock socket, driving `buildStubExecGuest`                   |

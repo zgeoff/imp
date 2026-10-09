@@ -73,7 +73,18 @@ interface StubSessionAgentOptions {
 
   // closes the agent; at the test's end by default
   readonly stack?: Readonly<AsyncDisposableStack>;
+
+  // an older agent, the current one by default; what each lacks is pinned
+  // in this stand-in's tests
+  readonly release?: 'before-sessions' | 'before-offsets';
 }
+
+// the ops an agent from before sessions answers UNKNOWN_OP
+const SESSION_OPS: ReadonlySet<string> = new Set(['session.attach', 'session.kill', 'session.tap']);
+
+// how a process dies of the SIGHUP that session.kill sends it, as the agent's
+// proto.ExitOf reports a signal
+const HANGUP_EXIT: StubExit = { code: 128 + 1, signal: 1 };
 
 function sendError(socket: Socket, error: Readonly<Record<string, unknown>>): void {
   socket.end(encodeJsonFrame(FRAME_TYPES.response, { error }));
@@ -92,12 +103,10 @@ export async function startStubSessionAgent(
   const previous = new Map<string, StubPrevious>();
 
   const connections = { open: 0 };
+  const hasOffsets = options.release === undefined;
 
-  const listActivity = () => ({
-    tcp_established: 0,
-    exec_sessions: connections.open,
-    load1: 0,
-    sessions: [...runs]
+  const listSessions = () =>
+    [...runs]
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([name, run]) => ({
         name,
@@ -111,11 +120,17 @@ export async function startStubSessionAgent(
 
         // left out of the JSON while undefined, as the agent omits them
         exit: run.exit ?? undefined,
-        execution_generation: run.generation,
-        boot_id: bootId,
-        end: run.output.length,
-        log: run.isLogged ? true : undefined,
-      })),
+        execution_generation: hasOffsets ? run.generation : undefined,
+        boot_id: hasOffsets ? bootId : undefined,
+        end: hasOffsets ? run.output.length : undefined,
+        log: hasOffsets && run.isLogged ? true : undefined,
+      }));
+
+  const listActivity = () => ({
+    tcp_established: 0,
+    exec_sessions: connections.open,
+    load1: 0,
+    ...(options.release !== 'before-sessions' && { sessions: listSessions() }),
   });
 
   const sendNoSession = (socket: Socket, session: string): void => {
@@ -239,7 +254,7 @@ export async function startStubSessionAgent(
         pid: 9,
         session,
         ...(created && { created: true }),
-        output: { ...output, ...(last !== undefined && { previous: last }) },
+        ...(hasOffsets && { output: { ...output, ...(last !== undefined && { previous: last }) } }),
       }),
     );
 
@@ -286,11 +301,14 @@ export async function startStubSessionAgent(
 
     removeRun(session);
 
+    // a size with either side unset is 80 by 24, as the agent's newSession
+    const isSized = (start.cols ?? 0) > 0 && (start.rows ?? 0) > 0;
+
     runs.set(session, {
       generation: randomBytes(16).toString('hex'),
       argv: start.argv ?? [],
-      cols: start.cols ?? 0,
-      rows: start.rows ?? 0,
+      cols: isSized ? (start.cols ?? 80) : 80,
+      rows: isSized ? (start.rows ?? 24) : 24,
       isLogged: start.log === true,
       startedUnixMs: Date.now(),
       taps: new Set(),
@@ -348,6 +366,35 @@ export async function startStubSessionAgent(
     });
   };
 
+  // session.kill, as Manager.Kill: the run leaves its name at once; a run
+  // still running gets SIGHUP, which ends it, so its viewer and taps get the
+  // EXIT and its generation becomes the name's previous
+  const stopKilledRun = (socket: Socket, session: string): void => {
+    const run = runs.get(session);
+
+    if (run === undefined) {
+      sendNoSession(socket, session);
+
+      return;
+    }
+
+    if (run.exit === null) {
+      run.exit = HANGUP_EXIT;
+
+      for (const reader of [run.viewer, ...run.taps]) {
+        reader?.end(encodeJsonFrame(FRAME_TYPES.exit, HANGUP_EXIT));
+      }
+
+      run.viewer = null;
+
+      run.taps.clear();
+    }
+
+    removeRun(session);
+
+    socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+  };
+
   // a connection the activity counts: exec, exec.outer and session.attach,
   // and exec with a session, for as long as it is open
   const countConnection = (socket: Socket): void => {
@@ -376,6 +423,22 @@ export async function startStubSessionAgent(
         return;
       }
 
+      const isUnknown =
+        (options.release === 'before-sessions' && SESSION_OPS.has(parsed.op)) ||
+        (options.release === 'before-offsets' && parsed.op === 'session.tap');
+
+      if (isUnknown) {
+        sendError(socket, { code: 'UNKNOWN_OP', message: `unknown op ${parsed.op}` });
+
+        return;
+      }
+
+      if (parsed.op === 'session.kill') {
+        stopKilledRun(socket, session);
+
+        return;
+      }
+
       if (parsed.op === 'session.tap') {
         openTap(socket, session, parsed.resume_from);
 
@@ -390,7 +453,7 @@ export async function startStubSessionAgent(
         return;
       }
 
-      if (parsed.session === undefined) {
+      if (parsed.session === undefined || options.release === 'before-sessions') {
         socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
 
         return;

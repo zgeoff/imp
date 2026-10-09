@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import { sendActivity } from '../agent-client/agent-requests';
+import { openExecStream } from '../agent-client/exec-stream';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -15,7 +18,6 @@ import { openDatabase } from '../db/open-database';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { buildMockAgentSession } from '../test-utils/build-mock-agent-session';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -143,57 +145,69 @@ async function setupTest() {
   return { db, dataDir, vmm, impd, client, stack };
 }
 
-test('it lists a running imp’s sessions from its agent', async () => {
+test('it lists a running imp’s sessions from an agent from before output offsets', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  // an agent from before output offsets
-  const main = buildMockAgentSession({
-    name: 'main',
-    attached: true,
-    execution_generation: undefined,
-    boot_id: undefined,
-    end: undefined,
-  });
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
 
-  const job = buildMockAgentSession({
-    name: 'job',
-    state: 'exited',
-    exit: { code: 137, signal: 9 },
-    execution_generation: undefined,
-    boot_id: undefined,
-    end: undefined,
-  });
-
-  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main, job], {
-    knowsKill: true,
+  const agent = await startStubSessionAgent(vsockPath, {
+    release: 'before-offsets',
     stack: ctx.stack,
   });
+
+  const main = await openExecStream(vsockPath, {
+    argv: ['sh'],
+    tty: true,
+    cols: 120,
+    rows: 40,
+    session: 'main',
+  });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
+
+  const job = await openExecStream(vsockPath, {
+    argv: ['make'],
+    tty: true,
+    cols: 80,
+    rows: 24,
+    session: 'job',
+  });
+
+  job.close();
+
+  await waitFor(() => {
+    expect(agent.readRun('job')?.isAttached).toBeFalse();
+  });
+
+  agent.exitRun('job', { code: 137, signal: 9 });
 
   const sessions = await ctx.client.sessions.list({ name: 'dev' });
 
   expect(sessions).toStrictEqual([
     {
-      name: 'main',
-      pid: main.pid,
-      argv: [...main.argv],
-      state: 'running',
-      attached: true,
-      cols: main.cols,
-      rows: main.rows,
-      startedAt: new Date(main.started_unix_ms),
+      name: 'job',
+      pid: 9,
+      argv: ['make'],
+      state: 'exited',
+      attached: false,
+      cols: 80,
+      rows: 24,
+      startedAt: expect.toBeValidDate(),
+      exit: { code: null, signal: 'SIGKILL' },
       continuity: 'none',
     },
     {
-      name: 'job',
-      pid: job.pid,
-      argv: [...job.argv],
-      state: 'exited',
-      attached: false,
-      cols: job.cols,
-      rows: job.rows,
-      startedAt: new Date(job.started_unix_ms),
-      exit: { code: null, signal: 'SIGKILL' },
+      name: 'main',
+      pid: 9,
+      argv: ['sh'],
+      state: 'running',
+      attached: true,
+      cols: 120,
+      rows: 40,
+      startedAt: expect.toBeValidDate(),
       continuity: 'none',
     },
   ]);
@@ -203,11 +217,15 @@ test('it counts no sessions for an imp whose agent impd has not asked yet', asyn
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  await startStubSessionAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    [buildMockAgentSession()],
-    { knowsKill: true, stack: ctx.stack },
-  );
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
 
   const got = await ctx.client.imps.get({ name: 'dev' });
 
@@ -218,11 +236,21 @@ test('it counts an imp’s sessions on the imp and the host once it lists them',
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  await startStubSessionAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    [buildMockAgentSession({ name: 'main' }), buildMockAgentSession({ name: 'job' })],
-    { knowsKill: true, stack: ctx.stack },
-  );
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
+
+  const job = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'job' });
+
+  ctx.stack.defer(() => {
+    job.close();
+  });
 
   await ctx.client.sessions.list({ name: 'dev' });
 
@@ -237,11 +265,15 @@ test('it records the sessions that the idle loop’s activity read finds', async
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  await startStubSessionAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    [buildMockAgentSession({ name: 'main' })],
-    { knowsKill: true, stack: ctx.stack },
-  );
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
 
   const record = await findImpByName(ctx.db, 'dev');
 
@@ -258,19 +290,30 @@ test('it records a sleeping imp’s sessions as detached in its snapshot', async
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const main = buildMockAgentSession({ name: 'main', attached: true });
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
 
-  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main], {
-    knowsKill: true,
-    stack: ctx.stack,
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
   });
+
+  const seen = await sendActivity(vsockPath);
+
+  const [attached] = seen.sessions;
+
+  invariant(attached);
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
   const meta = readSnapshotMeta(buildImpPaths(ctx.dataDir, imp.id));
 
+  expect(attached.attached).toBeTrue();
+
   expect(meta?.sessions).toStrictEqual([
-    { ...main, attached: false, observed_unix_ms: expect.toBeNumber() },
+    { ...attached, attached: false, observed_unix_ms: expect.toBeNumber() },
   ]);
 });
 
@@ -278,15 +321,17 @@ test('it lists a sleeping imp’s sessions without a wake', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const agent = await startStubSessionAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    [buildMockAgentSession({ name: 'main', attached: true })],
-    { knowsKill: true, stack: ctx.stack },
-  );
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
 
   await ctx.client.imps.sleep({ name: 'dev' });
-
-  const opsBefore = agent.ops.length;
 
   const sessions = await ctx.client.sessions.list({ name: 'dev' });
   const got = await ctx.client.imps.get({ name: 'dev' });
@@ -298,18 +343,21 @@ test('it lists a sleeping imp’s sessions without a wake', async () => {
   expect(got.state).toBe('sleeping');
   expect(got.sessions).toBe(1);
   expect(ctx.vmm.wakes).toStrictEqual([]);
-  expect(agent.ops).toHaveLength(opsBefore);
 });
 
 test('it lists no sessions for a stopped imp', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  await startStubSessionAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    [buildMockAgentSession({ name: 'main' })],
-    { knowsKill: true, stack: ctx.stack },
-  );
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
 
   await ctx.client.sessions.list({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -325,11 +373,20 @@ test('it wakes a sleeping imp for a kill, and ends the session', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const agent = await startStubSessionAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    [buildMockAgentSession({ name: 'main' }), buildMockAgentSession({ name: 'other' })],
-    { knowsKill: true, stack: ctx.stack },
-  );
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  const agent = await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
+
+  const other = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'other' });
+
+  ctx.stack.defer(() => {
+    other.close();
+  });
 
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.sessions.kill({ name: 'dev', session: 'main' });
@@ -337,16 +394,44 @@ test('it wakes a sleeping imp for a kill, and ends the session', async () => {
   const got = await ctx.client.imps.get({ name: 'dev' });
 
   expect(ctx.vmm.wakes).toHaveLength(1);
-  expect(agent.sessions.map((session) => session.name)).toStrictEqual(['other']);
+  expect(agent.readRun('main')).toBeUndefined();
+  expect(agent.readRun('other')?.state).toBe('running');
   expect(got.state).toBe('running');
+});
+
+test('it drops a killed session from the sessions impd keeps', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
+
+  const other = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'other' });
+
+  ctx.stack.defer(() => {
+    other.close();
+  });
+
+  await ctx.client.sessions.list({ name: 'dev' });
+  await ctx.client.sessions.kill({ name: 'dev', session: 'main' });
+
+  const got = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(got.sessions).toBe(1);
 });
 
 test('it refuses a kill of a session the agent lacks as NOT_FOUND', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [], {
-    knowsKill: true,
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
     stack: ctx.stack,
   });
 
@@ -360,8 +445,8 @@ test('it refuses a kill on an agent from before sessions as AGENT_OUTDATED', asy
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [], {
-    knowsKill: false,
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    release: 'before-sessions',
     stack: ctx.stack,
   });
 
@@ -384,17 +469,24 @@ test('it lists a session’s generation, and its end as last seen, from an agent
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const main = buildMockAgentSession({
-    name: 'main',
-    execution_generation: 'b'.repeat(32),
-    boot_id: '22222222-2222-4222-8222-222222222222',
-    end: 4096,
-  });
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
 
-  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main], {
-    knowsKill: true,
+  const agent = await startStubSessionAgent(vsockPath, {
+    bootId: '22222222-2222-4222-8222-222222222222',
     stack: ctx.stack,
   });
+
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
+  });
+
+  agent.writeOutput('main', Buffer.alloc(4096));
+
+  const run = agent.readRun('main');
+
+  invariant(run);
 
   const before = Date.now();
 
@@ -402,7 +494,7 @@ test('it lists a session’s generation, and its end as last seen, from an agent
 
   expect(session).toMatchObject({
     continuity: 'offsets',
-    executionGeneration: 'b'.repeat(32),
+    executionGeneration: run.generation,
     bootId: '22222222-2222-4222-8222-222222222222',
     end: 4096,
     endObservedAt: expect.toBeAfter(new Date(before - 1)),
@@ -413,16 +505,20 @@ test('it keeps a session’s generation and when impd saw its end across a sleep
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
-  const main = buildMockAgentSession({
-    name: 'main',
-    execution_generation: 'b'.repeat(32),
-    end: 4096,
+  const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
+
+  const agent = await startStubSessionAgent(vsockPath, { stack: ctx.stack });
+  const main = await openExecStream(vsockPath, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    main.close();
   });
 
-  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, [main], {
-    knowsKill: true,
-    stack: ctx.stack,
-  });
+  agent.writeOutput('main', Buffer.alloc(4096));
+
+  const run = agent.readRun('main');
+
+  invariant(run);
 
   const [seen] = await ctx.client.sessions.list({ name: 'dev' });
 
@@ -436,7 +532,7 @@ test('it keeps a session’s generation and when impd saw its end across a sleep
 
   expect(slept).toMatchObject({
     continuity: 'offsets',
-    executionGeneration: 'b'.repeat(32),
+    executionGeneration: run.generation,
     end: 4096,
     endObservedAt: expect.toBeAfter(seenBefore),
   });

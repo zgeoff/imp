@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
-import { sendActivity } from '../agent-client/agent-requests';
+import { sendActivity, sendAgentRequest, sendSessionKill } from '../agent-client/agent-requests';
 import { openAttachStream, openExecStream, openTapStream } from '../agent-client/exec-stream';
 import { startStubSessionAgent } from './start-stub-session-agent';
 
 // The stand-in's assumptions are agent/internal/session's: Manager.find,
-// session.attach and session.tap there, and Activity.ExecSessions.
+// Manager.Kill, session.attach and session.tap there, proto.ExitOf, and
+// Activity.ExecSessions.
 
 // a temp dir for the agent's socket, and `stack`, whose releases (the
 // agent's and the streams') run before the dir goes
@@ -610,4 +611,259 @@ test('it stops listening once its stack is released', async () => {
   await stack.disposeAsync();
 
   expect(openExecStream(path, { argv: ['true'], tty: false })).rejects.toThrow();
+});
+
+test.each([
+  ['no size', {}, [80, 24]],
+  ['only columns', { cols: 120 }, [80, 24]],
+  ['a full size', { cols: 120, rows: 40 }, [120, 40]],
+])('it starts a run opened with %s at its size %j', async (_label, size, expected) => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubSessionAgent(path, { stack: ctx.stack });
+
+  const stream = await openExecStream(path, { argv: ['sh'], tty: true, session: 'main', ...size });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  const activity = await sendActivity(path);
+
+  expect(activity.sessions.map((session) => [session.cols, session.rows])).toStrictEqual([
+    expected,
+  ]);
+});
+
+test('it hangs up a running run on session.kill, sending its viewer the EXIT of SIGHUP', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  const agent = await startStubSessionAgent(path, { stack: ctx.stack });
+  const stream = await openExecStream(path, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  await sendSessionKill(path, 'main');
+
+  const events = await Array.fromAsync(stream.events());
+
+  expect(events).toStrictEqual([{ type: 'exit', code: 129, signal: 1 }]);
+  expect(agent.readRun('main')).toBeUndefined();
+});
+
+test('it names a killed run as the previous of its session', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  const agent = await startStubSessionAgent(path, {
+    bootId: '22222222-2222-4222-8222-222222222222',
+    stack: ctx.stack,
+  });
+
+  const stream = await openExecStream(path, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  const run = agent.readRun('main');
+
+  invariant(run);
+
+  agent.writeOutput('main', Buffer.from('work'));
+
+  await sendSessionKill(path, 'main');
+
+  expect(openAttachStream(path, { session: 'main' })).rejects.toMatchObject({
+    code: 'NO_SESSION',
+    data: {
+      bootId: '22222222-2222-4222-8222-222222222222',
+
+      // a signal ended it, so it has no exit code
+      previous: { executionGeneration: run.generation, end: 4, exitCode: null },
+    },
+  });
+});
+
+test('it removes an exited run on session.kill, keeping its own exit as the previous', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  const agent = await startStubSessionAgent(path, { stack: ctx.stack });
+  const stream = await openExecStream(path, { argv: ['sh'], tty: true, session: 'job' });
+
+  stream.close();
+
+  await waitFor(() => {
+    expect(agent.readRun('job')?.isAttached).toBeFalse();
+  });
+
+  agent.exitRun('job', { code: 2, signal: 0 });
+
+  await sendSessionKill(path, 'job');
+
+  expect(agent.readRun('job')).toBeUndefined();
+
+  expect(openAttachStream(path, { session: 'job' })).rejects.toMatchObject({
+    code: 'NO_SESSION',
+    data: { previous: { end: 0, exitCode: 2 } },
+  });
+});
+
+test('it refuses session.kill of a name with no run with NO_SESSION and its boot', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubSessionAgent(path, {
+    bootId: '22222222-2222-4222-8222-222222222222',
+    stack: ctx.stack,
+  });
+
+  const killing = sendAgentRequest(path, { op: 'session.kill', session: 'main' });
+
+  expect(killing).rejects.toMatchObject({
+    code: 'NO_SESSION',
+    detail: 'no session "main"',
+    data: { boot_id: '22222222-2222-4222-8222-222222222222' },
+  });
+});
+
+test('it lists no sessions in its activity as an agent from before sessions', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubSessionAgent(path, { release: 'before-sessions', stack: ctx.stack });
+
+  const activity = await sendAgentRequest(path, { op: 'activity' });
+
+  expect(activity).toStrictEqual({ tcp_established: 0, exec_sessions: 0, load1: 0 });
+});
+
+test('it ignores an exec’s session name as an agent from before sessions', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  const agent = await startStubSessionAgent(path, {
+    release: 'before-sessions',
+    stack: ctx.stack,
+  });
+
+  // impd reads a STARTED without the session as an agent too old for sessions
+  const opening = openExecStream(path, { argv: ['sh'], tty: true, session: 'main' });
+
+  expect(opening).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(agent.readRun('main')).toBeUndefined();
+});
+
+test.each(['session.kill', 'session.attach', 'session.tap'])(
+  'it answers %s with UNKNOWN_OP as an agent from before sessions',
+  async (op) => {
+    const ctx = await setupTest();
+
+    const path = join(ctx.dir, 'v.sock');
+
+    await startStubSessionAgent(path, { release: 'before-sessions', stack: ctx.stack });
+
+    const answering = sendAgentRequest(path, { op, session: 'main' });
+
+    expect(answering).rejects.toMatchObject({ code: 'UNKNOWN_OP', detail: `unknown op ${op}` });
+  },
+);
+
+test('it lists sessions without generation, boot or end as an agent from before offsets', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubSessionAgent(path, { release: 'before-offsets', stack: ctx.stack });
+
+  const stream = await openExecStream(path, {
+    argv: ['sh'],
+    tty: true,
+    cols: 80,
+    rows: 24,
+    session: 'main',
+    log: true,
+  });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  const activity = await sendAgentRequest(path, { op: 'activity' });
+
+  expect(activity).toStrictEqual({
+    tcp_established: 0,
+    exec_sessions: 1,
+    load1: 0,
+    sessions: [
+      {
+        name: 'main',
+        pid: 9,
+        argv: ['sh'],
+        state: 'running',
+        attached: true,
+        cols: 80,
+        rows: 24,
+        started_unix_ms: expect.toBeNumber(),
+      },
+    ],
+  });
+});
+
+test('it sends no output place in STARTED as an agent from before offsets', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubSessionAgent(path, { release: 'before-offsets', stack: ctx.stack });
+
+  const stream = await openExecStream(path, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  expect(stream.session).toBe('main');
+  expect(stream.output).toStrictEqual({ continuity: 'none' });
+});
+
+test('it answers session.tap with UNKNOWN_OP as an agent from before offsets', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubSessionAgent(path, { release: 'before-offsets', stack: ctx.stack });
+
+  const answering = sendAgentRequest(path, { op: 'session.tap', session: 'main' });
+
+  expect(answering).rejects.toMatchObject({ code: 'UNKNOWN_OP', detail: 'unknown op session.tap' });
+});
+
+test('it hangs up a run on session.kill as an agent from before offsets', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  const agent = await startStubSessionAgent(path, { release: 'before-offsets', stack: ctx.stack });
+  const stream = await openExecStream(path, { argv: ['sh'], tty: true, session: 'main' });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  await sendSessionKill(path, 'main');
+
+  expect(agent.readRun('main')).toBeUndefined();
 });
