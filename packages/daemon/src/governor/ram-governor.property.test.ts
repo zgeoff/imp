@@ -1,572 +1,290 @@
 import { expect, test } from 'bun:test';
 import fc from 'fast-check';
-import { createKeyedMutex } from '../imps/keyed-mutex';
-import { createLockFreeSleep } from '../imps/lock-free-sleep';
-import type { SleepOutcome } from '../imps/lock-free-sleep';
+import { buildMockGovernorArbitraries } from '../test-utils/build-mock-governor-arbitraries';
+import { buildStubGovernedHost } from '../test-utils/build-stub-governed-host';
+import type { RoomLeft } from '../test-utils/build-stub-governed-host';
 import { createRamGovernor } from './ram-governor';
 
-// hundreds of runs: a loaded host can stretch them past the 5 s default
-const SLOW_TEST_TIMEOUT_MS = 30_000;
-const BUDGET_MIB = 1000;
-const IMP_IDS: readonly string[] = ['a', 'b', 'c', 'd', 'e', 'f'];
+// Each case builds its own host and governor, which hold no resource to
+// release. A failure reports fast-check's seed, path and shrunk counterexample.
 
-// far past any clock the ops reach: a hold that never expires on its own
-const HELD_FOREVER = Number.MAX_SAFE_INTEGER;
+test('it keeps each admission within the budget and never asks a pinned imp to sleep, one op at a time', async () => {
+  const arbitraries = buildMockGovernorArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
 
-interface ModelImp {
-  awake: boolean;
-  rssMib: number;
-  lastActiveAt: number;
-  held: boolean;
-  busy: boolean;
-
-  // its snapshot fails: a sleep fails and leaves it awake
-  failsSleep: boolean;
-
-  // what an elastic guest can unplug when the governor reclaims
-  spareMib: number;
-}
-
-interface GrowOp {
-  readonly kind: 'grow';
-  readonly id: string;
-  readonly mib: number;
-}
-
-interface AdmitOp {
-  readonly kind: 'admit';
-  readonly id: string;
-  readonly reserveMib: number;
-  readonly extraMib: number;
-}
-
-type MutationOp =
-  | { readonly kind: 'rss'; readonly id: string; readonly mib: number }
-  | { readonly kind: 'hold'; readonly id: string; readonly on: boolean }
-  | { readonly kind: 'busy'; readonly id: string; readonly on: boolean }
-  | { readonly kind: 'failSleep'; readonly id: string; readonly on: boolean }
-  | { readonly kind: 'spare'; readonly id: string; readonly mib: number }
-  | { readonly kind: 'touch'; readonly id: string }
-  | { readonly kind: 'stop'; readonly id: string }
-  | { readonly kind: 'tick'; readonly ms: number };
-
-type GovernorOp = AdmitOp | MutationOp | { readonly kind: 'enforce' };
-
-const idArb = fc.constantFrom(...IMP_IDS);
-
-const admitArb: fc.Arbitrary<AdmitOp> = fc.record({
-  kind: fc.constant('admit' as const),
-  id: idArb,
-  reserveMib: fc.integer({ min: 50, max: 700 }),
-  extraMib: fc.integer({ min: 0, max: 600 }),
-});
-
-const mutationArb: fc.Arbitrary<MutationOp> = fc.oneof(
-  fc.record({
-    kind: fc.constant('rss' as const),
-    id: idArb,
-    mib: fc.integer({ min: 0, max: 600 }),
-  }),
-  fc.record({ kind: fc.constant('hold' as const), id: idArb, on: fc.boolean() }),
-  fc.record({ kind: fc.constant('busy' as const), id: idArb, on: fc.boolean() }),
-  fc.record({ kind: fc.constant('failSleep' as const), id: idArb, on: fc.boolean() }),
-  fc.record({
-    kind: fc.constant('spare' as const),
-    id: idArb,
-    mib: fc.integer({ min: 0, max: 300 }),
-  }),
-  fc.record({ kind: fc.constant('touch' as const), id: idArb }),
-  fc.record({ kind: fc.constant('stop' as const), id: idArb }),
-  fc.record({ kind: fc.constant('tick' as const), ms: fc.integer({ min: 0, max: 25_000 }) }),
-);
-
-const opArb: fc.Arbitrary<GovernorOp> = fc.oneof(
-  admitArb,
-  mutationArb,
-  fc.constant({ kind: 'enforce' as const }),
-);
-
-// up to four admits for different imps, started at once
-const concurrentAdmitsArb = fc.uniqueArray(admitArb, {
-  selector: (admit) => admit.id,
-  maxLength: 4,
-});
-
-// imps that start awake, with what they measure; one in four fails to sleep
-const startArb = fc.uniqueArray(
-  fc.record({
-    id: idArb,
-    rssMib: fc.integer({ min: 0, max: 400 }),
-    failsSleep: fc.nat({ max: 3 }).map((roll) => roll === 0),
-  }),
-  { selector: (imp) => imp.id, maxLength: IMP_IDS.length },
-);
-
-// A model host for the governor. `pace` runs before each of its reads and
-// sleeps. The fake sleep refuses a held or busy imp at call time, as the real
-// one does under the imp's lock.
-function setupModel(
-  start: readonly {
-    readonly id: string;
-    readonly rssMib: number;
-    readonly failsSleep?: boolean;
-  }[],
-) {
-  const imps = new Map<string, ModelImp>(
-    IMP_IDS.map((id) => [
-      id,
-      {
-        awake: false,
-        rssMib: 0,
-        lastActiveAt: 0,
-        held: false,
-        busy: false,
-        failsSleep: false,
-        spareMib: 0,
-      },
-    ]),
+  const opArb = fc.oneof(
+    arbitraries.admit,
+    arbitraries.change,
+    fc.constant({ kind: 'enforce' as const }),
   );
 
-  for (const [index, imp] of start.entries()) {
-    imps.set(imp.id, {
-      awake: true,
-      rssMib: imp.rssMib,
-      lastActiveAt: index,
-      held: false,
-      busy: false,
-      failsSleep: imp.failsSleep ?? false,
-      spareMib: 0,
-    });
-  }
+  await fc.assert(
+    fc.asyncProperty(arbitraries.awake, fc.array(opArb, { maxLength: 40 }), async (awake, ops) => {
+      const host = buildStubGovernedHost({
+        budgetMib: 1000,
+        ids: ['a', 'b', 'c', 'd', 'e', 'f'],
+        awake,
+      });
 
-  const clock = { now: 1_000_000 };
-  const pacer: { pace: () => Promise<void> } = { pace: () => Promise.resolve() };
+      const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-  // every sleep the governor asked for, with the imp's state at that moment
-  const sleepCalls: {
-    readonly id: string;
-    readonly eligible: boolean;
-    readonly outcome: SleepOutcome;
-  }[] = [];
+      for (const op of ops) {
+        const awakeBefore = [...host.imps.values()].filter((imp) => imp.awake).length;
+        const callsBefore = host.sleepCalls.length;
+        let rejected = false;
 
-  const mutex = createKeyedMutex();
+        if (op.kind === 'admit') {
+          if (host.findImp(op.id).awake) {
+            continue;
+          }
 
-  const findImp = (id: string): ModelImp => {
-    const imp = imps.get(id);
+          // an admit that cannot fit throws RAM_BUDGET_EXCEEDED; anything
+          // else fails the property
+          const outcome = await governor
+            .admit({
+              id: op.id,
+              name: op.id,
+              reserveMib: op.reserveMib,
+              memoryMib: op.reserveMib + op.extraMib,
+            })
+            .then(() => 'admitted' as const)
+            .catch((error: unknown) => {
+              expect(error).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 
-    if (imp === undefined) {
-      throw new Error(`no imp ${id}`);
-    }
+              return 'rejected' as const;
+            });
 
-    return imp;
-  };
+          if (outcome === 'admitted') {
+            host.markAdmitted(op.id);
 
-  const trySleepImp = createLockFreeSleep<string>(
-    (id, action) => mutex.tryRunExclusive(id, () => action(id)),
-    async (id): Promise<SleepOutcome> => {
-      await pacer.pace();
+            const usage = await governor.readUsage();
 
-      const imp = findImp(id);
-      const eligible = imp.awake && !imp.held && !imp.busy;
-      let outcome: SleepOutcome = 'slept';
+            expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(1000);
+          } else {
+            rejected = true;
 
-      if (!eligible) {
-        outcome = 'skipped';
-      } else if (imp.failsSleep) {
-        outcome = 'failed';
-      }
+            const reservedMib = await host.readReservation(op.id, governor);
 
-      sleepCalls.push({ id, eligible, outcome });
+            expect(reservedMib).toBe(0);
+          }
+        } else if (op.kind === 'enforce') {
+          await governor.enforce();
 
-      if (outcome === 'slept') {
-        imp.awake = false;
-      }
+          // under the budget, or every imp it may sleep is asleep
+          expect(host.findRoomLeft()).toSatisfy(
+            (room: RoomLeft) => room.overMib <= 0 || room.eligibleAwake === 0,
+          );
+        } else {
+          host.applyChange(op, governor);
+        }
 
-      return outcome;
-    },
-  );
+        const calls = host.sleepCalls.slice(callsBefore);
 
-  const governor = createRamGovernor({
-    budgetMib: BUDGET_MIB,
-    listAwake: async () => {
-      await pacer.pace();
+        // nothing changes between the pick and the sleep: no pinned imp is
+        // even asked, and each awake imp at most once
+        expect(calls.filter((call) => !call.eligible)).toStrictEqual([]);
+        expect(calls.length).toBeLessThanOrEqual(awakeBefore);
 
-      return [...imps].flatMap(([id, imp]) =>
-        imp.awake
-          ? [
-              {
-                id,
-                name: id,
-                pid: IMP_IDS.indexOf(id) + 1,
-                apiSocket: id,
-                lastActiveAt: imp.lastActiveAt,
-                holdUntil: imp.held ? HELD_FOREVER : null,
-              },
-            ]
-          : [],
-      );
-    },
-
-    // apiSocket carries the id
-    readRamMib: (_pid, id) => (imps.get(id)?.awake === true ? findImp(id).rssMib : null),
-    isBusy: (id) => findImp(id).busy,
-    trySleepImp,
-
-    // idle elastic guests give back what they can spare
-    reclaim: async (excludeId) => {
-      await pacer.pace();
-
-      let freedMib = 0;
-
-      for (const [id, imp] of imps) {
-        if (imp.awake && !imp.busy && id !== excludeId) {
-          const mib = Math.min(imp.spareMib, imp.rssMib);
-
-          imp.rssMib -= mib;
-          imp.spareMib = 0;
-          freedMib += mib;
+        // a rejected admit gives up at a failed sleep, never after a sleep
+        // that worked, which would leave the pick enough
+        if (rejected) {
+          expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
         }
       }
+    }),
+    { numRuns: 1000 },
+  );
+}, 30_000);
 
-      return freedMib;
-    },
-    log: () => {
-      // quiet
-    },
-    now: () => clock.now,
+test('it gets a crowded host under the budget or sleeps every imp it may', async () => {
+  // imps up to the whole budget each, often held or busy: often the imps
+  // enforce may sleep cannot free enough between them
+  const crowdedArb = fc.uniqueArray(
+    fc.record({
+      id: fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f'),
+      rssMib: fc.integer({ min: 0, max: 1000 }),
+      held: fc.boolean(),
+      busy: fc.boolean(),
+    }),
+    { selector: (imp) => imp.id, minLength: 1, maxLength: 6 },
+  );
+
+  await fc.assert(
+    fc.asyncProperty(crowdedArb, async (crowded) => {
+      const host = buildStubGovernedHost({
+        budgetMib: 1000,
+        ids: ['a', 'b', 'c', 'd', 'e', 'f'],
+        awake: crowded,
+      });
+
+      const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+      for (const imp of crowded) {
+        host.applyChange({ kind: 'hold', id: imp.id, on: imp.held }, governor);
+        host.applyChange({ kind: 'busy', id: imp.id, on: imp.busy }, governor);
+      }
+
+      await governor.enforce();
+
+      expect(host.sleepCalls.filter((call) => !call.eligible)).toStrictEqual([]);
+
+      expect(host.findRoomLeft()).toSatisfy(
+        (room: RoomLeft) => room.overMib <= 0 || room.eligibleAwake === 0,
+      );
+    }),
+    { numRuns: 300 },
+  );
+}, 30_000);
+
+test('it settles concurrent admits with holds and RSS changes inside them, leaving no reservation for a rejected one', async () => {
+  const arbitraries = buildMockGovernorArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
+
+  // up to four admits for different imps, started at once
+  const admitsArb = fc.uniqueArray(arbitraries.admit, {
+    selector: (admit) => admit.id,
+    maxLength: 4,
   });
 
-  // What the id holds reserved. Asleep, its reservation counts in full;
-  // awake with a huge measurement, it counts nothing, since an awake imp
-  // counts the larger of the two. The difference is the reservation.
-  const readReservation = async (id: string): Promise<number> => {
-    const imp = findImp(id);
+  await fc.assert(
+    fc.asyncProperty(
+      fc.scheduler(),
+      arbitraries.awake,
+      admitsArb,
+      fc.array(arbitraries.change, { maxLength: 20 }),
+      async (scheduler, awake, admits, changes) => {
+        const host = buildStubGovernedHost({
+          budgetMib: 1000,
+          ids: ['a', 'b', 'c', 'd', 'e', 'f'],
+          awake,
+        });
 
-    if (imp.awake) {
-      return 0;
-    }
+        const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-    const asleep = await governor.readUsage();
+        host.pacer.pace = () => scheduler.schedule(Promise.resolve());
 
-    imp.awake = true;
-    imp.rssMib = 1_000_000;
+        const pending = admits.filter((admit) => !host.findImp(admit.id).awake);
 
-    const measured = await governor.readUsage();
+        const admitting = pending.map((admit) =>
+          governor
+            .admit({
+              id: admit.id,
+              name: admit.id,
+              reserveMib: admit.reserveMib,
+              memoryMib: admit.reserveMib + admit.extraMib,
+            })
+            .then(() => {
+              host.markAdmitted(admit.id);
 
-    imp.awake = false;
-    imp.rssMib = 0;
+              return { id: admit.id, outcome: 'admitted' as const };
+            })
+            .catch((error: unknown) => {
+              expect(error).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 
-    return asleep.reservedMib - measured.reservedMib;
-  };
+              return { id: admit.id, outcome: 'rejected' as const };
+            }),
+        );
 
-  // measured usage over the budget, and how many imps the governor may still
-  // sleep: an imp whose sleep fails does not count
-  const findRoomLeft = (): { readonly overMib: number; readonly eligibleAwake: number } => {
-    const awake = [...imps.values()].filter((imp) => imp.awake);
-    const usedMib = awake.reduce((sum, imp) => sum + imp.rssMib, 0);
-    const eligibleAwake = awake.filter((imp) => !imp.held && !imp.busy && !imp.failsSleep).length;
+        const enforcing = governor.enforce();
 
-    return { overMib: usedMib - BUDGET_MIB, eligibleAwake };
-  };
+        // each change lands wherever the scheduler releases it, inside an
+        // admit as often as between two
+        const changing = changes.map(async (change) => {
+          await scheduler.schedule(Promise.resolve());
 
-  const applyMutation = (op: MutationOp): void => {
-    switch (op.kind) {
-      case 'rss': {
-        findImp(op.id).rssMib = op.mib;
-        break;
-      }
-      case 'hold': {
-        findImp(op.id).held = op.on;
-        break;
-      }
-      case 'busy': {
-        findImp(op.id).busy = op.on;
-        break;
-      }
-      case 'failSleep': {
-        findImp(op.id).failsSleep = op.on;
-        break;
-      }
-      case 'spare': {
-        findImp(op.id).spareMib = op.mib;
-        break;
-      }
-      case 'touch': {
-        findImp(op.id).lastActiveAt = clock.now;
-        break;
-      }
-      case 'stop': {
-        findImp(op.id).awake = false;
+          host.applyChange(change, governor);
+        });
 
-        governor.release(op.id);
-        break;
-      }
-      case 'tick': {
-        clock.now += op.ms;
-        break;
-      }
-    }
-  };
+        const outcomes = await scheduler.waitFor(Promise.all(admitting));
 
-  // admits a sleeping imp; once admitted it is awake and measures nothing yet
-  const runAdmit = async (op: AdmitOp): Promise<'admitted' | 'rejected'> => {
-    try {
-      await governor.admit({
-        id: op.id,
-        name: op.id,
-        reserveMib: op.reserveMib,
-        memoryMib: op.reserveMib + op.extraMib,
+        await scheduler.waitFor(Promise.all([enforcing, ...changing]));
+
+        // a pin set after the pick reaches the stand-in, which refuses it as
+        // the real sleep does under the lock; the governor moves on. Each
+        // admit and the enforce pass ask each imp at most once.
+        expect(host.sleepCalls.length).toBeLessThanOrEqual((admitting.length + 1) * 6);
+
+        host.pacer.pace = () => Promise.resolve();
+
+        for (const admitted of outcomes) {
+          if (admitted.outcome === 'rejected') {
+            const reservedMib = await host.readReservation(admitted.id, governor);
+
+            expect(reservedMib).toBe(0);
+          }
+        }
+
+        await governor.enforce();
+
+        // under the budget, or every imp it may sleep is asleep
+        expect(host.findRoomLeft()).toSatisfy(
+          (room: RoomLeft) => room.overMib <= 0 || room.eligibleAwake === 0,
+        );
+      },
+    ),
+    { numRuns: 200 },
+  );
+}, 30_000);
+
+test('it keeps a grow within the budget, never sleeps its grower, and sleeps only for room it then has', async () => {
+  const arbitraries = buildMockGovernorArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
+
+  const opArb = fc.oneof(
+    fc.record({
+      kind: fc.constant('grow' as const),
+      id: fc.constantFrom('a', 'b', 'c', 'd', 'e', 'f'),
+      mib: fc.integer({ min: 2, max: 600 }),
+    }),
+    arbitraries.change,
+    fc.constant({ kind: 'enforce' as const }),
+  );
+
+  await fc.assert(
+    fc.asyncProperty(arbitraries.awake, fc.array(opArb, { maxLength: 40 }), async (awake, ops) => {
+      const host = buildStubGovernedHost({
+        budgetMib: 1000,
+        ids: ['a', 'b', 'c', 'd', 'e', 'f'],
+        awake,
       });
-    } catch (error) {
-      expect(error).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 
-      return 'rejected';
-    }
+      const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-    const imp = findImp(op.id);
+      for (const op of ops) {
+        if (op.kind === 'enforce') {
+          await governor.enforce();
 
-    imp.awake = true;
-    imp.rssMib = 0;
-    imp.lastActiveAt = clock.now;
-
-    return 'admitted';
-  };
-
-  return {
-    imps,
-    pacer,
-    sleepCalls,
-    governor,
-    findImp,
-    readReservation,
-    findRoomLeft,
-    applyMutation,
-    runAdmit,
-  };
-}
-
-test(
-  'one op at a time: admission keeps the budget and never picks a pinned imp',
-  async () => {
-    await fc.assert(
-      fc.asyncProperty(startArb, fc.array(opArb, { maxLength: 40 }), async (start, ops) => {
-        const model = setupModel(start);
-
-        for (const op of ops) {
-          const awakeBefore = [...model.imps.values()].filter((imp) => imp.awake).length;
-          const callsBefore = model.sleepCalls.length;
-          let rejected = false;
-
-          if (op.kind === 'admit') {
-            if (model.findImp(op.id).awake) {
-              continue;
-            }
-
-            const outcome = await model.runAdmit(op);
-
-            if (outcome === 'admitted') {
-              const usage = await model.governor.readUsage();
-
-              expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(BUDGET_MIB);
-            } else {
-              rejected = true;
-
-              const reservedMib = await model.readReservation(op.id);
-
-              expect(reservedMib).toBe(0);
-            }
-          } else if (op.kind === 'enforce') {
-            await model.governor.enforce();
-
-            // under the budget, or every imp it may sleep is asleep
-            const room = model.findRoomLeft();
-
-            expect(room.overMib <= 0 || room.eligibleAwake === 0).toBeTrue();
-          } else {
-            model.applyMutation(op);
-          }
-
-          const calls = model.sleepCalls.slice(callsBefore);
-
-          // nothing changes between the pick and the sleep: no pinned imp is
-          // even asked, and each awake imp at most once
-          expect(calls.filter((call) => !call.eligible)).toEqual([]);
-          expect(calls.length).toBeLessThanOrEqual(awakeBefore);
-
-          // a rejected admit gives up at a failed sleep, not after a sleep
-          // that came after it: with nothing changing inside the op, a sleep
-          // that works leaves the pick still enough
-          if (op.kind === 'admit' && rejected) {
-            expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
-          }
-        }
-      }),
-      { numRuns: 1000 },
-    );
-  },
-  SLOW_TEST_TIMEOUT_MS,
-);
-
-// A host where imps up to the whole budget may be held or busy: often the
-// imps enforce may sleep cannot free enough between them.
-const crowdedHostArb = fc.uniqueArray(
-  fc.record({
-    id: idArb,
-    rssMib: fc.integer({ min: 0, max: BUDGET_MIB }),
-    held: fc.boolean(),
-    busy: fc.boolean(),
-  }),
-  { selector: (imp) => imp.id, minLength: 1, maxLength: IMP_IDS.length },
-);
-
-test(
-  'enforce on a crowded host gets under the budget or sleeps every imp it may',
-  async () => {
-    await fc.assert(
-      fc.asyncProperty(crowdedHostArb, async (host) => {
-        const model = setupModel(host);
-
-        for (const imp of host) {
-          Object.assign(model.findImp(imp.id), { held: imp.held, busy: imp.busy });
+          continue;
         }
 
-        await model.governor.enforce();
+        if (op.kind !== 'grow') {
+          host.applyChange(op, governor);
+          continue;
+        }
 
-        const room = model.findRoomLeft();
+        if (!host.findImp(op.id).awake) {
+          continue;
+        }
 
-        expect(model.sleepCalls.filter((call) => !call.eligible)).toEqual([]);
-        expect(room.overMib <= 0 || room.eligibleAwake === 0).toBeTrue();
-      }),
-      { numRuns: 300 },
-    );
-  },
-  SLOW_TEST_TIMEOUT_MS,
-);
+        const callsBefore = host.sleepCalls.length;
 
-test(
-  'concurrent admits with holds and RSS changes inside them all settle',
-  async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        fc.scheduler(),
-        startArb,
-        concurrentAdmitsArb,
-        fc.array(mutationArb, { maxLength: 20 }),
-        async (scheduler, start, admits, mutations) => {
-          const model = setupModel(start);
+        const admitted = await governor.admitGrow({ id: op.id, name: op.id, mib: op.mib });
 
-          model.pacer.pace = () => scheduler.schedule(Promise.resolve());
+        const calls = host.sleepCalls.slice(callsBefore);
 
-          const pending = admits.filter((admit) => !model.findImp(admit.id).awake);
-          const admitting = pending.map((admit) => model.runAdmit(admit));
-          const enforcing = model.governor.enforce();
+        expect(calls.map((call) => call.id)).not.toContain(op.id);
+        expect(calls.filter((call) => !call.eligible)).toStrictEqual([]);
 
-          // each mutation lands wherever the scheduler releases it, inside an
-          // admit as often as between two
-          const mutating = mutations.map(async (op) => {
-            await scheduler.schedule(Promise.resolve());
+        if (admitted) {
+          const usage = await governor.readUsage();
 
-            model.applyMutation(op);
-          });
-
-          const outcomes = await scheduler.waitFor(Promise.all(admitting));
-
-          await scheduler.waitFor(Promise.all([enforcing, ...mutating]));
-
-          // a pin set after the pick reaches the fake, which refuses it as the
-          // real sleep does under the lock; the governor moves on. Each admit
-          // and the enforce pass ask each imp at most once.
-          expect(model.sleepCalls.length).toBeLessThanOrEqual(
-            (admitting.length + 1) * IMP_IDS.length,
-          );
-
-          model.pacer.pace = () => Promise.resolve();
-
-          for (const [index, outcome] of outcomes.entries()) {
-            const id = pending[index]?.id ?? '';
-
-            if (outcome === 'rejected' && !model.findImp(id).awake) {
-              const reservedMib = await model.readReservation(id);
-
-              expect(reservedMib).toBe(0);
-            }
-          }
-
-          await model.governor.enforce();
-
-          // as above
-          const room = model.findRoomLeft();
-
-          expect(room.overMib <= 0 || room.eligibleAwake === 0).toBeTrue();
-        },
-      ),
-      { numRuns: 200 },
-    );
-  },
-  SLOW_TEST_TIMEOUT_MS,
-);
-
-const growArb: fc.Arbitrary<GrowOp> = fc.record({
-  kind: fc.constant('grow' as const),
-  id: idArb,
-  mib: fc.integer({ min: 2, max: 600 }),
-});
-
-const growOpArb = fc.oneof(growArb, mutationArb, fc.constant({ kind: 'enforce' as const }));
-
-test(
-  'a grow keeps the budget, never sleeps its grower, and sleeps only for room it then has',
-  async () => {
-    await fc.assert(
-      fc.asyncProperty(startArb, fc.array(growOpArb, { maxLength: 40 }), async (start, ops) => {
-        const model = setupModel(start);
-
-        for (const op of ops) {
-          if (op.kind === 'enforce') {
-            await model.governor.enforce();
-
-            continue;
-          }
-
-          if (op.kind !== 'grow') {
-            model.applyMutation(op);
-            continue;
-          }
-
-          if (!model.findImp(op.id).awake) {
-            continue;
-          }
-
-          const callsBefore = model.sleepCalls.length;
-
-          const admitted = await model.governor.admitGrow({
-            id: op.id,
-            name: op.id,
-            mib: op.mib,
-          });
-
-          const calls = model.sleepCalls.slice(callsBefore);
-
-          expect(calls.map((call) => call.id)).not.toContain(op.id);
-          expect(calls.filter((call) => !call.eligible)).toEqual([]);
-
-          if (admitted) {
-            const usage = await model.governor.readUsage();
-
-            expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(BUDGET_MIB);
-          } else {
-            // refused: nothing slept for room that was not there
-            expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
-          }
+          expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(1000);
 
           // the guest's RSS shows the grow once the plug lands
-          if (admitted) {
-            model.findImp(op.id).rssMib += op.mib;
-          }
+          host.findImp(op.id).rssMib += op.mib;
+        } else {
+          // refused: nothing slept for room that was not there
+          expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
         }
-      }),
-      { numRuns: 500 },
-    );
-  },
-  SLOW_TEST_TIMEOUT_MS,
-);
+      }
+    }),
+    { numRuns: 500 },
+  );
+}, 30_000);
