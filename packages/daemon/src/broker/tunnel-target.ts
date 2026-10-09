@@ -10,7 +10,7 @@ import { readErrorMessage } from '../read-error-message';
 // wake proxy and other imps' ports.
 
 // [network, prefix length]: every block not globally reachable in the IANA
-// IPv4 Special-Purpose Address Registry (special-ranges.test.ts), and
+// IPv4 Special-Purpose Address Registry (tunnel-target.test.ts), and
 // multicast; the egress firewall refuses them to a box or public imp too
 export const REFUSED_RANGES: readonly (readonly [string, number])[] = [
   ['0.0.0.0', 8],
