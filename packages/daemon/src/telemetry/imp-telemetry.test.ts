@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test';
 import { EVENT_VERSION, ImpStateSchema } from '@imp/api';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { invariant } from '@imp/test-utils/invariant';
+import { spanExporter } from '@imp/test-utils/register-tracing';
 import { createEventBus } from '../events/event-bus';
 import type { ResourceDelta } from '../imps/resource-sampler';
 import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
 import { startInMemoryMetrics } from '../test-utils/start-in-memory-metrics';
-import { startInMemoryTracing } from '../test-utils/start-in-memory-tracing';
 import { startImpTelemetry } from './imp-telemetry';
 
 test('it records imp.lifecycle.transitions per reason', async () => {
@@ -128,7 +128,6 @@ test('it records imp.governor.decisions per decision', async () => {
 });
 
 test('it records a span per timed transition, with each step a child in turn', () => {
-  const traced = startInMemoryTracing();
   const bus = createEventBus();
 
   const stop = startImpTelemetry({
@@ -148,7 +147,7 @@ test('it records a span per timed transition, with each step a child in turn', (
 
   stop();
 
-  const spans = traced.readSpans().map((span) => ({
+  const spans = spanExporter.getFinishedSpans().map((span) => ({
     name: span.name,
     startMs: span.startTime[0] * 1000 + span.startTime[1] / 1e6,
     endMs: span.endTime[0] * 1000 + span.endTime[1] / 1e6,
@@ -156,7 +155,7 @@ test('it records a span per timed transition, with each step a child in turn', (
     attributes: span.attributes,
   }));
 
-  const rootSpanId = traced.readSpans().at(-1)?.spanContext().spanId;
+  const rootSpanId = spanExporter.getFinishedSpans().at(-1)?.spanContext().spanId;
 
   expect(spans).toStrictEqual([
     {
@@ -184,7 +183,6 @@ test('it records a span per timed transition, with each step a child in turn', (
 });
 
 test('it puts the trigger and the cold boot reason on the span', () => {
-  const traced = startInMemoryTracing();
   const bus = createEventBus();
 
   const stop = startImpTelemetry({
@@ -204,7 +202,7 @@ test('it puts the trigger and the cold boot reason on the span', () => {
 
   stop();
 
-  const attributes = traced.readSpans().map((span) => span.attributes);
+  const attributes = spanExporter.getFinishedSpans().map((span) => span.attributes);
 
   expect(attributes).toStrictEqual([
     { 'imp.name': 'dev', 'imp.trigger': 'exec', 'imp.cold_boot_reason': 'no-snapshot' },
@@ -212,7 +210,6 @@ test('it puts the trigger and the cold boot reason on the span', () => {
 });
 
 test('it records no span for a transition without a duration', () => {
-  const traced = startInMemoryTracing();
   const bus = createEventBus();
 
   const stop = startImpTelemetry({
@@ -231,7 +228,7 @@ test('it records no span for a transition without a duration', () => {
 
   stop();
 
-  expect(traced.readSpans()).toStrictEqual([]);
+  expect(spanExporter.getFinishedSpans()).toStrictEqual([]);
 });
 
 test('it reads the imps by state into imp.imps', async () => {

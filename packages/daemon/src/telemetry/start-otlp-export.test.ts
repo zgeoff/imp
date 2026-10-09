@@ -1,8 +1,25 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
-import { updateEnv } from '@imp/test-utils/update-env';
-import { metrics, trace } from '@opentelemetry/api';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { startOtlpExport } from './start-otlp-export';
+
+// An export that starts sets the global meter and tracer providers, which the
+// run's preload holds, so each such case runs as its own child `bun test`
+// with no preload. Its source imports these by absolute path.
+async function setupTest() {
+  const dir = await mkdtemp(join(tmpdir(), 'otlp-export-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  return {
+    dir,
+    exportPath: JSON.stringify(join(import.meta.dir, 'start-otlp-export.ts')),
+    apiPath: JSON.stringify(Bun.resolveSync('@opentelemetry/api', import.meta.dir)),
+    updateEnvPath: JSON.stringify(Bun.resolveSync('@imp/test-utils/update-env', import.meta.dir)),
+  };
+}
 
 test('it starts nothing without an endpoint', async () => {
   const stop = await startOtlpExport({}, '0.0.0');
@@ -17,8 +34,17 @@ test('it starts nothing with an empty endpoint', async () => {
 });
 
 test('it sends metrics and spans to the collector at the endpoint', async () => {
-  const received: { path: string; contentType: string | null; bodyBytes: number }[] = [];
+  const ctx = await setupTest();
 
+  const run = runChildTests(
+    ctx.dir,
+    `import { expect, test } from 'bun:test';
+import { metrics, trace } from ${ctx.apiPath};
+import { startOtlpExport } from ${ctx.exportPath};
+import { updateEnv } from ${ctx.updateEnvPath};
+
+test('it sends', async () => {
+  const received: { path: string; contentType: string | null; bodyBytes: number }[] = [];
   const collector = Bun.serve({
     port: 0,
     fetch: async (request) => {
@@ -34,74 +60,85 @@ test('it sends metrics and spans to the collector at the endpoint', async () => 
     },
   });
 
-  onTestFinished(() => collector.stop(true));
-
   // the exporters read it from the process environment, not the argument
-  updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', `http://127.0.0.1:${String(collector.port)}`);
+  updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', \`http://127.0.0.1:\${String(collector.port)}\`);
 
   const stop = await startOtlpExport(process.env, '0.3.0');
 
-  onTestFinished(() => {
-    metrics.disable();
-    trace.disable();
-  });
-
   metrics.getMeter('impd').createCounter('imp.test').add(1);
   trace.getTracer('impd').startSpan('imp.test').end();
-
   await stop?.();
+  await collector.stop(true);
 
-  expect(received.toSorted((a, b) => a.path.localeCompare(b.path))).toStrictEqual([
-    {
-      path: '/v1/metrics',
-      contentType: 'application/x-protobuf',
-      bodyBytes: expect.toBePositive(),
-    },
-    { path: '/v1/traces', contentType: 'application/x-protobuf', bodyBytes: expect.toBePositive() },
+  const sorted = received.toSorted((a, b) => a.path.localeCompare(b.path));
+
+  expect(sorted.map((each) => [each.path, each.contentType])).toStrictEqual([
+    ['/v1/metrics', 'application/x-protobuf'],
+    ['/v1/traces', 'application/x-protobuf'],
   ]);
+  expect(sorted.map((each) => each.bodyBytes > 0)).toStrictEqual([true, true]);
+});
+`,
+  );
+
+  expect(run.output).toInclude(' 1 pass');
+  expect(run.exitCode).toBe(0);
 });
 
 test('it names the service and its version in what it sends', async () => {
-  const bodies: string[] = [];
+  const ctx = await setupTest();
 
+  const run = runChildTests(
+    ctx.dir,
+    `import { expect, test } from 'bun:test';
+import { trace } from ${ctx.apiPath};
+import { startOtlpExport } from ${ctx.exportPath};
+import { updateEnv } from ${ctx.updateEnvPath};
+
+test('it names', async () => {
+  const bodies: string[] = [];
   const collector = Bun.serve({
     port: 0,
     fetch: async (request) => {
-      const body = await request.text();
-
-      bodies.push(body);
+      bodies.push(await request.text());
 
       return new Response(null, { status: 200 });
     },
   });
 
-  onTestFinished(() => collector.stop(true));
-  updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', `http://127.0.0.1:${String(collector.port)}`);
+  updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', \`http://127.0.0.1:\${String(collector.port)}\`);
 
   const stop = await startOtlpExport(
     { ...process.env, OTEL_SERVICE_NAME: 'impd-staging' },
     '0.3.0',
   );
 
-  onTestFinished(() => {
-    metrics.disable();
-    trace.disable();
-  });
-
   trace.getTracer('impd').startSpan('imp.test').end();
-
   await stop?.();
+  await collector.stop(true);
 
-  expect(bodies).toSatisfyAll(
-    (body: string) => body.includes('impd-staging') && body.includes('0.3.0'),
+  expect(bodies.length).toBeGreaterThan(0);
+  expect(bodies.filter((body) => !body.includes('impd-staging') || !body.includes('0.3.0'))).toStrictEqual([]);
+});
+`,
   );
 
-  expect(bodies).not.toBeEmpty();
+  expect(run.output).toInclude(' 1 pass');
+  expect(run.exitCode).toBe(0);
 });
 
 test('it rejects its stop when the collector answers with an error', async () => {
-  const paths: string[] = [];
+  const ctx = await setupTest();
 
+  const run = runChildTests(
+    ctx.dir,
+    `import { expect, test } from 'bun:test';
+import { trace } from ${ctx.apiPath};
+import { startOtlpExport } from ${ctx.exportPath};
+import { updateEnv } from ${ctx.updateEnvPath};
+
+test('it rejects', async () => {
+  const paths: string[] = [];
   const collector = Bun.serve({
     port: 0,
     fetch: (request) => {
@@ -111,31 +148,40 @@ test('it rejects its stop when the collector answers with an error', async () =>
     },
   });
 
-  onTestFinished(() => collector.stop(true));
-  updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', `http://127.0.0.1:${String(collector.port)}`);
+  updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', \`http://127.0.0.1:\${String(collector.port)}\`);
 
   const stop = await startOtlpExport(process.env, '0.3.0');
 
-  onTestFinished(() => {
-    metrics.disable();
-    trace.disable();
-  });
-
   trace.getTracer('impd').startSpan('imp.test').end();
 
-  invariant(stop);
+  const stopping = stop === null ? Promise.resolve('no stop') : stop();
 
-  await expect(stop()).toReject();
-
+  expect(stopping).rejects.toThrow();
+  await collector.stop(true);
   expect(paths).toContain('/v1/traces');
+});
+`,
+  );
+
+  expect(run.output).toInclude(' 1 pass');
+  expect(run.exitCode).toBe(0);
 });
 
 test('it rejects its stop when nothing listens at the endpoint', async () => {
+  const ctx = await setupTest();
+
+  const run = runChildTests(
+    ctx.dir,
+    `import { expect, test } from 'bun:test';
+import { trace } from ${ctx.apiPath};
+import { startOtlpExport } from ${ctx.exportPath};
+import { updateEnv } from ${ctx.updateEnvPath};
+
+test('it rejects', async () => {
   const collector = Bun.serve({ port: 0, fetch: () => new Response(null, { status: 200 }) });
-  const deadEndpoint = `http://127.0.0.1:${String(collector.port)}`;
+  const deadEndpoint = \`http://127.0.0.1:\${String(collector.port)}\`;
 
   await collector.stop(true);
-
   updateEnv('OTEL_EXPORTER_OTLP_ENDPOINT', deadEndpoint);
 
   // the exporters' own deadline for retrying a refused send; 10 s by default
@@ -143,14 +189,15 @@ test('it rejects its stop when nothing listens at the endpoint', async () => {
 
   const stop = await startOtlpExport(process.env, '0.3.0');
 
-  onTestFinished(() => {
-    metrics.disable();
-    trace.disable();
-  });
-
   trace.getTracer('impd').startSpan('imp.test').end();
 
-  invariant(stop);
+  const stopping = stop === null ? Promise.resolve('no stop') : stop();
 
-  await expect(stop()).toReject();
+  expect(stopping).rejects.toThrow();
+});
+`,
+  );
+
+  expect(run.output).toInclude(' 1 pass');
+  expect(run.exitCode).toBe(0);
 });

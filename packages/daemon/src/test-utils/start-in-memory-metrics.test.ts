@@ -27,6 +27,19 @@ test('it reads no points for a metric nothing recorded', async () => {
   expect(points).toStrictEqual([]);
 });
 
+test('it throws when another meter provider is registered', () => {
+  metrics.setGlobalMeterProvider(new MeterProvider());
+
+  onTestFinished(() => {
+    metrics.disable();
+  });
+
+  expect(() => startInMemoryMetrics()).toThrowWithMessage(
+    Error,
+    'another meter provider is registered; this test would read none of its points',
+  );
+});
+
 test('it unregisters the provider when the test ends', () => {
   startInMemoryMetrics();
 

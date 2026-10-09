@@ -24,7 +24,13 @@ export function startInMemoryMetrics() {
     readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 3_600_000 })],
   });
 
-  metrics.setGlobalMeterProvider(meterProvider);
+  const isRegistered = metrics.setGlobalMeterProvider(meterProvider);
+
+  if (!isRegistered) {
+    throw new Error(
+      'another meter provider is registered; this test would read none of its points',
+    );
+  }
 
   onTestFinished(async () => {
     metrics.disable();
