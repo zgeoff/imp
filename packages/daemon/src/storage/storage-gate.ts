@@ -10,11 +10,15 @@ export interface StorageGate {
   // ran: false when operations kept the gate busy for `timeoutMs`
   readonly runAlone: <T>(task: () => Promise<T>, timeoutMs: number) => Promise<TryResult<T>>;
   readonly countInFlight: () => number;
+
+  // the tasks that wait to run alone, for operations in flight to end
+  readonly countWaiting: () => number;
 }
 
 export function createStorageGate(): StorageGate {
   const state = {
     inFlight: 0,
+    waiting: 0,
 
     // set while a task runs alone; joins wait for it
     alone: null as Promise<void> | null,
@@ -55,15 +59,21 @@ export function createStorageGate(): StorageGate {
 
       const deadline = Date.now() + timeoutMs;
 
-      // the check and the claim run in one synchronous step: no join slips in
-      while (state.inFlight > 0) {
-        const left = deadline - Date.now();
+      state.waiting += 1;
 
-        if (left <= 0) {
-          return { ran: false };
+      try {
+        // the check and the claim run in one synchronous step: no join slips in
+        while (state.inFlight > 0) {
+          const left = deadline - Date.now();
+
+          if (left <= 0) {
+            return { ran: false };
+          }
+
+          await waitWithin(state.idle.promise, left);
         }
-
-        await waitWithin(state.idle.promise, left);
+      } finally {
+        state.waiting -= 1;
       }
 
       state.alone = done.promise;
@@ -76,5 +86,10 @@ export function createStorageGate(): StorageGate {
     }
   };
 
-  return { join: runJoined, runAlone, countInFlight: () => state.inFlight };
+  return {
+    join: runJoined,
+    runAlone,
+    countInFlight: () => state.inFlight,
+    countWaiting: () => state.waiting,
+  };
 }

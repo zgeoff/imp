@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createStorageGate } from './storage-gate';
 
 test('it runs a task alone after the operations in flight, and lets new ones pass while it waits', async () => {
@@ -106,6 +107,29 @@ test('it gives up a task alone when operations keep the gate busy past its timeo
 
   expect(alone).toStrictEqual({ ran: false });
   expect(inFlight).toBe(1);
+});
+
+test('it counts a task alone as waiting until the operations in flight end', async () => {
+  const gate = createStorageGate();
+  const stuck = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    stuck.resolve();
+  });
+
+  const op = gate.join(() => stuck.promise);
+  const alone = gate.runAlone(() => Promise.resolve('swept'), 5000);
+
+  await waitFor(() => {
+    expect(gate.countWaiting()).toBe(1);
+  });
+
+  stuck.resolve();
+
+  await op;
+  await alone;
+
+  expect(gate.countWaiting()).toBe(0);
 });
 
 test('it counts an operation as in flight only until it ends', async () => {

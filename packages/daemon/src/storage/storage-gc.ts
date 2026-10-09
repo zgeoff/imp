@@ -21,6 +21,10 @@ interface StorageGcDeps {
 
   // the secret values the broker kept aside (docs/guides/connectors.md#value-files)
   readonly secretFiles?: Pick<SecretFiles, 'listKept' | 'removeKept'>;
+
+  // how long `imp gc` and the hourly pass wait for the gate; a test passes 0
+  readonly manualWaitMs?: number;
+  readonly scheduledWaitMs?: number;
 }
 
 interface GcOptions {
@@ -74,7 +78,7 @@ export function createStorageGc(deps: StorageGcDeps): StorageGcService {
 
   return {
     runGc: async (options) => {
-      const result = await runAlone(options, MANUAL_WAIT_MS, false);
+      const result = await runAlone(options, deps.manualWaitMs ?? MANUAL_WAIT_MS, false);
 
       if (!result.ran) {
         throw new ORPCError('PRECONDITION_FAILED', {
@@ -92,7 +96,11 @@ export function createStorageGc(deps: StorageGcDeps): StorageGcService {
       };
     },
     runScheduled: async () => {
-      const result = await runAlone({ isDryRun: false, isOrphans: false }, SCHEDULED_WAIT_MS, true);
+      const result = await runAlone(
+        { isDryRun: false, isOrphans: false },
+        deps.scheduledWaitMs ?? SCHEDULED_WAIT_MS,
+        true,
+      );
 
       if (!result.ran) {
         deps.log('impd: gc: storage stayed busy; the next pass tries again');

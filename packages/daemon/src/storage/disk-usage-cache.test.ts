@@ -41,7 +41,11 @@ test('it measures every imp with its checkpoints', async () => {
     Promise.resolve({ imps: new Map(), isPartial: false }),
   );
 
-  const cache = createDiskUsageCache({ db: ctx.db, storage: { measureUsage }, log: mock() });
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage },
+    log: mock<(message: string) => void>(),
+  });
 
   onTestFinished(() => {
     cache.stop();
@@ -80,7 +84,7 @@ test('it keeps each count with the time its pass started', async () => {
     storage: {
       measureUsage: () => Promise.resolve({ imps: new Map([[imp.id, usage]]), isPartial: true }),
     },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     now: () => new Date(5000),
   });
 
@@ -105,7 +109,7 @@ test('it reads no count for an imp before the first pass', async () => {
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
-    log: mock(),
+    log: mock<(message: string) => void>(),
   });
 
   onTestFinished(() => {
@@ -155,7 +159,7 @@ test('it totals what every imp takes on its own', async () => {
           isPartial: false,
         }),
     },
-    log: mock(),
+    log: mock<(message: string) => void>(),
   });
 
   onTestFinished(() => {
@@ -177,7 +181,12 @@ test('it shares a pass under way with a second caller', async () => {
   });
 
   const measureUsage = mock<MeasureUsage>(() => measured.promise);
-  const cache = createDiskUsageCache({ db: ctx.db, storage: { measureUsage }, log: mock() });
+
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage },
+    log: mock<(message: string) => void>(),
+  });
 
   onTestFinished(() => {
     cache.stop();
@@ -219,7 +228,11 @@ test('it keeps the last count when a pass fails', async () => {
     }),
   );
 
-  const cache = createDiskUsageCache({ db: ctx.db, storage: { measureUsage }, log: mock() });
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage },
+    log: mock<(message: string) => void>(),
+  });
 
   onTestFinished(() => {
     cache.stop();
@@ -237,7 +250,7 @@ test('it keeps the last count when a pass fails', async () => {
 test('it logs a pass that fails', async () => {
   const ctx = await setupTest();
 
-  const log = mock();
+  const log = mock<(message: string) => void>();
 
   const cache = createDiskUsageCache({
     db: ctx.db,
@@ -285,7 +298,7 @@ test('it keeps the last count of an imp a cut-short pass did not reach', async (
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: { measureUsage },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     now: () => new Date(clock.ms),
   });
 
@@ -343,7 +356,7 @@ test('it stamps a count with the time its pass started, not the time it ended', 
         });
       },
     },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     now: () => new Date(clock.ms),
   });
 
@@ -384,7 +397,7 @@ test('it runs a refresh asked for during a pass as a pass of its own after it', 
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: { measureUsage },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     startTimer,
   });
 
@@ -423,7 +436,7 @@ test('it starts one refresh timer for a burst of refresh requests', async () => 
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     startTimer,
   });
 
@@ -441,12 +454,12 @@ test('it starts one refresh timer for a burst of refresh requests', async () => 
 test('it cancels a pending refresh when it stops', async () => {
   const ctx = await setupTest();
 
-  const cancel = mock();
+  const cancel = mock<() => void>();
 
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     startTimer: () => cancel,
   });
 
@@ -464,7 +477,7 @@ test('it starts no refresh after it stops', async () => {
   const cache = createDiskUsageCache({
     db: ctx.db,
     storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
-    log: mock(),
+    log: mock<(message: string) => void>(),
     startTimer,
   });
 
