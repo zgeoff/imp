@@ -1,54 +1,76 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRejection } from '../read-rejection';
+import { invariant } from '@imp/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import type { StubAgentHandler } from '../test-utils/start-stub-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from './frame-codec';
 import { openAccept, openListener } from './listener-stream';
 
-const LISTENING = { ok: true, path: '/run/imp/ssh-agent/ab/agent.sock', listener: 'ab' };
-
-async function setupFakeVsock(agent: StubAgentHandler) {
+function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-agentfwd-'));
-  const path = join(dir, 'vsock.sock');
 
-  const fake = await startStubAgent(path, agent);
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-  return {
-    path,
-    [Symbol.dispose]() {
-      fake.close();
-
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+  return { vsockPath: join(dir, 'vsock.sock') };
 }
 
-test('a listener answers with its socket, then names each client', async () => {
-  using vsock = await setupFakeVsock((socket, request) => {
-    expect(decodeJsonPayload(request)).toEqual({ op: 'agent.listen' });
+test('#openListener asks the agent for an ssh-agent socket', async () => {
+  const ctx = setupTest();
 
-    socket.write(encodeJsonFrame(FRAME_TYPES.response, LISTENING));
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        ok: true,
+        path: '/run/imp/ssh-agent/ab/agent.sock',
+        listener: 'ab',
+      }),
+    );
+  });
+
+  await openListener(ctx.vsockPath, { network: 'ssh-agent' });
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({ op: 'agent.listen' });
+});
+
+test('#openListener answers with its socket, then names each client', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.write(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        ok: true,
+        path: '/run/imp/ssh-agent/ab/agent.sock',
+        listener: 'ab',
+      }),
+    );
+
     socket.write(encodeJsonFrame(FRAME_TYPES.connection, { id: 1 }));
     socket.end(encodeJsonFrame(FRAME_TYPES.connection, { id: 2 }));
   });
 
-  const listener = await openListener(vsock.path, { network: 'ssh-agent' });
+  const listener = await openListener(ctx.vsockPath, { network: 'ssh-agent' });
+  const ids = await Array.fromAsync(listener.connections());
 
-  const ids: number[] = [];
+  expect(listener).toMatchObject({
+    path: '/run/imp/ssh-agent/ab/agent.sock',
+    port: null,
+    id: 'ab',
+  });
 
-  for await (const id of listener.connections()) {
-    ids.push(id);
-  }
-
-  expect(listener).toMatchObject({ path: LISTENING.path, id: 'ab' });
-  expect(ids).toEqual([1, 2]);
+  expect(ids).toStrictEqual([1, 2]);
 });
 
-test('an agent from before agent forwarding gets AGENT_OUTDATED', async () => {
-  using vsock = await setupFakeVsock((socket) => {
+test('#openListener rejects with AGENT_OUTDATED for an agent from before agent forwarding', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
     socket.end(
       encodeJsonFrame(FRAME_TYPES.response, {
         error: { code: 'UNKNOWN_OP', message: 'unknown op agent.listen' },
@@ -56,64 +78,88 @@ test('an agent from before agent forwarding gets AGENT_OUTDATED', async () => {
     );
   });
 
-  const failure = await readRejection(openListener(vsock.path, { network: 'ssh-agent' }));
-
-  expect(failure).toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(openListener(ctx.vsockPath, { network: 'ssh-agent' })).rejects.toMatchObject({
+    code: 'AGENT_OUTDATED',
+    detail: "the imp's agent has no ssh-agent forwarding yet; stop and start the imp to update it",
+  });
 });
 
-test('an accept names its listener and client, and a gone client is NO_CONNECTION', async () => {
-  using vsock = await setupFakeVsock((socket, request) => {
-    expect(decodeJsonPayload(request)).toEqual({
-      op: 'agent.accept',
-      listener: 'ab',
-      connection: 7,
-    });
+test('#openListener listens on a port the agent picks', async () => {
+  const ctx = setupTest();
 
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true, port: 41_000, listener: 'cd' }));
+  });
+
+  const listener = await openListener(ctx.vsockPath, { network: 'tcp', port: 0 });
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'listen',
+    network: 'tcp',
+    address: '127.0.0.1:0',
+  });
+
+  expect(listener).toMatchObject({ port: 41_000, path: null, id: 'cd' });
+});
+
+test('#openListener listens on a socket the agent makes for a null path', async () => {
+  const ctx = setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
     socket.end(
       encodeJsonFrame(FRAME_TYPES.response, {
-        error: { code: 'NO_CONNECTION', message: 'no waiting connection 7' },
+        ok: true,
+        path: '/run/imp/forward/cd/sock',
+        listener: 'cd',
       }),
     );
   });
 
-  const failure = await readRejection(openAccept(vsock.path, 'ab', 7));
+  const listener = await openListener(ctx.vsockPath, { network: 'unix', path: null });
 
-  expect(failure).toMatchObject({ code: 'NO_CONNECTION' });
-});
+  const [request] = agent.received;
 
-test('a reverse forward listens on a port, a path, or a socket the agent makes', async () => {
-  const requests: unknown[] = [];
+  invariant(request);
 
-  using vsock = await setupFakeVsock((socket, request) => {
-    const asked = decodeJsonPayload(request);
-
-    requests.push(asked);
-
-    const answer =
-      typeof asked === 'object' && asked !== null && Reflect.get(asked, 'network') === 'tcp'
-        ? { ok: true, port: 41_000, listener: 'cd' }
-        : { ok: true, path: '/run/imp/forward/cd/sock', listener: 'cd' };
-
-    socket.end(encodeJsonFrame(FRAME_TYPES.response, answer));
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'listen',
+    network: 'unix',
+    address: '',
   });
 
-  const port = await openListener(vsock.path, { network: 'tcp', port: 0 });
-  const own = await openListener(vsock.path, { network: 'unix', path: null });
-
-  await openListener(vsock.path, { network: 'unix', path: '/tmp/atc.sock' });
-
-  expect(port).toMatchObject({ port: 41_000, path: null, id: 'cd' });
-  expect(own).toMatchObject({ port: null, path: '/run/imp/forward/cd/sock' });
-
-  expect(requests).toEqual([
-    { op: 'listen', network: 'tcp', address: '127.0.0.1:0' },
-    { op: 'listen', network: 'unix', address: '' },
-    { op: 'listen', network: 'unix', address: '/tmp/atc.sock' },
-  ]);
+  expect(listener).toMatchObject({ port: null, path: '/run/imp/forward/cd/sock', id: 'cd' });
 });
 
-test('an agent from before reverse forwards gets AGENT_OUTDATED for reverse forwards', async () => {
-  using vsock = await setupFakeVsock((socket) => {
+test('#openListener listens on the socket path it is given', async () => {
+  const ctx = setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, { ok: true, path: '/tmp/atc.sock', listener: 'cd' }),
+    );
+  });
+
+  await openListener(ctx.vsockPath, { network: 'unix', path: '/tmp/atc.sock' });
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'listen',
+    network: 'unix',
+    address: '/tmp/atc.sock',
+  });
+});
+
+test('#openListener rejects with AGENT_OUTDATED for an agent from before reverse forwards', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
     socket.end(
       encodeJsonFrame(FRAME_TYPES.response, {
         error: { code: 'UNKNOWN_OP', message: 'unknown op listen' },
@@ -121,8 +167,60 @@ test('an agent from before reverse forwards gets AGENT_OUTDATED for reverse forw
     );
   });
 
-  const failure = await readRejection(openListener(vsock.path, { network: 'tcp', port: 0 }));
+  expect(openListener(ctx.vsockPath, { network: 'tcp', port: 0 })).rejects.toMatchObject({
+    code: 'AGENT_OUTDATED',
+    detail: "the imp's agent has no reverse forwards yet; stop and start the imp to update it",
+  });
+});
 
-  expect(failure).toMatchObject({ code: 'AGENT_OUTDATED' });
-  expect(String(failure)).toContain('no reverse forwards');
+test('#openListener rejects when the agent closes the connection before it answers', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end();
+  });
+
+  expect(openListener(ctx.vsockPath, { network: 'ssh-agent' })).rejects.toThrowWithMessage(
+    Error,
+    'agent closed the listen connection before it answered',
+  );
+});
+
+test('#openAccept names its listener and client', async () => {
+  const ctx = setupTest();
+
+  const agent = await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+  });
+
+  const stream = await openAccept(ctx.vsockPath, 'ab', 7);
+
+  stream.close();
+
+  const [request] = agent.received;
+
+  invariant(request);
+
+  expect(decodeJsonPayload(request)).toStrictEqual({
+    op: 'agent.accept',
+    listener: 'ab',
+    connection: 7,
+  });
+});
+
+test('#openAccept rejects with NO_CONNECTION for a client that is gone', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'NO_CONNECTION', message: 'no waiting connection 7' },
+      }),
+    );
+  });
+
+  expect(openAccept(ctx.vsockPath, 'ab', 7)).rejects.toMatchObject({
+    code: 'NO_CONNECTION',
+    detail: 'no waiting connection 7',
+  });
 });
