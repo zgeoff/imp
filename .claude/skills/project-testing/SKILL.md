@@ -86,12 +86,11 @@ anything the test registers after calling it. These utils register their own: `s
 `startStubExecAgent`, `startStubSessionAgent` and `startStubAttachAgent` (through `startStubAgent`,
 so each also takes `{ stack }`), `startStubDnsUpstream`, `createTestDatabase`,
 `createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely closes a driver only
-after a query started it), `buildQueryGate` (it releases a held select), `setupImpTest`,
-`setupMcpTest` and `setupMoveHosts`.
+after a query started it), `buildQueryGate` (it releases a held select), `setupImpTest` and
+`setupMoveHosts`.
 
-`setupImpTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
-`[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
-removes it once those branches land.
+`setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
+branches that hold them with `await using`; a later GEO-135 PR removes it once those branches land.
 
 Utils that take a caller's stack and register nothing themselves:
 
@@ -459,13 +458,21 @@ the fork's grant report: `packages/mcp/src/test-utils/build-stub-older-impd-fetc
 (`buildStubOlderImpdFetch`) takes `grantsNotCopied` and `grantsError` out of the real `imps.fork`
 answer. The progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a
 `repeat`, and the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`),
-which ticks only when the test says so.
+which ticks only when the test says so. A tool call's deadline (`timeoutSeconds`) and kill grace
+take `createMcpServer`'s `after`, `setTimeout` by default, and the tests pass
+`packages/mcp/src/test-utils/build-stub-after.ts` (`buildStubAfter`), which fires only when the test
+says so.
 
-In `mcp/mcp-endpoint.test.ts` and `mcp/stdio.test.ts`, an exec through impd's real app reaches the
-guest through `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path,
-which runs each command on `buildStubExecGuest`. The other `mcp/*.test.ts` files still reach it
-through `test-mcp.ts`'s `openExec` override. `imp mcp` runs as a subprocess against impd's app on a
-loopback port.
+In the `mcp/*.test.ts` files, an exec through impd's real app reaches the guest through
+`test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path, which runs
+each command on `buildStubExecGuest`; the agent keeps its socket through a sleep or stop and wake.
+The tool tests drive `createMcpServer` in process. `exec-tool.test.ts` passes `buildStubRepeat` and
+`buildStubAfter` as its timers, except one timeout test that keeps the default timers and waits its
+one-second deadline. `imp mcp` runs as a subprocess against impd's app on a loopback port.
+
+The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
+grant call's access check and its transaction, as `afterRuleRead` runs between a request's rule read
+and its value read; `build-app-grants.test.ts` and `build-app-token-update.test.ts` act there.
 
 impd's API listens with `buildApiListenOptions(config, idleTimeoutS)` (`api-listen-options.ts`),
 whose idle timeout defaults to Elysia's 30 seconds. `mcp/mcp-endpoint.test.ts` listens with 1

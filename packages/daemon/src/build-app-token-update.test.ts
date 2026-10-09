@@ -1,361 +1,814 @@
-import { expect, test } from 'bun:test';
-import type { ImpContract, Scope } from '@imp/api';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
-import { loadTokenStore } from './auth/token-store';
-import type { Broker } from './broker/broker-service';
+import { loadConfig } from './config';
+import { createImpd } from './create-impd';
+import type { ImpdDeps } from './create-impd';
+import { createImage } from './db/images';
 import { findImpByName } from './db/imps';
+import { openDatabase } from './db/open-database';
 import { findSecret } from './db/secrets';
 import { listTokenRecords } from './db/tokens';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { createXfsBackend } from './storage/xfs-backend';
+import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from './test-utils/build-stub-vmm';
+import { findFreePorts } from './test-utils/find-free-ports';
 
 // tokens.update: a token's grantable list changed in place
 // (docs/guides/tokens.md#change-the-list), through the API as a client calls it.
 
-const ORIGIN = 'http://impd.test';
-const VALUE = 'sk-synthetic-119-0123456789abcdef';
+// impd's real app on stub VMs, a root client, `sendToImpd` for the clients a
+// test makes, and `gap`: its `once` runs in the next grant write, between the
+// access check and the transaction, and then resets
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-interface RequestHandler {
-  readonly handle: (request: Request) => Promise<Response>;
-}
+  onTestFinished(() => stack.disposeAsync());
 
-interface TokenOptions {
-  readonly scope?: Scope;
+  const dataDir = await mkdtemp(join(tmpdir(), 'token-update-'));
 
-  // null: host-wide
-  readonly imps?: readonly string[] | null;
-  readonly grantable?: readonly string[];
-}
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-type Client = ContractRouterClient<ImpContract>;
+  const db = await openDatabase(':memory:');
 
-function buildClient(app: RequestHandler, headers: Readonly<Record<string, string>>): Client {
-  const link = new RPCLink({
-    url: `${ORIGIN}/rpc`,
-    headers,
-    fetch: (request) => app.handle(request),
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
-  return createORPCClient(link);
-}
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-async function setupTest() {
-  const harness = await setupImpTest();
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-  const root = buildTestApp(harness, harness);
+  const vmm = buildStubVmm();
+  const gap = { once: (): Promise<void> => Promise.resolve() };
 
-  await harness.createTestImage('base');
+  const deps: ImpdDeps = {
+    db,
 
-  for (const name of ['dev-a', 'dev-b', 'prod']) {
-    await root.client.imps.create({ name });
-  }
+    // the bearer the root client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
 
-  await root.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
-  await root.client.secrets.add({ name: 'npm', kind: 'npm', value: VALUE });
-
-  // a manage token for dev-* unless the options say otherwise
-  const createToken = async (name: string, options: TokenOptions = {}) => {
-    const made = await root.client.tokens.create({
-      name,
-      scope: options.scope ?? 'manage',
-      ...(options.imps !== null && { imps: [...(options.imps ?? ['dev-*'])] }),
-      ...(options.grantable !== undefined && { grantable: [...options.grantable] }),
-    });
-
-    return {
-      secret: made.secret,
-      client: buildClient(root.app, { authorization: `Bearer ${made.secret}` }),
-    };
-  };
-
-  const isGranted = async (impName: string, host: string): Promise<boolean> => {
-    const imp = await findImpByName(harness.db, impName);
-
-    return harness.broker.isGranted(imp?.id ?? '', host);
-  };
-
-  // the generation each entry of the token's list holds, by name
-  const readGenerations = async (name: string): Promise<Record<string, string>> => {
-    const records = await listTokenRecords(harness.db);
-
-    const record = records.find((each) => each.name === name);
-
-    return Object.fromEntries(
-      (record?.grantable ?? []).map((secret) => [secret.name, secret.generation]),
-    );
-  };
-
-  // an app whose grants run `between` after the access check and before
-  // their transaction
-  const buildAppWithGap = (between: () => Promise<void>) => {
-    const broker: Broker = {
-      ...harness.broker,
-      addGrant: async (...args) => {
-        await between();
-
-        return harness.broker.addGrant(...args);
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
       },
-    };
+    },
 
-    return buildTestApp({ ...harness, broker }, harness);
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+
+      // the race window: what a test sets runs once, then writes run on
+      beforeGrantWrite: () => {
+        const run = gap.once;
+
+        gap.once = () => Promise.resolve();
+
+        return run();
+      },
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   };
 
-  // impd restarted on the same database
-  const startAgain = async () => {
-    const tokens = await loadTokenStore({
-      db: harness.db,
-      rootToken: TEST_TOKEN,
-      now: harness.now,
-      onRemove: harness.revocations.revoke,
-      isFileKey: () => false,
-    });
+  const impd = await createImpd(config, deps);
 
-    return buildTestApp({ ...harness, tokens }, harness.restartImpd());
-  };
+  stack.defer(() => impd.broker.stop());
 
-  return {
-    ...harness,
-    ...root,
-    createToken,
-    isGranted,
-    readGenerations,
-    buildAppWithGap,
-    startAgain,
-  };
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // the default image, which every imps.create boots when it names none
+  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+
+  const sendToImpd = (request: Request) => impd.api.app.handle(request);
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: sendToImpd,
+    }),
+  );
+
+  return { db, config, deps, vmm, stack, impd, client, sendToImpd, gap };
 }
 
-// the code and reason of a failed call, or 'ok'
-async function readFailure(call: Promise<unknown>): Promise<string> {
-  try {
-    await call;
-
-    return 'ok';
-  } catch (error) {
-    if (typeof error !== 'object' || error === null || !('code' in error)) {
-      return 'thrown';
-    }
-
-    const data: unknown = 'data' in error ? error.data : undefined;
-
-    const reason: unknown =
-      typeof data === 'object' && data !== null && 'reason' in data ? data.reason : undefined;
-
-    return typeof reason === 'string' ? `${String(error.code)} ${reason}` : String(error.code);
-  }
-}
-
-test('only a host-wide manage caller may change a grantable list, as with a grant', async () => {
+test('it lets a host-wide manage token change another token’s list', async () => {
   const ctx = await setupTest();
 
-  await ctx.createToken('agent', { grantable: ['gh'] });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
 
-  const callers = {
-    'host-wide manage': await ctx.createToken('admin', { imps: null }),
-    'host-wide exec': await ctx.createToken('runner', { scope: 'exec', imps: null }),
-    'dev-* manage': await ctx.createToken('dev', {}),
-    'dev-* manage that may grant': await ctx.createToken('granter', { grantable: ['gh', 'npm'] }),
-  };
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
-  const outcomes: string[] = [];
+  const admin = await ctx.client.tokens.create({ name: 'admin', scope: 'manage' });
 
-  for (const [label, caller] of Object.entries(callers)) {
-    const update = await readFailure(
-      caller.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] }),
-    );
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${admin.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
-    // the same rule as a grant on an imp outside every pattern
-    const grant = await readFailure(caller.client.grants.add({ name: 'prod', secret: 'npm' }));
+  const updated = await caller.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
 
-    outcomes.push(`${label}: update ${update}, grant ${grant}`);
+  expect(updated.grantable).toStrictEqual(['gh', 'npm']);
+});
 
-    // the next caller's grant starts from none
-    await readFailure(ctx.client.grants.delete({ name: 'prod', secret: 'npm' }));
-  }
+test.each([
+  [
+    'a host-wide exec token',
+    { scope: 'exec' as const },
+    { code: 'FORBIDDEN', data: { reason: 'scope' } },
+  ],
+  [
+    'a dev-* manage token',
+    { scope: 'manage' as const, imps: ['dev-*'] },
+    { code: 'FORBIDDEN', data: undefined },
+  ],
+  [
+    'a dev-* manage token that may grant',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['gh', 'npm'] },
+    { code: 'FORBIDDEN', data: undefined },
+  ],
+])('it refuses a list change from %s', async (_label, options, refusal) => {
+  const ctx = await setupTest();
 
-  // a refused update leaves the list as it was
-  await readFailure(callers['dev-* manage'].client.tokens.update({ name: 'agent', grantable: [] }));
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const made = await ctx.client.tokens.create({ name: 'caller', ...options });
+
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(caller.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] })).rejects.toMatchObject(
+    refusal,
+  );
+});
+
+// the same rule as a list change: a grant on an imp outside every pattern
+test('it lets a host-wide manage token grant on any imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const admin = await ctx.client.tokens.create({ name: 'admin', scope: 'manage' });
+
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${admin.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await caller.grants.add({ name: 'prod', secret: 'npm' });
+
+  const grants = await ctx.client.grants.list({ name: 'prod' });
+
+  expect(grants).toStrictEqual(['npm']);
+});
+
+test.each([
+  [
+    'a host-wide exec token',
+    { scope: 'exec' as const },
+    { code: 'FORBIDDEN', data: { reason: 'scope' } },
+  ],
+  [
+    'a dev-* manage token',
+    { scope: 'manage' as const, imps: ['dev-*'] },
+    { code: 'FORBIDDEN', data: { reason: 'imp_out_of_scope' } },
+  ],
+  [
+    'a dev-* manage token that may grant',
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: ['gh', 'npm'] },
+    { code: 'FORBIDDEN', data: { reason: 'imp_out_of_scope' } },
+  ],
+])('it refuses a grant on prod from %s', async (_label, options, refusal) => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({ name: 'caller', ...options });
+
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(caller.grants.add({ name: 'prod', secret: 'npm' })).rejects.toMatchObject(refusal);
+});
+
+test('it leaves the list as it was after a refused change', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const dev = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${dev.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await expect(caller.tokens.update({ name: 'agent', grantable: [] })).toReject();
 
   const tokens = await ctx.client.tokens.list();
 
-  const agent = tokens.find((token) => token.name === 'agent');
-
-  expect(outcomes).toEqual([
-    'host-wide manage: update ok, grant ok',
-    'host-wide exec: update FORBIDDEN scope, grant FORBIDDEN scope',
-    'dev-* manage: update FORBIDDEN, grant FORBIDDEN imp_out_of_scope',
-    'dev-* manage that may grant: update FORBIDDEN, grant FORBIDDEN imp_out_of_scope',
-  ]);
-
-  expect(agent?.grantable).toEqual(['gh', 'npm']);
+  expect(tokens.find((token) => token.name === 'agent')?.grantable).toStrictEqual(['gh']);
 });
 
-test('a secret taken off the list loses its grants on the token’s imps, and only there', async () => {
+test('it revokes a secret taken off the list on the token’s imps only', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh', 'npm'] });
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
 
   // made through the token, by the root token on one of its imps, and on an
   // imp outside its patterns
-  await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
-  await agent.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.grants.add({ name: 'dev-a', secret: 'npm' });
   await ctx.client.grants.add({ name: 'dev-b', secret: 'gh' });
   await ctx.client.grants.add({ name: 'prod', secret: 'gh' });
 
-  const before = await ctx.isGranted('dev-a', 'api.github.com');
+  const devA = await findImpByName(ctx.db, 'dev-a');
+  const prod = await findImpByName(ctx.db, 'prod');
+
+  invariant(devA);
+  invariant(prod);
+
+  const before = await ctx.impd.broker.isGranted(devA.id, 'api.github.com');
   const updated = await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
-
-  const grants = {
-    'dev-a': await ctx.client.grants.list({ name: 'dev-a' }),
-    'dev-b': await ctx.client.grants.list({ name: 'dev-b' }),
-    prod: await ctx.client.grants.list({ name: 'prod' }),
-  };
-
-  const brokered = await Promise.all([
-    ctx.isGranted('dev-a', 'api.github.com'),
-    ctx.isGranted('dev-a', 'registry.npmjs.org'),
-    ctx.isGranted('prod', 'api.github.com'),
-  ]);
-
-  // and the token may not grant it again
-  const regrant = await readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' }));
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+  const prodGrants = await ctx.client.grants.list({ name: 'prod' });
+  const devAGithub = await ctx.impd.broker.isGranted(devA.id, 'api.github.com');
+  const devANpm = await ctx.impd.broker.isGranted(devA.id, 'registry.npmjs.org');
+  const prodGithub = await ctx.impd.broker.isGranted(prod.id, 'api.github.com');
 
   expect(before).toBeTrue();
-  expect(updated.grantable).toEqual(['npm']);
-  expect(grants).toEqual({ 'dev-a': ['npm'], 'dev-b': [], prod: ['gh'] });
-  expect(brokered).toEqual([false, true, true]);
-  expect(regrant).toBe('FORBIDDEN not_grantable');
+  expect(updated.grantable).toStrictEqual(['npm']);
+  expect(devAGrants).toStrictEqual(['npm']);
+  expect(devBGrants).toStrictEqual([]);
+  expect(prodGrants).toStrictEqual(['gh']);
+  expect(devAGithub).toBeFalse();
+  expect(devANpm).toBeTrue();
+  expect(prodGithub).toBeTrue();
 });
 
-test('each entry takes its secret’s generation now, as a fresh token does', async () => {
+test('it refuses a grant of a secret taken off the list', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it refuses a list entry a rebind left stale', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
   // a rebind gives gh another generation, so the list no longer covers it
   await ctx.client.secrets.add({
     name: 'gh',
     kind: 'custom',
-    value: VALUE,
+    value: 'sk-synthetic-119-0',
     rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
     replace: true,
     rebind: true,
   });
 
-  const stale = await readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' }));
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  expect(agent.grants.add({ name: 'dev-a', secret: 'gh' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    data: { reason: 'not_grantable' },
+  });
+});
+
+test('it binds each entry to its secret’s generation at the update', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  // a rebind gives gh another generation than the list holds
+  await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: 'sk-synthetic-119-0',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
 
   await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
 
-  const updated = await ctx.readGenerations('agent');
+  const gh = await findSecret(ctx.db, 'gh');
+  const npm = await findSecret(ctx.db, 'npm');
+  const records = await listTokenRecords(ctx.db);
 
-  // a fresh token made now holds the same generations
-  await ctx.createToken('fresh', { grantable: ['gh', 'npm'] });
+  invariant(gh);
+  invariant(npm);
 
-  const fresh = await ctx.readGenerations('fresh');
-  const current = await Promise.all(['gh', 'npm'].map((name) => findSecret(ctx.db, name)));
-
-  const granted = await Promise.all([
-    readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' })),
-    readFailure(agent.client.grants.add({ name: 'dev-b', secret: 'npm' })),
+  expect(records.find((record) => record.name === 'agent')?.grantable).toStrictEqual([
+    { name: 'gh', generation: gh.generation },
+    { name: 'npm', generation: npm.generation },
   ]);
-
-  expect(stale).toBe('FORBIDDEN not_grantable');
-  expect(updated).toEqual({ gh: current[0]?.generation ?? '', npm: current[1]?.generation ?? '' });
-  expect(fresh).toEqual(updated);
-  expect(granted).toEqual(['ok', 'ok']);
 });
 
-test('the change is in the API audit log, refused or made', async () => {
+test('it binds the same generations as a token made after the update', async () => {
   const ctx = await setupTest();
-  const dev = await ctx.createToken('dev', {});
 
-  await ctx.createToken('agent', { grantable: ['gh'] });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: 'sk-synthetic-119-0',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
+
+  await ctx.client.tokens.create({
+    name: 'fresh',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const records = await listTokenRecords(ctx.db);
+
+  const agent = records.find((record) => record.name === 'agent');
+  const fresh = records.find((record) => record.name === 'fresh');
+
+  invariant(agent);
+
+  expect(fresh?.grantable).toStrictEqual(agent.grantable);
+});
+
+test('it lets the token grant each secret on its updated list', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: 'sk-synthetic-119-0',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await agent.grants.add({ name: 'dev-a', secret: 'gh' });
+  await agent.grants.add({ name: 'dev-b', secret: 'npm' });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+  const devBGrants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(devAGrants).toStrictEqual(['gh']);
+  expect(devBGrants).toStrictEqual(['npm']);
+});
+
+test('it records each change in the API audit log, refused or made', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const dev = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const caller: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${dev.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
   await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
 
-  await readFailure(dev.client.tokens.update({ name: 'agent', grantable: [] }));
+  await expect(caller.tokens.update({ name: 'agent', grantable: [] })).toReject();
 
   // what `imp audit --kind api` reads
   const calls = await ctx.client.audit.calls({});
 
-  const updates = calls
-    .filter((call) => call.procedure === 'tokens.update')
-    .map((call) => `${call.actor} ${call.actorName ?? ''} ${call.outcome}`);
+  expect(
+    calls
+      .filter((call) => call.procedure === 'tokens.update')
+      .map((call) => ({ actor: call.actor, actorName: call.actorName, outcome: call.outcome })),
+  ).toIncludeSameMembers([
+    { actor: 'token', actorName: 'root', outcome: 'ok' },
+    { actor: 'token', actorName: 'dev', outcome: 'FORBIDDEN' },
+  ]);
 
-  expect(updates.toSorted()).toEqual(['token dev FORBIDDEN', 'token root ok']);
-  expect(JSON.stringify(calls)).not.toContain(VALUE);
+  expect(JSON.stringify(calls)).not.toContain('sk-synthetic-119');
 });
 
-test('the token keeps its secret: its bearer, its id and its hash stay, through a restart', async () => {
+test('it keeps the token’s id, hash and creation time through an update', async () => {
   const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
-  const [before] = await listTokenRecords(ctx.db);
-  const updated = await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
-  const [after] = await listTokenRecords(ctx.db);
 
-  // the client made with the old secret works on, and sees the new list
-  const whoami = await agent.client.tokens.whoami();
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
 
-  // the update answers with the token, never a secret
-  const answer = JSON.stringify(updated);
-
-  const restarted = await ctx.startAgain();
-
-  const again = buildClient(restarted.app, { authorization: `Bearer ${agent.secret}` });
-
-  const afterRestart = await again.tokens.whoami();
-
-  expect(after?.id).toBe(before?.id ?? '');
-  expect(after?.secretHash).toBe(before?.secretHash ?? '');
-  expect(after?.createdAt).toEqual(before?.createdAt ?? new Date(0));
-  expect(whoami).toMatchObject({ name: 'agent', grantable: ['gh', 'npm'] });
-  expect(afterRestart).toMatchObject({ name: 'agent', grantable: ['gh', 'npm'] });
-  expect(answer).not.toContain(agent.secret);
-});
-
-test('a grant checked before the update and run after it is refused in the transaction', async () => {
-  const ctx = await setupTest();
-  const agent = await ctx.createToken('agent', { grantable: ['gh', 'npm'] });
-
-  const gapped = ctx.buildAppWithGap(async () => {
-    await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
   });
 
-  const client = buildClient(gapped.app, { authorization: `Bearer ${agent.secret}` });
+  const [before] = await listTokenRecords(ctx.db);
 
-  const outcome = await readFailure(client.grants.add({ name: 'dev-a', secret: 'gh' }));
-  const grants = await ctx.client.grants.list({ name: 'dev-a' });
+  invariant(before);
 
-  expect(outcome).toBe('FORBIDDEN not_grantable');
-  expect(grants).toEqual([]);
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
+
+  const [after] = await listTokenRecords(ctx.db);
+
+  expect(after?.id).toBe(before.id);
+  expect(after?.secretHash).toBe(before.secretHash);
+  expect(after?.createdAt).toStrictEqual(before.createdAt);
 });
 
-test('an update refuses what tokens.create refuses, and an empty list clears it', async () => {
+test('it answers an update with the token and never its secret', async () => {
   const ctx = await setupTest();
 
-  await ctx.createToken('agent', { grantable: ['gh'] });
-  await ctx.createToken('admin', { imps: null });
-  await ctx.createToken('runner', { scope: 'exec' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
 
-  const outcomes = await Promise.all([
-    readFailure(ctx.client.tokens.update({ name: 'admin', grantable: ['gh'] })),
-    readFailure(ctx.client.tokens.update({ name: 'runner', grantable: ['gh'] })),
-    readFailure(ctx.client.tokens.update({ name: 'agent', grantable: ['nope'] })),
-    readFailure(ctx.client.tokens.update({ name: 'nobody', grantable: [] })),
-    readFailure(ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'gh'] })),
-    readFailure(ctx.client.tokens.update({ name: 'root', grantable: [] })),
-  ]);
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const updated = await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
+
+  expect(updated.name).toBe('agent');
+  expect(JSON.stringify(updated)).not.toContain(made.secret);
+});
+
+test('it lets the old bearer read the new list after an update', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
+
+  const identity = await agent.tokens.whoami();
+
+  expect(identity).toStrictEqual({
+    kind: 'token',
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+});
+
+test('it keeps the updated list for the old bearer after a restart', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['gh', 'npm'] });
+
+  // the first impd still holds its resolver's port in this process
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+    restarted.diskUsage.stop();
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: (request) => restarted.api.app.handle(request),
+    }),
+  );
+
+  const identity = await agent.tokens.whoami();
+
+  expect(identity).toStrictEqual({
+    kind: 'token',
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+});
+
+test('it refuses in the transaction a grant checked before an update took its secret off', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'sk-synthetic-119-1' });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh', 'npm'],
+  });
+
+  const agent: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: `Bearer ${made.secret}` },
+      fetch: ctx.sendToImpd,
+    }),
+  );
+
+  ctx.gap.once = async () => {
+    await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
+  };
+
+  const added = agent.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  expect(added).rejects.toMatchObject({ code: 'FORBIDDEN', data: { reason: 'not_grantable' } });
+
+  const devAGrants = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(devAGrants).toStrictEqual([]);
+});
+
+test.each([
+  ['a host-wide token', 'BAD_REQUEST', 'admin', ['gh']],
+  ['a token without manage', 'BAD_REQUEST', 'runner', ['gh']],
+  ['a secret that does not exist', 'NOT_FOUND', 'agent', ['nope']],
+  ['a token that does not exist', 'NOT_FOUND', 'nobody', []],
+  ['a list that names a secret twice', 'BAD_REQUEST', 'agent', ['gh', 'gh']],
+  ['the root token', 'NOT_FOUND', 'root', []],
+])('it refuses an update of %s with %s', async (_label, code, name, grantable) => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
+
+  await ctx.client.tokens.create({ name: 'admin', scope: 'manage' });
+  await ctx.client.tokens.create({ name: 'runner', scope: 'exec', imps: ['dev-*'] });
+
+  expect(ctx.client.tokens.update({ name, grantable })).rejects.toMatchObject({ code });
+});
+
+test('it clears the list with an empty update', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-119-0' });
+
+  await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+  });
 
   const cleared = await ctx.client.tokens.update({ name: 'agent', grantable: [] });
+  const records = await listTokenRecords(ctx.db);
 
-  expect(outcomes).toEqual([
-    'BAD_REQUEST',
-    'BAD_REQUEST',
-    'NOT_FOUND',
-    'NOT_FOUND',
-    'BAD_REQUEST',
-    'NOT_FOUND',
-  ]);
-
-  const generations = await ctx.readGenerations('agent');
-
-  expect(cleared.grantable).toEqual([]);
-  expect(generations).toEqual({});
+  expect(cleared.grantable).toStrictEqual([]);
+  expect(records.find((record) => record.name === 'agent')?.grantable).toStrictEqual([]);
 });

@@ -1,5 +1,6 @@
 import type { ExecHandle, ExecRequirement, ImpClient } from '@zgeoff/imp-client';
 import { ExecError } from '@zgeoff/imp-client';
+import type { After } from '../after';
 import { createOutputCollector } from './output-cap';
 import type { CappedOutput } from './output-cap';
 
@@ -20,6 +21,9 @@ export interface CappedRunOptions {
 
   // how long SIGTERM, then SIGKILL, get before the next step
   readonly killGraceMs: number;
+
+  // the timer behind the deadline and the kill grace
+  readonly after: After;
 }
 
 export interface CappedRunResult {
@@ -41,10 +45,27 @@ export async function runCapped(
   name: string,
   options: Readonly<CappedRunOptions>,
 ): Promise<CappedRunResult> {
-  const deadline = AbortSignal.timeout(options.timeoutMs);
-
   options.signal.throwIfAborted();
 
+  const deadline = new AbortController();
+
+  const stopDeadline = options.after(options.timeoutMs, () => {
+    deadline.abort();
+  });
+
+  try {
+    return await runToStop(openExec, name, options, deadline.signal);
+  } finally {
+    stopDeadline();
+  }
+}
+
+async function runToStop(
+  openExec: ImpClient['openExec'],
+  name: string,
+  options: Readonly<CappedRunOptions>,
+  deadline: Readonly<AbortSignal>,
+): Promise<CappedRunResult> {
   const handle = await openExec(name, options.argv, {
     ...(options.cwd !== undefined && { cwd: options.cwd }),
     ...(options.env !== undefined && { env: options.env }),
@@ -65,7 +86,7 @@ export async function runCapped(
   const stop = await waitForStop(handle, [options.signal, deadline]);
 
   if (stop !== 'exited') {
-    await stopCommand(handle, options.killGraceMs);
+    await stopCommand(handle, options.killGraceMs, options.after);
   }
 
   const exit = await readExit(handle, stop);
@@ -133,10 +154,14 @@ async function waitForStop(
 
 // SIGTERM to the process group, then SIGKILL after the grace. After a leader
 // exits on SIGTERM, the agent kills the rest (docs/guides/mcp.md#exec).
-async function stopCommand(handle: Readonly<ExecHandle>, graceMs: number): Promise<void> {
+async function stopCommand(
+  handle: Readonly<ExecHandle>,
+  graceMs: number,
+  after: After,
+): Promise<void> {
   handle.sendSignal('SIGTERM');
 
-  const exited = await waitForExit(handle, graceMs);
+  const exited = await waitForExit(handle, graceMs, after);
 
   if (exited) {
     return;
@@ -144,7 +169,7 @@ async function stopCommand(handle: Readonly<ExecHandle>, graceMs: number): Promi
 
   handle.sendSignal('SIGKILL');
 
-  const killed = await waitForExit(handle, graceMs);
+  const killed = await waitForExit(handle, graceMs, after);
 
   if (!killed) {
     handle.close();
@@ -152,7 +177,11 @@ async function stopCommand(handle: Readonly<ExecHandle>, graceMs: number): Promi
 }
 
 // whether the session ended within `ms`
-async function waitForExit(handle: Readonly<ExecHandle>, ms: number): Promise<boolean> {
+async function waitForExit(
+  handle: Readonly<ExecHandle>,
+  ms: number,
+  after: After,
+): Promise<boolean> {
   const settled = (async () => {
     await waitSettled(handle.exit);
 
@@ -161,14 +190,14 @@ async function waitForExit(handle: Readonly<ExecHandle>, ms: number): Promise<bo
 
   const timer = Promise.withResolvers<boolean>();
 
-  const timeout = setTimeout(() => {
+  const cancel = after(ms, () => {
     timer.resolve(false);
-  }, ms);
+  });
 
   try {
     return await Promise.race([settled, timer.promise]);
   } finally {
-    clearTimeout(timeout);
+    cancel();
   }
 }
 

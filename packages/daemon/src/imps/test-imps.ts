@@ -55,7 +55,7 @@ import type { ImpService } from './imp-service';
 export const TEST_TOKEN = 'test-token';
 
 // what system.info reports about the guest kernel and the system drive
-export const TEST_SYSTEM_FILES = {
+const TEST_SYSTEM_FILES = {
   guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
   systemDrive: { sha256: 'b'.repeat(64) },
 };

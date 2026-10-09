@@ -1,34 +1,206 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ImpContract } from '@imp/api';
+import { updateEnv } from '@imp/test-utils/update-env';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
 import packageJson from '../package.json' with { type: 'json' };
+import { buildApiListenOptions } from './api-listen-options';
+import { loadConfig } from './config';
+import { createImpd } from './create-impd';
 import { listApiCalls } from './db/api-audit';
+import { createImage } from './db/images';
 import { findImpByName } from './db/imps';
-import {
-  TEST_SYSTEM_FILES,
-  TEST_TOKEN,
-  buildTestApp,
-  createImpTest,
-  setupImpTest,
-} from './imps/test-imps';
+import { openDatabase } from './db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { createXfsBackend } from './storage/xfs-backend';
+import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
+import { buildStubDockerCli } from './test-utils/build-stub-docker-cli';
+import { buildStubVmm } from './test-utils/build-stub-vmm';
+import { findFreePorts } from './test-utils/find-free-ports';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
+import type { CpuCgroups } from './vmm/cpu-cgroups';
 
-async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
-  const harness = await setupImpTest({ env });
+interface SetupOptions {
+  // impd's environment past what every test boots with
+  readonly env?: Readonly<Record<string, string>>;
 
-  return { ...harness, ...buildTestApp(harness, harness, token) };
+  // the host's cgroup tree; one with a cpu controller by default
+  readonly cgroups?: CpuCgroups;
+}
+
+// impd's real app on stub VMs, on a loopback port for the sockets, with a
+// root client in process, the clock the test steps, the stub VMM and the taps
+// impd set up
+async function setupTest(options: SetupOptions = {}) {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'build-app-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  const config = {
+    // the stub VMM runs no jailer and builds no boot template; the resolver
+    // binds its port on every address, so each impd takes a free one
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_JAILER: 'false',
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+      ...options.env,
+    }),
+
+    // a new disk stays the size of its image, since the clone copies every
+    // byte of a template's disk
+    defaultDiskBytes: 0,
+  };
+
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  // the clock of holds, budgets and tickets; a test moves it
+  const clock = { nowMs: Date.now() };
+
+  // each tap impd set up, by name
+  const taps: string[] = [];
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the root client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+    now: () => clock.nowMs,
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: options.cgroups ?? buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: {
+      setupTap: (address) => {
+        taps.push(address.tap);
+
+        return Promise.resolve();
+      },
+      removeTap: () => Promise.resolve(),
+    },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  // as main.ts listens, on a free loopback port: exec and tunnels are sockets
+  const server = impd.api.app.listen({
+    ...buildApiListenOptions(config),
+    port: 0,
+    hostname: '127.0.0.1',
+  });
+
+  stack.defer(async () => {
+    await server.stop(true);
+  });
+
+  // the root bearer's client, against impd's own app
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer root-token' },
+      fetch: (request) => impd.api.app.handle(request),
+    }),
+  );
+
+  return {
+    db,
+    dataDir,
+    impd,
+    vmm,
+    clock,
+    taps,
+    client,
+    port: String(server.server?.port),
+  };
 }
 
 test('it serves system.info from config and the database', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+  const ctx = await setupTest();
   const { storage, ...info } = await ctx.client.system.info();
 
   // the test data dir's own filesystem
   expect(storage.backend).toBe('xfs');
   expect(storage.availableBytes).toBeGreaterThan(0);
 
-  expect(info).toEqual({
+  expect(info).toStrictEqual({
     version: packageJson.version,
     ramBudgetMib: 16_384,
     ramUsedMib: 0,
@@ -40,9 +212,12 @@ test('it serves system.info from config and the database', async () => {
     sessionCount: 0,
     bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
     firecrackerVersion: 'v1.17.0',
-    ...TEST_SYSTEM_FILES,
+    guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+    systemDrive: { sha256: 'd1'.repeat(32) },
     tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
-    cpu: { hostCpus: 8, limitsEnforced: false },
+
+    // the stub cgroup tree has a cpu controller
+    cpu: { hostCpus: 8, limitsEnforced: true },
     defaults: { memoryMib: 2048, image: null },
     egress: { isEnforced: true },
     public: null,
@@ -68,25 +243,114 @@ test('it serves system.info from config and the database', async () => {
   });
 });
 
-test('it rejects a request with the wrong token', async () => {
-  const ctx = await setupTest('wrong');
-  const rejection = await ctx.client.system.info().catch((error: unknown) => error);
+test('it reports cpu limits as not enforced on a host without a cpu controller', async () => {
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups({ isEnforced: false }).cgroups });
+  const info = await ctx.client.system.info();
 
-  expect(rejection).toMatchObject({ status: 401 });
+  expect(info.cpu).toStrictEqual({ hostCpus: 8, limitsEnforced: false });
 });
 
-test('it answers /health without a token', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
-  const response = await ctx.app.handle(new Request('http://impd.test/health'));
+test('it rejects a request with the wrong token', async () => {
+  const ctx = await setupTest();
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: { authorization: 'Bearer wrong' },
+      fetch: (request) => ctx.impd.api.app.handle(request),
+    }),
+  );
+
+  expect(client.system.info()).rejects.toMatchObject({ status: 401 });
+});
+
+test('it answers 404 for a procedure the API does not have', async () => {
+  const ctx = await setupTest();
+
+  const response = await ctx.impd.api.app.handle(
+    new Request('http://impd.test/rpc/nope/missing', {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+
+  const body = await response.text();
+
+  expect(response.status).toBe(404);
+  expect(body).toBe('not found');
+});
+
+test('it refuses an image build without a token', async () => {
+  const ctx = await setupTest();
+
+  const response = await ctx.impd.api.app.handle(
+    new Request('http://impd.test/images/build', { method: 'POST', body: 'context' }),
+  );
+
   const body: unknown = await response.json();
 
-  expect(body).toEqual({ status: 'ok', ready: true });
+  expect(response.status).toBe(401);
+  expect(body).toStrictEqual({ error: 'unauthorized' });
 });
 
-test('it creates, stops, starts and destroys an imp', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it answers a conflict that is not a move without Retry-After', async () => {
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const response = await ctx.impd.api.app.handle(
+    new Request('http://impd.test/rpc/imps/create', {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ json: { name: 'dev' } }),
+    }),
+  );
+
+  expect(response.status).toBe(409);
+  expect(response.headers.get('retry-after')).toBeNull();
+});
+
+test('it answers /health without a token, not ready before the default image is seeded', async () => {
+  const ctx = await setupTest();
+  const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({ status: 'ok', ready: false });
+});
+
+test('it answers /health as ready once impd marks itself ready', async () => {
+  const ctx = await setupTest();
+
+  // as main.ts marks it once the default image is seeded
+  ctx.impd.state.ready = true;
+
+  const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({ status: 'ok', ready: true });
+});
+
+test('it creates a running imp on the first slot with its own tap', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
@@ -102,12 +366,43 @@ test('it creates, stops, starts and destroys an imp', async () => {
     rssMib: 340,
   });
 
-  expect(ctx.taps).toEqual(['imp0']);
+  expect(ctx.taps).toStrictEqual(['imp0']);
+});
+
+test('it stops an imp gracefully', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
 
   const stopped = await ctx.client.imps.stop({ name: 'dev' });
 
   expect(stopped.state).toBe('stopped');
-  expect(ctx.fake.stops).toEqual([{ pid: 1001, graceful: true }]);
+  expect(ctx.vmm.stops).toStrictEqual([{ pid: 1001, graceful: true }]);
+});
+
+test('it starts a stopped imp and counts it as awake', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.stop({ name: 'dev' });
 
   const started = await ctx.client.imps.start({ name: 'dev' });
   const info = await ctx.client.system.info();
@@ -120,38 +415,72 @@ test('it creates, stops, starts and destroys an imp', async () => {
     ramUsedMib: 300,
     ramCommittedMib: 2048,
   });
+});
 
+test('it destroys an imp and its VM', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.destroy({ name: 'dev' });
 
   const imps = await ctx.client.imps.list();
 
-  expect(imps).toEqual([]);
-  expect(ctx.fake.alive.size).toBe(0);
+  expect(imps).toStrictEqual([]);
+  expect(ctx.vmm.alive.size).toBe(0);
 });
 
-test('it reports the https URL when impd has a domain', async () => {
-  const plain = await setupTest(TEST_TOKEN);
+test('it reports only the local URL when impd has no domain', async () => {
+  const ctx = await setupTest();
 
-  await plain.createTestImage('ubuntu');
-  await plain.client.imps.create({ name: 'box' });
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  const plainUrls = await plain.client.imps.url({ name: 'box' });
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  expect(plainUrls).toEqual({
+  await ctx.client.imps.create({ name: 'box' });
+
+  const urls = await ctx.client.imps.url({ name: 'box' });
+
+  expect(urls).toStrictEqual({
     local: 'http://box.imp.localhost:7080',
     https: null,
     public: null,
     service: null,
     tailnet: null,
   });
+});
 
-  const ctx = await setupTest(TEST_TOKEN, {
-    IMP_DOMAIN: 'imp.example.com',
-    IMP_DNS_PROVIDER: 'cloudflare',
-    IMP_DNS_API_TOKEN: 'unused',
+test('it reports the https URL when impd has a domain', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+    },
   });
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'box' });
 
   const urls = await ctx.client.imps.url({ name: 'box' });
@@ -159,177 +488,412 @@ test('it reports the https URL when impd has a domain', async () => {
   expect(urls.https).toBe('https://box.imp.example.com');
 });
 
-test('without its DNS token file, the API still answers and system.info names the file as an error', async () => {
-  // one stack: the harness goes before the dir its token file is in
-  const stack = new AsyncDisposableStack();
+test('it names a missing DNS token file as an error in system.info, and still answers', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
-  onTestFinished(() => stack.disposeAsync());
-
-  const dir = mkdtempSync(join(tmpdir(), 'imp-dns-token-'));
-
-  stack.defer(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  const tokenPath = join(dir, 'dns-api-token');
-
-  const harness = await createImpTest(stack, {
+  const ctx = await setupTest({
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN_FILE: tokenPath,
+      IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
     },
   });
 
-  const ctx = buildTestApp(harness, harness, TEST_TOKEN);
+  // registered after setupTest's own release, so the dir goes once impd stops
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-  const missing = await ctx.client.system.info();
+  const info = await ctx.client.system.info();
 
-  expect(missing.https?.domain).toBe('imp.example.com');
-
-  expect(missing.https?.dnsToken).toMatchObject({
-    isOk: false,
-    error: `cannot read the DNS API token from ${tokenPath}: ENOENT`,
+  expect(info.https).toStrictEqual({
+    domain: 'imp.example.com',
+    dnsToken: {
+      isOk: false,
+      error: `cannot read the DNS API token from ${join(dir, 'dns-api-token')}: ENOENT`,
+      at: new Date(ctx.clock.nowMs),
+    },
   });
-
-  // the operator puts the token in place; the next ask sees it, with no
-  // restart, and never shows it
-  writeFileSync(tokenPath, 'cf-secret-token\n');
-
-  const fixed = await ctx.client.system.info();
-
-  expect(fixed.https?.dnsToken?.isOk).toBe(true);
-  expect(JSON.stringify([missing, fixed])).not.toContain('cf-secret-token');
 });
 
-const PUBLIC_ENV = {
-  IMP_DOMAIN: 'imp.example.com',
-  IMP_DNS_PROVIDER: 'cloudflare',
-  IMP_DNS_API_TOKEN: 'unused',
-  IMP_PUBLIC_IP: '203.0.113.7',
-};
+test('it reads a DNS token file put in place after start, and never shows the token', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
-test('expose makes an imp public with a credential shown once, and unexpose ends it', async () => {
-  const ctx = await setupTest(TEST_TOKEN, PUBLIC_ENV);
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
+    },
+  });
 
-  await ctx.createTestImage('ubuntu');
+  // registered after setupTest's own release, so the dir goes once impd stops
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  await writeFile(join(dir, 'dns-api-token'), 'cf-secret-token\n');
+
+  const info = await ctx.client.system.info();
+
+  expect(info.https?.dnsToken?.isOk).toBe(true);
+  expect(JSON.stringify(info)).not.toContain('cf-secret-token');
+});
+
+test('it exposes an imp with a basic credential shown once', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'web' });
 
   const exposed = await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
 
-  expect(exposed).toMatchObject({
+  expect(exposed).toStrictEqual({
     url: 'https://web.imp.example.com',
     auth: 'basic',
     user: 'imp',
+    credential: exposed.credential,
   });
 
   expect(exposed.credential).toMatch(/^[\w-]{43}$/);
+});
+
+test('it shows an exposed imp as public', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'web' });
+  await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
 
   const imp = await ctx.client.imps.get({ name: 'web' });
+
+  expect(imp.public).toStrictEqual({ auth: 'basic' });
+});
+
+test('it gives an exposed imp its public URL', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'web' });
+  await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
+
   const urls = await ctx.client.imps.url({ name: 'web' });
+
+  expect(urls.public).toBe('https://web.imp.example.com');
+});
+
+test('it counts exposed imps in system.info, with no token check for a token from the env', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'web' });
+  await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
+
   const info = await ctx.client.system.info();
 
-  expect(imp.public).toEqual({ auth: 'basic' });
-  expect(urls.public).toBe('https://web.imp.example.com');
-  expect(info.public).toEqual({ ip: '203.0.113.7', imps: 1, records: null });
+  expect(info.public).toStrictEqual({ ip: '203.0.113.7', imps: 1, records: null });
+  expect(info.https).toStrictEqual({ domain: 'imp.example.com', dnsToken: null });
+});
 
-  // a token from the env has nothing to check
-  expect(info.https).toEqual({ domain: 'imp.example.com', dnsToken: null });
+test('it keeps only a hash of an exposed imp’s credential', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
 
-  // only a hash is kept
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'web' });
+
+  const exposed = await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
+
   const row = await ctx.db
     .selectFrom('imps')
     .select(['public_hash', 'public_user'])
     .executeTakeFirstOrThrow();
 
   expect(row.public_user).toBe('imp');
-  expect(row.public_hash).not.toContain(exposed.credential ?? '');
+  expect(row.public_hash).toBeString();
+  expect(row.public_hash).not.toContain(exposed.credential ?? 'no credential');
+});
 
-  // a second expose gives a new credential
+test('it gives a new credential to a second expose', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'web' });
+
+  const first = await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
   const again = await ctx.client.imps.expose({ name: 'web', auth: 'token' });
 
-  expect(again).toMatchObject({ auth: 'token', user: null });
-  expect(again.credential).not.toBe(exposed.credential);
+  expect(again).toStrictEqual({
+    url: 'https://web.imp.example.com',
+    auth: 'token',
+    user: null,
+    credential: again.credential,
+  });
+
+  expect(again.credential).toMatch(/^[\w-]{43}$/);
+  expect(again.credential).not.toBe(first.credential);
+});
+
+test('it ends an exposure on unexpose', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'web' });
+  await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
 
   const unexposed = await ctx.client.imps.unexpose({ name: 'web' });
+  const urls = await ctx.client.imps.url({ name: 'web' });
 
   expect(unexposed.public).toBeUndefined();
-
-  const after = await ctx.client.imps.url({ name: 'web' });
-
-  expect(after.public).toBeNull();
+  expect(urls.public).toBeNull();
 });
 
-test('expose needs public mode, a known imp, and a user only with basic auth', async () => {
-  const plain = await setupTest(TEST_TOKEN);
+test('it refuses an expose when impd has no public mode', async () => {
+  const ctx = await setupTest();
 
-  await plain.createTestImage('ubuntu');
-  await plain.client.imps.create({ name: 'web' });
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  const off = await plain.client.imps
-    .expose({ name: 'web', auth: 'none' })
-    .catch((error: unknown) => error);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  expect(off).toMatchObject({ code: 'PRECONDITION_FAILED' });
+  await ctx.client.imps.create({ name: 'web' });
 
-  const plainInfo = await plain.client.system.info();
-
-  expect(plainInfo.public).toBeNull();
-  expect(plainInfo.https).toBeNull();
-
-  const ctx = await setupTest(TEST_TOKEN, PUBLIC_ENV);
-
-  const unknown = await ctx.client.imps
-    .expose({ name: 'nope', auth: 'none' })
-    .catch((error: unknown) => error);
-
-  const stray = await ctx.client.imps
-    .expose({ name: 'nope', auth: 'token', user: 'ann' })
-    .catch((error: unknown) => error);
-
-  expect(unknown).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'imp', name: 'nope' } });
-  expect(stray).toMatchObject({ code: 'BAD_REQUEST' });
+  expect(ctx.client.imps.expose({ name: 'web', auth: 'none' })).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+  });
 });
 
-test('it prefers the configured default image and falls back to ubuntu', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it reports neither public mode nor HTTPS in system.info without a domain', async () => {
+  const ctx = await setupTest();
+  const info = await ctx.client.system.info();
 
-  await ctx.createTestImage('ubuntu');
-
-  const first = await ctx.client.imps.create({ name: 'a' });
-
-  await ctx.createTestImage('base');
-
-  const second = await ctx.client.imps.create({});
-
-  expect(first.image).toBe('ubuntu');
-  expect(second.image).toBe('base');
-  expect(second.name).toMatch(/^imp-[a-z0-9]{4}$/);
+  expect(info.public).toBeNull();
+  expect(info.https).toBeNull();
 });
 
-test('it rejects a duplicate name and an unknown image', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it refuses to expose an imp that does not exist', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
 
-  await ctx.createTestImage('ubuntu');
+  expect(ctx.client.imps.expose({ name: 'nope', auth: 'none' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    data: { kind: 'imp', name: 'nope' },
+  });
+});
+
+test('it refuses a user name on an expose without basic auth', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+      IMP_PUBLIC_IP: '203.0.113.7',
+    },
+  });
+
+  expect(
+    ctx.client.imps.expose({ name: 'nope', auth: 'token', user: 'ann' }),
+  ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+});
+
+test('it boots ubuntu when the configured default image is missing', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const created = await ctx.client.imps.create({ name: 'a' });
+
+  expect(created.image).toBe('ubuntu');
+});
+
+test('it boots the configured default image, and names an imp made without a name', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'base',
+    ref: 'base:latest',
+    digest: 'sha256:base',
+    sizeBytes: 6,
+  });
+
+  const created = await ctx.client.imps.create({});
+
+  expect(created.image).toBe('base');
+  expect(created.name).toMatch(/^imp-[a-z0-9]{4}$/);
+});
+
+test('it rejects a duplicate name', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'dev' });
 
-  const duplicate = await ctx.client.imps.create({ name: 'dev' }).catch((error: unknown) => error);
+  expect(ctx.client.imps.create({ name: 'dev' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+    data: { kind: 'imp', name: 'dev' },
+  });
+});
 
-  const unknown = await ctx.client.imps
-    .create({ name: 'other', image: 'nope' })
-    .catch((error: unknown) => error);
+test('it rejects an unknown image', async () => {
+  const ctx = await setupTest();
 
-  expect(duplicate).toMatchObject({ code: 'CONFLICT', data: { kind: 'imp', name: 'dev' } });
-  expect(unknown).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'image', name: 'nope' } });
+  expect(ctx.client.imps.create({ name: 'other', image: 'nope' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    data: { kind: 'image', name: 'nope' },
+  });
 });
 
 test('it marks a running imp stopped when its VM died', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'dev' });
 
-  ctx.fake.alive.clear();
+  ctx.vmm.alive.clear();
 
   const imp = await ctx.client.imps.get({ name: 'dev' });
 
@@ -337,73 +901,187 @@ test('it marks a running imp stopped when its VM died', async () => {
 });
 
 test('it refuses to remove an image an imp uses', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'dev' });
 
-  const rejection = await ctx.client.images
-    .delete({ name: 'ubuntu' })
-    .catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'CONFLICT' });
+  expect(ctx.client.images.delete({ name: 'ubuntu' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
 });
 
-test('images.add with an imp makes a template that imps.create takes', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it makes a template image from an imp', async () => {
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'dev' });
 
   const template = await ctx.client.images.add({ imp: 'dev', name: 'tools' });
 
   expect(template).toMatchObject({ name: 'tools', ref: 'imp:dev', source: 'imp' });
+});
+
+test('it creates an imp from a template image', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.images.add({ imp: 'dev', name: 'tools' });
 
   const copy = await ctx.client.imps.create({ name: 'copy', image: 'tools' });
 
   expect(copy.image).toBe('tools');
+});
+
+test('it lists a template image beside the image it came from', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.images.add({ imp: 'dev', name: 'tools' });
 
   const images = await ctx.client.images.list();
 
-  expect(images.map((image) => [image.name, image.source])).toEqual([
+  expect(images.map((image) => [image.name, image.source])).toStrictEqual([
     ['tools', 'imp'],
     ['ubuntu', 'oci'],
   ]);
 });
 
-test('it sleeps, wakes and holds an imp', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it sleeps an imp and ends its VM', async () => {
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'dev' });
 
   const asleep = await ctx.client.imps.sleep({ name: 'dev' });
 
   expect(asleep.state).toBe('sleeping');
+  expect(asleep.sleptAt).toBeValidDate();
+  expect(ctx.vmm.alive.size).toBe(0);
+});
 
-  // placement reads what the sleepers take back on a wake, and the default
-  const sleepingInfo = await ctx.client.system.info();
+test('it reports what the sleepers take back on a wake, and the default image, in system.info', async () => {
+  const ctx = await setupTest();
 
-  expect(sleepingInfo).toMatchObject({
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const info = await ctx.client.system.info();
+
+  expect(info).toMatchObject({
     ramSleepingMib: 2048,
     ramCommittedMib: 0,
     defaults: { memoryMib: 2048, image: 'ubuntu' },
   });
+});
 
-  expect(asleep.sleptAt).toBeInstanceOf(Date);
-  expect(ctx.fake.alive.size).toBe(0);
+test('it wakes a sleeping imp from its snapshot', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
 
   const awake = await ctx.client.imps.wake({ name: 'dev' });
 
   expect(awake).toMatchObject({ state: 'running', ramMib: 300 });
-  expect(ctx.fake.wakes).toEqual([1002]);
+  expect(ctx.vmm.wakes).toStrictEqual([1002]);
+});
 
+test('it wakes a sleeping imp it holds, until the hold ends', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
 
   const held = await ctx.client.imps.hold({ name: 'dev', seconds: 60 });
 
   expect(held.state).toBe('running');
-  expect(held.holdUntil?.getTime()).toBeGreaterThan(Date.now() + 50_000);
+  expect(held.holdUntil?.getTime()).toBe(ctx.clock.nowMs + 60_000);
+});
+
+test('it releases a hold with seconds 0', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.hold({ name: 'dev', seconds: 60 });
 
   const released = await ctx.client.imps.hold({ name: 'dev', seconds: 0 });
 
@@ -411,15 +1089,22 @@ test('it sleeps, wakes and holds an imp', async () => {
 });
 
 test('it boots cold when the snapshot belongs to another firecracker', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
-  const metaPath = `${ctx.dataDir}/imps/${created.id}/snapshot/meta.json`;
+  const metaPath = join(ctx.dataDir, 'imps', created.id, 'snapshot', 'meta.json');
 
   const meta = await Bun.file(metaPath).text();
 
@@ -428,49 +1113,83 @@ test('it boots cold when the snapshot belongs to another firecracker', async () 
   const awake = await ctx.client.imps.wake({ name: 'dev' });
 
   expect(awake.state).toBe('running');
-  expect(ctx.fake.wakes).toEqual([]);
+  expect(ctx.vmm.wakes).toStrictEqual([]);
 });
 
 test('it sleeps the least recently active imp to fit a new one in the budget', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  const ctx = await setupTest(TEST_TOKEN, {
-    IMP_RAM_BUDGET_MIB: '800',
-    IMP_DEFAULT_MEMORY_MIB: '512',
+  const ctx = await setupTest({
+    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'a' });
-  await Bun.sleep(5);
+
+  ctx.clock.nowMs += 1000;
+
   await ctx.client.imps.create({ name: 'b' });
-  await Bun.sleep(5);
+
+  ctx.clock.nowMs += 1000;
+
   await ctx.client.imps.create({ name: 'c' });
 
-  const states = await ctx.client.imps.list();
+  const imps = await ctx.client.imps.list();
 
-  expect(states.map((imp) => [imp.name, imp.state])).toEqual([
+  expect(imps.map((imp) => [imp.name, imp.state])).toStrictEqual([
     ['a', 'sleeping'],
     ['b', 'running'],
     ['c', 'running'],
   ]);
+});
 
+test('it refuses a wake that needs more RAM than the held imps leave', async () => {
+  const ctx = await setupTest({
+    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
+  });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'a' });
+  await ctx.client.imps.sleep({ name: 'a' });
+  await ctx.client.imps.create({ name: 'b' });
+  await ctx.client.imps.create({ name: 'c' });
   await ctx.client.imps.hold({ name: 'b', seconds: 600 });
   await ctx.client.imps.hold({ name: 'c', seconds: 600 });
 
-  const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({
+  expect(ctx.client.imps.wake({ name: 'a' })).rejects.toMatchObject({
     code: 'RAM_BUDGET_EXCEEDED',
     data: { budgetMib: 800, requestedMib: 300 },
   });
 });
 
-test('a cold boot the budget turns away keeps the sleeping imp and its snapshot', async () => {
-  const ctx = await setupTest(TEST_TOKEN, {
-    IMP_RAM_BUDGET_MIB: '800',
-    IMP_DEFAULT_MEMORY_MIB: '512',
+test('it keeps the sleeping imp and its snapshot when the budget turns away a cold boot', async () => {
+  const ctx = await setupTest({
+    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
   const asleep = await ctx.client.imps.create({ name: 'a' });
 
@@ -481,55 +1200,107 @@ test('a cold boot the budget turns away keeps the sleeping imp and its snapshot'
   await ctx.client.imps.hold({ name: 'c', seconds: 600 });
 
   // a snapshot from another firecracker: the wake falls back to a cold boot
-  const metaPath = `${ctx.dataDir}/imps/${asleep.id}/snapshot/meta.json`;
+  const metaPath = join(ctx.dataDir, 'imps', asleep.id, 'snapshot', 'meta.json');
 
   const meta = await Bun.file(metaPath).text();
 
   await Bun.write(metaPath, meta.replace('"v1.17.0"', '"v0.1.0"'));
 
-  const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
+  expect(ctx.client.imps.wake({ name: 'a' })).rejects.toMatchObject({
+    code: 'RAM_BUDGET_EXCEEDED',
+  });
 
   // the raw row: a read through the service would repair a lost snapshot
   const row = await findImpByName(ctx.db, 'a');
 
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
   expect(row?.state).toBe('sleeping');
   expect(existsSync(metaPath)).toBeTrue();
 });
 
 test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
-  const ctx = await setupTest(TEST_TOKEN, { IMP_RAM_BUDGET_MIB: '800' });
+  const ctx = await setupTest({ env: { IMP_RAM_BUDGET_MIB: '800' } });
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  const rejection = await ctx.client.imps
-    .create({ name: 'huge', memoryMib: 900 })
-    .catch((error: unknown) => error);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  expect(ctx.client.imps.create({ name: 'huge', memoryMib: 900 })).rejects.toMatchObject({
+    code: 'RAM_BUDGET_EXCEEDED',
+    data: { requestedMib: 900 },
+  });
 
   const imps = await ctx.client.imps.list();
+  const dirs = await readdir(join(ctx.dataDir, 'imps'));
 
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED', data: { requestedMib: 900 } });
-  expect(imps).toEqual([]);
-  expect(readdirSync(`${ctx.dataDir}/imps`)).toEqual([]);
+  expect(imps).toStrictEqual([]);
+  expect(dirs).toStrictEqual([]);
+});
 
-  // the name and the slot are free again
+test('it frees the name and the slot of a create the RAM budget refused', async () => {
+  const ctx = await setupTest({ env: { IMP_RAM_BUDGET_MIB: '800' } });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  // refused: the budget is 800 MiB
+  await Promise.allSettled([ctx.client.imps.create({ name: 'huge', memoryMib: 900 })]);
+
   const created = await ctx.client.imps.create({ name: 'huge', memoryMib: 512 });
 
   expect(created).toMatchObject({ state: 'running', slot: 0 });
 });
 
 test('it records a boot failure as the error state with its first line', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  ctx.fake.queue('boot', 'fail');
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  const rejection = await ctx.client.imps.create({ name: 'dev' }).catch((error: unknown) => error);
+  ctx.vmm.queue('boot', 'fail');
+
+  expect(ctx.client.imps.create({ name: 'dev' })).rejects.toThrow();
+
   const imp = await ctx.client.imps.get({ name: 'dev' });
 
-  expect(rejection).toBeInstanceOf(Error);
-  expect(imp).toMatchObject({ state: 'error', error: 'boot failed: no agent' });
+  expect(imp).toMatchObject({
+    state: 'error',
+    error: 'boot failed: no agent',
+  });
+});
+
+test('it starts an imp in error', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  ctx.vmm.queue('boot', 'fail');
+
+  // the boot fails, as queued
+  await Promise.allSettled([ctx.client.imps.create({ name: 'dev' })]);
 
   const started = await ctx.client.imps.start({ name: 'dev' });
 
@@ -537,9 +1308,17 @@ test('it records a boot failure as the error state with its first line', async (
 });
 
 test('it re-adopts live VMs on reconcile, even with a silent agent', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'alive' });
   await ctx.client.imps.create({ name: 'dead' });
   await ctx.client.imps.create({ name: 'asleep' });
@@ -547,36 +1326,45 @@ test('it re-adopts live VMs on reconcile, even with a silent agent', async () =>
 
   const dead = await ctx.client.imps.get({ name: 'dead' });
 
-  ctx.fake.alive.delete(1002);
-  ctx.fake.queue('agentReady', 'fail');
+  ctx.vmm.alive.delete(1002);
+  ctx.vmm.queue('agentReady', 'fail');
 
-  await ctx.imps.reconcileImps();
+  await ctx.impd.imps.reconcileImps();
 
   const imps = await ctx.client.imps.list();
 
-  expect(imps.map((imp) => [imp.name, imp.state])).toEqual([
+  expect(dead.state).toBe('running');
+
+  expect(imps.map((imp) => [imp.name, imp.state])).toStrictEqual([
     ['alive', 'running'],
     ['asleep', 'sleeping'],
     ['dead', 'stopped'],
   ]);
 
-  expect(dead.state).toBe('running');
-  expect(ctx.fake.stops).toEqual([]);
+  expect(ctx.vmm.stops).toStrictEqual([]);
 });
 
-test('a read during a lifecycle operation does not mark the imp stopped', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it keeps an imp running for a read during a lifecycle operation', async () => {
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
   await ctx.client.imps.create({ name: 'dev' });
 
-  const gate = ctx.fake.hold('sleep');
+  const gate = ctx.vmm.hold('sleep');
   const sleeping = ctx.client.imps.sleep({ name: 'dev' });
 
   await gate.reached;
 
   // the VM looks dead to a reader while the sleep holds the lock
-  ctx.fake.alive.clear();
+  ctx.vmm.alive.clear();
 
   const during = await ctx.client.imps.get({ name: 'dev' });
 
@@ -588,296 +1376,345 @@ test('a read during a lifecycle operation does not mark the imp stopped', async 
   expect(after.state).toBe('sleeping');
 });
 
-test('impd stopping closes exec sessions with 1012', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it closes exec sessions with 1012 when impd stops', async () => {
+  const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/exec`, {
+    headers: { authorization: 'Bearer root-token' },
+  });
 
-  try {
-    const port = String(server.server?.port);
+  onTestFinished(() => {
+    socket.close();
+  });
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec`, {
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
-    });
+  const opened = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<CloseEvent>();
 
-    const opened = Promise.withResolvers<void>();
-    const closed = Promise.withResolvers<CloseEvent>();
+  socket.addEventListener('open', () => {
+    opened.resolve();
+  });
 
-    socket.addEventListener('open', () => {
-      opened.resolve();
-    });
+  socket.addEventListener('close', closed.resolve);
 
-    socket.addEventListener('close', closed.resolve);
+  await opened.promise;
 
-    await opened.promise;
+  ctx.impd.api.closeExecSessions();
 
-    ctx.closeExecSessions();
+  const event = await closed.promise;
 
-    const event = await closed.promise;
-
-    expect(event.code).toBe(1012);
-  } finally {
-    await server.stop(true);
-  }
+  expect(event.code).toBe(1012);
 });
 
-test('an exec ticket opens one socket for its imp, once', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it refuses the socket of an exec ticket for another imp', async () => {
+  const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  try {
-    const port = String(server.server?.port);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-    await ctx.createTestImage('ubuntu');
-    await ctx.client.imps.create({ name: 'other' });
+  await ctx.client.imps.create({ name: 'other' });
 
-    const issued = await ctx.client.exec.ticket({ name: 'other' });
+  const issued = await ctx.client.exec.ticket({ name: 'other' });
 
-    // accepted at the upgrade, refused at start: the ticket names another imp
-    const first = await tryExecSocket(port, `ticket=${issued.ticket}`);
+  // accepted at the upgrade, refused at start: the session starts imp dev
+  const reply = await tryExecSocket(ctx.port, `ticket=${issued.ticket}`);
 
-    const forbidden: unknown = JSON.parse(first);
-
-    expect(forbidden).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
-
-    const reused = await tryExecSocket(port, `ticket=${issued.ticket}`);
-
-    expect(reused).toBe('rejected');
-  } finally {
-    await server.stop(true);
-  }
+  expect(JSON.parse(reply)).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
 });
 
-test("an image add's audit row keeps the reference its pull resolved", async () => {
-  const harness = await setupImpTest();
+test('it refuses an exec ticket used once', async () => {
+  const ctx = await setupTest();
 
-  const pulled = `busybox@sha256:${'b'.repeat(64)}`;
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  // an add as the builder makes it, without the builder
-  const images = {
-    ...harness.images,
-    addImage: (
-      _ref: string,
-      name?: string,
-      options?: Readonly<{ onResolved?: (reference: string) => void }>,
-    ) => {
-      options?.onResolved?.(pulled);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-      return harness.createTestImage(name ?? 'box');
-    },
-  };
+  await ctx.client.imps.create({ name: 'other' });
 
-  const ctx = { ...harness, ...buildTestApp({ ...harness, images }, harness) };
+  const issued = await ctx.client.exec.ticket({ name: 'other' });
+
+  await tryExecSocket(ctx.port, `ticket=${issued.ticket}`);
+
+  const reused = await tryExecSocket(ctx.port, `ticket=${issued.ticket}`);
+
+  expect(reused).toBe('rejected');
+});
+
+test("it keeps the reference an image add's pull resolved in its audit row", async () => {
+  const ctx = await setupTest({ env: { IMP_BUILD_ISOLATION: 'host' } });
+
+  const pulled = `busybox@sha256:${'d'.repeat(64)}`;
+
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
+
+  // the image is not on the host: the add pulls it, then unpacks its export
+  const docker = buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox'],
+        inspects: [{ Id: `sha256:${'b'.repeat(64)}`, Config: {}, Size: 2, RepoDigests: [pulled] }],
+        isOnHost: false,
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar: Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout,
+  });
+
+  updateEnv('PATH', docker.path);
 
   await ctx.client.images.add({ ref: 'busybox', name: 'box' });
 
   // the row lands after the answer
-  const deadline = Date.now() + 5000;
-  let adds: { readonly detail?: string | undefined }[] = [];
+  const details = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, null, 10, null);
 
-  while (adds.length === 0 && Date.now() < deadline) {
-    const calls = await listApiCalls(ctx.db, null, 10, null);
+    const adds = rows.filter((row) => row.procedure === 'images.add');
 
-    adds = calls.filter((call) => call.procedure === 'images.add');
+    expect(adds).not.toBeEmpty();
 
-    await Bun.sleep(1);
-  }
+    return adds.map((row) => row.detail);
+  });
 
-  expect(adds.map((call) => call.detail)).toEqual([pulled]);
+  expect(details).toStrictEqual([pulled]);
 });
 
-test('an exec on a ticket the token asked for is audited as the token', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it audits an exec on a ticket the token asked for as the token', async () => {
+  const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  try {
-    const port = String(server.server?.port);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-    await ctx.createTestImage('ubuntu');
-    await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.create({ name: 'dev' });
 
-    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+  const issued = await ctx.client.exec.ticket({ name: 'dev' });
 
-    await tryExecSocket(port, `ticket=${issued.ticket}`);
+  await tryExecSocket(ctx.port, `ticket=${issued.ticket}`);
 
-    // the row lands after the open settles
-    const deadline = Date.now() + 5000;
-    let execs: { readonly actor: string }[] = [];
+  // the row lands after the open settles
+  const actors = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, 'dev', 10, null);
 
-    while (execs.length === 0 && Date.now() < deadline) {
-      const calls = await listApiCalls(ctx.db, 'dev', 10, null);
+    const execs = rows.filter((row) => row.procedure === 'exec');
 
-      execs = calls.filter((call) => call.procedure === 'exec');
+    expect(execs).not.toBeEmpty();
 
-      await Bun.sleep(1);
-    }
+    return execs.map((row) => row.actor);
+  });
 
-    expect(execs.map((call) => call.actor)).toEqual(['token']);
-  } finally {
-    await server.stop(true);
-  }
+  expect(actors).toStrictEqual(['token']);
 });
 
-test('a bearer exec socket may start any imp', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it lets a bearer exec socket start any imp', async () => {
+  const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  const reply = await tryExecSocket(ctx.port, '', 'other', {
+    authorization: 'Bearer root-token',
+  });
 
-  try {
-    const port = String(server.server?.port);
-
-    const reply = await tryExecSocket(port, '', 'other', { authorization: `Bearer ${TEST_TOKEN}` });
-
-    const message: unknown = JSON.parse(reply);
-
-    // past the grant: the imp does not exist
-    expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
-  } finally {
-    await server.stop(true);
-  }
+  // past the grant: the imp does not exist
+  expect(JSON.parse(reply)).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
 });
 
-test('/exec rejects an expired ticket and the token in the query', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it refuses an expired exec ticket', async () => {
+  const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  try {
-    const port = String(server.server?.port);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-    await ctx.createTestImage('ubuntu');
-    await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.create({ name: 'dev' });
 
-    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+  const issued = await ctx.client.exec.ticket({ name: 'dev' });
 
-    ctx.advance(30_000);
+  ctx.clock.nowMs += 30_000;
 
-    const expired = await tryExecSocket(port, `ticket=${issued.ticket}`);
-    const queryToken = await tryExecSocket(port, `token=${TEST_TOKEN}`);
+  const expired = await tryExecSocket(ctx.port, `ticket=${issued.ticket}`);
 
-    expect(expired).toBe('rejected');
-    expect(queryToken).toBe('rejected');
-  } finally {
-    await server.stop(true);
-  }
+  expect(expired).toBe('rejected');
 });
 
-test('/tunnel takes the bearer header only, not a ticket', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it refuses the token in the query of /exec', async () => {
+  const ctx = await setupTest();
+  const reply = await tryExecSocket(ctx.port, 'token=root-token');
 
-  const server = ctx.app.listen(0);
-
-  try {
-    const port = String(server.server?.port);
-
-    await ctx.createTestImage('ubuntu');
-    await ctx.client.imps.create({ name: 'dev' });
-
-    const issued = await ctx.client.exec.ticket({ name: 'dev' });
-    const ticket = await tryTunnelSocket(port, `ticket=${issued.ticket}`, {});
-    const bearer = await tryTunnelSocket(port, '', { authorization: `Bearer ${TEST_TOKEN}` });
-
-    const message: unknown = JSON.parse(bearer);
-
-    expect(ticket).toBe('rejected');
-
-    // past the auth: the imp does not exist
-    expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
-  } finally {
-    await server.stop(true);
-  }
+  expect(reply).toBe('rejected');
 });
 
-test('a tunnel open is audited as the token, with the imp and the port', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it refuses a ticket on /tunnel', async () => {
+  const ctx = await setupTest();
 
-  const server = ctx.app.listen(0);
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  try {
-    const port = String(server.server?.port);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-    await ctx.createTestImage('ubuntu');
-    await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.create({ name: 'dev' });
 
-    await tryTunnelSocket(port, '', { authorization: `Bearer ${TEST_TOKEN}` }, 'dev');
+  const issued = await ctx.client.exec.ticket({ name: 'dev' });
+  const reply = await tryTunnelSocket(ctx.port, `ticket=${issued.ticket}`, {});
 
-    // the row lands after the open settles
-    const deadline = Date.now() + 5000;
-    let tunnels: { readonly procedure: string; readonly actor: string }[] = [];
-
-    while (tunnels.length === 0 && Date.now() < deadline) {
-      const calls = await listApiCalls(ctx.db, 'dev', 10, null);
-
-      tunnels = calls.filter((call) => call.procedure.startsWith('tunnel'));
-
-      await Bun.sleep(1);
-    }
-
-    expect(tunnels.map((call) => [call.procedure, call.actor])).toEqual([['tunnel:5432', 'token']]);
-  } finally {
-    await server.stop(true);
-  }
+  expect(reply).toBe('rejected');
 });
 
-test('impd stopping closes tunnels with 1012', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it takes the bearer header on /tunnel', async () => {
+  const ctx = await setupTest();
+  const reply = await tryTunnelSocket(ctx.port, '', { authorization: 'Bearer root-token' });
 
-  const server = ctx.app.listen(0);
-
-  try {
-    const socket = new WebSocket(`ws://127.0.0.1:${String(server.server?.port)}/tunnel`, {
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
-    });
-
-    const opened = Promise.withResolvers<void>();
-    const closed = Promise.withResolvers<CloseEvent>();
-
-    socket.addEventListener('open', () => {
-      opened.resolve();
-    });
-
-    socket.addEventListener('close', closed.resolve);
-
-    await opened.promise;
-
-    ctx.closeExecSessions();
-
-    const event = await closed.promise;
-
-    expect(event.code).toBe(1012);
-  } finally {
-    await server.stop(true);
-  }
+  // past the auth: the imp does not exist
+  expect(JSON.parse(reply)).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
 });
 
-test('exec.ticket refuses an imp that does not exist', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
-  const rejection = await ctx.client.exec.ticket({ name: 'nope' }).catch((error: unknown) => error);
+test('it refuses a tunnel into an imp to a token without exec', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
 
-  expect(rejection).toMatchObject({ code: 'NOT_FOUND' });
+  const reply = await tryTunnelSocket(
+    ctx.port,
+    '',
+    { authorization: `Bearer ${made.secret}` },
+    'dev',
+  );
+
+  expect(JSON.parse(reply)).toMatchObject({
+    type: 'error',
+    code: 'FORBIDDEN',
+    message: 'token reader may not open a tunnel into imp dev',
+  });
 });
 
-test('wake with restartError false refuses an imp in error', async () => {
-  const ctx = await setupTest(TEST_TOKEN);
+test('it audits a tunnel open as the token, with the imp and the port', async () => {
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  ctx.fake.queue('boot', 'fail');
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  await ctx.client.imps.create({ name: 'dev' }).catch(() => {});
+  await ctx.client.imps.create({ name: 'dev' });
 
-  const rejection = await ctx.client.imps
-    .wake({ name: 'dev', restartError: false })
-    .catch((error: unknown) => error);
+  await tryTunnelSocket(ctx.port, '', { authorization: 'Bearer root-token' }, 'dev');
 
-  const restarted = await ctx.client.imps.wake({ name: 'dev' });
+  // the row lands after the open settles
+  const tunnels = await waitFor(async () => {
+    const rows = await listApiCalls(ctx.db, 'dev', 10, null);
 
-  expect(rejection).toMatchObject({
+    const opens = rows.filter((row) => row.procedure.startsWith('tunnel'));
+
+    expect(opens).not.toBeEmpty();
+
+    return opens.map((row) => [row.procedure, row.actor]);
+  });
+
+  expect(tunnels).toStrictEqual([['tunnel:5432', 'token']]);
+});
+
+test('it closes tunnels with 1012 when impd stops', async () => {
+  const ctx = await setupTest();
+
+  const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/tunnel`, {
+    headers: { authorization: 'Bearer root-token' },
+  });
+
+  onTestFinished(() => {
+    socket.close();
+  });
+
+  const opened = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<CloseEvent>();
+
+  socket.addEventListener('open', () => {
+    opened.resolve();
+  });
+
+  socket.addEventListener('close', closed.resolve);
+
+  await opened.promise;
+
+  ctx.impd.api.closeExecSessions();
+
+  const event = await closed.promise;
+
+  expect(event.code).toBe(1012);
+});
+
+test('it refuses an exec ticket for an imp that does not exist', async () => {
+  const ctx = await setupTest();
+
+  expect(ctx.client.exec.ticket({ name: 'nope' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+});
+
+test('it refuses a wake of an imp in error when restartError is false', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  ctx.vmm.queue('boot', 'fail');
+
+  // the boot fails, as queued
+  await Promise.allSettled([ctx.client.imps.create({ name: 'dev' })]);
+
+  expect(ctx.client.imps.wake({ name: 'dev', restartError: false })).rejects.toMatchObject({
     code: 'INVALID_STATE',
     data: { state: 'error', allowed: ['running', 'sleeping', 'stopped'] },
   });
+});
+
+test('it restarts an imp in error on a wake', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  ctx.vmm.queue('boot', 'fail');
+
+  // the boot fails, as queued
+  await Promise.allSettled([ctx.client.imps.create({ name: 'dev' })]);
+
+  const restarted = await ctx.client.imps.wake({ name: 'dev' });
 
   expect(restarted.state).toBe('running');
 });

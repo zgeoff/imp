@@ -200,6 +200,10 @@ export interface BrokerDeps {
   // tests hold a request between its rule read and its value read, and
   // stand in for the value files
   readonly afterRuleRead?: () => Promise<void>;
+
+  // tests act between a grant call's access check and its transaction: a
+  // grant, a revoke, or a fork's copy runs this first
+  readonly beforeGrantWrite?: () => Promise<void>;
   readonly secretFiles?: SecretFiles;
 }
 
@@ -622,6 +626,10 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildMovingError(impName);
       }
 
+      if (deps.beforeGrantWrite !== undefined) {
+        await deps.beforeGrantWrite();
+      }
+
       const outcome = await createCheckedGrant(db, imp.id, secretName, authority);
 
       switch (outcome.kind) {
@@ -648,6 +656,10 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
       if (imp.moveState !== null) {
         throw buildMovingError(impName);
+      }
+
+      if (deps.beforeGrantWrite !== undefined) {
+        await deps.beforeGrantWrite();
       }
 
       const outcome = await removeCheckedGrant(db, imp.id, secretName, authority);
@@ -680,6 +692,10 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     createForkGrants: async (source, fork, authority) => {
+      if (deps.beforeGrantWrite !== undefined) {
+        await deps.beforeGrantWrite();
+      }
+
       try {
         const outcome = await createForkGrants(db, source.id, fork.id, authority);
 
