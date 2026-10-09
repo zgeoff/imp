@@ -1,27 +1,30 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
+import { buildMockImpDiskUsage } from '../test-utils/build-mock-imp-disk-usage';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createDiskUsageCache } from './disk-usage-cache';
 import type { DiskUsageReport, StorageBackend } from './storage-backend';
 
 type MeasureUsage = StorageBackend['measureUsage'];
 
-type CacheOptions = Pick<Parameters<typeof createDiskUsageCache>[0], 'now' | 'refreshDelayMs'>;
+async function setupTest() {
+  const database = await createTestDatabase();
 
-async function setupCache(measureUsage: MeasureUsage, options: CacheOptions = {}) {
-  const ctx = await createTestDatabase();
+  return { db: database.db };
+}
 
-  // the image every imp row here refers to
+test('it measures every imp with its checkpoints', async () => {
+  const ctx = await setupTest();
+
   const image = await createImage(ctx.db, {
     name: 'base',
     ref: 'imp/base:latest',
     digest: 'sha256:0000',
     sizeBytes: 1024,
   });
-
-  const logs: string[] = [];
 
   const imp = await createImp(ctx.db, {
     name: 'dev',
@@ -34,171 +37,439 @@ async function setupCache(measureUsage: MeasureUsage, options: CacheOptions = {}
 
   await createCheckpoint(ctx.db, { id: 'cp-1', impId: imp.id, label: null, sizeBytes: null });
 
+  const measureUsage = mock<MeasureUsage>(() =>
+    Promise.resolve({ imps: new Map(), isPartial: false }),
+  );
+
+  const cache = createDiskUsageCache({ db: ctx.db, storage: { measureUsage }, log: mock() });
+
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  await cache.runPass();
+
+  expect(measureUsage).toHaveBeenCalledExactlyOnceWith([
+    { impId: imp.id, checkpointIds: ['cp-1'] },
+  ]);
+});
+
+test('it keeps each count with the time its pass started', async () => {
+  const ctx = await setupTest();
+
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createImp(ctx.db, {
+    name: 'dev',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
+
+  const usage = buildMockImpDiskUsage();
+
   const cache = createDiskUsageCache({
     db: ctx.db,
-    storage: { measureUsage },
-    log: (message) => {
-      logs.push(message);
+    storage: {
+      measureUsage: () => Promise.resolve({ imps: new Map([[imp.id, usage]]), isPartial: true }),
     },
+    log: mock(),
     now: () => new Date(5000),
-    ...options,
   });
 
-  return Object.assign(ctx, { imp, cache, logs });
-}
-
-function buildReport(impId: string, isPartial: boolean): DiskUsageReport {
-  return {
-    imps: new Map([[impId, { exclusiveBytes: 10, sharedBytes: 20, isUpperBound: false }]]),
-    isPartial,
-  };
-}
-
-test('a pass measures every imp with its checkpoints and keeps the result', async () => {
-  const asked: Parameters<MeasureUsage>[0][] = [];
-
-  const ctx = await setupCache((imps) => {
-    asked.push(imps);
-
-    return Promise.resolve(buildReport(imps[0]?.impId ?? '', true));
+  onTestFinished(() => {
+    cache.stop();
   });
 
-  expect(ctx.cache.read(ctx.imp.id)).toBeUndefined();
+  await cache.runPass();
 
-  await ctx.cache.runPass();
-
-  expect(asked).toEqual([[{ impId: ctx.imp.id, checkpointIds: ['cp-1'] }]]);
-  expect(ctx.cache.readExclusiveTotal()).toBe(10);
-
-  expect(ctx.cache.read(ctx.imp.id)).toEqual({
-    exclusiveBytes: 10,
-    sharedBytes: 20,
+  expect(cache.read(imp.id)).toStrictEqual({
+    exclusiveBytes: usage.exclusiveBytes,
+    sharedBytes: usage.sharedBytes,
     isUpperBound: false,
     isPartial: true,
     measuredAt: new Date(5000),
   });
 });
 
-test('passes run one at a time, and a failed one keeps the last result', async () => {
-  const gate = Promise.withResolvers<DiskUsageReport>();
-  const state = { calls: 0 };
+test('it reads no count for an imp before the first pass', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupCache((imps) => {
-    state.calls += 1;
-
-    if (state.calls === 1) {
-      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
-    }
-
-    return gate.promise;
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
+    log: mock(),
   });
 
-  await ctx.cache.runPass();
+  onTestFinished(() => {
+    cache.stop();
+  });
 
-  const first = ctx.cache.runPass();
-  const second = ctx.cache.runPass();
+  expect(cache.read('dev')).toBeUndefined();
+});
 
-  gate.reject(new Error('pool gone'));
+test('it totals what every imp takes on its own', async () => {
+  const ctx = await setupTest();
+
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const dev = await createImp(ctx.db, {
+    name: 'dev',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
+
+  const ci = await createImp(ctx.db, {
+    name: 'ci',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 1,
+    ip: '10.66.0.3',
+  });
+
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: {
+      measureUsage: () =>
+        Promise.resolve({
+          imps: new Map([
+            [dev.id, buildMockImpDiskUsage({ exclusiveBytes: 10 })],
+            [ci.id, buildMockImpDiskUsage({ exclusiveBytes: 32 })],
+          ]),
+          isPartial: false,
+        }),
+    },
+    log: mock(),
+  });
+
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  await cache.runPass();
+
+  expect(cache.readExclusiveTotal()).toBe(42);
+});
+
+test('it shares a pass under way with a second caller', async () => {
+  const ctx = await setupTest();
+
+  const measured = Promise.withResolvers<DiskUsageReport>();
+
+  onTestFinished(() => {
+    measured.resolve({ imps: new Map(), isPartial: false });
+  });
+
+  const measureUsage = mock<MeasureUsage>(() => measured.promise);
+  const cache = createDiskUsageCache({ db: ctx.db, storage: { measureUsage }, log: mock() });
+
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  const first = cache.runPass();
+  const second = cache.runPass();
+
+  measured.resolve({ imps: new Map(), isPartial: false });
 
   await Promise.all([first, second]);
 
-  expect(state.calls).toBe(2);
-  expect(ctx.cache.read(ctx.imp.id)?.isPartial).toBeFalse();
-  expect(ctx.logs).toEqual(['impd: disk usage: pool gone']);
+  expect(measureUsage).toHaveBeenCalledOnce();
 });
 
-test('an imp a cut-short pass did not reach keeps its last count', async () => {
-  const state = { calls: 0 };
+test('it keeps the last count when a pass fails', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupCache((imps) => {
-    state.calls += 1;
-
-    const report = buildReport(imps[0]?.impId ?? '', state.calls > 1);
-
-    // the second pass reached no imp
-    const cut = { imps: new Map(), isPartial: true };
-    const answer = state.calls === 1 ? report : cut;
-
-    return Promise.resolve(answer);
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
   });
 
-  await ctx.cache.runPass();
-  await ctx.cache.runPass();
+  const imp = await createImp(ctx.db, {
+    name: 'dev',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
 
-  expect(ctx.cache.read(ctx.imp.id)).toMatchObject({ exclusiveBytes: 10, isPartial: false });
+  const measureUsage = mock<MeasureUsage>(() =>
+    Promise.resolve({
+      imps: new Map([[imp.id, buildMockImpDiskUsage({ exclusiveBytes: 10 })]]),
+      isPartial: false,
+    }),
+  );
+
+  const cache = createDiskUsageCache({ db: ctx.db, storage: { measureUsage }, log: mock() });
+
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  await cache.runPass();
+
+  measureUsage.mockImplementation(() => Promise.reject(new Error('pool gone')));
+
+  await cache.runPass();
+
+  expect(cache.read(imp.id)?.exclusiveBytes).toBe(10);
 });
 
-test('a count carries the time its pass started, not the time it ended', async () => {
+test('it logs a pass that fails', async () => {
+  const ctx = await setupTest();
+
+  const log = mock();
+
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage: () => Promise.reject(new Error('pool gone')) },
+    log,
+  });
+
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  await cache.runPass();
+
+  expect(log).toHaveBeenCalledExactlyOnceWith('impd: disk usage: pool gone');
+});
+
+test('it keeps the last count of an imp a cut-short pass did not reach', async () => {
+  const ctx = await setupTest();
+
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createImp(ctx.db, {
+    name: 'dev',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
+
   const clock = { ms: 1000 };
 
-  const ctx = await setupCache(
-    (imps) => {
-      // the measure is slow: a write lands while it runs
-      clock.ms = 9000;
-
-      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
-    },
-    { now: () => new Date(clock.ms) },
+  const measureUsage = mock<MeasureUsage>(() =>
+    Promise.resolve({
+      imps: new Map([[imp.id, buildMockImpDiskUsage({ exclusiveBytes: 10 })]]),
+      isPartial: false,
+    }),
   );
 
-  await ctx.cache.runPass();
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage },
+    log: mock(),
+    now: () => new Date(clock.ms),
+  });
 
-  expect(ctx.cache.read(ctx.imp.id)?.measuredAt).toEqual(new Date(1000));
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  await cache.runPass();
+
+  // the second pass reached no imp
+  clock.ms = 9000;
+
+  measureUsage.mockImplementation(() => Promise.resolve({ imps: new Map(), isPartial: true }));
+
+  await cache.runPass();
+
+  expect(cache.read(imp.id)).toMatchObject({
+    exclusiveBytes: 10,
+    isPartial: false,
+    measuredAt: new Date(1000),
+  });
 });
 
-test('a refresh asked for during a pass runs a pass of its own after it', async () => {
-  const gate = Promise.withResolvers<DiskUsageReport>();
-  const second = Promise.withResolvers<undefined>();
-  const state = { calls: 0 };
+test('it stamps a count with the time its pass started, not the time it ended', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupCache(
-    (imps) => {
-      state.calls += 1;
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
-      if (state.calls === 1) {
-        return gate.promise;
-      }
+  const imp = await createImp(ctx.db, {
+    name: 'dev',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
 
-      second.resolve(undefined);
+  const clock = { ms: 1000 };
 
-      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: {
+      measureUsage: () => {
+        // the measure is slow: a write lands while it runs
+        clock.ms = 9000;
+
+        return Promise.resolve({
+          imps: new Map([[imp.id, buildMockImpDiskUsage()]]),
+          isPartial: false,
+        });
+      },
     },
-    { refreshDelayMs: 0 },
-  );
+    log: mock(),
+    now: () => new Date(clock.ms),
+  });
 
-  const first = ctx.cache.runPass();
+  onTestFinished(() => {
+    cache.stop();
+  });
 
-  ctx.cache.requestRefresh();
+  await cache.runPass();
+
+  expect(cache.read(imp.id)?.measuredAt).toStrictEqual(new Date(1000));
+});
+
+test('it runs a refresh asked for during a pass as a pass of its own after it', async () => {
+  const ctx = await setupTest();
+
+  const firstReached = Promise.withResolvers<void>();
+  const firstMeasured = Promise.withResolvers<DiskUsageReport>();
+  const secondStarted = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    firstMeasured.resolve({ imps: new Map(), isPartial: false });
+  });
+
+  const measureUsage = mock<MeasureUsage>(() => {
+    secondStarted.resolve();
+
+    return Promise.resolve({ imps: new Map(), isPartial: false });
+  });
+
+  measureUsage.mockImplementationOnce(() => {
+    firstReached.resolve();
+
+    return firstMeasured.promise;
+  });
+
+  const startTimer = mock<(fire: () => void, ms: number) => () => void>(() => () => {});
+
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage },
+    log: mock(),
+    startTimer,
+  });
+
+  onTestFinished(() => {
+    cache.stop();
+  });
+
+  const first = cache.runPass();
+
+  await firstReached.promise;
+
+  cache.requestRefresh();
 
   // the refresh's timer fires while the first pass still measures
-  await Bun.sleep(5);
+  const fire = startTimer.mock.calls[0]?.[0];
 
-  expect(state.calls).toBe(1);
+  invariant(fire);
+  fire();
 
-  gate.resolve(buildReport(ctx.imp.id, true));
+  const callsDuringFirst = measureUsage.mock.calls.length;
+
+  firstMeasured.resolve({ imps: new Map(), isPartial: false });
 
   await first;
-  await second.promise;
+  await secondStarted.promise;
 
-  expect(state.calls).toBe(2);
+  expect(callsDuringFirst).toBe(1);
+  expect(measureUsage).toHaveBeenCalledTimes(2);
 });
 
-test('after stop, a refresh runs no pass', async () => {
-  const state = { calls: 0 };
+test('it starts one refresh timer for a burst of refresh requests', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupCache(
-    (imps) => {
-      state.calls += 1;
+  const startTimer = mock<(fire: () => void, ms: number) => () => void>(() => () => {});
 
-      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
-    },
-    { refreshDelayMs: 0 },
-  );
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
+    log: mock(),
+    startTimer,
+  });
 
-  ctx.cache.stop();
-  ctx.cache.requestRefresh();
+  onTestFinished(() => {
+    cache.stop();
+  });
 
-  await Bun.sleep(5);
+  cache.requestRefresh();
+  cache.requestRefresh();
+  cache.requestRefresh();
 
-  expect(state.calls).toBe(0);
+  expect(startTimer).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 10_000);
+});
+
+test('it cancels a pending refresh when it stops', async () => {
+  const ctx = await setupTest();
+
+  const cancel = mock();
+
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
+    log: mock(),
+    startTimer: () => cancel,
+  });
+
+  cache.requestRefresh();
+  cache.stop();
+
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+test('it starts no refresh after it stops', async () => {
+  const ctx = await setupTest();
+
+  const startTimer = mock<(fire: () => void, ms: number) => () => void>(() => () => {});
+
+  const cache = createDiskUsageCache({
+    db: ctx.db,
+    storage: { measureUsage: () => Promise.resolve({ imps: new Map(), isPartial: false }) },
+    log: mock(),
+    startTimer,
+  });
+
+  cache.stop();
+  cache.requestRefresh();
+
+  expect(startTimer).not.toHaveBeenCalled();
 });

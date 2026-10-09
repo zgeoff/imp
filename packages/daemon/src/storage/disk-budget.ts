@@ -46,7 +46,21 @@ interface DiskBudgetDeps {
   // how long a write's hold outlives it: ZFS reports a write's blocks in
   // `available` only once its transaction group commits, about 5 s later
   readonly releaseDelayMs?: number;
+
+  // runs `fire` once `ms` is up and returns the cancel; setTimeout by default
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
   readonly log: (message: string) => void;
+}
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  // a pending release never keeps impd running
+  timer.unref();
+
+  return () => {
+    clearTimeout(timer);
+  };
 }
 
 function buildDiskFullError(availableBytes: number, reserveBytes: number, requestedBytes: number) {
@@ -61,6 +75,7 @@ function buildDiskFullError(availableBytes: number, reserveBytes: number, reques
 
 export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   const mutex = createKeyedMutex();
+  const startTimer = deps.startTimer ?? startRealTimer;
   const ledger = { pendingBytes: 0, wasLow: false };
 
   const readStatus = async (): Promise<DiskStatus> => {
@@ -115,11 +130,9 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
       return;
     }
 
-    const timer = setTimeout(() => {
+    startTimer(() => {
       ledger.pendingBytes -= bytes;
     }, delayMs);
-
-    timer.unref();
   };
 
   const withRoom = async <T>(bytes: number, task: () => Promise<T>): Promise<T> => {
