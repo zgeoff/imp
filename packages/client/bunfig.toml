@@ -1,0 +1,3 @@
+[test]
+# the root run's preload, so the package's own tests run from here as well
+preload = ["../test-utils/src/preload.ts", "@zgeoff/bun-test-extended"]

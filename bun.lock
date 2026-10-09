@@ -71,9 +71,11 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@faker-js/faker": "catalog:",
         "@imp/api": "workspace:*",
         "@imp/daemon": "workspace:*",
-        "@orpc/server": "catalog:",
+        "@imp/test-utils": "workspace:*",
+        "msw": "catalog:",
         "tsdown": "catalog:",
       },
       "peerDependencies": {

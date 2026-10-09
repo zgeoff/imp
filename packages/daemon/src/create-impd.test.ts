@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
 import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
@@ -445,6 +446,71 @@ test('it sets a lease end from the wall clock when no clock is given', async () 
   );
 
   expect(acquired.lease.until?.getTime()).toBeWithin(startedMs + 30_000, Date.now() + 30_001);
+});
+
+test('it sends a streamed build its progress at the keepalive gap it is given', async () => {
+  const ctx = await setupTest();
+
+  const quick = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration(), keepaliveMs: 20 },
+  );
+
+  ctx.stack.defer(() => quick.broker.stop());
+
+  ctx.stack.defer(() => {
+    quick.egress.stop();
+    quick.diskUsage.stop();
+  });
+
+  // an upload that has not ended, so the build waits in its upload phase
+  const upload = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+
+  const context = new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      controller.enqueue(new TextEncoder().encode('tar'));
+      upload.resolve(controller);
+    },
+  });
+
+  const uploading = await upload.promise;
+
+  onTestFinished(() => {
+    uploading.close();
+  });
+
+  const init: RequestInit & { readonly duplex: 'half' } = {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/x-tar',
+      accept: IMAGE_BUILD_STREAM_TYPE,
+    },
+    body: context,
+    duplex: 'half',
+  };
+
+  const response = await quick.api.app.handle(
+    new Request('http://impd.test/images/build?name=web', init),
+  );
+
+  const lines: string[] = [];
+  const body: AsyncIterable<Uint8Array> = response.body ?? new ReadableStream<Uint8Array>();
+
+  for await (const chunk of body) {
+    lines.push(...new TextDecoder().decode(chunk).split('\n').filter(Boolean));
+
+    if (lines.length >= 4) {
+      break;
+    }
+  }
+
+  expect(lines.slice(0, 4).map((line) => JSON.parse(line) as unknown)).toStrictEqual([
+    { type: 'progress', phase: 'upload', elapsedMs: 0 },
+    { type: 'progress', phase: 'upload', elapsedMs: 0 },
+    { type: 'progress', phase: 'upload', elapsedMs: 0 },
+    { type: 'progress', phase: 'upload', elapsedMs: 0 },
+  ]);
 });
 
 test('it logs to stdout when no log is given', async () => {

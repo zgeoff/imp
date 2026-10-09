@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import type { ImpdDeps } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
@@ -14,10 +13,10 @@ import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { server } from '@imp/test-utils/mock-server';
 import { http } from 'msw';
-import { createImpClient } from './create-imp-client';
-import { buildStubImpdWithNewReason } from './test-utils/build-stub-impd-with-new-reason';
+import { checkImpdAccess } from './check-impd-access';
 
-// impd booted in process on stub VMs
+// impd booted in process on stub VMs, served at http://impd.test/ through
+// the run's MSW server
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -26,7 +25,7 @@ async function setupTest() {
   // impd boots with a root token, the bearer the test's client sends
   const rootToken = 'root-token';
 
-  const dataDir = await mkdtemp(join(tmpdir(), 'imp-client-events-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'imp-client-access-'));
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
@@ -40,16 +39,6 @@ async function setupTest() {
 
   await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
   await writeFile(systemDrivePath, drive);
-
-  // the image every imps.create boots when it names none
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
 
   const vmm = buildStubVmm();
 
@@ -130,40 +119,31 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  return { impd, rootToken };
+  server.use(http.all('http://impd.test/*', (info) => impd.api.app.handle(info.request)));
+
+  return { url: 'http://impd.test', rootToken };
 }
 
-// A newer impd sends a reason this client does not know: the client passes
-// it through, since oRPC checks outputs on the server, not here. A new
-// ImpChangeReason needs no EVENT_VERSION bump.
-test('it passes on an event whose reason this client does not know', async () => {
+test('it reports an impd that takes the token as reachable', async () => {
   const ctx = await setupTest();
+  const access = await checkImpdAccess(ctx.url, ctx.rootToken);
 
-  const newer = buildStubImpdWithNewReason(
-    (request) => ctx.impd.api.app.handle(request),
-    'from-the-future',
+  expect(access).toBe('reachable');
+});
+
+test('it reports an impd that rejects the token as unauthorized', async () => {
+  const ctx = await setupTest();
+  const access = await checkImpdAccess(ctx.url, 'wrong');
+
+  expect(access).toBe('unauthorized');
+});
+
+test('it reports an impd it cannot reach as unreachable', async () => {
+  // nothing listens on a free port
+  const access = await checkImpdAccess(
+    `http://127.0.0.1:${String(findFreePorts(1).take())}`,
+    'root-token',
   );
 
-  server.use(http.all('http://impd.test/*', (info) => newer(info.request)));
-
-  const client = createImpClient({ url: 'http://impd.test/', token: ctx.rootToken });
-
-  await client.imps.create({ name: 'dev' });
-
-  const events = await client.events.stream();
-
-  const reading = events[Symbol.asyncIterator]();
-
-  onTestFinished(() => reading.return?.());
-
-  await reading.next();
-  await client.imps.sleep({ name: 'dev' });
-
-  const changed = await reading.next();
-
-  expect(changed.value).toMatchObject({
-    ev: 'ImpChanged',
-    reason: 'from-the-future',
-    imp: { name: 'dev' },
-  });
+  expect(access).toBe('unreachable');
 });

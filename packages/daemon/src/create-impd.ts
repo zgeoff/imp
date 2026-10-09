@@ -189,6 +189,10 @@ export interface ImpdDeps {
 
   // signs each OAuth sign-in's id; drawn at random by default
   readonly oauthKey?: Buffer;
+
+  // the gap between the progress events of a streamed image call;
+  // BUILD_KEEPALIVE_MS by default
+  readonly keepaliveMs?: number;
 }
 
 // What the storage services need, and the data dir's backend
@@ -835,6 +839,7 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
     readTailscale,
     readTailnetNames: tailnetNames === null ? null : tailnetNames.readStatus,
     isReady: () => state.ready,
+    ...(deps.keepaliveMs !== undefined && { keepaliveMs: deps.keepaliveMs }),
   });
 
   return {
