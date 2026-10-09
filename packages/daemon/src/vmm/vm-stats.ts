@@ -3,6 +3,8 @@ import { isFirecrackerAlive } from './firecracker-process';
 
 const KIB_PER_MIB = 1024;
 
+// Each reader takes `procRoot`, where /proc is mounted: /proc by default.
+
 // `Name:   1234 kB` lines of /proc/<pid>/smaps_rollup → kB by name
 export function parseSmapsRollup(text: string): ReadonlyMap<string, number> {
   const fields = new Map<string, number>();
@@ -21,8 +23,8 @@ export function parseSmapsRollup(text: string): ReadonlyMap<string, number> {
 // What the governor counts: anonymous and shmem pages, not the clean mem file pages a woken
 // guest only read (docs/architecture/sleep-and-wake.md#5-ram-what-the-governor-measures).
 // Null when the pid is not this Firecracker.
-export function readOwnedRamMib(pid: number, apiSocket: string): number | null {
-  const fields = readVmSmaps(pid, apiSocket);
+export function readOwnedRamMib(pid: number, apiSocket: string, procRoot = '/proc'): number | null {
+  const fields = readVmSmaps(pid, apiSocket, procRoot);
 
   if (fields === null) {
     return null;
@@ -34,8 +36,12 @@ export function readOwnedRamMib(pid: number, apiSocket: string): number | null {
 // The VM's anonymous and shmem pages counted in full, as if none were shared. KSM
 // splits a merged page's Pss across the VMs that map it, and a write splits the
 // page again: a wake reserve of this size holds when the guest writes them all.
-export function readUnsharedRamMib(pid: number, apiSocket: string): number | null {
-  const fields = readVmSmaps(pid, apiSocket);
+export function readUnsharedRamMib(
+  pid: number,
+  apiSocket: string,
+  procRoot = '/proc',
+): number | null {
+  const fields = readVmSmaps(pid, apiSocket, procRoot);
 
   return fields === null ? null : countUnsharedMib(fields);
 }
@@ -47,8 +53,8 @@ export function countUnsharedMib(fields: ReadonlyMap<string, number>): number {
 }
 
 // All the VM's resident pages (Rss), what `ps` shows; null as above
-export function readRssMib(pid: number, apiSocket: string): number | null {
-  const fields = readVmSmaps(pid, apiSocket);
+export function readRssMib(pid: number, apiSocket: string, procRoot = '/proc'): number | null {
+  const fields = readVmSmaps(pid, apiSocket, procRoot);
 
   return fields === null ? null : Math.round((fields.get('Rss') ?? 0) / KIB_PER_MIB);
 }
@@ -57,8 +63,9 @@ export function readRssMib(pid: number, apiSocket: string): number | null {
 export function readVmMemory(
   pid: number,
   apiSocket: string,
+  procRoot = '/proc',
 ): { readonly ramMib: number | null; readonly rssMib: number | null } {
-  const fields = readVmSmaps(pid, apiSocket);
+  const fields = readVmSmaps(pid, apiSocket, procRoot);
 
   if (fields === null) {
     return { ramMib: null, rssMib: null };
@@ -72,22 +79,26 @@ export function readVmMemory(
   };
 }
 
-function readVmSmaps(pid: number, apiSocket: string): ReadonlyMap<string, number> | null {
-  if (!isFirecrackerAlive(pid, apiSocket)) {
+function readVmSmaps(
+  pid: number,
+  apiSocket: string,
+  procRoot: string,
+): ReadonlyMap<string, number> | null {
+  if (!isFirecrackerAlive(pid, apiSocket, procRoot)) {
     return null;
   }
 
   try {
-    return parseSmapsRollup(readFileSync(`/proc/${String(pid)}/smaps_rollup`, 'utf8'));
+    return parseSmapsRollup(readFileSync(`${procRoot}/${String(pid)}/smaps_rollup`, 'utf8'));
   } catch {
     return null;
   }
 }
 
 // utime + stime in clock ticks (USER_HZ, 100 on Linux), or null when gone
-export function readCpuTicks(pid: number): number | null {
+export function readCpuTicks(pid: number, procRoot = '/proc'): number | null {
   try {
-    const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+    const stat = readFileSync(`${procRoot}/${String(pid)}/stat`, 'utf8');
 
     // fields after the parenthesised command name, starting at field 3
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');

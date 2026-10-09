@@ -1,7 +1,8 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sendPing } from '../agent-client/agent-requests';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { parsePrefix64 } from '../net/addressing6';
@@ -231,21 +232,33 @@ test('#sleepVm kills a VM whose pause and resume both fail', async () => {
   expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
 });
 
-// the ping's own deadline is 250 ms, far below a ping's default of 2 s
-test('#readGuestUptimeMs reads no uptime from a wedged agent within a short timeout', async () => {
+// a sleep asks under the imp's lock: far below a ping's default of 2 s
+test('#readGuestUptimeMs asks the agent with a 250 ms deadline', async () => {
+  const ctx = setupTest();
+
+  const ping = mock(() =>
+    Promise.resolve({ ok: true as const, version: '0.1.0', uptime_ms: 1350 }),
+  );
+
+  const uptime = await createVmRunner(buildStubJails().jails, null, ping).readGuestUptimeMs(
+    ctx.paths,
+  );
+
+  expect(uptime).toBe(1350);
+  expect(ping).toHaveBeenCalledWith(ctx.paths.vsockSocket, 250);
+});
+
+test('#readGuestUptimeMs reads no uptime from an agent that does not answer by the deadline', async () => {
   const ctx = setupTest();
 
   // accepts the connection and never answers
   await startStubAgent(ctx.paths.vsockSocket, () => {});
 
-  const started = performance.now();
-
-  const uptime = await createVmRunner(buildStubJails().jails).readGuestUptimeMs(ctx.paths);
-
-  const elapsedMs = performance.now() - started;
+  const uptime = await createVmRunner(buildStubJails().jails, null, (vsockPath) =>
+    sendPing(vsockPath, 20),
+  ).readGuestUptimeMs(ctx.paths);
 
   expect(uptime).toBeNull();
-  expect(elapsedMs).toBeLessThan(1000);
 });
 
 test('#readGuestUptimeMs reads no uptime from an agent that cannot read its clock', async () => {

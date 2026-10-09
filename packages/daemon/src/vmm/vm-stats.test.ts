@@ -1,8 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startStubFirecrackerProcess } from '../test-utils/start-stub-firecracker-process';
 import {
   countUnsharedMib,
   parseSmapsRollup,
@@ -13,6 +12,7 @@ import {
   readVmMemory,
 } from './vm-stats';
 
+// an empty /proc in a temp dir; the test writes each process's files
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-vm-stats-'));
 
@@ -20,7 +20,11 @@ function setupTest() {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  return { dir };
+  const procRoot = join(dir, 'proc');
+
+  mkdirSync(procRoot);
+
+  return { procRoot };
 }
 
 test('#parseSmapsRollup reads the kB fields of smaps_rollup', () => {
@@ -53,84 +57,159 @@ test('#countUnsharedMib counts anonymous and shmem pages in full, in MiB', () =>
   ).toBe(3);
 });
 
-test('#readOwnedRamMib reads a live firecracker in whole MiB', async () => {
+test('#readOwnedRamMib counts the anonymous and shmem Pss of a live firecracker', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
 
-  expect(readOwnedRamMib(child.pid, join(ctx.dir, 'api.sock'))).toSatisfy(Number.isSafeInteger);
+  writeFileSync(
+    join(ctx.procRoot, '42', 'smaps_rollup'),
+    'Rss:              409600 kB\nPss_Anon:          204800 kB\nPss_Shmem:          51200 kB\nAnonymous:         307200 kB\n',
+  );
+
+  expect(readOwnedRamMib(42, '/run/api.sock', ctx.procRoot)).toBe(250);
 });
 
-test('#readRssMib reads a live firecracker in whole MiB', async () => {
+test('#readUnsharedRamMib counts the anonymous pages in full and the shmem Pss', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
 
-  expect(readRssMib(child.pid, join(ctx.dir, 'api.sock'))).toSatisfy(Number.isSafeInteger);
+  writeFileSync(
+    join(ctx.procRoot, '42', 'smaps_rollup'),
+    'Rss:              409600 kB\nPss_Anon:          204800 kB\nPss_Shmem:          51200 kB\nAnonymous:         307200 kB\n',
+  );
+
+  expect(readUnsharedRamMib(42, '/run/api.sock', ctx.procRoot)).toBe(350);
 });
 
-test('#readUnsharedRamMib reads a live firecracker in whole MiB', async () => {
+test('#readRssMib reads the resident size of a live firecracker', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
 
-  expect(readUnsharedRamMib(child.pid, join(ctx.dir, 'api.sock'))).toSatisfy(Number.isSafeInteger);
+  writeFileSync(
+    join(ctx.procRoot, '42', 'smaps_rollup'),
+    'Rss:              409600 kB\nPss_Anon:          204800 kB\nPss_Shmem:          51200 kB\nAnonymous:         307200 kB\n',
+  );
+
+  expect(readRssMib(42, '/run/api.sock', ctx.procRoot)).toBe(400);
 });
 
-test('#readOwnedRamMib reads nothing for a pid that serves another socket', async () => {
+test('#readVmMemory reads the counted and the resident size in one read', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
 
-  expect(readOwnedRamMib(child.pid, join(ctx.dir, 'other.sock'))).toBeNull();
+  writeFileSync(
+    join(ctx.procRoot, '42', 'smaps_rollup'),
+    'Rss:              409600 kB\nPss_Anon:          204800 kB\nPss_Shmem:          51200 kB\nAnonymous:         307200 kB\n',
+  );
+
+  expect(readVmMemory(42, '/run/api.sock', ctx.procRoot)).toStrictEqual({
+    ramMib: 250,
+    rssMib: 400,
+  });
 });
 
-test('#readRssMib reads nothing for a pid that serves another socket', async () => {
+test('#readOwnedRamMib rounds to whole MiB', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
+  writeFileSync(join(ctx.procRoot, '42', 'smaps_rollup'), 'Pss_Anon:            1600 kB\n');
 
-  expect(readRssMib(child.pid, join(ctx.dir, 'other.sock'))).toBeNull();
+  expect(readOwnedRamMib(42, '/run/api.sock', ctx.procRoot)).toBe(2);
 });
 
-test('#readUnsharedRamMib reads nothing for a pid that serves another socket', async () => {
+test('#readOwnedRamMib reads nothing for a pid that serves another socket', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/other.sock\0');
+  writeFileSync(join(ctx.procRoot, '42', 'smaps_rollup'), 'Pss_Anon:          204800 kB\n');
 
-  expect(readUnsharedRamMib(child.pid, join(ctx.dir, 'other.sock'))).toBeNull();
+  expect(readOwnedRamMib(42, '/run/api.sock', ctx.procRoot)).toBeNull();
 });
 
-test('#readVmMemory reads the counted and the resident size of a live firecracker', async () => {
+test('#readOwnedRamMib reads nothing for a zombie firecracker', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) Z 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
+  writeFileSync(join(ctx.procRoot, '42', 'smaps_rollup'), 'Pss_Anon:          204800 kB\n');
 
-  const memory = readVmMemory(child.pid, join(ctx.dir, 'api.sock'));
-
-  expect(memory.ramMib).toSatisfy(Number.isSafeInteger);
-  expect(memory.rssMib).toSatisfy(Number.isSafeInteger);
+  expect(readOwnedRamMib(42, '/run/api.sock', ctx.procRoot)).toBeNull();
 });
 
-test('#readVmMemory reads nothing for a pid that serves another socket', async () => {
+test('#readRssMib reads nothing for a firecracker without smaps_rollup', () => {
   const ctx = setupTest();
 
-  const child = await startStubFirecrackerProcess(join(ctx.dir, 'api.sock'));
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
 
-  expect(readVmMemory(child.pid, join(ctx.dir, 'other.sock'))).toStrictEqual({
+  expect(readRssMib(42, '/run/api.sock', ctx.procRoot)).toBeNull();
+});
+
+test('#readVmMemory reads nothing for a pid that is gone', () => {
+  const ctx = setupTest();
+
+  expect(readVmMemory(42, '/run/api.sock', ctx.procRoot)).toStrictEqual({
     ramMib: null,
     rssMib: null,
   });
 });
 
-test('#readCpuTicks reads the user and system ticks of a live process', () => {
-  expect(readCpuTicks(process.pid)).toSatisfy(Number.isSafeInteger);
+test('#readUnsharedRamMib reads nothing for a pid that is gone', () => {
+  const ctx = setupTest();
+
+  expect(readUnsharedRamMib(42, '/run/api.sock', ctx.procRoot)).toBeNull();
 });
 
-test('#readCpuTicks reads nothing for a process that is gone', async () => {
-  const child = Bun.spawn(['true']);
+test('#readCpuTicks adds the user and system ticks of stat', () => {
+  const ctx = setupTest();
 
-  await child.exited;
+  mkdirSync(join(ctx.procRoot, '42'));
 
-  expect(readCpuTicks(child.pid)).toBeNull();
+  writeFileSync(
+    join(ctx.procRoot, '42', 'stat'),
+    '42 (firecracker) S 1 42 42 0 -1 4194560 100 0 0 0 1500 250 0 0 20 0 3 0',
+  );
+
+  expect(readCpuTicks(42, ctx.procRoot)).toBe(1750);
+});
+
+test('#readCpuTicks reads past a command name with spaces and parentheses', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.procRoot, '42'));
+
+  writeFileSync(
+    join(ctx.procRoot, '42', 'stat'),
+    '42 (fc (vm) 1) S 1 42 42 0 -1 4194560 100 0 0 0 1500 250 0 0 20 0 3 0',
+  );
+
+  expect(readCpuTicks(42, ctx.procRoot)).toBe(1750);
+});
+
+test('#readCpuTicks reads nothing for a process that is gone', () => {
+  const ctx = setupTest();
+
+  expect(readCpuTicks(42, ctx.procRoot)).toBeNull();
+});
+
+test('#readCpuTicks reads the host /proc by default', () => {
+  expect(readCpuTicks(process.pid)).toSatisfy(Number.isSafeInteger);
 });

@@ -437,8 +437,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
    a table, or never answers.
 2. `vmm/template-vm.test.ts` and `vmm/vm-runner.test.ts` run
    `test-utils/run-stub-firecracker-api.ts` as the VMM process, with the API socket in its argv.
-3. `vmm/firecracker-process.test.ts`, `vmm/vm-stats.test.ts`: `bash` run under the name
-   `firecracker`; it serves nothing.
+3. `vmm/firecracker-process.test.ts`: `bash` run under the name `firecracker`; it serves nothing.
 4. `startStubDockerEngine`: a `Bun.serve({ unix })` in the test's temp dir, over `@msw/data`
    collections of containers and images; a call it does not model gets a 500 that names it and lands
    in `unexpected`, which each test that uses it asserts empty. It reads image names as the engine
@@ -448,7 +447,8 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
    through a build, for `images/docker-build.test.ts`'s idle-limit test: a child Bun with
    `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1` runs `test-utils/run-idle-limited-docker-build.ts`, whose
    unprotected fetch starts once both builds are silent (`started`) and expires after about 8 s.
-5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`.
+5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`, of the
+   readers in `vmm/vm-stats.ts` and of `isFirecrackerAlive`.
 6. Used by `broker/broker.test.ts`, `broker/broker-oauth.test.ts`, `broker/forward-request.test.ts`
    and `broker/oauth-refresher.test.ts`: real TLS on loopback with a CA of its own, since the
    broker's verification of the upstream and the guest's view of an untrusted certificate are under

@@ -204,7 +204,13 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
 // `jails` releases a jail whatever started the VM: an impd with the jailer
 // off still stops a jailed VM it adopted. Every Firecracker, an imp's or a
 // template build's, starts through `mergeWrapper` (ksm-exec with IMP_KSM).
-export function createVmRunner(jails: Jails, mergeWrapper: string | null = null): VmRunner {
+export function createVmRunner(
+  jails: Jails,
+  mergeWrapper: string | null = null,
+
+  // asks the agent with a deadline; sendPing by default
+  sendUptimePing: typeof sendPing = sendPing,
+): VmRunner {
   const removeVmMounts = (paths: ImpPaths): Promise<void> => jails.release(paths.impId);
 
   // the jailer's command in a prepared chroot, or Firecracker's own beside
@@ -535,9 +541,9 @@ export function createVmRunner(jails: Jails, mergeWrapper: string | null = null)
     },
     readGuestUptimeMs: async (paths) => {
       try {
-        const ping = await sendPing(paths.vsockSocket, UPTIME_PING_TIMEOUT_MS);
+        const answer = await sendUptimePing(paths.vsockSocket, UPTIME_PING_TIMEOUT_MS);
 
-        return ping.uptime_ms ?? null;
+        return answer.uptime_ms ?? null;
       } catch {
         return null;
       }
