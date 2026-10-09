@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadOrCreateToken } from './token';
@@ -19,6 +19,18 @@ test('it makes a token of 32 random bytes in base64url on first start', () => {
   const token = loadOrCreateToken(ctx.dir);
 
   expect(token).toMatch(/^[\w-]{43}$/);
+});
+
+test('it makes a different token for each new data dir', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'a'));
+  mkdirSync(join(ctx.dir, 'b'));
+
+  const first = loadOrCreateToken(join(ctx.dir, 'a'));
+  const second = loadOrCreateToken(join(ctx.dir, 'b'));
+
+  expect(second).not.toBe(first);
 });
 
 test('it keeps the token it makes in a file the owner alone may read', () => {

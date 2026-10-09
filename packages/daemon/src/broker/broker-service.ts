@@ -626,7 +626,9 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildMovingError(impName);
       }
 
-      await deps.beforeGrantWrite?.();
+      if (deps.beforeGrantWrite !== undefined) {
+        await deps.beforeGrantWrite();
+      }
 
       const outcome = await createCheckedGrant(db, imp.id, secretName, authority);
 
@@ -656,7 +658,9 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildMovingError(impName);
       }
 
-      await deps.beforeGrantWrite?.();
+      if (deps.beforeGrantWrite !== undefined) {
+        await deps.beforeGrantWrite();
+      }
 
       const outcome = await removeCheckedGrant(db, imp.id, secretName, authority);
 
@@ -688,7 +692,9 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     createForkGrants: async (source, fork, authority) => {
-      await deps.beforeGrantWrite?.();
+      if (deps.beforeGrantWrite !== undefined) {
+        await deps.beforeGrantWrite();
+      }
 
       try {
         const outcome = await createForkGrants(db, source.id, fork.id, authority);

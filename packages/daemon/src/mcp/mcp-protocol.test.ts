@@ -16,6 +16,7 @@ import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildQueryGate } from '../test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
@@ -62,8 +63,11 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // holds impd's next read of the imps once armed, so a call waits there
+  const gate = buildQueryGate('imps');
+
   const impd = await createImpd(config, {
-    db,
+    db: db.withPlugin(gate.plugin),
 
     // the bearer the root client sends
     rootToken: 'root-token',
@@ -182,6 +186,7 @@ async function setupTest() {
     rootClient: createImpClient({ url, token: 'root-token' }),
     mcp,
     repeat,
+    gate,
     sent,
     reply: (message: string) => {
       sent.push(JSON.parse(message));
@@ -199,6 +204,8 @@ test('it still answers a cancelled create, so the agent learns the name of what 
     scope: 'manage' as const,
   };
 
+  ctx.gate.arm();
+
   const call = ctx.mcp.receive(
     JSON.stringify({
       jsonrpc: '2.0',
@@ -209,10 +216,17 @@ test('it still answers a cancelled create, so the agent learns the name of what 
     context,
   );
 
+  // the create waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
   await ctx.mcp.receive(
     JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
     context,
   );
+
+  const sentAtCancel = [...ctx.sent];
+
+  ctx.gate.release();
 
   await call;
 
@@ -225,6 +239,7 @@ test('it still answers a cancelled create, so the agent learns the name of what 
   const json: unknown = JSON.parse(JSON.stringify(made));
   const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
 
+  expect(sentAtCancel).toStrictEqual([]);
   expect(made.name).toStartWith('agent-');
 
   expect(ctx.sent).toStrictEqual([
@@ -259,6 +274,8 @@ test('it still answers a cancelled fork, so the agent learns the name of what it
     scope: 'manage' as const,
   };
 
+  ctx.gate.arm();
+
   const call = ctx.mcp.receive(
     JSON.stringify({
       jsonrpc: '2.0',
@@ -269,10 +286,17 @@ test('it still answers a cancelled fork, so the agent learns the name of what it
     context,
   );
 
+  // the fork waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
   await ctx.mcp.receive(
     JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
     context,
   );
+
+  const sentAtCancel = [...ctx.sent];
+
+  ctx.gate.release();
 
   await call;
 
@@ -287,6 +311,7 @@ test('it still answers a cancelled fork, so the agent learns the name of what it
   const json: unknown = JSON.parse(JSON.stringify(fork));
   const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
 
+  expect(sentAtCancel).toStrictEqual([]);
   expect(fork.name).toStartWith('agent-');
 
   expect(ctx.sent).toStrictEqual([
@@ -323,6 +348,8 @@ test('it still answers a cancelled restore, so the agent learns the state of the
     scope: 'manage' as const,
   };
 
+  ctx.gate.arm();
+
   const call = ctx.mcp.receive(
     JSON.stringify({
       jsonrpc: '2.0',
@@ -333,10 +360,17 @@ test('it still answers a cancelled restore, so the agent learns the state of the
     context,
   );
 
+  // the restore waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
   await ctx.mcp.receive(
     JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
     context,
   );
+
+  const sentAtCancel = [...ctx.sent];
+
+  ctx.gate.release();
 
   await call;
 
@@ -346,6 +380,8 @@ test('it still answers a cancelled restore, so the agent learns the state of the
   // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
   const json: unknown = JSON.parse(JSON.stringify(restored));
   const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  expect(sentAtCancel).toStrictEqual([]);
 
   expect(ctx.sent).toStrictEqual([
     {

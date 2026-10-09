@@ -403,6 +403,71 @@ test("it passes a requirement to impd, whose refusal comes back as the tool's er
   expect(guest.requests).toStrictEqual([]);
 });
 
+test('it runs a command whose broker requirement impd meets, with the broker variables', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.rootClient.imps.create({ name: 'dev' });
+  await ctx.rootClient.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-1' });
+  await ctx.rootClient.grants.add({ name: 'dev', secret: 'gh' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  await ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'imp_exec',
+        arguments: { name: 'dev', argv: ['echo', 'hi'], require: ['broker'] },
+      },
+    }),
+    {
+      reply: ctx.reply,
+      client: createImpClient({ url: ctx.url, token: 'root-token' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: 'hi\n',
+          stderr: '',
+          stdoutDroppedBytes: 0,
+          stderrDroppedBytes: 0,
+        },
+        isError: false,
+      },
+    },
+  ]);
+
+  expect(guest.requests).toMatchObject([
+    {
+      argv: ['echo', 'hi'],
+      env: expect.arrayContaining([expect.stringMatching(/^HTTPS_PROXY=http:\/\//)]) as unknown,
+    },
+  ]);
+});
+
 test('it refuses an unknown requirement before anything runs', async () => {
   const ctx = await setupTest();
 

@@ -246,6 +246,23 @@ test('it lists the imps with their state', async () => {
     },
   );
 
+  const dev = await ctx.rootClient.imps.get({ name: 'dev' });
+  const off = await ctx.rootClient.imps.get({ name: 'off' });
+
+  // the imps as they cross impd's API, their dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify([dev, off]));
+
+  const [storedDev, storedOff] = z
+    .tuple([
+      z.looseObject({ resources: z.looseObject({}) }),
+      z.looseObject({ resources: z.looseObject({}) }),
+    ])
+    .parse(json);
+
+  expect(dev.state).toBe('running');
+  expect(off.state).toBe('stopped');
+
   expect(ctx.sent).toStrictEqual([
     {
       jsonrpc: '2.0',
@@ -254,8 +271,16 @@ test('it lists the imps with their state', async () => {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
         structuredContent: {
           imps: [
-            expect.objectContaining({ name: 'dev', state: 'running' }) as unknown,
-            expect.objectContaining({ name: 'off', state: 'stopped' }) as unknown,
+            {
+              ...storedDev,
+
+              // its awake time runs on the wall clock between the answer and the read
+              resources: { ...storedDev.resources, awakeMs: expect.any(Number) as unknown },
+            },
+            {
+              ...storedOff,
+              resources: { ...storedOff.resources, awakeMs: expect.any(Number) as unknown },
+            },
           ],
         },
         isError: false,
@@ -312,6 +337,13 @@ test('it hides the imps the guard does not allow from the list', async () => {
     },
   );
 
+  const allowed = await ctx.rootClient.imps.get({ name: 'agent-one' });
+
+  // the imp as it crosses impd's API, its dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(allowed));
+  const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
   expect(ctx.sent).toStrictEqual([
     {
       jsonrpc: '2.0',
@@ -319,7 +351,14 @@ test('it hides the imps the guard does not allow from the list', async () => {
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
         structuredContent: {
-          imps: [expect.objectContaining({ name: 'agent-one' }) as unknown],
+          imps: [
+            {
+              ...stored,
+
+              // its awake time runs on the wall clock between the answer and the read
+              resources: { ...stored.resources, awakeMs: expect.any(Number) as unknown },
+            },
+          ],
         },
         isError: false,
       },
@@ -405,6 +444,11 @@ test('it names a nameless create under the prefix', async () => {
 
   const imps = await ctx.rootClient.imps.list();
 
+  // the imp as it crosses impd's API, its dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(imps));
+  const [stored] = z.tuple([z.looseObject({ resources: z.looseObject({}) })]).parse(json);
+
   expect(imps).toMatchObject([{ name: expect.stringMatching(/^agent-[a-z0-9]{8}$/) as unknown }]);
 
   expect(ctx.sent).toStrictEqual([
@@ -414,7 +458,12 @@ test('it names a nameless create under the prefix', async () => {
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
         structuredContent: {
-          imp: expect.objectContaining({ name: imps[0]?.name }) as unknown,
+          imp: {
+            ...stored,
+
+            // its awake time runs on the wall clock between the answer and the read
+            resources: { ...stored.resources, awakeMs: expect.any(Number) as unknown },
+          },
         },
         isError: false,
       },
@@ -474,13 +523,27 @@ test('it creates an imp the allow-list names', async () => {
     },
   );
 
+  const created = await ctx.rootClient.imps.get({ name: 'box' });
+
+  // the imp as it crosses impd's API, its dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(created));
+  const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
   expect(ctx.sent).toStrictEqual([
     {
       jsonrpc: '2.0',
       id: 1,
       result: {
         content: [{ type: 'text', text: expect.any(String) as unknown }],
-        structuredContent: { imp: expect.objectContaining({ name: 'box' }) as unknown },
+        structuredContent: {
+          imp: {
+            ...stored,
+
+            // its awake time runs on the wall clock between the answer and the read
+            resources: { ...stored.resources, awakeMs: expect.any(Number) as unknown },
+          },
+        },
         isError: false,
       },
     },

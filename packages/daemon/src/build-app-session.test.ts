@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -184,12 +185,16 @@ test('it accepts the session from its own page', async () => {
     }),
   );
 
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
   // what a browser on the dashboard's page sends
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
       url: 'http://impd.test/rpc',
       headers: {
-        cookie: login.headers.get('set-cookie')?.split(';')[0] ?? '',
+        cookie,
         'sec-fetch-site': 'same-origin',
       },
       fetch: (request) => ctx.sendToImpd(request),
@@ -236,12 +241,16 @@ test('it accepts the __Host- session from its own page', async () => {
     }),
   );
 
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
   // what a browser on the dashboard's page sends
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
       url: 'http://impd.test/rpc',
       headers: {
-        cookie: login.headers.get('set-cookie')?.split(';')[0] ?? '',
+        cookie,
         'sec-fetch-site': 'same-origin',
       },
       fetch: (request) => ctx.sendToImpd(request),
@@ -302,26 +311,9 @@ test('it refuses a login from another origin and sets no cookie', async () => {
 // what an imp's page on another port of this host can make a browser send:
 // a link, a form post and a text/plain fetch, none needing a preflight
 test.each([
-  ['a link', { method: 'GET', headers: {} }],
-  ['a same-site link', { method: 'GET', headers: { 'sec-fetch-site': 'same-site' } }],
-  [
-    'a form post from another origin',
-    { method: 'POST', headers: { origin: 'http://impd.test:20001' }, body: new FormData() },
-  ],
-  ['a form post with no origin', { method: 'POST', headers: {}, body: new FormData() }],
-  [
-    'a text/plain fetch from another origin',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'text/plain', origin: 'http://impd.test:20001' },
-      body: '{"json":{}}',
-    },
-  ],
-  [
-    'a text/plain fetch with no origin',
-    { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{"json":{}}' },
-  ],
-])('it refuses %s that carries only the session', async (_label, init) => {
+  ['a link', {}],
+  ['a same-site link', { 'sec-fetch-site': 'same-site' }],
+])('it refuses %s that carries only the session', async (_label, headers) => {
   const ctx = await setupTest();
 
   const login = await ctx.sendToImpd(
@@ -332,10 +324,72 @@ test.each([
     }),
   );
 
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
   const response = await ctx.sendToImpd(
     new Request('http://impd.test/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
-      ...init,
-      headers: { ...init.headers, cookie: login.headers.get('set-cookie')?.split(';')[0] ?? '' },
+      method: 'GET',
+      headers: { ...headers, cookie },
+    }),
+  );
+
+  expect(response.status).toBe(401);
+});
+
+test.each([
+  ['from another origin', { origin: 'http://impd.test:20001' }],
+  ['with no origin', {}],
+])('it refuses a form post %s that carries only the session', async (_label, headers) => {
+  const ctx = await setupTest();
+
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'root-token' }),
+    }),
+  );
+
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
+  const response = await ctx.sendToImpd(
+    new Request('http://impd.test/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
+      method: 'POST',
+      headers: { ...headers, cookie },
+      body: new FormData(),
+    }),
+  );
+
+  expect(response.status).toBe(401);
+});
+
+test.each([
+  ['from another origin', { origin: 'http://impd.test:20001' }],
+  ['with no origin', {}],
+])('it refuses a text/plain fetch %s that carries only the session', async (_label, headers) => {
+  const ctx = await setupTest();
+
+  const login = await ctx.sendToImpd(
+    new Request('http://impd.test/auth/login', {
+      method: 'POST',
+      headers: { origin: 'http://impd.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'root-token' }),
+    }),
+  );
+
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
+  const response = await ctx.sendToImpd(
+    new Request('http://impd.test/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'text/plain', cookie },
+      body: '{"json":{}}',
     }),
   );
 
@@ -392,8 +446,12 @@ test('it refuses an /exec socket that carries only the session', async () => {
     }),
   );
 
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+
+  invariant(cookie);
+
   const outcome = await tryExecSocket(ctx.port, '', 'dev', {
-    cookie: login.headers.get('set-cookie')?.split(';')[0] ?? '',
+    cookie,
     origin: `http://127.0.0.1:${ctx.port}`,
   });
 

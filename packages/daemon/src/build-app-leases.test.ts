@@ -476,12 +476,16 @@ test('it refuses the owner’s stop of a leased imp with LEASED naming its lease
 
   await a.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
 
+  const caller = ctx.impd.tokens.authenticate(made.secret);
+
+  invariant(caller);
+
   expect(a.imps.stop({ name: 'dev' })).rejects.toMatchObject({
     code: 'LEASED',
     data: {
       leases: [
         {
-          owner: { principal: ctx.impd.tokens.authenticate(made.secret)?.principal, label: 'job' },
+          owner: { principal: caller.principal, label: 'job' },
         },
       ],
       otherCount: 0,
@@ -638,11 +642,13 @@ test('it releases the caller’s hold and a legacy one on hold 0, and keeps the 
 
   const left = await listLeases(ctx.db, ctx.clock.nowMs);
 
-  const principalOfB = ctx.impd.tokens.authenticate(madeB.secret)?.principal;
+  const callerB = ctx.impd.tokens.authenticate(madeB.secret);
+
+  invariant(callerB);
 
   expect(left.map((lease) => `${lease.principal}/${lease.label}`)).toStrictEqual([
-    `${String(principalOfB)}/hold`,
-    `${String(principalOfB)}/job`,
+    `${callerB.principal}/hold`,
+    `${callerB.principal}/job`,
   ]);
 });
 
@@ -650,13 +656,19 @@ test('it gives a new token with a deleted token’s name another principal', asy
   const ctx = await setupTest();
   const first = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
 
+  // read while the first token still authenticates
+  const firstCaller = ctx.impd.tokens.authenticate(first.secret);
+
   await ctx.client.tokens.delete({ name: 'ci' });
 
   const second = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
 
-  expect(ctx.impd.tokens.authenticate(second.secret)?.principal).not.toBe(
-    ctx.impd.tokens.authenticate(first.secret)?.principal ?? null,
-  );
+  const secondCaller = ctx.impd.tokens.authenticate(second.secret);
+
+  invariant(firstCaller);
+  invariant(secondCaller);
+
+  expect(secondCaller.principal).not.toBe(firstCaller.principal);
 });
 
 test('it lists a new token with a deleted token’s name none of its leases', async () => {

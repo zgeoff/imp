@@ -24,10 +24,14 @@ import { buildStubDockerCli } from './test-utils/build-stub-docker-cli';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
+import type { CpuCgroups } from './vmm/cpu-cgroups';
 
 interface SetupOptions {
   // impd's environment past what every test boots with
   readonly env?: Readonly<Record<string, string>>;
+
+  // the host's cgroup tree; one with a cpu controller by default
+  readonly cgroups?: CpuCgroups;
 }
 
 // impd's real app on stub VMs, on a loopback port for the sockets, with a
@@ -114,7 +118,7 @@ async function setupTest(options: SetupOptions = {}) {
     resolveIpv6: () => Promise.resolve(null),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
-    cgroups: buildStubCpuCgroups().cgroups,
+    cgroups: options.cgroups ?? buildStubCpuCgroups().cgroups,
     vms: vmm.startGeneration(),
     taps: {
       setupTap: (address) => {
@@ -237,6 +241,13 @@ test('it serves system.info from config and the database', async () => {
     },
     ksm: null,
   });
+});
+
+test('it reports cpu limits as not enforced on a host without a cpu controller', async () => {
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups({ isEnforced: false }).cgroups });
+  const info = await ctx.client.system.info();
+
+  expect(info.cpu).toStrictEqual({ hostCpus: 8, limitsEnforced: false });
 });
 
 test('it rejects a request with the wrong token', async () => {
@@ -480,8 +491,6 @@ test('it reports the https URL when impd has a domain', async () => {
 test('it names a missing DNS token file as an error in system.info, and still answers', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
-
   const ctx = await setupTest({
     env: {
       IMP_DOMAIN: 'imp.example.com',
@@ -489,6 +498,9 @@ test('it names a missing DNS token file as an error in system.info, and still an
       IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
     },
   });
+
+  // registered after setupTest's own release, so the dir goes once impd stops
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   const info = await ctx.client.system.info();
 
@@ -505,8 +517,6 @@ test('it names a missing DNS token file as an error in system.info, and still an
 test('it reads a DNS token file put in place after start, and never shows the token', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
-
   const ctx = await setupTest({
     env: {
       IMP_DOMAIN: 'imp.example.com',
@@ -514,6 +524,9 @@ test('it reads a DNS token file put in place after start, and never shows the to
       IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
     },
   });
+
+  // registered after setupTest's own release, so the dir goes once impd stops
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   await writeFile(join(dir, 'dns-api-token'), 'cf-secret-token\n');
 
