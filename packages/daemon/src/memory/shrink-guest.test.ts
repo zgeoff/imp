@@ -1,51 +1,10 @@
 import { expect, test } from 'bun:test';
 import { buildImpPaths } from '../storage/data-layout';
+import { buildStubClock } from '../test-utils/build-stub-clock';
+import { buildStubElasticGuest } from '../test-utils/build-stub-elastic-guest';
 import { findShrinkTargetMib, shrinkGuest } from './shrink-guest';
 
-const PATHS = buildImpPaths('/data', 'dev');
-
-// A guest with 512 MiB base and 1024 plugged, using 600: it unplugs `stepMib`
-// per look, down to `floorMib`. The clock moves 100 ms per look.
-function setupShrinkTest(stepMib: number, floorMib = 0) {
-  const clock = { now: 0 };
-  const guest = { pluggedMib: 1024, requestedMib: 1024 };
-  const requests: number[] = [];
-
-  const vm = {
-    readGuestMemory: () => {
-      if (guest.requestedMib < guest.pluggedMib) {
-        guest.pluggedMib = Math.max(guest.requestedMib, floorMib, guest.pluggedMib - stepMib);
-      }
-
-      return Promise.resolve({
-        ...guest,
-        totalMib: 512 + guest.pluggedMib,
-        availableMib: 512 + guest.pluggedMib - 600,
-      });
-    },
-    requestPluggedMib: (_paths: unknown, mib: number) => {
-      guest.requestedMib = mib;
-
-      requests.push(mib);
-
-      return Promise.resolve();
-    },
-  };
-
-  const options = {
-    timeLimitMs: 2000,
-    now: () => clock.now,
-    sleep: (ms: number) => {
-      clock.now += ms;
-
-      return Promise.resolve();
-    },
-  };
-
-  return { clock, guest, requests, shrink: () => shrinkGuest(vm, PATHS, options) };
-}
-
-test('the target leaves the guest a step more available than its grow mark, never below 0', () => {
+test('#findShrinkTargetMib leaves the guest a step more available than its grow mark', () => {
   expect(
     findShrinkTargetMib({
       pluggedMib: 1024,
@@ -54,71 +13,121 @@ test('the target leaves the guest a step more available than its grow mark, neve
       availableMib: 936,
     }),
   ).toBe(496);
+});
 
+test('#findShrinkTargetMib never goes below 0', () => {
   expect(
     findShrinkTargetMib({ pluggedMib: 512, requestedMib: 512, totalMib: 1024, availableMib: 1000 }),
   ).toBe(0);
+});
 
-  // 15 % of a large guest is more than 128 MiB; odd MiB round up to whole
-  // blocks: (623 + 256) / 0.85 is 1034.1
+test('#findShrinkTargetMib keeps 15 % of a large guest free, in whole blocks', () => {
+  // (623 + 256) / 0.85 is 1034.1: 1036 in whole 2 MiB blocks, 524 of it plugged
   expect(
     findShrinkTargetMib({ pluggedMib: 512, requestedMib: 512, totalMib: 1024, availableMib: 401 }),
   ).toBe(524);
 });
 
-test('a shrink waits until the guest gets there', async () => {
-  const ctx = setupShrinkTest(200);
+test('#shrinkGuest waits until the guest gets to the target', async () => {
+  const clock = buildStubClock();
 
-  const shrunk = await ctx.shrink();
+  const stub = buildStubElasticGuest({
+    baseMib: 512,
+    usedMib: 600,
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    stepMib: 200,
+  });
+
+  const shrunk = await shrinkGuest(stub.vm, buildImpPaths('/data', 'dev'), {
+    timeLimitMs: 2000,
+    now: clock.now,
+    sleep: clock.sleep,
+  });
 
   expect(shrunk).toBe(496);
-  expect(ctx.requests).toEqual([496]);
-  expect(ctx.clock.now).toBe(300);
+  expect(stub.requests).toStrictEqual([496]);
+  expect(clock.now()).toBe(300);
 });
 
-test('an unplug that stops partway is asked back to what it reached', async () => {
-  const ctx = setupShrinkTest(200, 768);
+test('#shrinkGuest asks an unplug that stops partway back to what it reached', async () => {
+  const clock = buildStubClock();
 
-  const shrunk = await ctx.shrink();
+  const stub = buildStubElasticGuest({
+    baseMib: 512,
+    usedMib: 600,
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    stepMib: 200,
+    floorMib: 768,
+  });
+
+  const shrunk = await shrinkGuest(stub.vm, buildImpPaths('/data', 'dev'), {
+    timeLimitMs: 2000,
+    now: clock.now,
+    sleep: clock.sleep,
+  });
 
   expect(shrunk).toBe(768);
-  expect(ctx.requests).toEqual([496, 768]);
+  expect(stub.requests).toStrictEqual([496, 768]);
 
   // 768 reached at 200 ms, then 500 ms without a move
-  expect(ctx.clock.now).toBe(700);
+  expect(clock.now()).toBe(700);
 });
 
-test('a slow unplug ends at the time limit with what the guest holds then', async () => {
-  const ctx = setupShrinkTest(16);
+test('#shrinkGuest ends a slow unplug at the time limit with what the guest holds then', async () => {
+  const clock = buildStubClock();
 
-  const shrunk = await ctx.shrink();
+  const stub = buildStubElasticGuest({
+    baseMib: 512,
+    usedMib: 600,
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    stepMib: 16,
+  });
 
-  expect(ctx.clock.now).toBe(2000);
-  expect(shrunk).toBe(1024 - 16 * 20);
-  expect(ctx.requests).toEqual([496, 704]);
-  expect(ctx.guest.requestedMib).toBe(704);
+  const shrunk = await shrinkGuest(stub.vm, buildImpPaths('/data', 'dev'), {
+    timeLimitMs: 2000,
+    now: clock.now,
+    sleep: clock.sleep,
+  });
+
+  // 20 looks of 100 ms, each 16 MiB further down
+  expect(shrunk).toBe(704);
+  expect(clock.now()).toBe(2000);
+  expect(stub.requests).toStrictEqual([496, 704]);
 });
 
-test('a guest with nothing to spare is not asked', async () => {
-  const ctx = setupShrinkTest(200);
+test('#shrinkGuest asks nothing of a guest with nothing to spare', async () => {
+  const stub = buildStubElasticGuest({
+    baseMib: 512,
+    usedMib: 600,
+    pluggedMib: 300,
+    requestedMib: 300,
+    stepMib: 200,
+  });
 
-  ctx.guest.pluggedMib = 300;
-  ctx.guest.requestedMib = 300;
-
-  const shrunk = await ctx.shrink();
+  const shrunk = await shrinkGuest(stub.vm, buildImpPaths('/data', 'dev'), {
+    timeLimitMs: 2000,
+  });
 
   expect(shrunk).toBe(300);
-  expect(ctx.requests).toEqual([]);
+  expect(stub.requests).toStrictEqual([]);
 });
 
-test('a plug under way counts at its request: the guest may hold that much by the pause', async () => {
-  const ctx = setupShrinkTest(200);
+test('#shrinkGuest counts a plug under way at its request', async () => {
+  const stub = buildStubElasticGuest({
+    baseMib: 512,
+    usedMib: 600,
+    pluggedMib: 300,
+    requestedMib: 556,
+    stepMib: 200,
+  });
 
-  ctx.guest.pluggedMib = 300;
-  ctx.guest.requestedMib = 556;
-
-  const shrunk = await ctx.shrink();
+  const shrunk = await shrinkGuest(stub.vm, buildImpPaths('/data', 'dev'), {
+    timeLimitMs: 2000,
+  });
 
   expect(shrunk).toBe(556);
-  expect(ctx.requests).toEqual([]);
+  expect(stub.requests).toStrictEqual([]);
 });
