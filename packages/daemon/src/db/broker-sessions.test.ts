@@ -1,50 +1,64 @@
 import { expect, test } from 'bun:test';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { isBrokerSession, writeBrokerSession } from './broker-sessions';
 import { createImage } from './images';
 import { createImp, removeImp } from './imps';
 
-test('a session run is kept while it runs, and goes with its imp', async () => {
-  const database = await createTestDatabase();
+test('it keeps an earlier session that the agent still lists', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  // the image every imp row here refers to
-  const image = await createImage(database.db, {
-    name: 'base',
-    ref: 'imp/base:latest',
-    digest: 'sha256:0000',
-    sizeBytes: 1024,
-  });
+  await writeBrokerSession(ctx.db, imp.id, 'gen-a', []);
+  await writeBrokerSession(ctx.db, imp.id, 'gen-b', ['gen-a']);
 
-  const db = database.db;
+  const isKept = await isBrokerSession(ctx.db, imp.id, 'gen-a');
 
-  const imp = await createImp(db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+  expect(isKept).toBeTrue();
+});
 
-  await writeBrokerSession(db, imp.id, 'gen-a', []);
-  await writeBrokerSession(db, imp.id, 'gen-b', ['gen-a']);
+test('it drops an earlier session that the agent no longer lists', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  const isFirstKept = await isBrokerSession(db, imp.id, 'gen-a');
+  await writeBrokerSession(ctx.db, imp.id, 'gen-a', []);
+  await writeBrokerSession(ctx.db, imp.id, 'gen-b', ['gen-a']);
+  await writeBrokerSession(ctx.db, imp.id, 'gen-c', ['gen-b']);
 
-  expect(isFirstKept).toBe(true);
+  const isKept = await isBrokerSession(ctx.db, imp.id, 'gen-a');
 
-  // the agent no longer lists gen-a when gen-c starts
-  await writeBrokerSession(db, imp.id, 'gen-c', ['gen-b']);
+  expect(isKept).toBeFalse();
+});
 
-  const kept = await Promise.all(
-    ['gen-a', 'gen-b', 'gen-c'].map((generation) => isBrokerSession(db, imp.id, generation)),
-  );
+test('it keeps the new session and the listed one', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  expect(kept).toEqual([false, true, true]);
+  await writeBrokerSession(ctx.db, imp.id, 'gen-a', []);
+  await writeBrokerSession(ctx.db, imp.id, 'gen-b', ['gen-a']);
+  await writeBrokerSession(ctx.db, imp.id, 'gen-c', ['gen-b']);
 
-  await removeImp(db, imp.id);
+  const kept = await Promise.all([
+    isBrokerSession(ctx.db, imp.id, 'gen-b'),
+    isBrokerSession(ctx.db, imp.id, 'gen-c'),
+  ]);
 
-  const isGoneWithImp = !(await isBrokerSession(db, imp.id, 'gen-c'));
+  expect(kept).toStrictEqual([true, true]);
+});
 
-  expect(isGoneWithImp).toBe(true);
+test('it removes the sessions with their imp', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeBrokerSession(ctx.db, imp.id, 'gen-a', []);
+  await removeImp(ctx.db, imp.id);
+
+  const isKept = await isBrokerSession(ctx.db, imp.id, 'gen-a');
+
+  expect(isKept).toBeFalse();
 });

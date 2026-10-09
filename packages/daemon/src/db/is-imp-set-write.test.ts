@@ -1,31 +1,26 @@
 import { expect, test } from 'bun:test';
-import { createTestDatabase } from '../test-utils/create-test-database';
-import { createImage } from './images';
-import { createImp } from './imps';
+import { buildMockCheckpointRecord } from '../test-utils/build-mock-checkpoint-record';
+import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
 import { isImpSetWrite } from './is-imp-set-write';
 
-test('a create, a destroy and a stop resync the proxy and the grants; a sleep does not', async () => {
-  const ctx = await createTestDatabase();
+test('it resyncs the imp set for a create', () => {
+  expect(isImpSetWrite({ kind: 'added', imp: buildMockImpRecord() })).toBeTrue();
+});
 
-  // the image every imp row here refers to
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'imp/base:latest',
-    digest: 'sha256:0000',
-    sizeBytes: 1024,
-  });
+test('it resyncs the imp set for a destroy', () => {
+  expect(isImpSetWrite({ kind: 'removed', imp: buildMockImpRecord() })).toBeTrue();
+});
 
-  const imp = await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 2,
-    memoryMib: 2048,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+test.each([
+  ['stopped', true],
+  ['slept', false],
+  ['booted', false],
+] as const)('it resyncs the imp set for a %s change: %p', (reason, expected) => {
+  expect(isImpSetWrite({ kind: 'changed', imp: buildMockImpRecord(), reason })).toBe(expected);
+});
 
-  expect(isImpSetWrite({ kind: 'added', imp })).toBeTrue();
-  expect(isImpSetWrite({ kind: 'removed', imp })).toBeTrue();
-  expect(isImpSetWrite({ kind: 'changed', imp, reason: 'stopped' })).toBeTrue();
-  expect(isImpSetWrite({ kind: 'changed', imp, reason: 'slept' })).toBeFalse();
+test('it leaves the imp set alone for a checkpoint write', () => {
+  expect(
+    isImpSetWrite({ kind: 'checkpointAdded', checkpoint: buildMockCheckpointRecord() }),
+  ).toBeFalse();
 });

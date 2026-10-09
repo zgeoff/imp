@@ -1,241 +1,564 @@
-import { Database } from 'bun:sqlite';
 import { expect, onTestFinished, test } from 'bun:test';
-import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
+import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
-import { BunSqliteDriver } from './bun-sqlite-driver';
+import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
 import { createImage } from './images';
 import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
 import { createImp, findImpById } from './imps';
-import { isBlockingLease, listLeases, removeLeases, writeLease } from './leases';
-import type { LeaseRecord } from './leases';
+import { isBlockingLease, listLeases, removeLeases, writeLease, writeMovedLeases } from './leases';
 import { runMigrations, runMigrationsTo } from './run-migrations';
-import type { DatabaseSchema } from './schema';
 
-const AT = 1_800_000_000_000;
+test('#writeLease sets the hold to the lease’s end', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-async function setupTest() {
-  const database = await createTestDatabase();
+  const held = await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, until: new Date(1_800_000_060_000) }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
 
-  // the image every imp row here refers to
-  const image = await createImage(database.db, {
-    name: 'base',
-    ref: 'imp/base:latest',
-    digest: 'sha256:0000',
-    sizeBytes: 1024,
-  });
+  expect(held.holdUntil).toStrictEqual(new Date(1_800_000_060_000));
+});
 
-  const imp = await createImp(database.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+test('#writeLease sets the hold to the latest end of the live leases', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  const writes: ImpWrite[] = [];
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, until: new Date(1_800_000_120_000) }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
 
-  subscribeImpWrites(database.db, (write) => {
-    writes.push(write);
-  });
+  const held = await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, until: new Date(1_800_000_060_000) }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
 
-  const buildLease = (overrides: Partial<LeaseRecord>): LeaseRecord => ({
-    impId: imp.id,
-    principal: 'token:a',
-    label: 'job',
-    display: 'a',
-    until: new Date(AT + 60_000),
-    createdAt: new Date(AT),
-    ...overrides,
-  });
+  expect(held.holdUntil).toStrictEqual(new Date(1_800_000_120_000));
+});
 
-  return { ...database, imp, writes, buildLease };
-}
+test('#writeLease holds past every end for a lease with no end', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-test('the hold is the latest end of the live leases, and no end beats every end', async () => {
-  const ctx = await setupTest();
-  const first = await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, until: new Date(1_800_000_120_000) }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
 
-  const later = new Date(AT + 120_000);
-
-  const second = await writeLease(ctx.db, ctx.buildLease({ principal: 'token:b', until: later }), {
-    at: AT,
-    reason: 'held',
-  });
-
-  expect(first.holdUntil).toEqual(new Date(AT + 60_000));
-  expect(second.holdUntil).toEqual(later);
-
-  const endless = await writeLease(ctx.db, ctx.buildLease({ principal: 'token:c', until: null }), {
-    at: AT,
+  const held = await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id, until: null }), {
+    at: 1_800_000_000_000,
     reason: null,
   });
 
-  expect(endless.holdUntil?.getTime()).toBeGreaterThan(later.getTime());
-
-  const removed = await removeLeases(ctx.db, ctx.imp.id, [{ principal: 'token:c', label: 'job' }], {
-    at: AT,
-    reason: 'held',
-  });
-
-  const stored = await findImpById(ctx.db, ctx.imp.id);
-
-  expect(removed.imp.holdUntil).toEqual(later);
-  expect(stored?.holdUntil).toEqual(later);
+  expect(held.holdUntil).toBeAfter(new Date(1_800_000_120_000));
 });
 
-test('a write moves the end and keeps when the lease was made', async () => {
-  const ctx = await setupTest();
-
-  await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
+test('#writeLease moves the end and keeps when the lease was made', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   await writeLease(
     ctx.db,
-    ctx.buildLease({ until: new Date(AT + 90_000), createdAt: new Date(AT + 30_000) }),
-    { at: AT + 30_000, reason: null },
+    buildMockLeaseRecord({
+      impId: imp.id,
+      principal: 'token:a',
+      label: 'job',
+      display: 'a',
+      until: new Date(1_800_000_060_000),
+      createdAt: new Date(1_800_000_000_000),
+    }),
+    { at: 1_800_000_000_000, reason: 'held' },
   );
-
-  const [lease] = await listLeases(ctx.db, AT + 30_000);
-
-  expect(lease?.until).toEqual(new Date(AT + 90_000));
-  expect(lease?.createdAt).toEqual(new Date(AT));
-
-  // a renew emits nothing
-  expect(ctx.writes.map((write) => write.kind === 'changed' && write.reason)).toEqual(['held']);
-});
-
-test('a lease past its end is gone from the list, and a later write prunes it', async () => {
-  const ctx = await setupTest();
-
-  await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
-
-  const before = await listLeases(ctx.db, AT + 59_999);
-  const after = await listLeases(ctx.db, AT + 60_000);
-
-  expect(before).toHaveLength(1);
-  expect(after).toEqual([]);
-
-  // it comes back as a new lease
-  const at = AT + 61_000;
 
   await writeLease(
     ctx.db,
-    ctx.buildLease({ until: new Date(at + 10_000), createdAt: new Date(at) }),
-    { at, reason: 'held' },
+    buildMockLeaseRecord({
+      impId: imp.id,
+      principal: 'token:a',
+      label: 'job',
+      display: 'a2',
+      until: new Date(1_800_000_090_000),
+      createdAt: new Date(1_800_000_030_000),
+    }),
+    { at: 1_800_000_030_000, reason: null },
   );
 
-  const [lease] = await listLeases(ctx.db, at);
+  const leases = await listLeases(ctx.db, 1_800_000_030_000);
 
-  expect(lease?.createdAt).toEqual(new Date(at));
+  expect(leases).toStrictEqual([
+    {
+      impId: imp.id,
+      principal: 'token:a',
+      label: 'job',
+      display: 'a2',
+      until: new Date(1_800_000_090_000),
+      createdAt: new Date(1_800_000_000_000),
+    },
+  ]);
 });
 
-test('two owners each remove only their own lease', async () => {
-  const ctx = await setupTest();
+test('#writeLease emits nothing for a renew', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
+  const writes: ImpWrite[] = [];
 
-  await writeLease(ctx.db, ctx.buildLease({ principal: 'token:b', display: 'b' }), {
-    at: AT,
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
+  });
+
+  onTestFinished(unsubscribe);
+
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id }), {
+    at: 1_800_000_000_000,
+    reason: null,
+  });
+
+  expect(writes).toStrictEqual([]);
+});
+
+test('#writeLease emits ImpChanged with its reason', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  const writes: ImpWrite[] = [];
+
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
+  });
+
+  onTestFinished(unsubscribe);
+
+  const held = await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id }), {
+    at: 1_800_000_000_000,
     reason: 'held',
   });
 
-  const removed = await removeLeases(ctx.db, ctx.imp.id, [{ principal: 'token:b', label: 'job' }], {
-    at: AT,
+  expect(writes).toStrictEqual([{ kind: 'changed', imp: held, reason: 'held' }]);
+});
+
+test('#writeLease writes an ended lease anew, with a new start', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({
+      impId: imp.id,
+      principal: 'token:a',
+      label: 'job',
+      until: new Date(1_800_000_060_000),
+      createdAt: new Date(1_800_000_000_000),
+    }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({
+      impId: imp.id,
+      principal: 'token:a',
+      label: 'job',
+      until: new Date(1_800_000_071_000),
+      createdAt: new Date(1_800_000_061_000),
+    }),
+    { at: 1_800_000_061_000, reason: 'held' },
+  );
+
+  const leases = await listLeases(ctx.db, 1_800_000_061_000);
+
+  expect(leases.map((lease) => lease.createdAt)).toStrictEqual([new Date(1_800_000_061_000)]);
+});
+
+test('#listLeases lists a lease until just before its end', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, until: new Date(1_800_000_060_000) }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  const leases = await listLeases(ctx.db, 1_800_000_059_999);
+
+  expect(leases).toHaveLength(1);
+});
+
+test('#listLeases leaves out a lease past its end', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, until: new Date(1_800_000_060_000) }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  const leases = await listLeases(ctx.db, 1_800_000_060_000);
+
+  expect(leases).toStrictEqual([]);
+});
+
+test('#listLeases lists only the leases of the imps it names', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const dev = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
+  const other = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: dev.id }), {
+    at: 1_800_000_000_000,
+    reason: null,
+  });
+
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: other.id }), {
+    at: 1_800_000_000_000,
+    reason: null,
+  });
+
+  const leases = await listLeases(ctx.db, 1_800_000_000_000, [dev.id]);
+
+  expect(leases.map((lease) => lease.impId)).toStrictEqual([dev.id]);
+});
+
+test('#listLeases lists nothing for an empty set of imps', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id }), {
+    at: 1_800_000_000_000,
+    reason: null,
+  });
+
+  const leases = await listLeases(ctx.db, 1_800_000_000_000, []);
+
+  expect(leases).toStrictEqual([]);
+});
+
+test('#removeLeases sets the hold back to the latest remaining end', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({
+      impId: imp.id,
+      principal: 'token:b',
+      until: new Date(1_800_000_120_000),
+    }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:c', label: 'job', until: null }),
+    { at: 1_800_000_000_000, reason: null },
+  );
+
+  await removeLeases(ctx.db, imp.id, [{ principal: 'token:c', label: 'job' }], {
+    at: 1_800_000_000_000,
     reason: 'held',
   });
 
-  const again = await removeLeases(ctx.db, ctx.imp.id, [{ principal: 'token:b', label: 'job' }], {
-    at: AT,
+  const stored = await findImpById(ctx.db, imp.id);
+
+  expect(stored?.holdUntil).toStrictEqual(new Date(1_800_000_120_000));
+});
+
+test('#removeLeases removes only the named owner’s lease', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:a', label: 'job' }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:b', label: 'job' }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  const removed = await removeLeases(ctx.db, imp.id, [{ principal: 'token:b', label: 'job' }], {
+    at: 1_800_000_000_000,
     reason: 'held',
   });
+
+  const left = await listLeases(ctx.db, 1_800_000_000_000);
 
   expect(removed.removed).toBe(1);
-  expect(again.removed).toBe(0);
-
-  const left = await listLeases(ctx.db, AT);
-
-  expect(left.map((lease) => lease.principal)).toEqual(['token:a']);
-
-  // a removal that took nothing emits nothing
-  expect(ctx.writes).toHaveLength(3);
+  expect(left.map((lease) => lease.principal)).toStrictEqual(['token:a']);
 });
 
-test('a forced clear takes only the leases made through leases.*', async () => {
-  const ctx = await setupTest();
+test('#removeLeases reports a removal that took nothing', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:a', label: 'job' }),
+    { at: 1_800_000_000_000, reason: 'held' },
+  );
+
+  const removed = await removeLeases(ctx.db, imp.id, [{ principal: 'token:b', label: 'job' }], {
+    at: 1_800_000_000_000,
+    reason: 'held',
+  });
+
+  expect(removed.removed).toBe(0);
+});
+
+test('#removeLeases emits nothing for a removal that took nothing', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  const writes: ImpWrite[] = [];
+
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
+  });
+
+  onTestFinished(unsubscribe);
+
+  await removeLeases(ctx.db, imp.id, [{ principal: 'token:b', label: 'job' }], {
+    at: 1_800_000_000_000,
+    reason: 'held',
+  });
+
+  expect(writes).toStrictEqual([]);
+});
+
+test('#removeLeases emits for a removal that took nothing when told to', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  const writes: ImpWrite[] = [];
+
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
+  });
+
+  onTestFinished(unsubscribe);
+
+  const removed = await removeLeases(ctx.db, imp.id, [], {
+    at: 1_800_000_000_000,
+    reason: 'held',
+    isEmittedWhenNone: true,
+  });
+
+  expect(writes).toStrictEqual([{ kind: 'changed', imp: removed.imp, reason: 'held' }]);
+});
+
+test('#removeLeases takes only the leases made through leases.* on a forced clear', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   for (const lease of [
-    ctx.buildLease({}),
-    ctx.buildLease({ label: 'other' }),
-    ctx.buildLease({ label: 'hold' }),
-    ctx.buildLease({ principal: 'legacy', label: 'hold', display: 'legacy' }),
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:a', label: 'job' }),
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:a', label: 'other' }),
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:a', label: 'hold' }),
+    buildMockLeaseRecord({ impId: imp.id, principal: 'legacy', label: 'hold' }),
   ]) {
-    await writeLease(ctx.db, lease, { at: AT, reason: null });
+    await writeLease(ctx.db, lease, { at: 1_800_000_000_000, reason: null });
   }
 
-  const cleared = await removeLeases(ctx.db, ctx.imp.id, 'blocking', {
-    at: AT,
+  const cleared = await removeLeases(ctx.db, imp.id, 'blocking', {
+    at: 1_800_000_000_000,
     reason: 'released',
   });
 
-  const left = await listLeases(ctx.db, AT);
+  const left = await listLeases(ctx.db, 1_800_000_000_000);
 
   expect(cleared.removed).toBe(2);
 
-  expect(left.map((lease) => `${lease.principal}/${lease.label}`)).toEqual([
+  expect(left.map((lease) => `${lease.principal}/${lease.label}`)).toIncludeSameMembers([
     'legacy/hold',
     'token:a/hold',
   ]);
+});
 
-  expect(left.some((lease) => isBlockingLease(lease))).toBeFalse();
+test('#removeLeases emits how many leases a forced clear released', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  expect(ctx.writes.at(-1)).toMatchObject({
-    kind: 'changed',
+  await writeLease(
+    ctx.db,
+    buildMockLeaseRecord({ impId: imp.id, principal: 'token:a', label: 'job' }),
+    { at: 1_800_000_000_000, reason: null },
+  );
+
+  const writes: ImpWrite[] = [];
+
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
+  });
+
+  onTestFinished(unsubscribe);
+
+  const cleared = await removeLeases(ctx.db, imp.id, 'blocking', {
+    at: 1_800_000_000_000,
     reason: 'released',
-    detail: { released: 2 },
   });
+
+  expect(writes).toStrictEqual([
+    { kind: 'changed', imp: cleared.imp, reason: 'released', detail: { released: 1 } },
+  ]);
 });
 
-test('a destroy takes the leases with the imp', async () => {
-  const ctx = await setupTest();
+test('#writeMovedLeases writes a moved imp’s leases and its hold', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await writeLease(ctx.db, ctx.buildLease({}), { at: AT, reason: 'held' });
-
-  await ctx.db.deleteFrom('imps').where('id', '=', ctx.imp.id).execute();
-
-  const left = await listLeases(ctx.db, AT);
-
-  expect(left).toEqual([]);
-});
-
-test('the migration moves a live hold to legacy, and drops one that ended', async () => {
-  const sqlite = new Database(':memory:');
-
-  sqlite.run('PRAGMA foreign_keys = ON;');
-
-  const db = new Kysely<DatabaseSchema>({
-    dialect: {
-      createAdapter: () => new SqliteAdapter(),
-      createDriver: () => new BunSqliteDriver(sqlite),
-      createIntrospector: (kysely) => new SqliteIntrospector(kysely),
-      createQueryCompiler: () => new SqliteQueryCompiler(),
+  await writeMovedLeases(ctx.db, imp.id, [
+    {
+      principal: 'token:a',
+      label: 'job',
+      display: 'a',
+      until: new Date(1_800_000_060_000),
+      createdAt: new Date(1_800_000_000_000),
     },
+  ]);
+
+  const stored = await findImpById(ctx.db, imp.id);
+
+  expect(stored?.holdUntil).toStrictEqual(new Date(1_800_000_060_000));
+});
+
+test('#writeMovedLeases keeps the last of a pair the header names twice', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeMovedLeases(ctx.db, imp.id, [
+    {
+      principal: 'token:a',
+      label: 'job',
+      display: 'first',
+      until: new Date(1_800_000_060_000),
+      createdAt: new Date(1_800_000_000_000),
+    },
+    {
+      principal: 'token:a',
+      label: 'job',
+      display: 'last',
+      until: null,
+      createdAt: new Date(1_800_000_010_000),
+    },
+  ]);
+
+  const leases = await listLeases(ctx.db, 1_800_000_000_000);
+
+  expect(leases).toStrictEqual([
+    {
+      impId: imp.id,
+      principal: 'token:a',
+      label: 'job',
+      display: 'last',
+      until: null,
+      createdAt: new Date(1_800_000_000_000),
+    },
+  ]);
+});
+
+test('#writeMovedLeases emits nothing', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  const writes: ImpWrite[] = [];
+
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
   });
 
-  onTestFinished(() => db.destroy());
+  onTestFinished(unsubscribe);
+
+  await writeMovedLeases(ctx.db, imp.id, [
+    {
+      principal: 'token:a',
+      label: 'job',
+      display: 'a',
+      until: null,
+      createdAt: new Date(1_800_000_000_000),
+    },
+  ]);
+
+  expect(writes).toStrictEqual([]);
+});
+
+test.each([
+  ['token:a', 'job', true],
+  ['token:a', 'hold', false],
+  ['legacy', 'job', false],
+  ['legacy', 'hold', false],
+])(
+  '#isBlockingLease reports a %s lease labelled %s as blocking: %p',
+  (principal, label, expected) => {
+    expect(isBlockingLease({ principal, label })).toBe(expected);
+  },
+);
+
+test('#removeImp takes the imp’s leases with it', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id }), {
+    at: 1_800_000_000_000,
+    reason: 'held',
+  });
+
+  await ctx.db.deleteFrom('imps').where('id', '=', imp.id).execute();
+
+  const leases = await listLeases(ctx.db, 1_800_000_000_000);
+
+  expect(leases).toStrictEqual([]);
+});
+
+test('#runMigrations moves a live hold to a legacy lease in the lease migration', async () => {
+  const db = createUnmigratedDatabase();
 
   await runMigrationsTo(db, '012_add_networks');
 
-  const now = Date.now();
-
+  // rows as an impd at 012 wrote them, which no current factory builds
   await db
     .insertInto('images')
-    .values({ id: 'i', name: 'base', ref: 'r', digest: 'd', size_bytes: 1, created_at: now })
+    .values({ id: 'i', name: 'base', ref: 'r', digest: 'd', size_bytes: 1, created_at: 0 })
     .execute();
 
+  const live = Date.now() + 3_600_000;
+
   for (const [slot, holdUntil] of [
-    [0, now + 3_600_000],
-    [1, now - 1000],
+    [0, live],
+    [1, Date.now() - 1000],
     [2, null],
   ] as const) {
     await db
@@ -249,39 +572,71 @@ test('the migration moves a live hold to legacy, and drops one that ended', asyn
         memory_mib: 512,
         slot,
         ip: `10.66.0.${String(slot * 4 + 2)}`,
-        created_at: now,
-        last_active_at: now,
-        slept_at: null,
+        created_at: 0,
+        last_active_at: 0,
         hold_until: holdUntil,
-        error: null,
-        pid: null,
-        firecracker_version: null,
-        cpu_limit: null,
-        awake_since: null,
-        public_auth: null,
-        public_user: null,
-        public_hash: null,
       })
       .execute();
   }
 
   await runMigrations(db);
 
-  const leases = await listLeases(db, now);
-  const holds = await db.selectFrom('imps').select(['id', 'hold_until']).orderBy('id').execute();
+  const leases = await listLeases(db, Date.now());
 
-  expect(leases).toMatchObject([
+  expect(leases).toStrictEqual([
     {
       impId: 'imp-0',
       principal: 'legacy',
       label: 'hold',
       display: 'legacy',
-      until: new Date(now + 3_600_000),
+      until: new Date(live),
+      createdAt: expect.toBeValidDate(),
     },
   ]);
+});
 
-  expect(holds).toEqual([
-    { id: 'imp-0', hold_until: now + 3_600_000 },
+test('#runMigrations clears every hold but a live one in the lease migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '012_add_networks');
+
+  // rows as an impd at 012 wrote them, which no current factory builds
+  await db
+    .insertInto('images')
+    .values({ id: 'i', name: 'base', ref: 'r', digest: 'd', size_bytes: 1, created_at: 0 })
+    .execute();
+
+  const live = Date.now() + 3_600_000;
+
+  for (const [slot, holdUntil] of [
+    [0, live],
+    [1, Date.now() - 1000],
+    [2, null],
+  ] as const) {
+    await db
+      .insertInto('imps')
+      .values({
+        id: `imp-${String(slot)}`,
+        name: `imp-${String(slot)}`,
+        image_id: 'i',
+        state: 'running',
+        vcpus: 1,
+        memory_mib: 512,
+        slot,
+        ip: `10.66.0.${String(slot * 4 + 2)}`,
+        created_at: 0,
+        last_active_at: 0,
+        hold_until: holdUntil,
+      })
+      .execute();
+  }
+
+  await runMigrations(db);
+
+  const holds = await db.selectFrom('imps').select(['id', 'hold_until']).orderBy('id').execute();
+
+  expect(holds).toStrictEqual([
+    { id: 'imp-0', hold_until: live },
     { id: 'imp-1', hold_until: null },
     { id: 'imp-2', hold_until: null },
   ]);

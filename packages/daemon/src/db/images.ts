@@ -64,6 +64,7 @@ export async function findImageByDigest(
     .selectAll()
     .where('digest', '=', digest)
     .orderBy('created_at')
+    .orderBy('id')
     .executeTakeFirst();
 
   return row === undefined ? undefined : toImageRecord(row);
