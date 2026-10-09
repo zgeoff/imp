@@ -1,381 +1,980 @@
-import { expect, test } from 'bun:test';
-import type { Scope } from '@imp/api';
-import * as z from 'zod';
-import { createKnownHosts } from '../auth/ambient-request';
-import { createTailnetIdentities } from '../auth/tailnet-identity';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createImpClient } from '@zgeoff/imp-client';
+import { buildApiListenOptions } from '../api-listen-options';
 import type { TailnetPeer } from '../auth/tailnet-identity';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
-import type { TailscaleStatus } from '../net/tailscale-status';
+import { createImage } from '../db/images';
+import { findImpByName } from '../db/imps';
+import { openDatabase } from '../db/open-database';
 import { PEER_HEADER } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
-import { setupImpdTest } from './test-mcp';
+import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
 
-const TAILNET_PEER = '100.101.102.103';
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
-const MessageSchema = z.looseObject({ id: z.unknown().optional() });
-const TextSchema = z.object({ type: z.string(), text: z.string() });
+interface SetupOptions {
+  // impd's environment past what every test boots with
+  readonly env?: Readonly<Record<string, string>>;
 
-const ToolResultSchema = z.object({
-  content: z.array(TextSchema),
-  structuredContent: z.record(z.string(), z.unknown()).optional(),
-  isError: z.boolean(),
-});
+  // `tailscale whois`; nobody on the tailnet by default
+  readonly whois?: (address: string) => Promise<TailnetPeer | null>;
 
-const NamedSchema = z.object({ name: z.string() });
-const ToolsSchema = z.object({ tools: z.array(NamedSchema) });
-const CreatedSchema = z.object({ imp: NamedSchema });
-const ResultSchema = z.object({ result: z.unknown() });
-
-function readNoNode(): Promise<TailscaleStatus> {
-  return Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] });
+  // the API's idle timeout in seconds; main.ts's by default
+  readonly idleTimeoutS?: number;
 }
 
-// alice's laptop may exec on dev-* imps
-function buildTailnet(now: () => number) {
-  return {
-    identities: createTailnetIdentities({
-      rules: [{ match: 'user:alice@example.com', scope: 'exec' as const, imps: ['dev-*'] }],
-      whois: (address: string) => {
-        const peer = address === TAILNET_PEER ? ALICE : null;
+// impd's real app on a loopback port, as a remote agent reaches /mcp, a root
+// client for the scenario, and `stack`, whose releases run before impd stops
+async function setupTest(options: SetupOptions = {}) {
+  const stack = new AsyncDisposableStack();
 
-        return Promise.resolve(peer);
+  onTestFinished(() => stack.disposeAsync());
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'mcp-endpoint-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    ...options.env,
+  });
+
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer the root client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
       },
-      readTailscale: readNoNode,
-      now,
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
     }),
-    knownHosts: createKnownHosts({ readTailscale: readNoNode, domain: null }),
-  };
-}
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    whois: options.whois ?? (() => Promise.resolve(null)),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
 
-// the messages of a response: one JSON body, or every event of an SSE stream
-function parseMessages(contentType: string | null, text: string): unknown[] {
-  const streamed = (contentType ?? '').includes('text/event-stream');
+  stack.defer(() => impd.broker.stop());
 
-  if (!streamed) {
-    return text === '' ? [] : [parseJson(text)];
-  }
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
 
-  return text
-    .split('\n')
-    .filter((line) => line.startsWith('data: '))
-    .map((line) => parseJson(line.slice('data: '.length)));
-}
+  // as main.ts listens, on a free loopback port
+  const server = impd.api.app.listen({
+    ...buildApiListenOptions(config, options.idleTimeoutS),
+    port: 0,
+    hostname: '127.0.0.1',
+  });
 
-function parseJson(text: string): unknown {
-  return JSON.parse(text);
-}
+  stack.defer(async () => {
+    await server.stop(true);
+  });
 
-// An MCP client over HTTP, as a remote agent runs one: `headers` say who it
-// is, and every request after `initialize` carries its session's id.
-function startHttpClient(url: string, headers: Readonly<Record<string, string>>) {
-  const state: { session: string | null; nextId: number } = { session: null, nextId: 1 };
+  // the image every imps.create boots when it names none
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  const sendPost = (body: unknown, extra: Readonly<Record<string, string>> = {}) =>
-    fetch(`${url}/mcp`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        ...(state.session !== null && { 'mcp-session-id': state.session }),
-        ...headers,
-        ...extra,
-      },
-      body: JSON.stringify(body),
-    });
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  const sendRequest = async (method: string, params: unknown = {}) => {
-    const id = state.nextId++;
-
-    const response = await sendPost({ jsonrpc: '2.0', id, method, params });
-    const text = await response.text();
-
-    const messages = parseMessages(response.headers.get('content-type'), text);
-
-    const answer = messages
-      .map((message) => MessageSchema.parse(message))
-      .find((message) => message.id === id);
-
-    return { status: response.status, answer };
-  };
+  const url = `http://127.0.0.1:${String(server.server?.port)}`;
 
   return {
-    sendPost,
-    sendRequest,
-    initialize: async () => {
-      const response = await sendPost({
-        jsonrpc: '2.0',
-        id: 0,
-        method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
-      });
-
-      state.session = response.headers.get('mcp-session-id');
-
-      return response;
-    },
-    listTools: async () => {
-      const listed = await sendRequest('tools/list');
-
-      return ToolsSchema.parse(ResultSchema.parse(listed.answer).result).tools.map(
-        (tool) => tool.name,
-      );
-    },
-    runTool: async (name: string, args: unknown = {}) => {
-      const called = await sendRequest('tools/call', { name, arguments: args });
-
-      return ToolResultSchema.parse(ResultSchema.parse(called.answer).result);
-    },
+    db,
+    dataDir,
+    config,
+    impd,
+    url,
+    client: createImpClient({ url, token: 'root-token' }),
+    stack,
   };
 }
 
-async function setupHttpTest(withTailnet = false) {
-  const tailnet = withTailnet ? buildTailnet(Date.now) : null;
+test('it names a nameless create under the one prefix its token may touch', async () => {
+  const ctx = await setupTest();
 
-  const impd = await setupImpdTest({ tailnet });
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+  });
 
-  const createToken = async (name: string, scope: Scope, imps?: readonly string[]) => {
-    const made = await impd.rootClient.tokens.create({
-      name,
-      scope,
-      ...(imps !== undefined && { imps: [...imps] }),
-    });
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-    return made.secret;
-  };
+  const session = opened.headers.get('mcp-session-id');
 
-  const openClient = async (secret: string) => {
-    const client = startHttpClient(impd.url, { authorization: `Bearer ${secret}` });
+  invariant(session);
 
-    const opened = await client.initialize();
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_create', arguments: { image: 'ubuntu' } },
+    }),
+  });
 
-    expect(opened.status).toBe(200);
+  const body: unknown = await response.json();
 
-    return client;
-  };
-
-  return { ...impd, createToken, openClient };
-}
-
-test('a token limited to agent-* creates, names and runs commands in its own imps only', async () => {
-  const ctx = await setupHttpTest();
-  const secret = await ctx.createToken('agent', 'manage', ['agent-*']);
-  const agent = await ctx.openClient(secret);
-  const created = await agent.runTool('imp_create', { image: 'ubuntu' });
-
-  const name = CreatedSchema.parse(created.structuredContent).imp.name;
-
-  expect(name).toMatch(/^agent-[a-z0-9]{8}$/);
-
-  const executed = await agent.runTool('imp_exec', { name, command: 'echo hi' });
-
-  expect(executed.structuredContent).toMatchObject({ exitCode: 0, stdout: 'hi\n' });
-
-  const outside = await agent.runTool('imp_create', { name: 'other', image: 'ubuntu' });
-
-  expect(outside.isError).toBe(true);
-  expect(outside.content[0]?.text).toStartWith('FORBIDDEN: ');
-
-  // the calls ran as the token, and the audit log says so
-  const calls = await listApiCalls(ctx.db, name, 10, null);
-
-  expect(calls.map((call) => [call.procedure, call.actorName, call.outcome])).toContainEqual([
-    'imps.create',
-    'agent',
-    'ok',
-  ]);
+  expect(body).toMatchObject({
+    id: 1,
+    result: {
+      isError: false,
+      structuredContent: { imp: { name: expect.stringMatching(/^agent-[a-z0-9]{8}$/) as unknown } },
+    },
+  });
 });
 
-test('a read token sees only the read tools, and impd refuses the rest', async () => {
-  const ctx = await setupHttpTest();
+test('it audits a tool call as the token that made it', async () => {
+  const ctx = await setupTest();
 
-  await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+  });
 
-  const secret = await ctx.createToken('reader', 'read');
-  const reader = await ctx.openClient(secret);
-  const tools = await reader.listTools();
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-  expect(tools).toEqual(['imp_list', 'imp_url', 'imp_image_list', 'imp_checkpoint_list']);
+  const session = opened.headers.get('mcp-session-id');
 
-  const listed = await reader.runTool('imp_list');
+  invariant(session);
 
-  expect(listed.structuredContent).toMatchObject({ imps: [{ name: 'box' }] });
+  await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_create', arguments: { name: 'agent-a', image: 'ubuntu' } },
+    }),
+  });
 
-  for (const [tool, args] of [
-    ['imp_exec', { name: 'box', command: 'echo hi' }],
-    ['imp_write_file', { name: 'box', path: '/x', content: 'x' }],
-    ['imp_destroy', { name: 'box' }],
-  ] as const) {
-    const refused = await reader.runTool(tool, args);
+  const calls = await listApiCalls(ctx.db, 'agent-a', 10, null);
 
-    expect({ tool, text: refused.content[0]?.text.slice(0, 10) }).toEqual({
-      tool,
-      text: 'FORBIDDEN:',
-    });
-  }
-
-  expect(ctx.guest.requests).toEqual([]);
+  expect(calls).toPartiallyContain({ procedure: 'imps.create', actorName: 'agent', outcome: 'ok' });
 });
 
-test('a token that may grant secrets forks nothing through MCP either', async () => {
-  const ctx = await setupHttpTest();
+test('it runs a command in an imp its token may touch', async () => {
+  const ctx = await setupTest();
 
-  await ctx.rootClient.imps.create({ name: 'agent-a', image: 'ubuntu' });
-  await ctx.rootClient.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126' });
+  const guest = buildStubExecGuest();
 
-  const made = await ctx.rootClient.tokens.create({
+  await ctx.client.imps.create({ name: 'agent-a' });
+
+  const record = await findImpByName(ctx.db, 'agent-a');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+  });
+
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_exec', arguments: { name: 'agent-a', command: 'echo hi' } },
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({
+    id: 1,
+    result: { isError: false, structuredContent: { exitCode: 0, stdout: 'hi\n' } },
+  });
+});
+
+test('it refuses a create outside the patterns of its token', async () => {
+  const ctx = await setupTest();
+
+  const made = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+  });
+
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_create', arguments: { name: 'other', image: 'ubuntu' } },
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({
+    id: 1,
+    result: {
+      isError: true,
+      content: [{ type: 'text', text: expect.stringMatching(/^FORBIDDEN: /) as unknown }],
+    },
+  });
+});
+
+test('it lists only the read tools to a read token', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({
+    id: 1,
+    result: {
+      tools: [
+        { name: 'imp_list' },
+        { name: 'imp_url' },
+        { name: 'imp_image_list' },
+        { name: 'imp_checkpoint_list' },
+      ],
+    },
+  });
+});
+
+test('it lists the imps to a read token', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
+
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_list', arguments: {} },
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({
+    id: 1,
+    result: { isError: false, structuredContent: { imps: [{ name: 'box' }] } },
+  });
+});
+
+test.each([
+  ['imp_exec', { name: 'box', command: 'echo hi' }],
+  ['imp_write_file', { name: 'box', path: '/x', content: 'x' }],
+  ['imp_destroy', { name: 'box' }],
+])('it refuses %s to a read token before it reaches the guest', async (tool, args) => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.client.imps.create({ name: 'box' });
+
+  const record = await findImpByName(ctx.db, 'box');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
+
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: tool, arguments: args },
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({
+    id: 1,
+    result: {
+      isError: true,
+      content: [{ type: 'text', text: expect.stringMatching(/^FORBIDDEN: /) as unknown }],
+    },
+  });
+
+  expect(guest.requests).toStrictEqual([]);
+});
+
+test('it refuses a fork to a token that may grant secrets', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'agent-a' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126' });
+
+  const made = await ctx.client.tokens.create({
     name: 'agent',
     scope: 'manage',
     imps: ['agent-*'],
     grantable: ['gh'],
   });
 
-  const agent = await ctx.openClient(made.secret);
-  const refused = await agent.runTool('imp_fork', { source: 'agent-a', name: 'agent-b' });
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-  expect(refused.isError).toBe(true);
-  expect(refused.content[0]?.text).toStartWith('FORBIDDEN: ');
+  const session = opened.headers.get('mcp-session-id');
 
-  const imps = await ctx.rootClient.imps.list();
+  invariant(session);
 
-  expect(imps.map((imp) => imp.name)).toEqual(['agent-a']);
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_fork', arguments: { source: 'agent-a', name: 'agent-b' } },
+    }),
+  });
+
+  const body: unknown = await response.json();
+  const imps = await ctx.client.imps.list();
+
+  expect(body).toMatchObject({
+    id: 1,
+    result: {
+      isError: true,
+      content: [{ type: 'text', text: expect.stringMatching(/^FORBIDDEN: /) as unknown }],
+    },
+  });
+
+  expect(imps.map((imp) => imp.name)).toStrictEqual(['agent-a']);
 });
 
-test('a nameless create needs one prefix pattern, else a clear refusal', async () => {
-  const ctx = await setupHttpTest();
-  const secret = await ctx.createToken('two', 'manage', ['a-*', 'b-*']);
-  const two = await ctx.openClient(secret);
-  const refused = await two.runTool('imp_create', { image: 'ubuntu' });
+test('it asks a token with two patterns to name the imp it creates', async () => {
+  const ctx = await setupTest();
 
-  expect(refused.isError).toBe(true);
+  const made = await ctx.client.tokens.create({
+    name: 'two',
+    scope: 'manage',
+    imps: ['a-*', 'b-*'],
+  });
 
-  expect(refused.content[0]?.text).toBe(
-    'GUARD: this token may touch only imps matching a-*, b-*, so give the new imp a name that matches',
-  );
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_create', arguments: { image: 'ubuntu' } },
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
+    jsonrpc: '2.0',
+    id: 1,
+    result: {
+      content: [
+        {
+          type: 'text',
+          text: 'GUARD: this token may touch only imps matching a-*, b-*, so give the new imp a name that matches',
+        },
+      ],
+      isError: true,
+    },
+  });
 });
 
-test('a session answers only the caller that opened it', async () => {
-  const ctx = await setupHttpTest();
-  const firstSecret = await ctx.createToken('first', 'read');
-  const first = await ctx.openClient(firstSecret);
-  const secondSecret = await ctx.createToken('second', 'read');
-  const opened = await first.initialize();
+test('it refuses a session to a caller other than the one that opened it', async () => {
+  const ctx = await setupTest();
+  const first = await ctx.client.tokens.create({ name: 'first', scope: 'read' });
+  const second = await ctx.client.tokens.create({ name: 'second', scope: 'read' });
 
-  const session = opened.headers.get('mcp-session-id') ?? '';
-  const stranger = startHttpClient(ctx.url, { authorization: `Bearer ${secondSecret}` });
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${first.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-  const response = await stranger.sendPost(
-    { jsonrpc: '2.0', id: 1, method: 'ping' },
-    { 'mcp-session-id': session },
-  );
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${second.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  });
 
   expect(response.status).toBe(404);
 });
 
-test('removing the token ends its session and the command it runs', async () => {
-  const ctx = await setupHttpTest();
+test('it ends the streamed call and running command of a token that is removed', async () => {
+  const ctx = await setupTest();
 
-  await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
+  const guest = buildStubExecGuest();
 
-  const secret = await ctx.createToken('agent', 'exec');
-  const agent = await ctx.openClient(secret);
+  await ctx.client.imps.create({ name: 'box' });
 
-  const call = agent.runTool('imp_exec', { name: 'box', command: 'sleepy' });
+  const record = await findImpByName(ctx.db, 'box');
 
-  while (ctx.guest.requests.length === 0) {
-    await Bun.sleep(10);
-  }
+  invariant(record);
 
-  await ctx.rootClient.tokens.delete({ name: 'agent' });
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
 
-  const failure = await call.then(
-    () => null,
-    (error: unknown) => error,
-  );
+  ctx.stack.defer(() => {
+    agent.close();
+  });
 
-  // the stream closed with no answer
-  expect(failure).toBeInstanceOf(Error);
-  expect(ctx.guest.closed).toContain('sleepy');
+  const made = await ctx.client.tokens.create({ name: 'agent', scope: 'exec' });
 
-  const after = await agent.sendPost({ jsonrpc: '2.0', id: 9, method: 'ping' });
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-  expect(after.status).toBe(401);
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const call = fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_exec', arguments: { name: 'box', command: 'sleepy' } },
+    }),
+  });
+
+  await waitFor(() => {
+    invariant(guest.requests[0]);
+  });
+
+  await ctx.client.tokens.delete({ name: 'agent' });
+
+  const response = await call;
+  const text = await response.text();
+
+  await waitFor(() => {
+    invariant(guest.closed[0]);
+  });
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe('text/event-stream');
+
+  // the stream closed with no answer to the call
+  expect(
+    text
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line): unknown => JSON.parse(line.slice('data: '.length))),
+  ).toStrictEqual([]);
+
+  expect(guest.closed).toStrictEqual(['sleepy']);
 });
 
-test('a tailnet identity needs no token, and its rule limits it', async () => {
-  const ctx = await setupHttpTest(true);
+test('it refuses the session of a removed token with 401', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'agent', scope: 'exec' });
 
-  await ctx.rootClient.imps.create({ name: 'dev-a', image: 'ubuntu' });
-  await ctx.rootClient.imps.create({ name: 'prod', image: 'ubuntu' });
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-  // with no token and no address handed over, there is no caller
-  const nobody = await startHttpClient(ctx.url, {}).initialize();
+  const session = opened.headers.get('mcp-session-id');
 
-  expect(nobody.status).toBe(401);
+  invariant(session);
 
-  // each request comes through the wake proxy, which hands over alice's address
-  const buildHandOver = () => ({ [PEER_HEADER]: ctx.peers.register(TAILNET_PEER) });
-  const viaProxy = startHttpClient(ctx.url, {});
+  await ctx.client.tokens.delete({ name: 'agent' });
 
-  const init = await viaProxy.sendPost(
-    {
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${made.secret}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  });
+
+  expect(response.status).toBe(401);
+});
+
+test('it refuses a caller with no token and no handed-over address with 401', async () => {
+  const ctx = await setupTest({
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
+  });
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  expect(response.status).toBe(401);
+});
+
+test('it serves a tailnet identity the wake proxy hands over the imps its rule allows', async () => {
+  const ctx = await setupTest({
+    // alice's laptop may exec on dev-* imps
+    env: {
+      IMP_TAILNET_IDENTITIES:
+        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+    },
+    whois: (address) => {
+      const peers = new Map([
+        [
+          '100.101.102.103',
+          { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
+        ],
+      ]);
+
+      return Promise.resolve(peers.get(address) ?? null);
+    },
+  });
+
+  await ctx.client.imps.create({ name: 'dev-a' });
+  await ctx.client.imps.create({ name: 'prod' });
+
+  // each request comes as the wake proxy sends it, with alice's address
+  const opened = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
+    },
+    body: JSON.stringify({
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
       params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'atc' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+      [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
     },
-    buildHandOver(),
-  );
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_list', arguments: {} },
+    }),
+  });
 
-  expect(init.status).toBe(200);
+  const body: unknown = await response.json();
 
-  const session = init.headers.get('mcp-session-id') ?? '';
-
-  const call = await viaProxy.sendPost(
-    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'imp_list', arguments: {} } },
-    { ...buildHandOver(), 'mcp-session-id': session },
-  );
-
-  const text = await call.text();
-
-  const [answer] = parseMessages(call.headers.get('content-type'), text);
-
-  expect(answer).toMatchObject({ result: { structuredContent: { imps: [{ name: 'dev-a' }] } } });
+  expect(body).toMatchObject({
+    id: 1,
+    result: { isError: false, structuredContent: { imps: [{ name: 'dev-a' }] } },
+  });
 });
 
-test('a page on another origin is refused, Sec-Fetch-Site first, as the dashboard does', async () => {
-  const ctx = await setupHttpTest();
-
-  const page = startHttpClient(ctx.url, { authorization: `Bearer ${ctx.token}` });
-  const ping = { jsonrpc: '2.0', id: 0, method: 'ping' };
-
-  const host = new URL(ctx.url).host;
-
-  const statuses: number[] = [];
-
-  for (const headers of [
-    { origin: 'http://evil.example' },
-    { 'sec-fetch-site': 'cross-site' },
-    { 'sec-fetch-site': 'same-site', origin: `http://${host}` },
+// a 400, not a 403, once past the origin check: the ping has no session
+test.each([
+  ['an Origin on another site', { origin: 'http://evil.example' }, 403],
+  ['a cross-site Sec-Fetch-Site', { 'sec-fetch-site': 'cross-site' }, 403],
+  [
+    'a same-site Sec-Fetch-Site',
+    { 'sec-fetch-site': 'same-site', origin: 'http://impd.example' },
+    403,
+  ],
+  [
+    'a same-origin Sec-Fetch-Site whatever the Origin',
     { 'sec-fetch-site': 'same-origin', origin: 'http://evil.example' },
-    { origin: `https://${host}` },
-  ]) {
-    const response = await page.sendPost(ping, headers);
+    400,
+  ],
+  ['its own host as the Origin, over another scheme', { origin: 'https://impd.example' }, 400],
+])('it answers a page that sends %s with %d', async (_label, headers, status) => {
+  const ctx = await setupTest();
 
-    statuses.push(response.status);
-  }
+  const response = await fetch(`${ctx.url}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      host: 'impd.example',
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...headers,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' }),
+  });
 
-  // a 400, not a 403: past the origin check, the ping has no session
-  expect(statuses).toEqual([403, 403, 403, 400, 400]);
+  expect(response.status).toBe(status);
 });
 
-// longer than the API server's 10 s idle timeout
-const LONG_CALL_MS = 15_000;
+test('it answers a tool call through the wake proxy’s API route', async () => {
+  const ctx = await setupTest();
 
-test('a 15 s call answers through the wake proxy, as JSON and as SSE', async () => {
-  const ctx = await setupHttpTest();
-
-  await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
+  await ctx.client.imps.create({ name: 'box' });
 
   // the proxy's API route, as the HTTPS domain serves impd
   const proxy = startWakeProxy({
@@ -385,10 +984,12 @@ test('a 15 s call answers through the wake proxy, as JSON and as SSE', async () 
       proxyPort: findFreePorts(1).take(),
     },
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
     log: () => {},
-    peers: ctx.peers,
+    peers: ctx.impd.peers,
   });
+
+  ctx.stack.defer(() => proxy.stop());
 
   const front = proxy.startListener({
     port: 0,
@@ -396,60 +997,256 @@ test('a 15 s call answers through the wake proxy, as JSON and as SSE', async () 
     route: () => ({ kind: 'api' }),
   });
 
-  try {
-    const agent = startHttpClient(`http://127.0.0.1:${String(front.port)}`, {
-      authorization: `Bearer ${ctx.token}`,
-    });
+  ctx.stack.defer(() => front.stop(true));
 
-    const opened = await agent.initialize();
+  const via = `http://127.0.0.1:${String(front.port)}`;
 
-    const session = opened.headers.get('mcp-session-id') ?? '';
+  const opened = await fetch(`${via}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
 
-    const runCall = async (id: number, accept: string) => {
-      const response = await agent.sendPost(
-        {
-          jsonrpc: '2.0',
-          id,
-          method: 'tools/call',
-          params: {
-            name: 'imp_exec',
-            arguments: { name: 'box', command: `wait ${String(LONG_CALL_MS)}` },
-          },
-        },
-        { 'mcp-session-id': session, accept },
-      );
+  const session = opened.headers.get('mcp-session-id');
 
-      const text = await response.text();
+  invariant(session);
 
-      const contentType = response.headers.get('content-type');
+  const response = await fetch(`${via}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_list', arguments: {} },
+    }),
+  });
 
-      return { contentType, messages: parseMessages(contentType, text) };
-    };
+  const body: unknown = await response.json();
 
-    const startedAt = performance.now();
+  expect(body).toMatchObject({
+    id: 1,
+    result: { isError: false, structuredContent: { imps: [{ name: 'box' }] } },
+  });
+});
 
-    const [json, sse] = await Promise.all([
-      runCall(1, 'application/json'),
-      runCall(2, 'application/json, text/event-stream'),
-    ]);
+test('it answers a JSON tool call that outlasts the idle timeout through the wake proxy', async () => {
+  const ctx = await setupTest({ idleTimeoutS: 1 });
 
-    const elapsedMs = performance.now() - startedAt;
+  const guest = buildStubExecGuest();
 
-    expect(elapsedMs).toBeGreaterThanOrEqual(LONG_CALL_MS);
-    expect(json.contentType).toBe('application/json');
-    expect(sse.contentType).toBe('text/event-stream');
+  await ctx.client.imps.create({ name: 'box' });
 
-    for (const [id, call] of [
-      [1, json],
-      [2, sse],
-    ] as const) {
-      expect(call.messages.at(-1)).toMatchObject({
-        id,
-        result: { structuredContent: { exitCode: 0, stdout: 'waited\n' } },
-      });
-    }
-  } finally {
-    await front.stop(true);
-    await proxy.stop();
-  }
-}, 40_000);
+  const record = await findImpByName(ctx.db, 'box');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  // the proxy's API route, as the HTTPS domain serves impd
+  const proxy = startWakeProxy({
+    config: {
+      ...ctx.config,
+      apiPort: Number(new URL(ctx.url).port),
+      proxyPort: findFreePorts(1).take(),
+    },
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: ctx.impd.peers,
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const front = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  ctx.stack.defer(() => front.stop(true));
+
+  const via = `http://127.0.0.1:${String(front.port)}`;
+
+  const opened = await fetch(`${via}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const call = fetch(`${via}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 6000' } },
+    }),
+  });
+
+  const response = await call;
+  const text = await response.text();
+
+  expect(response.headers.get('content-type')).toBe('application/json');
+
+  expect(JSON.parse(text)).toMatchObject({
+    id: 1,
+    result: { isError: false, structuredContent: { exitCode: 0, stdout: 'waited\n' } },
+  });
+}, 20_000);
+
+test('it keeps a call answered as server-sent events open through the wake proxy past the idle timeout that ends an unprotected stream', async () => {
+  const ctx = await setupTest({ idleTimeoutS: 1 });
+
+  // the guest's `wait` runs until the test lets it end
+  const done = Promise.withResolvers<void>();
+  const guest = buildStubExecGuest({ wait: () => done.promise });
+
+  // the guest's command ends before impd stops
+  ctx.stack.defer(() => {
+    done.resolve();
+  });
+
+  await ctx.client.imps.create({ name: 'box' });
+
+  const record = await findImpByName(ctx.db, 'box');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  // the proxy's API route, as the HTTPS domain serves impd
+  const proxy = startWakeProxy({
+    config: {
+      ...ctx.config,
+      apiPort: Number(new URL(ctx.url).port),
+      proxyPort: findFreePorts(1).take(),
+    },
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: ctx.impd.peers,
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const front = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  ctx.stack.defer(() => front.stop(true));
+
+  const via = `http://127.0.0.1:${String(front.port)}`;
+
+  const opened = await fetch(`${via}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+    }),
+  });
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const call = fetch(`${via}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer root-token',
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-session-id': session,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 1' } },
+    }),
+  });
+
+  await waitFor(() => {
+    invariant(guest.requests[0]);
+  });
+
+  // impd's event stream on /rpc, which lifts no idle timeout: its keepalive
+  // comes every 5 s, as the MCP stream's does, so the deadline ends it first
+  const control = await fetch(`${ctx.url}/rpc/events/stream`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer root-token', 'content-type': 'application/json' },
+    body: '{}',
+  });
+
+  const [expired] = await Promise.allSettled([control.text()]);
+
+  done.resolve();
+
+  const response = await call;
+  const text = await response.text();
+
+  expect(expired).toMatchObject({ status: 'rejected', reason: { code: 'ECONNRESET' } });
+  expect(response.headers.get('content-type')).toBe('text/event-stream');
+
+  expect(
+    text
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line): unknown => JSON.parse(line.slice('data: '.length))),
+  ).toMatchObject([
+    {
+      id: 1,
+      result: { isError: false, structuredContent: { exitCode: 0, stdout: 'waited\n' } },
+    },
+  ]);
+}, 20_000);

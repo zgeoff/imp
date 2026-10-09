@@ -84,9 +84,9 @@ the ones after it are skipped. A util that registers its own cleanup is therefor
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier), `startStubExecAgent` (through `startStubAgent`),
 `startStubDnsUpstream`, `createTestDatabase`, `buildQueryGate` (it releases a held select),
-`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `setupMoveHosts`.
+`setupImpTest`, `setupMcpTest` and `setupMoveHosts`.
 
-`setupImpTest`, `setupImpdTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
+`setupImpTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
 `[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
 removes it once those branches land.
 
@@ -401,12 +401,26 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
 10. `setupImpTest`'s default `runNft` still records scripts for the suites that use it.
 
-The mcp package's tests reach impd through the real `@zgeoff/imp-client` and
-`packages/mcp/src/test-utils/build-stub-impd.ts` (`buildStubImpd`): an MSW handler that answers the
-procedures a test implements with `implement(impContract)` through oRPC's own fetch handler. The
-progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a `repeat`, and
-the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks
-only when the test says so.
+The mcp package's tests boot impd's real app with `createImpd` and reach it through the real
+`@zgeoff/imp-client`, whose `fetch` is `impd.api.app.handle`. A test that needs a tool call to wait
+holds impd's read of the imps with `buildQueryGate`. One stand-in models an impd release from before
+the fork's grant report: `packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts`
+(`buildStubOlderImpdFetch`) takes `grantsNotCopied` and `grantsError` out of the real `imps.fork`
+answer. The progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a
+`repeat`, and the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`),
+which ticks only when the test says so.
+
+In `mcp/mcp-endpoint.test.ts` and `mcp/stdio.test.ts`, an exec through impd's real app reaches the
+guest through `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path,
+which runs each command on `buildStubExecGuest`. The other `mcp/*.test.ts` files still reach it
+through `test-mcp.ts`'s `openExec` override. `imp mcp` runs as a subprocess against impd's app on a
+loopback port.
+
+impd's API listens with `buildApiListenOptions(config, idleTimeoutS)` (`api-listen-options.ts`),
+whose idle timeout defaults to Elysia's 30 seconds. `mcp/mcp-endpoint.test.ts` listens with 1
+second, which Bun 1.4.2 enforces about 4 seconds after the last byte. On Bun 1.4.2 the idle timeout
+ends a request without a body, or a streamed answer that falls silent; it never ends a request that
+sent a body and still waits for its answer.
 
 The cli package's tests that talk to impd boot it with `createImpd` in their file's `setupTest()`
 and spawn the real binary (`packages/cli/src/test-utils/start-cli.ts`) against its app on a loopback

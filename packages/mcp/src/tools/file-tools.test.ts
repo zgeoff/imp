@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   chmodSync,
   lstatSync,
@@ -18,33 +18,27 @@ import { WRITE_SCRIPT } from './file-tools';
 // The write script runs under this host's /bin/sh, as a guest's runs it; the
 // e2e suite runs it in BusyBox and in impd's default image.
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-write-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { dir };
 }
 
 test('it creates the parent directories and leaves no temp file', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const path = join(ctx.dir, '-a b', '$(x)', 'f.txt');
 
   const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', path], {
     stdin: new TextEncoder().encode('hello'),
     stdout: 'pipe',
     stderr: 'pipe',
+  });
+
+  onTestFinished(() => {
+    proc.kill();
   });
 
   const code = await proc.exited;
@@ -55,8 +49,7 @@ test('it creates the parent directories and leaves no temp file', async () => {
 });
 
 test('it keeps the mode of a file that exists', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const path = join(ctx.dir, 'f');
 
   writeFileSync(path, 'old');
@@ -68,6 +61,10 @@ test('it keeps the mode of a file that exists', async () => {
     stderr: 'pipe',
   });
 
+  onTestFinished(() => {
+    proc.kill();
+  });
+
   const code = await proc.exited;
 
   expect(code).toBe(0);
@@ -76,8 +73,7 @@ test('it keeps the mode of a file that exists', async () => {
 });
 
 test('it writes through a symlink without replacing it', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const target = join(ctx.dir, 'real');
   const link = join(ctx.dir, 'link');
 
@@ -90,6 +86,10 @@ test('it writes through a symlink without replacing it', async () => {
     stderr: 'pipe',
   });
 
+  onTestFinished(() => {
+    proc.kill();
+  });
+
   const code = await proc.exited;
 
   expect(code).toBe(0);
@@ -98,8 +98,7 @@ test('it writes through a symlink without replacing it', async () => {
 });
 
 test('it refuses a directory and leaves it as it was', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const path = join(ctx.dir, 'sub');
 
   mkdirSync(path);
@@ -109,6 +108,10 @@ test('it refuses a directory and leaves it as it was', async () => {
     stdin: new TextEncoder().encode('new'),
     stdout: 'pipe',
     stderr: 'pipe',
+  });
+
+  onTestFinished(() => {
+    proc.kill();
   });
 
   const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
@@ -121,8 +124,7 @@ test('it refuses a directory and leaves it as it was', async () => {
 // refuses: the script must read it all, or the write fails with EPIPE and the
 // refusal is lost (#185).
 test('it reads all the content of a write it refuses for a directory', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const path = join(ctx.dir, 'sub');
 
   mkdirSync(path);
@@ -131,6 +133,10 @@ test('it reads all the content of a write it refuses for a directory', async () 
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
+  });
+
+  onTestFinished(() => {
+    proc.kill();
   });
 
   const written = (async () => {
@@ -146,8 +152,7 @@ test('it reads all the content of a write it refuses for a directory', async () 
 });
 
 test('it reads all the content of a write it refuses for a symlink it cannot resolve', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const loop = join(ctx.dir, 'loop');
   const link = join(ctx.dir, 'dangling');
 
@@ -158,6 +163,10 @@ test('it reads all the content of a write it refuses for a symlink it cannot res
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
+  });
+
+  onTestFinished(() => {
+    proc.kill();
   });
 
   const written = (async () => {

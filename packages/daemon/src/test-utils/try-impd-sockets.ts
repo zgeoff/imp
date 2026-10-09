@@ -1,5 +1,10 @@
 // WebSocket clients for impd's /exec and /tunnel, for tests
 
+// where a client opens impd's `path` on the loopback `port`, with `query`
+export function buildImpdSocketUrl(port: string, path: '/exec' | '/tunnel', query: string): string {
+  return `ws://127.0.0.1:${port}${path}?${query}`;
+}
+
 // opens /exec with `query` and reports whether the upgrade succeeded; a
 // session it opens sends `start` for `name` and reports the first message, or
 // 'closed' when the server closes it before sending one
@@ -9,7 +14,7 @@ export async function tryExecSocket(
   name = 'dev',
   headers: Readonly<Record<string, string>> = {},
 ) {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?${query}`, { headers });
+  const socket = new WebSocket(buildImpdSocketUrl(port, '/exec', query), { headers });
 
   const outcome = Promise.withResolvers<string>();
 
@@ -45,7 +50,7 @@ export async function tryTunnelSocket(
   headers: Readonly<Record<string, string>>,
   name = 'nope',
 ): Promise<string> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel?${query}`, { headers });
+  const socket = new WebSocket(buildImpdSocketUrl(port, '/tunnel', query), { headers });
 
   const outcome = Promise.withResolvers<string>();
 

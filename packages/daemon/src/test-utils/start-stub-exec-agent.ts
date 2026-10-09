@@ -26,6 +26,9 @@ const ExecRequestSchema = z.object({
 
 const SignalSchema = z.object({ signal: z.int() });
 
+// the agent's maxKillGrace, as the host's API caps it too
+const MAX_KILL_GRACE_MS = 60_000;
+
 // what runs the commands: buildStubExecGuest's openExec
 interface StubExecTarget {
   readonly openExec: (name: string, request: Readonly<AgentExecRequest>) => Promise<ExecStream>;
@@ -37,13 +40,21 @@ interface StubExecTarget {
 export function startStubExecAgent(path: string, guest: StubExecTarget) {
   const streams = new WeakMap<Socket, Promise<ExecStream>>();
 
-  const sendEvents = async (socket: Socket, pending: Promise<ExecStream>): Promise<void> => {
+  const sendEvents = async (
+    socket: Socket,
+    pending: Promise<ExecStream>,
+    killGraceMs: number,
+  ): Promise<void> => {
     const stream = await pending;
 
+    // as the agent's STARTED: the clamped grace of a guest that kills the
+    // group, and a session's name, with `created` only when true
     socket.write(
       encodeJsonFrame(FRAME_TYPES.started, {
         pid: stream.pid,
-        ...(stream.groupKill && { kill_grace_ms: 1 }),
+        ...(stream.session !== null && { session: stream.session }),
+        ...(stream.session !== null && stream.created && { created: true }),
+        ...(stream.groupKill && killGraceMs > 0 && { kill_grace_ms: killGraceMs }),
       }),
     );
 
@@ -106,7 +117,7 @@ export function startStubExecAgent(path: string, guest: StubExecTarget) {
       void stopStream(opening);
     });
 
-    void sendEvents(socket, opening);
+    void sendEvents(socket, opening, readKillGraceMs(parsed));
   });
 }
 
@@ -128,4 +139,14 @@ async function stopStream(pending: Promise<ExecStream>): Promise<void> {
   const stream = await pending;
 
   stream.close();
+}
+
+// the agent's killGrace (agent/internal/exec/group.go): off for a tty exec
+// or none asked, else capped at a minute
+function readKillGraceMs(request: Readonly<{ tty: boolean; kill_grace_ms?: number | undefined }>) {
+  if (request.tty || request.kill_grace_ms === undefined || request.kill_grace_ms <= 0) {
+    return 0;
+  }
+
+  return Math.min(request.kill_grace_ms, MAX_KILL_GRACE_MS);
 }

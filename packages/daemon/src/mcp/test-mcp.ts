@@ -4,7 +4,6 @@ import { createImpGuard, createMcpServer } from '@imp/mcp';
 import type { GuardOptions } from '@imp/mcp';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
-import type { AppDeps } from '../build-app';
 import { TEST_TOKEN, buildTestApp, createImpTest } from '../imps/test-imps';
 import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
 
@@ -26,12 +25,10 @@ const ToolResultSchema = z.object({
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 
 interface ImpdTestOptions {
-  readonly tailnet?: AppDeps['tailnet'];
-
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
 
-  // impd's environment, such as the public route's
+  // impd's environment
   readonly env?: Readonly<Record<string, string>>;
 
   // every line impd and the harness log, its releases included
@@ -39,25 +36,8 @@ interface ImpdTestOptions {
 }
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
-// an image, and a client for it; the test's end releases it
-export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
-  const stack = new AsyncDisposableStack();
-
-  onTestFinished(() => stack.disposeAsync());
-
-  const impd = await createImpdTest(stack, options);
-
-  return {
-    ...impd,
-
-    // transitional: in-flight area branches still hold the harness with
-    // `await using`; the GEO-135 PR that deletes this shim removes it
-    [Symbol.asyncDispose]: () => stack.disposeAsync(),
-  };
-}
-
-// setupImpdTest's impd, its releases in `stack`: deferred first, the
-// harness's run last
+// an image, and a client for it; its releases go in `stack`: deferred first,
+// the harness's run last
 async function createImpdTest(
   stack: Readonly<AsyncDisposableStack>,
   options: Readonly<ImpdTestOptions>,
@@ -81,7 +61,7 @@ async function createImpdTest(
         return guest.openExec(name, request);
       },
     },
-    options.tailnet ?? null,
+    null,
   );
 
   const server = built.app.listen(0);
@@ -119,11 +99,14 @@ interface McpTestOptions {
   // the server's token is a manage token for these imps, not the root token
   readonly tokenImps?: readonly string[];
 
+  // impd's environment
+  readonly env?: Readonly<Record<string, string>>;
+
   // every line impd and the harness log, its releases included
   readonly onLog?: (message: string) => void;
 }
 
-// an impd as setupImpdTest makes it, and an MCP server in process over its
+// impd's app on a real port with the fake guest, and an MCP server in process over its
 // client, as stdio runs it; `sent` holds every message it wrote, parsed. The
 // test's end releases it.
 export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
@@ -133,6 +116,7 @@ export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
 
   const impd = await createImpdTest(stack, {
     ...(options.oldAgent !== undefined && { oldAgent: options.oldAgent }),
+    ...(options.env !== undefined && { env: options.env }),
     ...(options.onLog !== undefined && { onLog: options.onLog }),
   });
 

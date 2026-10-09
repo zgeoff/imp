@@ -1,31 +1,143 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { impContract } from '@imp/api';
-import type { Imp } from '@imp/api';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildQueryGate } from '@imp/daemon/src/test-utils/build-query-gate';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
-import { server } from '@imp/test-utils/mock-server';
-import { implement } from '@orpc/server';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { buildMockMcpPrincipal } from '../test-utils/build-mock-mcp-principal';
-import { buildStubImpd } from '../test-utils/build-stub-impd';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
 import { createHttpTransport } from './http-transport';
 import type { McpPrincipal } from './http-transport';
 
-// A transport whose callers are the principals a test adds, by the
-// Authorization header they send; its timers run only when the test ticks
-// them, and its clock reads `clock.now`.
-// oxlint-disable-next-line require-await -- `await using` awaits the stack's disposal when setup throws
+// A transport whose callers are the principals a test adds, by their
+// Authorization header; its timers tick and its clock moves only by hand.
+
+// The tools reach impd's real app; an armed `gate` holds its next imps read.
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  // first, so a held read lets go before impd stops
+  const gate = buildQueryGate('imps');
+
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'mcp-http-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const opened = await openDatabase(':memory:');
+
+  stack.defer(() => opened.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db: opened.withPlugin(gate.plugin),
+
+    // the bearer the tools' client sends
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so impd never reads this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  const client = createImpClient({
+    url: 'http://impd.test',
+    token: 'root-token',
+    fetch: (request) => impd.api.app.handle(request),
+  });
 
   const timer = buildStubRepeat();
   const clock = { now: 0 };
 
   const principals = new Map<string, McpPrincipal>();
-
-  // impd's API as the tools reach it; a test stubs impd at this address
-  const client = createImpClient({ url: 'http://impd.test' });
 
   const readPrincipal = (request: Request) =>
     Promise.resolve(principals.get(request.headers.get('authorization') ?? '') ?? null);
@@ -41,24 +153,14 @@ async function setupTest() {
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
+  // its calls end before impd stops
   stack.defer(() => transport.close());
 
-  const owned = stack.move();
-
-  return {
-    timer,
-    clock,
-    principals,
-    client,
-    readPrincipal,
-    transport,
-
-    [Symbol.asyncDispose]: () => owned.disposeAsync(),
-  };
+  return { gate, timer, clock, principals, client, readPrincipal, transport, stack };
 }
 
 test('it opens a session at initialize and answers with its id', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -67,8 +169,8 @@ test('it opens a session at initialize and answers with its id', async () => {
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const response = await transport.handle(
@@ -107,7 +209,7 @@ test('it opens a session at initialize and answers with its id', async () => {
 });
 
 test('it answers a request in the session that initialize opened', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -151,7 +253,7 @@ test('it answers a request in the session that initialize opened', async () => {
 });
 
 test('it refuses a request outside a session with 400', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -179,7 +281,7 @@ test('it refuses a request outside a session with 400', async () => {
 });
 
 test('it refuses a request in an unknown session with 404', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -203,7 +305,7 @@ test('it refuses a request in an unknown session with 404', async () => {
 });
 
 test("it refuses a request in another caller's session with 404", async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
   ctx.principals.set('Bearer bob', buildMockMcpPrincipal({ key: 'bob', client: ctx.client }));
@@ -246,7 +348,7 @@ test("it refuses a request in another caller's session with 404", async () => {
 });
 
 test('it refuses a protocol version header it does not support with 400', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -292,7 +394,7 @@ test('it refuses a protocol version header it does not support with 400', async 
 });
 
 test('it answers a request that names a protocol version it supports', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -335,7 +437,7 @@ test('it answers a request that names a protocol version it supports', async () 
 });
 
 test('it accepts a notification with 202 and no body', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -380,7 +482,7 @@ test('it accepts a notification with 202 and no body', async () => {
 });
 
 test('it lists only the read tools to a read caller', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set(
     'Bearer reader',
@@ -435,7 +537,7 @@ test('it lists only the read tools to a read caller', async () => {
 });
 
 test('it streams a tool call’s progress, keepalives and response as server-sent events', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -446,24 +548,9 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
-  const impd = implement(impContract);
-  const listed = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<Imp[]>();
-
-  server.use(
-    buildStubImpd('http://impd.test', {
-      imps: {
-        list: impd.imps.list.handler(() => {
-          listed.resolve();
-
-          return answer.promise;
-        }),
-      },
-    }),
-  );
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
+  ctx.gate.arm();
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
@@ -505,11 +592,11 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
     }),
   );
 
-  await listed.promise;
+  await ctx.gate.reached;
 
   ctx.timer.tick(20);
   ctx.timer.tick(30);
-  answer.resolve([]);
+  ctx.gate.release();
 
   const text = await response.text();
 
@@ -554,25 +641,11 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
 });
 
 test('it ends a call only once impd answers, after its stream drops', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  const impd = implement(impContract);
-  const listed = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<Imp[]>();
   const state = { ended: false };
 
-  server.use(
-    buildStubImpd('http://impd.test', {
-      imps: {
-        list: impd.imps.list.handler(() => {
-          listed.resolve();
-
-          return answer.promise;
-        }),
-      },
-    }),
-  );
-
+  ctx.gate.arm();
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
@@ -627,7 +700,7 @@ test('it ends a call only once impd answers, after its stream drops', async () =
 
   await response.body.cancel();
 
-  await listed.promise;
+  await ctx.gate.reached;
 
   // a full round trip through the same session: any cancel the drop set off
   // has run by the time it answers
@@ -646,7 +719,7 @@ test('it ends a call only once impd answers, after its stream drops', async () =
 
   const endedBeforeAnswer = state.ended;
 
-  answer.resolve([]);
+  ctx.gate.release();
 
   await expect(tracked).toResolve();
 
@@ -667,7 +740,7 @@ test('it knows no call end for a response that is not a streamed call', () => {
 });
 
 test('it answers a tool call as JSON, without its progress, when the client takes no event stream', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -678,24 +751,9 @@ test('it answers a tool call as JSON, without its progress, when the client take
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
-  const impd = implement(impContract);
-  const listed = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<Imp[]>();
-
-  server.use(
-    buildStubImpd('http://impd.test', {
-      imps: {
-        list: impd.imps.list.handler(() => {
-          listed.resolve();
-
-          return answer.promise;
-        }),
-      },
-    }),
-  );
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
+  ctx.gate.arm();
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
@@ -737,10 +795,10 @@ test('it answers a tool call as JSON, without its progress, when the client take
     }),
   );
 
-  await listed.promise;
+  await ctx.gate.reached;
 
   ctx.timer.tick(20);
-  answer.resolve([]);
+  ctx.gate.release();
 
   const response = await call;
   const body: unknown = await response.json();
@@ -759,24 +817,9 @@ test('it answers a tool call as JSON, without its progress, when the client take
 });
 
 test('it ends a cancelled JSON call with 202 and no response', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  const impd = implement(impContract);
-  const listed = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<Imp[]>();
-
-  server.use(
-    buildStubImpd('http://impd.test', {
-      imps: {
-        list: impd.imps.list.handler(() => {
-          listed.resolve();
-
-          return answer.promise;
-        }),
-      },
-    }),
-  );
-
+  ctx.gate.arm();
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await ctx.transport.handle(
@@ -818,7 +861,7 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
     }),
   );
 
-  await listed.promise;
+  await ctx.gate.reached;
 
   const cancel = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -837,7 +880,7 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
     }),
   );
 
-  answer.resolve([]);
+  ctx.gate.release();
 
   const response = await call;
   const body = await response.text();
@@ -848,7 +891,7 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
 });
 
 test('it refuses an unknown caller with 401 and a bearer challenge', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -872,7 +915,7 @@ test('it refuses an unknown caller with 401 and a bearer challenge', async () =>
 });
 
 test('it refuses a batch of messages with 400', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -899,7 +942,7 @@ test('it refuses a batch of messages with 400', async () => {
 });
 
 test('it refuses a body that is not JSON with 400 and a parse error', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -923,7 +966,7 @@ test('it refuses a body that is not JSON with 400 and a parse error', async () =
 });
 
 test('it refuses a POST that is not application/json with 415', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -939,7 +982,7 @@ test('it refuses a POST that is not application/json with 415', async () => {
 });
 
 test('it refuses a GET with 405 and names the methods it allows', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -953,7 +996,7 @@ test('it refuses a GET with 405 and names the methods it allows', async () => {
 });
 
 test('it refuses a page on another origin with 403 before it authenticates', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -977,7 +1020,7 @@ test('it refuses a page on another origin with 403 before it authenticates', asy
 });
 
 test('it ends a session on DELETE', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -1027,7 +1070,7 @@ test('it ends a session on DELETE', async () => {
 });
 
 test('it refuses a DELETE of an unknown session with 404', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
@@ -1045,7 +1088,7 @@ test('it refuses a DELETE of an unknown session with 404', async () => {
 });
 
 test('it ends a caller’s sessions when what it authenticated with ends', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const ends = new AbortController();
 
@@ -1100,7 +1143,7 @@ test('it ends a caller’s sessions when what it authenticated with ends', async
 });
 
 test('it keeps another caller’s session when one caller’s credential ends', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const ends = new AbortController();
 
@@ -1171,7 +1214,7 @@ test('it keeps another caller’s session when one caller’s credential ends', 
 });
 
 test('it evicts the least recently used idle session of a caller at its limit', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1182,8 +1225,8 @@ test('it evicts the least recently used idle session of a caller at its limit', 
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const first = await transport.handle(
@@ -1278,11 +1321,7 @@ test('it evicts the least recently used idle session of a caller at its limit', 
 });
 
 test('it evicts an idle session, never a busy one, when the store is full', async () => {
-  await using ctx = await setupTest();
-
-  const impd = implement(impContract);
-  const listed = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<Imp[]>();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1293,20 +1332,9 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
-  server.use(
-    buildStubImpd('http://impd.test', {
-      imps: {
-        list: impd.imps.list.handler(() => {
-          listed.resolve();
-
-          return answer.promise;
-        }),
-      },
-    }),
-  );
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
+  ctx.gate.arm();
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
   ctx.principals.set('Bearer bob', buildMockMcpPrincipal({ key: 'bob', client: ctx.client }));
 
@@ -1355,7 +1383,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
     }),
   );
 
-  await listed.promise;
+  await ctx.gate.reached;
 
   ctx.clock.now = 1;
 
@@ -1399,7 +1427,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
     }),
   );
 
-  answer.resolve([]);
+  ctx.gate.release();
 
   const answered = await call;
 
@@ -1422,11 +1450,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
 });
 
 test('it refuses a new session with 429 to a caller whose sessions are all busy', async () => {
-  await using ctx = await setupTest();
-
-  const impd = implement(impContract);
-  const listed = Promise.withResolvers<void>();
-  const answer = Promise.withResolvers<Imp[]>();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1437,20 +1461,9 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
-  server.use(
-    buildStubImpd('http://impd.test', {
-      imps: {
-        list: impd.imps.list.handler(() => {
-          listed.resolve();
-
-          return answer.promise;
-        }),
-      },
-    }),
-  );
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
+  ctx.gate.arm();
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
@@ -1492,7 +1505,7 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
     }),
   );
 
-  await listed.promise;
+  await ctx.gate.reached;
 
   const refused = await transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1513,7 +1526,7 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
 
   const body = await refused.text();
 
-  answer.resolve([]);
+  ctx.gate.release();
 
   const answered = await call;
 
@@ -1523,7 +1536,7 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
 });
 
 test('it keeps a session used within the idle limit', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1534,8 +1547,8 @@ test('it keeps a session used within the idle limit', async () => {
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
@@ -1578,7 +1591,7 @@ test('it keeps a session used within the idle limit', async () => {
 });
 
 test('it ends a session idle past the idle limit', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1589,8 +1602,8 @@ test('it ends a session idle past the idle limit', async () => {
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
@@ -1633,7 +1646,7 @@ test('it ends a session idle past the idle limit', async () => {
 });
 
 test('it restarts the idle clock of a session each time it is used', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
@@ -1644,8 +1657,8 @@ test('it restarts the idle clock of a session each time it is used', async () =>
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
 
-  onTestFinished(() => transport.close());
-
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
   ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
 
   const opened = await transport.handle(
