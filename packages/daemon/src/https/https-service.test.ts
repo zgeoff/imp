@@ -9,7 +9,7 @@ import { HttpResponse, http } from 'msw';
 import { buildMockCertificate } from '../test-utils/build-mock-certificate';
 import { buildStubCloudflareApi } from '../test-utils/build-stub-cloudflare-api';
 import { buildStubProxyListen } from '../test-utils/build-stub-proxy-listen';
-import { buildStubTicker } from '../test-utils/build-stub-ticker';
+import { buildStubTickerTimer } from '../test-utils/build-stub-ticker-timer';
 import type { Certificate } from './acme/cert-store';
 import { createCertStore } from './acme/cert-store';
 import { createCloudflareProvider } from './dns/cloudflare-provider';
@@ -30,7 +30,7 @@ async function setupTest() {
     log: (message: string) => {
       logs.push(message);
     },
-    ticker: buildStubTicker(),
+    timer: buildStubTickerTimer(),
     proxy: buildStubProxyListen(),
   };
 }
@@ -64,7 +64,7 @@ test('it serves nothing until the first certificate arrives', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -109,7 +109,7 @@ test('it serves the certificate on loopback once it arrives', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -172,7 +172,7 @@ test('it logs the certificate it got', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -214,7 +214,7 @@ test('it says the domain answers only inside the host container when there is no
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -262,7 +262,7 @@ test('it serves an expired certificate on disk at start while renewal fails', as
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -319,7 +319,7 @@ test('it says it serves an expired certificate until a renewal succeeds', async 
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -376,7 +376,7 @@ test('it logs Cloudflare’s refusal of a bad DNS token', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -437,7 +437,7 @@ test('it keeps a bad DNS token out of the log', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -503,7 +503,7 @@ test('it serves nothing on any port without a DNS token file', async () => {
         stored: { auth: 'none', user: null, hash: null },
       }),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -567,7 +567,7 @@ test('it sends Cloudflare no call without a DNS token file', async () => {
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -622,7 +622,7 @@ test('it names the missing DNS token file in the log', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -686,7 +686,7 @@ test('it logs a records failure that repeats once, until it changes', async () =
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -697,16 +697,16 @@ test('it logs a records failure that repeats once, until it changes', async () =
     expect(ctx.logs).toSatisfyAny((line: string) => line.includes('cannot point'));
   });
 
-  await ctx.ticker.fire('https addresses');
+  await ctx.timer.fire('https addresses');
 
   failure.message = 'DNS still down';
 
-  await ctx.ticker.fire('https addresses');
-  await ctx.ticker.fire('https addresses');
+  await ctx.timer.fire('https addresses');
+  await ctx.timer.fire('https addresses');
 
   failure.message = null;
 
-  await ctx.ticker.fire('https addresses');
+  await ctx.timer.fire('https addresses');
 
   expect(ctx.logs.filter((line) => line.includes('point'))).toStrictEqual([
     'impd: https: cannot point imp.test at 127.0.0.2: Cloudflare GET /zones/z1/dns_records: 500 DNS down',
@@ -752,7 +752,7 @@ test('it points the domain and its wildcard at the tailnet IP', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -812,7 +812,7 @@ test('it serves the domain on the tailnet IP', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -887,7 +887,7 @@ test('it keeps the public records in line with the public imps, and leaves the r
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -943,7 +943,7 @@ test('it removes the record of an imp that is no longer public, and says so', as
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -989,7 +989,7 @@ test('it serves the public listener on its own port', async () => {
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1049,7 +1049,7 @@ test('it takes the public records impd left when public mode is off', async () =
     log: ctx.log,
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1098,7 +1098,7 @@ test('it logs a DNS failure on the public records', async () => {
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1149,7 +1149,7 @@ test('it reports a failed pass over the public records', async () => {
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1206,7 +1206,7 @@ test('it writes the public records on the pass after one that failed', async () 
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () => Promise.resolve(undefined),
     publicAddress: '127.0.0.1',
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1262,7 +1262,7 @@ test('it warns that tailscale serve holds the tailnet HTTPS port', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1323,7 +1323,7 @@ test('it keeps the tailnet listener and its connections when a tailscale status 
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1334,9 +1334,9 @@ test('it keeps the tailnet listener and its connections when a tailscale status 
     expect(ctx.proxy.events).toContain('start 127.0.0.2');
   });
 
-  await ctx.ticker.fire('https addresses');
-  await ctx.ticker.fire('https addresses');
-  await ctx.ticker.fire('https addresses');
+  await ctx.timer.fire('https addresses');
+  await ctx.timer.fire('https addresses');
+  await ctx.timer.fire('https addresses');
 
   expect(answers).toStrictEqual([]);
 
@@ -1373,7 +1373,7 @@ test('it logs an address pass that fails', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
@@ -1413,14 +1413,14 @@ test('it runs renewal and the public records every 10 minutes, and the addresses
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());
 
   service.start();
 
-  expect(ctx.ticker.readIntervals()).toStrictEqual({
+  expect(ctx.timer.readDelays()).toStrictEqual({
     'https renewal': 600_000,
     'https public records': 600_000,
     'https addresses': 30_000,
@@ -1456,7 +1456,7 @@ test('it starts no listener for a certificate that arrives after it stopped', as
     log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
-    startTicker: ctx.ticker.startTicker,
+    timer: ctx.timer.timer,
   });
 
   onTestFinished(() => service.stop());

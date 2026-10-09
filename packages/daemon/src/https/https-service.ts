@@ -1,7 +1,7 @@
 import type { PublicImp } from '../db/exposure';
 import { createSemaphore } from '../imps/semaphore';
 import type { TailscaleStatus } from '../net/tailscale-status';
-import type { Ticker } from '../process/ticker';
+import type { Ticker, TickerTimer } from '../process/ticker';
 import { startTicker } from '../process/ticker';
 import { readErrorMessage } from '../read-error-message';
 import type { IssueCertificate } from './acme/acme-issuer';
@@ -72,9 +72,9 @@ interface HttpsServiceDeps {
   readonly listPublicImps: () => Promise<readonly string[]>;
   readonly findPublicImp: (name: string) => Promise<PublicImp | undefined>;
 
-  // runs the renewal, records and address passes on their intervals;
-  // a test steps them by hand
-  readonly startTicker?: typeof startTicker;
+  // where the renewal, records and address passes wait out their intervals:
+  // the runtime's timers unless a test steps them by hand
+  readonly timer?: TickerTimer;
 
   // where the public listeners bind; every address unless a test says
   readonly publicAddress?: string;
@@ -144,7 +144,13 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
   };
 
   const tickers: Ticker[] = [];
-  const startTask = deps.startTicker ?? startTicker;
+
+  const startTask = (
+    label: string,
+    intervalMs: number,
+    task: () => Promise<void>,
+    taskLog: (message: string) => void,
+  ): Ticker => startTicker(label, intervalMs, task, taskLog, deps.timer);
 
   const runRenewal = async (): Promise<void> => {
     const certificate = await certs.renew();
