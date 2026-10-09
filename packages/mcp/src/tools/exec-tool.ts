@@ -98,6 +98,7 @@ export const EXEC_TOOL: Tool = defineTool({
       headBytes: Math.min(HEAD_BYTES, Math.floor(input.maxOutputBytes / 2)),
       signal: context.signal,
       killGraceMs: context.killGraceMs,
+      after: context.after,
     });
 
     return {

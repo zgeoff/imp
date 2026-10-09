@@ -458,15 +458,17 @@ the fork's grant report: `packages/mcp/src/test-utils/build-stub-older-impd-fetc
 (`buildStubOlderImpdFetch`) takes `grantsNotCopied` and `grantsError` out of the real `imps.fork`
 answer. The progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a
 `repeat`, and the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`),
-which ticks only when the test says so.
+which ticks only when the test says so. A tool call's deadline (`timeoutSeconds`) and kill grace
+take `createMcpServer`'s `after`, `setTimeout` by default, and the tests pass
+`packages/mcp/src/test-utils/build-stub-after.ts` (`buildStubAfter`), which fires only when the test
+says so.
 
 In the `mcp/*.test.ts` files, an exec through impd's real app reaches the guest through
 `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path, which runs
 each command on `buildStubExecGuest`; the agent keeps its socket through a sleep or stop and wake.
-The tool tests drive `createMcpServer` in process with `buildStubRepeat` as its progress timer.
-`imp mcp` runs as a subprocess against impd's app on a loopback port. A tool call's `timeoutSeconds`
-and kill grace in `packages/mcp/src/exec/run-capped.ts` run on real timers, so the exec tool's
-timeout tests each wait about a second.
+The tool tests drive `createMcpServer` in process. `exec-tool.test.ts` passes `buildStubRepeat` and
+`buildStubAfter` as its timers, except one timeout test that keeps the default timers and waits its
+one-second deadline. `imp mcp` runs as a subprocess against impd's app on a loopback port.
 
 The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
 grant call's access check and its transaction, as `afterRuleRead` runs between a request's rule read

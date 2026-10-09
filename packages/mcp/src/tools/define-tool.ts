@@ -1,6 +1,7 @@
 import type { Scope } from '@imp/api';
 import { ExecError, ORPCError } from '@zgeoff/imp-client';
 import * as z from 'zod';
+import type { After } from '../after';
 import { GuardError } from '../imp-guard';
 import type { ImpGuard } from '../imp-guard';
 import type { ToolClient } from './tool-client';
@@ -16,6 +17,9 @@ export interface ToolContext {
   // it already started
   readonly signal: Readonly<AbortSignal>;
   readonly killGraceMs: number;
+
+  // the timer behind a command's deadline and its kill grace
+  readonly after: After;
 }
 
 // MCP's tool annotations: hints for the client, which may ask the user

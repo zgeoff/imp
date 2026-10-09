@@ -1,4 +1,6 @@
 import type { Scope } from '@imp/api';
+import { runAfter } from './after';
+import type { After } from './after';
 import type { ImpGuard } from './imp-guard';
 import {
   INTERNAL_ERROR,
@@ -33,6 +35,10 @@ export interface McpServerOptions {
   // the timer behind progress notifications (and an HTTP stream's
   // keepalive); setInterval when left out
   readonly repeat?: Repeat;
+
+  // the timer behind a command's deadline and its kill grace; setTimeout
+  // when left out
+  readonly after?: After;
 }
 
 // Who one message comes from, and where its answers go. Over stdio every
@@ -74,6 +80,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
   const progressIntervalMs = options.progressIntervalMs ?? PROGRESS_INTERVAL_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const repeat = options.repeat ?? runOnInterval;
+  const after = options.after ?? runAfter;
 
   // never rejects: a failed tool call is an isError result and a bug an
   // internal error
@@ -102,7 +109,13 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
     const isAnswered = (): boolean => !signal.aborted || !tool.cancellable;
 
     try {
-      const context = { client: message.client, guard: message.guard, signal, killGraceMs };
+      const context = {
+        client: message.client,
+        guard: message.guard,
+        signal,
+        killGraceMs,
+        after,
+      };
 
       const result = await tool.call(params['arguments'], context);
 

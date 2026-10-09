@@ -173,6 +173,7 @@ function runFileCommand(
     headBytes: command.maxOutputBytes,
     signal: context.signal,
     killGraceMs: context.killGraceMs,
+    after: context.after,
   });
 }
 
