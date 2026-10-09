@@ -571,6 +571,48 @@ test('#updateImpState adds the awake span to the awake time when the imp stops',
   expect(stopped.awakeMs).toBe(5000);
 });
 
+test('#updateImpState keeps the awake span of a running imp marked running again as adopted', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+  const running = await updateImpState(ctx.db, imp.id, { reason: 'booted', state: 'running' });
+
+  invariant(running.awakeSince);
+
+  // impd stopped while the imp ran: the row still says running
+  const adopted = await updateImpState(ctx.db, imp.id, { reason: 'adopted', state: 'running' });
+
+  expect(adopted.awakeSince).toStrictEqual(running.awakeSince);
+});
+
+test('#updateImpStateIf adds no awake time when a repair ends the span before its start', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  const running = await updateImpState(ctx.db, imp.id, {
+    reason: 'booted',
+    state: 'running',
+    pid: 42,
+  });
+
+  invariant(running.awakeSince);
+
+  const repaired = await updateImpStateIf(
+    ctx.db,
+    imp.id,
+    { state: 'running', pid: 42 },
+    {
+      reason: 'repaired',
+      state: 'stopped',
+      pid: null,
+      awakeUntil: new Date(running.awakeSince.getTime() - 5000),
+    },
+  );
+
+  expect(repaired?.awakeMs).toBe(running.awakeMs);
+});
+
 test('#updateImpStateIf leaves a row whose pid changed first', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
