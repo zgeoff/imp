@@ -5,6 +5,7 @@ import type { ImpDatabase } from '../db/open-database';
 import type { Imps } from '../imps/imp-service';
 import { deriveSlotAddress } from '../net/addressing';
 import type { TailscaleStatus } from '../net/tailscale-status';
+import { runChecked, runCommand } from '../process/run-command';
 import { loadOrCreateHostId } from './host-id';
 import { readOAuthCredential } from './oauth-credential';
 import { createServiceServe } from './service-serve';
@@ -20,6 +21,9 @@ interface BuildTailnetNamesOptions {
   readonly imps: Pick<Imps, 'lockImp'>;
   readonly readTailscale: () => Promise<TailscaleStatus>;
   readonly log: (message: string) => void;
+
+  // runs `tailscale serve`; runCommand by default
+  readonly runCommand?: typeof runCommand | undefined;
 }
 
 // Per-imp names from impd's config, with the real API and tailscaled.
@@ -31,7 +35,7 @@ export function buildTailnetNames(options: BuildTailnetNamesOptions): TailnetNam
     hostId: loadOrCreateHostId(options.config.dataDir),
     db: options.db,
     api: createServicesApi({ readCredential: () => readOAuthCredential(names.oauthFile) }),
-    serve: createServiceServe(),
+    serve: createServiceServe((argv) => runChecked(argv, {}, options.runCommand ?? runCommand)),
     findPort: (slot) => deriveSlotAddress(slot, options.config).tailnetPort,
 
     isImpPresent: createPresenceCheck(options.imps, options.db),

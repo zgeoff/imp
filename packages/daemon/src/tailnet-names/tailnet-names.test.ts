@@ -1,10 +1,11 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -14,7 +15,6 @@ import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
 import { findImpByName, updateImpMove } from '../db/imps';
 import { openDatabase } from '../db/open-database';
-import { setupImpTest } from '../imps/test-imps';
 import { deriveSlotAddress } from '../net/addressing';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
@@ -29,7 +29,13 @@ import { createServicesApi } from './services-api';
 import { SERVICE_TAG, createTailnetNames } from './tailnet-names';
 import type { TailnetNamesDeps } from './tailnet-names';
 
-async function setupTest() {
+interface SetupOptions {
+  // impd's own per-imp names (IMP_TAILNET_NAMES=1) on a tailnet node, which
+  // serve through the stub `tailscale serve` and the stub API
+  readonly isNamed?: boolean;
+}
+
+async function setupTest(options: SetupOptions = {}) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -49,7 +55,11 @@ async function setupTest() {
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    ...(options.isNamed === true && { IMP_TAILNET_NAMES: '1', IMP_TAILSCALE_NODE: '1' }),
   });
+
+  const tailscale = buildStubTailscaleServe();
+  const impdLogs: string[] = [];
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
   const drive = 'd1'.repeat(32);
@@ -79,7 +89,9 @@ async function setupTest() {
 
     // the host's free space, so a create never meets this machine's disk
     readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
-    log: () => {},
+    log: (line) => {
+      impdLogs.push(line);
+    },
 
     // Firecracker, the kernel and the CPU as this host reports them, which a
     // snapshot must match to load
@@ -95,10 +107,19 @@ async function setupTest() {
       ipv6Prefix,
     }),
 
-    // no IPv6 and no tailnet node: these names come from the deps below
+    // no IPv6; the node's MagicDNS name gives impd's own names their suffix
     resolveIpv6: () => Promise.resolve(null),
     readTailscale: () =>
-      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp-host',
+        dnsName: 'imp-host.tail1234.ts.net',
+        ip: null,
+        ips: [],
+      }),
+
+    // `tailscale serve` for impd's own names, never the host's
+    runCommand: tailscale.run,
     cgroups: buildStubCpuCgroups().cgroups,
     vms: vmm.startGeneration(),
     taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
@@ -157,7 +178,6 @@ async function setupTest() {
 
   server.use(...tailscaleApi.handlers);
 
-  const tailscale = buildStubTailscaleServe();
   const logs: string[] = [];
 
   // every dep but the host's ID, through the real Services API client and
@@ -177,7 +197,7 @@ async function setupTest() {
     },
   };
 
-  return { config, db, client, tailscaleApi, tailscale, logs, namesDeps };
+  return { config, db, client, tailscaleApi, tailscale, logs, impdLogs, namesDeps };
 }
 
 test('it claims a service of this host’s for each imp', async () => {
@@ -661,31 +681,45 @@ test('it logs a removal that fails, and goes on with the pass', async () => {
 });
 
 test('it shows an imp’s service URL once its name is live', async () => {
-  const live = new Set<string>();
+  const ctx = await setupTest({ isNamed: true });
 
-  // impd's own wiring reaches tailnet names only through `tailscale serve`
-  // on the host, so this shim stands in for the names' readUrl
-  const ctx = await setupImpTest({
-    readServiceUrl: (name) => (live.has(name) ? `https://${name}.tail1234.ts.net` : null),
+  const oauthFile = ctx.config.tailnetNames?.oauthFile;
+
+  invariant(oauthFile);
+
+  await mkdir(dirname(oauthFile), { recursive: true });
+
+  await writeFile(oauthFile, JSON.stringify({ clientId: 'kExample', clientSecret: 'secret' }), {
+    mode: 0o600,
   });
 
-  await ctx.createTestImage('base');
-  await ctx.imps.createImp({ name: 'box' });
+  await ctx.client.imps.create({ name: 'box' });
 
-  live.add('box');
+  // the create's write starts impd's sync, which serves the name
+  const service = await waitFor(async () => {
+    const urls = await ctx.client.imps.url({ name: 'box' });
 
-  const urls = await ctx.imps.readUrls('box');
+    invariant(urls.service !== null);
 
-  expect(urls.service).toBe('https://box.tail1234.ts.net');
+    return urls.service;
+  });
+
+  expect(service).toBe('https://box.tail1234.ts.net');
 });
 
 test('it shows no service URL before the name is live', async () => {
-  const ctx = await setupImpTest({ readServiceUrl: () => null });
+  const ctx = await setupTest({ isNamed: true });
 
-  await ctx.createTestImage('base');
-  await ctx.imps.createImp({ name: 'box' });
+  await ctx.client.imps.create({ name: 'box' });
 
-  const urls = await ctx.imps.readUrls('box');
+  // with no OAuth client file, impd's sync cannot claim the name
+  await waitFor(() => {
+    expect(ctx.impdLogs).toSatisfyAny((line: string) =>
+      line.startsWith('impd: tailnet names: box: ENOENT'),
+    );
+  });
+
+  const urls = await ctx.client.imps.url({ name: 'box' });
 
   expect(urls.service).toBeNull();
 });
