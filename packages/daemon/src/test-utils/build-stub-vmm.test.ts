@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { AgentError } from '../agent-client/agent-connection';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { buildImpPaths, buildSnapshotPaths } from '../storage/data-layout';
@@ -790,11 +791,29 @@ test('#buildStubVmm keeps a hung call pending until the hangs are released', asy
 
   const call = ctx.runner.isAgentReady(ctx.paths);
 
-  // a later call on the same step runs the same path, so it settles after
-  // the hung one would have
-  await ctx.runner.isAgentReady(ctx.paths);
+  await waitFor(() => {
+    expect(ctx.fake.countHungCalls()).toBe(1);
+  });
 
   expect(Bun.peek.status(call)).toBe('pending');
+});
+
+test('#buildStubVmm counts no hung call once the hangs are released', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.queue('agentReady', 'hang');
+
+  const call = ctx.runner.isAgentReady(ctx.paths);
+
+  await waitFor(() => {
+    expect(ctx.fake.countHungCalls()).toBe(1);
+  });
+
+  ctx.fake.releaseHangs();
+
+  await call;
+
+  expect(ctx.fake.countHungCalls()).toBe(0);
 });
 
 test('#buildStubVmm lets a hung call succeed when the hangs are released', async () => {
@@ -831,9 +850,9 @@ test('#buildStubVmm hangs a later call again after the hangs are released', asyn
 
   const call = ctx.runner.isAgentReady(ctx.paths);
 
-  // a later call on the same step runs the same path, so it settles after
-  // the hung one would have
-  await ctx.runner.isAgentReady(ctx.paths);
+  await waitFor(() => {
+    expect(ctx.fake.countHungCalls()).toBe(1);
+  });
 
   expect(Bun.peek.status(call)).toBe('pending');
 });
@@ -841,14 +860,23 @@ test('#buildStubVmm hangs a later call again after the hangs are released', asyn
 test('#buildStubVmm never settles a call of a runner whose impd was replaced', async () => {
   const ctx = await setupTest();
 
-  const next = ctx.fake.startGeneration();
+  ctx.fake.startGeneration();
+
   const call = ctx.runner.isAgentReady(ctx.paths);
 
-  // the new runner's call runs the whole path, so it settles after the old
-  // one would have
-  await next.isAgentReady(ctx.paths);
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
 
   expect(Bun.peek.status(call)).toBe('pending');
+});
+
+test('#buildStubVmm parks no call of the current runner', async () => {
+  const ctx = await setupTest();
+
+  await ctx.runner.isAgentReady(ctx.paths);
+
+  expect(ctx.fake.countParkedCalls()).toBe(0);
 });
 
 test('#buildStubVmm never settles an in-flight call once its impd is replaced', async () => {
@@ -859,15 +887,57 @@ test('#buildStubVmm never settles an in-flight call once its impd is replaced', 
 
   await hold.reached;
 
-  const next = ctx.fake.startGeneration();
-
+  ctx.fake.startGeneration();
   hold.release();
 
-  // the new runner's call runs the whole path, so it settles after the
-  // released one would have
-  await next.isAgentReady(ctx.paths);
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
 
   expect(Bun.peek.status(call)).toBe('pending');
+});
+
+test('#buildStubVmm never settles an in-flight call that fails once its impd is replaced', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.queue('grow', 'fail');
+
+  const hold = ctx.fake.hold('grow');
+  const call = ctx.runner.growDrive(ctx.paths, 1024);
+
+  await hold.reached;
+
+  ctx.fake.startGeneration();
+  hold.release();
+
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
+
+  expect(Bun.peek.status(call)).toBe('pending');
+});
+
+test('#buildStubVmm never settles a jail sweep by a runner whose impd was replaced', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.startGeneration();
+
+  const call = ctx.runner.removeOrphanJails(new Set());
+
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
+
+  expect(Bun.peek.status(call)).toBe('pending');
+  expect(ctx.fake.sweeps).toStrictEqual([]);
+});
+
+test('#buildStubVmm throws on a VM listing by a runner whose impd was replaced', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.startGeneration();
+
+  expect(() => ctx.runner.listVms()).toThrowWithMessage(Error, 'this impd was replaced');
 });
 
 test('#buildStubVmm throws on a liveness check by a runner whose impd was replaced', async () => {

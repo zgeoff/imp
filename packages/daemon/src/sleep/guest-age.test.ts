@@ -1,74 +1,109 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { waitForGuestAge } from './guest-age';
 
-function isAlwaysWanted(): Promise<boolean> {
-  return Promise.resolve(true);
-}
+test('it sleeps a guest old enough at once without a wait', async () => {
+  const clock = buildStubClock();
 
-test('an old enough guest sleeps at once without a wait', async () => {
   const waited = await waitForGuestAge({
     readUptimeMs: () => Promise.resolve(5000),
     minUptimeMs: 1500,
-    isWanted: isAlwaysWanted,
+    isWanted: () => Promise.resolve(true),
+    now: clock.now,
+    sleep: clock.sleep,
   });
 
   expect(waited).toBe(0);
+  expect(clock.sleeps).toStrictEqual([]);
 });
 
-test('a young guest waits out the rest of the minimum uptime', async () => {
-  const started = performance.now();
+test('it waits out the rest of the minimum uptime for a young guest', async () => {
+  const clock = buildStubClock();
 
   const waited = await waitForGuestAge({
     readUptimeMs: () => Promise.resolve(1350),
     minUptimeMs: 1500,
-    isWanted: isAlwaysWanted,
+    isWanted: () => Promise.resolve(true),
+    now: clock.now,
+    sleep: clock.sleep,
   });
 
-  expect(waited).not.toBeNull();
-  expect(performance.now() - started).toBeGreaterThanOrEqual(145);
+  expect(waited).toBe(150);
 });
 
-test('0 turns the wait off without asking the agent', async () => {
-  let asked = false;
+test('it checks whether the sleep is still wanted every 50 ms of the wait', async () => {
+  const clock = buildStubClock();
+  const steps: (number | 'check')[] = [];
+
+  await waitForGuestAge({
+    readUptimeMs: () => Promise.resolve(1380),
+    minUptimeMs: 1500,
+    isWanted: () => {
+      steps.push('check');
+
+      return Promise.resolve(true);
+    },
+    now: clock.now,
+    sleep: (ms) => {
+      steps.push(ms);
+
+      return clock.sleep(ms);
+    },
+  });
+
+  expect(steps).toStrictEqual(['check', 50, 'check', 50, 'check', 20, 'check']);
+});
+
+test('it turns the wait off at a minimum of 0 without asking the agent', async () => {
+  const readUptimeMs = mock(() => Promise.resolve(10));
 
   const waited = await waitForGuestAge({
-    readUptimeMs: () => {
-      asked = true;
-
-      return Promise.resolve(10);
-    },
+    readUptimeMs,
     minUptimeMs: 0,
-    isWanted: isAlwaysWanted,
+    isWanted: () => Promise.resolve(true),
   });
 
   expect(waited).toBe(0);
-  expect(asked).toBe(false);
+  expect(readUptimeMs).not.toHaveBeenCalled();
 });
 
-test('an agent that does not answer does not hold the sleep', async () => {
+test('it lets the sleep go ahead when the agent does not answer', async () => {
   const waited = await waitForGuestAge({
     readUptimeMs: () => Promise.resolve(null),
     minUptimeMs: 1500,
-    isWanted: isAlwaysWanted,
+    isWanted: () => Promise.resolve(true),
   });
 
   expect(waited).toBe(0);
 });
 
-test('a sleep that is no longer wanted gives way during the wait', async () => {
-  const started = performance.now();
-  let checks = 0;
+test('it gives way during the wait once the sleep is no longer wanted', async () => {
+  const clock = buildStubClock();
+  const answers = [true, true, false];
 
   const waited = await waitForGuestAge({
     readUptimeMs: () => Promise.resolve(0),
     minUptimeMs: 1500,
-    isWanted: () => {
-      checks += 1;
-
-      return Promise.resolve(checks < 3);
-    },
+    isWanted: () => Promise.resolve(answers.shift() ?? false),
+    now: clock.now,
+    sleep: clock.sleep,
   });
 
   expect(waited).toBeNull();
-  expect(performance.now() - started).toBeLessThan(1000);
+  expect(clock.now()).toBe(100);
+});
+
+test('it gives way when the sleep is no longer wanted as the wait ends', async () => {
+  const clock = buildStubClock();
+  const answers = [true, false];
+
+  const waited = await waitForGuestAge({
+    readUptimeMs: () => Promise.resolve(1450),
+    minUptimeMs: 1500,
+    isWanted: () => Promise.resolve(answers.shift() ?? false),
+    now: clock.now,
+    sleep: clock.sleep,
+  });
+
+  expect(waited).toBeNull();
 });

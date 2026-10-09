@@ -1,7 +1,16 @@
-import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import {
   buildMemoryMax,
   createCpuCgroups,
@@ -10,241 +19,541 @@ import {
   parseOomKills,
 } from './cpu-cgroups';
 
-// a cgroup root and a /proc in a temp dir, with `controllers` handed to
-// imps/, as setup-cgroups.sh leaves it; none when `delegated` is false
-function setupCgroups(delegated = true, controllers = 'cpu') {
+// A cgroup root with its imps/ cgroup and a /proc, in a temp dir; what
+// setup-cgroups.sh hands down to imps/ is the test's to write.
+function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-cgroups-'));
+
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   const root = join(dir, 'cgroup');
   const proc = join(dir, 'proc');
-  const logs: string[] = [];
 
   mkdirSync(join(root, 'imps'), { recursive: true });
   mkdirSync(proc);
 
-  if (delegated) {
-    writeFileSync(join(root, 'imps', 'cgroup.subtree_control'), `${controllers}\n`);
-  }
-
-  const cgroups = createCpuCgroups({
-    root,
-    procRoot: proc,
-    log: (message) => {
-      logs.push(message);
-    },
-  });
-
-  // the files the kernel would make in a new cgroup
-  const readFile = (impId: string, file: string): string =>
-    readFileSync(join(root, 'imps', impId, file), 'utf8');
-
-  const setProcessCgroup = (pid: number, path: string): void => {
-    mkdirSync(join(proc, String(pid)), { recursive: true });
-    writeFileSync(join(proc, String(pid), 'cgroup'), `0::${path}\n`);
-  };
+  const logs: string[] = [];
 
   return {
     root,
-    cgroups,
+    proc,
     logs,
-    readFile,
-    setProcessCgroup,
-    [Symbol.dispose]: () => {
-      rmSync(dir, { recursive: true, force: true });
+    log: (message: string) => {
+      logs.push(message);
     },
   };
 }
 
-test('cpu.max is the limit in microseconds of each 100 ms period, or max', () => {
-  expect(formatCpuMax(null)).toBe('max 100000');
-  expect(formatCpuMax(1.5)).toBe('150000 100000');
-  expect(formatCpuMax(0.1)).toBe('10000 100000');
+test.each([
+  ['no limit', null, 'max 100000'],
+  ['1.5 CPUs', 1.5, '150000 100000'],
+  ['0.1 CPUs', 0.1, '10000 100000'],
+])('#formatCpuMax writes %s as microseconds of each 100 ms period', (_label, limit, cpuMax) => {
+  expect(formatCpuMax(limit)).toBe(cpuMax);
 });
 
-test('it reads usage and throttled time from cpu.stat', () => {
-  const stat = 'usage_usec 1029646\nuser_usec 1025746\nnr_throttled 20\nthrottled_usec 970041\n';
+test('#parseCpuStat reads usage and throttled time from cpu.stat', () => {
+  expect(
+    parseCpuStat('usage_usec 1029646\nuser_usec 1025746\nnr_throttled 20\nthrottled_usec 970041\n'),
+  ).toStrictEqual({ usageUsec: 1_029_646, throttledUsec: 970_041 });
+});
 
-  expect(parseCpuStat(stat)).toEqual({ usageUsec: 1_029_646, throttledUsec: 970_041 });
+test('#parseCpuStat reads nothing from an empty cpu.stat', () => {
   expect(parseCpuStat('')).toBeNull();
 });
 
-test('a VM gets its limit and weight, no limit while a snapshot is made, then its own again', () => {
-  using ctx = setupCgroups();
+test.each([
+  ['a 512 MiB guest 256 MiB more', 512, 768],
+  ['a 2 GiB guest 256 MiB more', 2048, 2304],
+  ['an 8 GiB guest an eighth more', 8192, 9216],
+])('#buildMemoryMax allows %s', (_label, memoryMib, maxMib) => {
+  expect(buildMemoryMax(memoryMib)).toBe(String(maxMib * 1024 * 1024));
+});
 
-  const cgroup = ctx.cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
+test('#parseOomKills reads oom_kill from memory.events', () => {
+  expect(parseOomKills('oom 0\noom_kill 2\noom_group_kill 1\n')).toBe(2);
+});
+
+test('#parseOomKills reads nothing from an empty memory.events', () => {
+  expect(parseOomKills('')).toBeNull();
+});
+
+test('#setup gives a VM a cgroup with its CPU limit and weight', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+  const cgroup = cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
 
   expect(cgroup?.procsPath).toBe(join(ctx.root, 'imps', 'a', 'cgroup.procs'));
-  expect(ctx.readFile('a', 'cpu.max')).toBe('50000 100000');
-  expect(ctx.readFile('a', 'cpu.weight')).toBe('200');
-  cgroup?.liftLimit();
-  expect(ctx.readFile('a', 'cpu.max')).toBe('max 100000');
-  cgroup?.applyLimit();
-  expect(ctx.readFile('a', 'cpu.max')).toBe('50000 100000');
-
-  ctx.cgroups.apply('a', { limit: null, weight: 50 });
-
-  expect(ctx.readFile('a', 'cpu.max')).toBe('max 100000');
-  expect(ctx.readFile('a', 'cpu.weight')).toBe('50');
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.max'), 'utf8')).toBe('50000 100000');
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.weight'), 'utf8')).toBe('200');
 });
 
-test('without the cpu controller handed down, limits are kept and nothing is written', () => {
-  using ctx = setupCgroups(false);
+test('#liftLimit lifts the CPU limit while a snapshot is made', () => {
+  const ctx = setupTest();
 
-  expect(ctx.cgroups.isEnforced).toBeFalse();
-  expect(ctx.cgroups.setup('a', { limit: 1, weight: 100 }, 512)).toBeNull();
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+  const cgroup = cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
+
+  invariant(cgroup);
+
+  cgroup.liftLimit();
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.max'), 'utf8')).toBe('max 100000');
+});
+
+test('#applyLimit puts the CPU limit back after a snapshot', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+  const cgroup = cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
+
+  invariant(cgroup);
+
+  cgroup.liftLimit();
+  cgroup.applyLimit();
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.max'), 'utf8')).toBe('50000 100000');
+});
+
+test('#apply changes the CPU limit and weight of a running VM', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
+  cgroups.apply('a', { limit: null, weight: 50 });
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.max'), 'utf8')).toBe('max 100000');
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.weight'), 'utf8')).toBe('50');
+});
+
+test('#setup writes nothing when the cpu controller is not handed down', () => {
+  const ctx = setupTest();
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+  const cgroup = cgroups.setup('a', { limit: 1, weight: 100 }, 512);
+
+  expect(cgroups.isEnforced).toBeFalse();
+  expect(cgroup).toBeNull();
   expect(existsSync(join(ctx.root, 'imps', 'a'))).toBeFalse();
-  expect(ctx.cgroups.removeOrphans(new Set())).toEqual([]);
 });
 
-test('a re-adopted VM joins its cgroup only when it is elsewhere', () => {
-  using ctx = setupCgroups();
+test('#removeOrphans finds nothing to sweep when the cpu controller is not handed down', () => {
+  const ctx = setupTest();
 
-  ctx.setProcessCgroup(10, '/init');
-  ctx.cgroups.adopt('a', 10, { limit: 1, weight: 100 }, 512);
+  mkdirSync(join(ctx.root, 'imps', 'orphan'));
 
-  expect(ctx.readFile('a', 'cgroup.procs')).toBe('10');
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
-  ctx.setProcessCgroup(11, '/imps/b');
-  ctx.cgroups.adopt('b', 11, { limit: 1, weight: 100 }, 512);
+  expect(cgroups.removeOrphans(new Set())).toStrictEqual([]);
+});
+
+test('#adopt moves a re-adopted VM that is elsewhere into its cgroup', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+  mkdirSync(join(ctx.proc, '10'));
+  writeFileSync(join(ctx.proc, '10', 'cgroup'), '0::/init\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.adopt('a', 10, { limit: 1, weight: 100 }, 512);
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'cgroup.procs'), 'utf8')).toBe('10');
+});
+
+test('#adopt leaves a re-adopted VM that is already in its cgroup', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+  mkdirSync(join(ctx.proc, '11'));
+  writeFileSync(join(ctx.proc, '11', 'cgroup'), '0::/imps/b\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.adopt('b', 11, { limit: 1, weight: 100 }, 512);
 
   expect(existsSync(join(ctx.root, 'imps', 'b'))).toBeFalse();
 });
 
-test('remove and the orphan sweep take empty cgroups; a failed rmdir is logged', async () => {
-  using ctx = setupCgroups();
+test('#remove takes an empty cgroup', async () => {
+  const ctx = setupTest();
 
-  ctx.cgroups.setup('kept', { limit: null, weight: 100 }, 512);
-  ctx.cgroups.setup('gone', { limit: null, weight: 100 }, 512);
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
 
-  mkdirSync(join(ctx.root, 'imps', 'orphan'));
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('gone', { limit: null, weight: 100 }, 512);
 
   // the kernel's files are not in a temp dir; an empty cgroup is an empty dir
-  for (const impId of ['kept', 'gone']) {
-    for (const file of ['cpu.max', 'cpu.weight']) {
-      rmSync(join(ctx.root, 'imps', impId, file));
-    }
-  }
+  rmSync(join(ctx.root, 'imps', 'gone', 'cpu.max'));
+  rmSync(join(ctx.root, 'imps', 'gone', 'cpu.weight'));
 
-  await ctx.cgroups.remove('gone');
-  await ctx.cgroups.remove('never-made');
+  await cgroups.remove('gone');
 
   expect(existsSync(join(ctx.root, 'imps', 'gone'))).toBeFalse();
-  expect(ctx.cgroups.removeOrphans(new Set(['kept']))).toEqual(['orphan']);
-  expect(existsSync(join(ctx.root, 'imps', 'kept'))).toBeTrue();
+  expect(ctx.logs).toStrictEqual([]);
+});
+
+test('#remove does nothing for a cgroup it never made', async () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  await cgroups.remove('never-made');
+
+  expect(ctx.logs).toStrictEqual([]);
+});
+
+test('#remove logs a cgroup that still holds a VM and keeps it', async () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
   // a cgroup that still holds files stands for one that still holds a VM
-  ctx.cgroups.setup('busy', { limit: null, weight: 100 }, 512);
+  cgroups.setup('busy', { limit: null, weight: 100 }, 512);
 
-  await ctx.cgroups.remove('busy');
+  await cgroups.remove('busy');
 
   expect(ctx.logs).toHaveLength(1);
   expect(ctx.logs[0]).toStartWith('impd: cgroup busy: remove:');
+  expect(existsSync(join(ctx.root, 'imps', 'busy'))).toBeTrue();
 });
 
-test('a VM may use its memory and 256 MiB more, never swap, and dies whole', () => {
-  using ctx = setupCgroups(true, 'cpu memory');
+test('#remove tries a busy cgroup again until the kernel lets it go', async () => {
+  const ctx = setupTest();
 
-  const cgroup = ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
 
-  expect(ctx.cgroups.isMemoryEnforced).toBeTrue();
-  expect(ctx.readFile('a', 'memory.max')).toBe(String(1280 * 1024 * 1024));
-  expect(ctx.readFile('a', 'memory.high')).toBe('max');
-  expect(ctx.readFile('a', 'memory.swap.max')).toBe('0');
-  expect(ctx.readFile('a', 'memory.oom.group')).toBe('1');
+  const sleeps: number[] = [];
 
-  // a sleep or a wake lifts the CPU limit only; memory.max always holds
-  cgroup?.liftLimit();
-  expect(ctx.readFile('a', 'memory.max')).toBe(String(1280 * 1024 * 1024));
-  cgroup?.applyLimit();
+  // the first rmdir finds the exited VM still held, as the kernel answers
+  const rmdir = mock(rmdirSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' });
+  });
+
+  const cgroups = createCpuCgroups({
+    root: ctx.root,
+    procRoot: ctx.proc,
+    log: ctx.log,
+    rmdir,
+    sleep: (ms) => {
+      sleeps.push(ms);
+
+      return Promise.resolve();
+    },
+  });
+
+  mkdirSync(join(ctx.root, 'imps', 'held'));
+
+  await cgroups.remove('held');
+
+  expect(existsSync(join(ctx.root, 'imps', 'held'))).toBeFalse();
+  expect(sleeps).toStrictEqual([50]);
+  expect(ctx.logs).toStrictEqual([]);
+});
+
+test('#remove logs a cgroup that stays busy past the last try and keeps it', async () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const sleeps: number[] = [];
+
+  const cgroups = createCpuCgroups({
+    root: ctx.root,
+    procRoot: ctx.proc,
+    log: ctx.log,
+    rmdir: () => {
+      throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' });
+    },
+    sleep: (ms) => {
+      sleeps.push(ms);
+
+      return Promise.resolve();
+    },
+  });
+
+  mkdirSync(join(ctx.root, 'imps', 'held'));
+
+  await cgroups.remove('held');
+
+  // 40 tries, with a 50 ms wait between each two
+  expect(sleeps).toHaveLength(39);
+
+  expect(ctx.logs).toStrictEqual([
+    'impd: cgroup held: remove: EBUSY: resource busy or locked, rmdir',
+  ]);
+
+  expect(existsSync(join(ctx.root, 'imps', 'held'))).toBeTrue();
+});
+
+test('#removeOrphans takes the empty cgroups of imps it does not know', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+  mkdirSync(join(ctx.root, 'imps', 'orphan'));
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+  const removed = cgroups.removeOrphans(new Set(['kept']));
+
+  expect(removed).toStrictEqual(['orphan']);
+  expect(existsSync(join(ctx.root, 'imps', 'orphan'))).toBeFalse();
+});
+
+test('#removeOrphans never takes the cgroup of an imp it knows', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+  mkdirSync(join(ctx.root, 'imps', 'kept'));
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.removeOrphans(new Set(['kept']));
+
+  expect(existsSync(join(ctx.root, 'imps', 'kept'))).toBeTrue();
+});
+
+test('#setup lets a VM use its memory and 256 MiB more, never swap, and die whole', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+
+  expect(cgroups.isMemoryEnforced).toBeTrue();
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
+    String(1280 * 1024 * 1024),
+  );
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.high'), 'utf8')).toBe('max');
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.swap.max'), 'utf8')).toBe('0');
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.oom.group'), 'utf8')).toBe('1');
+});
+
+test('#liftLimit keeps memory.max while a snapshot is made', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+  const cgroup = cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+
+  invariant(cgroup);
+
+  cgroup.liftLimit();
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
+    String(1280 * 1024 * 1024),
+  );
+});
+
+test('#setup writes only the CPU settings without the memory controller', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+
+  expect(cgroups.isMemoryEnforced).toBeFalse();
+  expect(existsSync(join(ctx.root, 'imps', 'a', 'memory.max'))).toBeFalse();
+});
+
+test('#readOomKills reads the OOM kills of a VM cgroup', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
 
   writeFileSync(
     join(ctx.root, 'imps', 'a', 'memory.events'),
     'low 0\nhigh 3\nmax 1\noom 1\noom_kill 1\n',
   );
 
-  expect(ctx.cgroups.readOomKills('a')).toBe(1);
-  expect(ctx.cgroups.readOomKills('never-made')).toBeNull();
+  expect(cgroups.readOomKills('a')).toBe(1);
 });
 
-test('an OOM kill counts for the VM that died only when it rose after its start', () => {
-  using ctx = setupCgroups(true, 'cpu memory');
+test('#readOomKills reads nothing for a cgroup it never made', () => {
+  const ctx = setupTest();
 
-  const events = join(ctx.root, 'imps', 'a', 'memory.events');
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  expect(cgroups.readOomKills('never-made')).toBeNull();
+});
+
+test('#hasOomKillSinceStart counts no kill an older VM left in a kept cgroup', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
 
   // a cgroup a busy remove kept, with an older VM's kill in it
   mkdirSync(join(ctx.root, 'imps', 'a'));
-  writeFileSync(events, 'oom 1\noom_kill 1\n');
+  writeFileSync(join(ctx.root, 'imps', 'a', 'memory.events'), 'oom 1\noom_kill 1\n');
 
-  expect(ctx.cgroups.hasOomKillSinceStart('a')).toBeFalse();
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
-  ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
 
-  expect(ctx.cgroups.hasOomKillSinceStart('a')).toBeFalse();
-
-  writeFileSync(events, 'oom 2\noom_kill 2\n');
-
-  expect(ctx.cgroups.hasOomKillSinceStart('a')).toBeTrue();
-
-  // a re-adopted VM inside its cgroup counts from the adopt
-  ctx.setProcessCgroup(10, '/imps/a');
-  ctx.cgroups.adopt('a', 10, { limit: null, weight: 100 }, 1024);
-
-  expect(ctx.cgroups.hasOomKillSinceStart('a')).toBeFalse();
+  expect(cgroups.hasOomKillSinceStart('a')).toBeFalse();
 });
 
-test('a hot-plug moves the limit, and a sleep keeps the new size', () => {
-  using ctx = setupCgroups(true, 'cpu memory');
+test('#hasOomKillSinceStart counts no kill before the VM starts', () => {
+  const ctx = setupTest();
 
-  ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
-  ctx.cgroups.setGuestMib('a', 4096);
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+  mkdirSync(join(ctx.root, 'imps', 'a'));
+  writeFileSync(join(ctx.root, 'imps', 'a', 'memory.events'), 'oom 1\noom_kill 1\n');
 
-  expect(ctx.readFile('a', 'memory.max')).toBe(String(4608 * 1024 * 1024));
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
-  ctx.cgroups.setGuestMib('a', 1536);
+  expect(cgroups.hasOomKillSinceStart('a')).toBeFalse();
+});
 
-  expect(ctx.readFile('a', 'memory.max')).toBe(String(1792 * 1024 * 1024));
+test('#hasOomKillSinceStart counts a kill that rose after the VM started', () => {
+  const ctx = setupTest();
 
-  // a sleep's setup keeps the plugged size; a stop forgets it
-  ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+  mkdirSync(join(ctx.root, 'imps', 'a'));
+  writeFileSync(join(ctx.root, 'imps', 'a', 'memory.events'), 'oom 1\noom_kill 1\n');
 
-  expect(ctx.readFile('a', 'memory.max')).toBe(String(1792 * 1024 * 1024));
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
-  // no cgroup yet: the size waits for setup to make it
-  ctx.cgroups.setGuestMib('b', 512);
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+
+  writeFileSync(join(ctx.root, 'imps', 'a', 'memory.events'), 'oom 2\noom_kill 2\n');
+
+  expect(cgroups.hasOomKillSinceStart('a')).toBeTrue();
+});
+
+test('#hasOomKillSinceStart counts from the adopt for a re-adopted VM in its cgroup', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+  mkdirSync(join(ctx.root, 'imps', 'a'));
+  writeFileSync(join(ctx.root, 'imps', 'a', 'memory.events'), 'oom 2\noom_kill 2\n');
+  mkdirSync(join(ctx.proc, '10'));
+  writeFileSync(join(ctx.proc, '10', 'cgroup'), '0::/imps/a\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.adopt('a', 10, { limit: null, weight: 100 }, 1024);
+
+  expect(cgroups.hasOomKillSinceStart('a')).toBeFalse();
+});
+
+test('#setGuestMib raises memory.max for a hot-plug', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  cgroups.setGuestMib('a', 4096);
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
+    String(4608 * 1024 * 1024),
+  );
+});
+
+test('#setGuestMib lowers memory.max for an unplug', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  cgroups.setGuestMib('a', 4096);
+  cgroups.setGuestMib('a', 1536);
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
+    String(1792 * 1024 * 1024),
+  );
+});
+
+test('#setup keeps a hot-plugged size across a sleep', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  cgroups.setGuestMib('a', 1536);
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
+    String(1792 * 1024 * 1024),
+  );
+});
+
+test('#setGuestMib makes no cgroup for an imp without one', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
+
+  cgroups.setGuestMib('b', 512);
 
   expect(existsSync(join(ctx.root, 'imps', 'b'))).toBeFalse();
-
-  ctx.cgroups.setup('b', { limit: null, weight: 100 }, 1024);
-
-  expect(ctx.readFile('b', 'memory.max')).toBe(String(768 * 1024 * 1024));
 });
 
-test('a stop forgets a hot-plugged size', async () => {
-  using ctx = setupCgroups(true, 'cpu memory');
+test('#setup takes a size set before the cgroup was made', () => {
+  const ctx = setupTest();
 
-  ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
-  ctx.cgroups.setGuestMib('a', 2048);
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
 
-  await ctx.cgroups.remove('a');
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
-  ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  cgroups.setGuestMib('b', 512);
+  cgroups.setup('b', { limit: null, weight: 100 }, 1024);
 
-  expect(ctx.readFile('a', 'memory.max')).toBe(String(1280 * 1024 * 1024));
+  expect(readFileSync(join(ctx.root, 'imps', 'b', 'memory.max'), 'utf8')).toBe(
+    String(768 * 1024 * 1024),
+  );
 });
 
-test('without the memory controller, only the CPU settings are written', () => {
-  using ctx = setupCgroups();
+test('#remove forgets a hot-plugged size, so the next start gets its memory', async () => {
+  const ctx = setupTest();
 
-  ctx.cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  writeFileSync(join(ctx.root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
 
-  expect(ctx.cgroups.isMemoryEnforced).toBeFalse();
-  expect(existsSync(join(ctx.root, 'imps', 'a', 'memory.max'))).toBeFalse();
-});
+  const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
 
-test('memory limits and oom_kill parse as the kernel writes them', () => {
-  // 256 MiB of room up to a 2 GiB guest, an eighth of the guest above it
-  expect(buildMemoryMax(512)).toBe(String(768 * 1024 * 1024));
-  expect(buildMemoryMax(2048)).toBe(String(2304 * 1024 * 1024));
-  expect(buildMemoryMax(8192)).toBe(String(9216 * 1024 * 1024));
-  expect(parseOomKills('oom 0\noom_kill 2\noom_group_kill 1\n')).toBe(2);
-  expect(parseOomKills('')).toBeNull();
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+  cgroups.setGuestMib('a', 2048);
+
+  await cgroups.remove('a');
+
+  cgroups.setup('a', { limit: null, weight: 100 }, 1024);
+
+  expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
+    String(1280 * 1024 * 1024),
+  );
 });

@@ -1,135 +1,336 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildStubSmapsMapping } from '../test-utils/build-stub-smaps-mapping';
 import {
+  checkGuestMemoryMergeable,
   checkKsmHost,
   checkKsmKernel,
   checkMergeableMappings,
   parseKsmStat,
   readKsmHostStats,
+  readKsmProfitMib,
 } from './ksm';
-import { countUnsharedMib, parseSmapsRollup } from './vm-stats';
 
-test('IMP_KSM needs Linux 6.10 or later', () => {
-  expect(checkKsmKernel('6.10.0')).toBeNull();
-  expect(checkKsmKernel('6.17.0-1022-azure')).toBeNull();
-  expect(checkKsmKernel('7.0.0-1012-azure')).toBeNull();
-  expect(checkKsmKernel('6.9.12')).toContain('Linux 6.10 or later');
-  expect(checkKsmKernel('6.6.87.2-microsoft-standard-WSL2')).toContain('this host runs 6.6.87.2');
-  expect(checkKsmKernel('garbage')).toContain('Linux 6.10 or later');
-});
+function setupTest() {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-ksm-'));
 
-test('IMP_KSM also needs a kernel built with KSM', () => {
-  const stats = { running: false, sharedMib: 0, profitMib: 0, zeroMib: 0 };
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-  expect(checkKsmHost('6.12.0', stats)).toBeNull();
-  expect(checkKsmHost('6.12.0', null)).toContain('CONFIG_KSM');
-  expect(checkKsmHost('6.6.0', stats)).toContain('Linux 6.10 or later');
-});
-
-// a mapping's smaps lines: its header, then VmFlags
-function writeMapping(
-  start: number,
-  mib: number,
-  perms: string,
-  flags: string,
-  backing = '',
-): string {
-  const end = start + mib * 1024 ** 2;
-
-  return [
-    `${start.toString(16)}-${end.toString(16)} ${perms} 00000000 00:00 0 ${backing}`.trimEnd(),
-    'Rss:                 100 kB',
-    `VmFlags: rd wr mr mw me ac ${flags}`,
-  ].join('\n');
+  return { dir };
 }
 
-test('guest memory is mergeable when every large private writable mapping has mg', () => {
-  const firecracker = writeMapping(0x40_00_00, 2, 'r-xp', '');
-  const heap = writeMapping(0x10_00_00_00, 1, 'rw-p', '', '[heap]');
-  const guest = writeMapping(0x7f_00_00_00_00_00, 512, 'rw-p', 'mg');
+test.each(['6.10.0', '6.17.0-1022-azure', '7.0.0-1012-azure'])(
+  '#checkKsmKernel accepts Linux %s',
+  (release) => {
+    expect(checkKsmKernel(release)).toBeNull();
+  },
+);
 
-  expect(checkMergeableMappings([firecracker, heap, guest].join('\n'))).toBe(true);
+test.each(['6.9.12', 'garbage'])(
+  '#checkKsmKernel asks for Linux 6.10 or later on %s',
+  (release) => {
+    expect(checkKsmKernel(release)).toContain('Linux 6.10 or later');
+  },
+);
 
-  const unflagged = writeMapping(0x7f_00_00_00_00_00, 512, 'rw-p', 'sd');
+test('#checkKsmKernel names the release the host runs', () => {
+  expect(checkKsmKernel('6.6.87.2-microsoft-standard-WSL2')).toContain('this host runs 6.6.87.2');
+});
 
-  expect(checkMergeableMappings([firecracker, heap, unflagged].join('\n'))).toBe(false);
+test('#checkKsmHost accepts a recent kernel built with KSM', () => {
+  expect(
+    checkKsmHost('6.12.0', { running: false, sharedMib: 0, profitMib: 0, zeroMib: 0 }),
+  ).toBeNull();
+});
 
-  // a large mapping that is not private and writable is not guest memory
-  const shared = writeMapping(0x7f_00_00_00_00_00, 512, 'rw-s', '');
+test('#checkKsmHost asks for CONFIG_KSM on a kernel without KSM', () => {
+  expect(checkKsmHost('6.12.0', null)).toContain('CONFIG_KSM');
+});
 
-  expect(checkMergeableMappings([firecracker, shared].join('\n'))).toBeNull();
+test('#checkKsmHost asks for Linux 6.10 or later on an older kernel with KSM', () => {
+  expect(
+    checkKsmHost('6.6.0', { running: false, sharedMib: 0, profitMib: 0, zeroMib: 0 }),
+  ).toContain('Linux 6.10 or later');
+});
+
+test('#checkMergeableMappings finds guest memory mergeable when its large private writable mapping has mg', () => {
+  const smaps = [
+    buildStubSmapsMapping({ start: 0x40_00_00, mib: 2, perms: 'r-xp', flags: '' }),
+    buildStubSmapsMapping({
+      start: 0x10_00_00_00,
+      mib: 1,
+      perms: 'rw-p',
+      flags: '',
+      backing: '[heap]',
+    }),
+    buildStubSmapsMapping({ start: 0x7f_00_00_00_00_00, mib: 512, perms: 'rw-p', flags: 'mg' }),
+  ];
+
+  expect(checkMergeableMappings(smaps.join('\n'))).toBeTrue();
+});
+
+test('#checkMergeableMappings finds guest memory without mg not mergeable', () => {
+  const smaps = [
+    buildStubSmapsMapping({ start: 0x40_00_00, mib: 2, perms: 'r-xp', flags: '' }),
+    buildStubSmapsMapping({ start: 0x7f_00_00_00_00_00, mib: 512, perms: 'rw-p', flags: 'sd' }),
+  ];
+
+  expect(checkMergeableMappings(smaps.join('\n'))).toBeFalse();
+});
+
+test('#checkMergeableMappings finds no guest memory in a large mapping that is not private', () => {
+  const smaps = [
+    buildStubSmapsMapping({ start: 0x40_00_00, mib: 2, perms: 'r-xp', flags: '' }),
+    buildStubSmapsMapping({ start: 0x7f_00_00_00_00_00, mib: 512, perms: 'rw-s', flags: '' }),
+  ];
+
+  expect(checkMergeableMappings(smaps.join('\n'))).toBeNull();
 });
 
 // as CI's 6.17 showed a template restore: the mem file in pieces, none of 64 MiB
-test('the guest memory of a restore, split into small mappings, is checked whole', () => {
-  const memFile = '/var/lib/imp/templates/abc/mem';
-  const firecracker = writeMapping(0x40_00_00, 2, 'r-xp', '', '/firecracker');
+test('#checkMergeableMappings checks the guest memory of a restore, split into small mappings, whole', () => {
+  const smaps = [
+    buildStubSmapsMapping({
+      start: 0x40_00_00,
+      mib: 2,
+      perms: 'r-xp',
+      flags: '',
+      backing: '/firecracker',
+    }),
+    ...[54, 20, 2, 40, 60].map((mib, index) =>
+      buildStubSmapsMapping({
+        start: 0x7f_00_00_00_00_00 + index * 0x10_00_00_00,
+        mib,
+        perms: 'rw-p',
+        flags: 'mg',
+        backing: '/var/lib/imp/templates/abc/mem',
+      }),
+    ),
+  ];
 
-  const pieces = [54, 20, 2, 40, 60].map((mib, index) =>
-    writeMapping(0x7f_00_00_00_00_00 + index * 0x10_00_00_00, mib, 'rw-p', 'mg', memFile),
-  );
-
-  expect(checkMergeableMappings([firecracker, ...pieces].join('\n'))).toBe(true);
-
-  const lost = writeMapping(0x7f_10_00_00_00_00, 30, 'rw-p', 'sd', memFile);
-
-  expect(checkMergeableMappings([firecracker, ...pieces, lost].join('\n'))).toBe(false);
-
-  // the pieces of a smaller backing are not guest memory
-  expect(checkMergeableMappings([firecracker, ...pieces.slice(1, 3)].join('\n'))).toBeNull();
+  expect(checkMergeableMappings(smaps.join('\n'))).toBeTrue();
 });
 
-test('the unshared size counts anonymous pages in full, not their Pss', () => {
-  const fields = parseSmapsRollup(
-    [
-      'Pss_Anon:          51200 kB',
-      'Anonymous:        153600 kB',
-      'Pss_Shmem:          1024 kB',
-    ].join('\n'),
-  );
+test('#checkMergeableMappings finds a restore not mergeable when one of its pieces lacks mg', () => {
+  const smaps = [
+    buildStubSmapsMapping({
+      start: 0x40_00_00,
+      mib: 2,
+      perms: 'r-xp',
+      flags: '',
+      backing: '/firecracker',
+    }),
+    ...[54, 20, 2, 40, 60].map((mib, index) =>
+      buildStubSmapsMapping({
+        start: 0x7f_00_00_00_00_00 + index * 0x10_00_00_00,
+        mib,
+        perms: 'rw-p',
+        flags: 'mg',
+        backing: '/var/lib/imp/templates/abc/mem',
+      }),
+    ),
+    buildStubSmapsMapping({
+      start: 0x7f_10_00_00_00_00,
+      mib: 30,
+      perms: 'rw-p',
+      flags: 'sd',
+      backing: '/var/lib/imp/templates/abc/mem',
+    }),
+  ];
 
-  expect(countUnsharedMib(fields)).toBe(151);
+  expect(checkMergeableMappings(smaps.join('\n'))).toBeFalse();
 });
 
-test('it reads the host counters from the KSM sysfs directory', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-ksm-'));
+test('#checkMergeableMappings finds no guest memory in the pieces of a small backing', () => {
+  const smaps = [
+    buildStubSmapsMapping({
+      start: 0x40_00_00,
+      mib: 2,
+      perms: 'r-xp',
+      flags: '',
+      backing: '/firecracker',
+    }),
+    ...[20, 2].map((mib, index) =>
+      buildStubSmapsMapping({
+        start: 0x7f_00_00_00_00_00 + index * 0x10_00_00_00,
+        mib,
+        perms: 'rw-p',
+        flags: 'mg',
+        backing: '/var/lib/imp/templates/abc/mem',
+      }),
+    ),
+  ];
 
-  try {
-    writeFileSync(join(dir, 'run'), '1\n');
-    writeFileSync(join(dir, 'pages_sharing'), '25600\n');
-    writeFileSync(join(dir, 'general_profit'), String(90 * 1024 ** 2));
-    writeFileSync(join(dir, 'ksm_zero_pages'), '512\n');
-
-    expect(readKsmHostStats(dir)).toEqual({
-      running: true,
-      sharedMib: 100,
-      profitMib: 90,
-      zeroMib: 2,
-    });
-
-    rmSync(join(dir, 'run'));
-
-    expect(readKsmHostStats(dir)).toBeNull();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(checkMergeableMappings(smaps.join('\n'))).toBeNull();
 });
 
-test('it reads ksm_stat, with the merge flags that 6.12 adds', () => {
+test('#readKsmHostStats reads the host counters from the KSM sysfs directory', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'run'), '1\n');
+  writeFileSync(join(ctx.dir, 'pages_sharing'), '25600\n');
+  writeFileSync(join(ctx.dir, 'general_profit'), String(90 * 1024 ** 2));
+  writeFileSync(join(ctx.dir, 'ksm_zero_pages'), '512\n');
+
+  expect(readKsmHostStats(ctx.dir)).toStrictEqual({
+    running: true,
+    sharedMib: 100,
+    profitMib: 90,
+    zeroMib: 2,
+  });
+});
+
+test('#readKsmHostStats reads no counters from a directory without run', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'pages_sharing'), '25600\n');
+  writeFileSync(join(ctx.dir, 'general_profit'), String(90 * 1024 ** 2));
+  writeFileSync(join(ctx.dir, 'ksm_zero_pages'), '512\n');
+
+  expect(readKsmHostStats(ctx.dir)).toBeNull();
+});
+
+test('#parseKsmStat reads each counter of ksm_stat', () => {
   const stat = parseKsmStat(
     [
       'ksm_rmap_items 5120',
       'ksm_zero_pages 12',
       'ksm_merging_pages 4096',
       'ksm_process_profit 16252928',
-      'ksm_merge_any: yes',
-      'ksm_mergeable: yes',
     ].join('\n'),
   );
 
-  expect(stat.get('ksm_process_profit')).toBe('16252928');
-  expect(stat.get('ksm_merge_any')).toBe('yes');
-  expect(parseKsmStat('ksm_rmap_items 0\n').has('ksm_merge_any')).toBe(false);
+  expect([...stat]).toStrictEqual([
+    ['ksm_rmap_items', '5120'],
+    ['ksm_zero_pages', '12'],
+    ['ksm_merging_pages', '4096'],
+    ['ksm_process_profit', '16252928'],
+  ]);
+});
+
+test('#parseKsmStat reads the merge flags that 6.12 adds', () => {
+  const stat = parseKsmStat(
+    ['ksm_rmap_items 5120', 'ksm_merge_any: yes', 'ksm_mergeable: no'].join('\n'),
+  );
+
+  expect([...stat]).toStrictEqual([
+    ['ksm_rmap_items', '5120'],
+    ['ksm_merge_any', 'yes'],
+    ['ksm_mergeable', 'no'],
+  ]);
+});
+
+test('#parseKsmStat reads no merge flag from an older kernel', () => {
+  expect(parseKsmStat('ksm_rmap_items 0\n').has('ksm_merge_any')).toBeFalse();
+});
+
+test('#checkGuestMemoryMergeable answers from ksm_merge_any when the kernel has it', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, '42'));
+  writeFileSync(join(ctx.dir, '42', 'ksm_stat'), 'ksm_rmap_items 0\nksm_merge_any: yes\n');
+
+  // smaps that says otherwise: ksm_merge_any wins
+  writeFileSync(
+    join(ctx.dir, '42', 'smaps'),
+    buildStubSmapsMapping({ start: 0x7f_00_00_00_00_00, mib: 512, perms: 'rw-p', flags: '' }),
+  );
+
+  const mergeable = await checkGuestMemoryMergeable(42, ctx.dir);
+
+  expect(mergeable).toBeTrue();
+});
+
+test('#checkGuestMemoryMergeable finds the guest memory not mergeable when ksm_merge_any says no', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, '42'));
+  writeFileSync(join(ctx.dir, '42', 'ksm_stat'), 'ksm_rmap_items 0\nksm_merge_any: no\n');
+
+  const mergeable = await checkGuestMemoryMergeable(42, ctx.dir);
+
+  expect(mergeable).toBeFalse();
+});
+
+test('#checkGuestMemoryMergeable reads the smaps flags on a kernel before ksm_merge_any', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, '42'));
+  writeFileSync(join(ctx.dir, '42', 'ksm_stat'), 'ksm_rmap_items 0\n');
+
+  writeFileSync(
+    join(ctx.dir, '42', 'smaps'),
+    buildStubSmapsMapping({ start: 0x7f_00_00_00_00_00, mib: 512, perms: 'rw-p', flags: 'mg' }),
+  );
+
+  const mergeable = await checkGuestMemoryMergeable(42, ctx.dir);
+
+  expect(mergeable).toBeTrue();
+});
+
+test('#checkGuestMemoryMergeable cannot say for a process that is gone', async () => {
+  const ctx = setupTest();
+
+  const mergeable = await checkGuestMemoryMergeable(42, ctx.dir);
+
+  expect(mergeable).toBeNull();
+});
+
+test('#readKsmProfitMib reads ksm_process_profit in MiB', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, '42'));
+
+  writeFileSync(
+    join(ctx.dir, '42', 'ksm_stat'),
+    `ksm_rmap_items 5120\nksm_process_profit ${String(24 * 1024 ** 2)}\n`,
+  );
+
+  const profitMib = await readKsmProfitMib(42, ctx.dir);
+
+  expect(profitMib).toBe(24);
+});
+
+test('#readKsmProfitMib reads a negative profit while little is merged', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, '42'));
+  writeFileSync(join(ctx.dir, '42', 'ksm_stat'), `ksm_process_profit ${String(-2 * 1024 ** 2)}\n`);
+
+  const profitMib = await readKsmProfitMib(42, ctx.dir);
+
+  expect(profitMib).toBe(-2);
+});
+
+test('#readKsmProfitMib reads nothing from a kernel without ksm_process_profit', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, '42'));
+  writeFileSync(join(ctx.dir, '42', 'ksm_stat'), 'ksm_rmap_items 5120\n');
+
+  const profitMib = await readKsmProfitMib(42, ctx.dir);
+
+  expect(profitMib).toBeNull();
+});
+
+test('#readKsmProfitMib reads nothing for a process that is gone', async () => {
+  const ctx = setupTest();
+
+  const profitMib = await readKsmProfitMib(42, ctx.dir);
+
+  expect(profitMib).toBeNull();
+});
+
+test('#readKsmProfitMib reads the host /proc by default', async () => {
+  const gone = Bun.spawn(['true']);
+
+  await gone.exited;
+
+  const profitMib = await readKsmProfitMib(gone.pid);
+
+  expect(profitMib).toBeNull();
 });

@@ -1,9 +1,10 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import {
   closeSync,
   lstatSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
   writeSync,
@@ -18,102 +19,192 @@ import {
   writeRegularFile,
 } from './vm-files';
 
-const OWNER = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
-
-// a dir with a file a symlink must never reach, a symlink to it and a FIFO
-function setupPlanted() {
+function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-vm-files-'));
-  const target = join(dir, 'target');
 
-  writeFileSync(target, 'untouched');
-  symlinkSync(target, join(dir, 'link'));
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-  Bun.spawnSync(['mkfifo', join(dir, 'fifo')]);
+  // the test's own uid, so the chown works without root
+  const owner = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
 
-  return { dir, target };
+  return { dir, owner };
 }
 
-test('a write replaces a planted symlink or FIFO, and never reaches past it', () => {
-  const planted = setupPlanted();
-  const dir = planted.dir;
-  const target = planted.target;
+test('#writeRegularFile writes a regular file in place of a planted symlink and leaves its target untouched', () => {
+  const ctx = setupTest();
+  const target = join(ctx.dir, 'target');
+  const link = join(ctx.dir, 'link');
 
-  for (const name of ['link', 'fifo']) {
-    writeRegularFile(join(dir, name), 'pid 1\n');
+  writeFileSync(target, 'untouched');
+  symlinkSync(target, link);
+  writeRegularFile(link, 'pid 1\n');
 
-    expect(lstatSync(join(dir, name)).isFile()).toBeTrue();
-    expect(readFileSync(join(dir, name), 'utf8')).toBe('pid 1\n');
-  }
-
+  expect(lstatSync(link).isFile()).toBeTrue();
+  expect(readFileSync(link, 'utf8')).toBe('pid 1\n');
   expect(readFileSync(target, 'utf8')).toBe('untouched');
 });
 
-test('the log opens as a regular file in place of a symlink or FIFO', () => {
-  const planted = setupPlanted();
-  const dir = planted.dir;
-  const target = planted.target;
+test('#writeRegularFile writes a regular file in place of a planted FIFO without blocking', () => {
+  const ctx = setupTest();
+  const fifo = join(ctx.dir, 'fifo');
 
-  for (const name of ['link', 'fifo']) {
-    const fd = setupLogFile(join(dir, name));
+  Bun.spawnSync(['mkfifo', fifo]);
 
-    writeSync(fd, 'line\n');
-    closeSync(fd);
+  writeRegularFile(fifo, 'pid 1\n');
 
-    expect(readFileSync(join(dir, name), 'utf8')).toBe('line\n');
-  }
+  expect(lstatSync(fifo).isFile()).toBeTrue();
+  expect(readFileSync(fifo, 'utf8')).toBe('pid 1\n');
+});
 
+test('#setupLogFile opens the log as a regular file in place of a planted symlink and leaves its target untouched', () => {
+  const ctx = setupTest();
+  const target = join(ctx.dir, 'target');
+  const link = join(ctx.dir, 'link');
+
+  writeFileSync(target, 'untouched');
+  symlinkSync(target, link);
+
+  const fd = setupLogFile(link);
+
+  writeSync(fd, 'line\n');
+  closeSync(fd);
+
+  expect(lstatSync(link).isFile()).toBeTrue();
+  expect(readFileSync(link, 'utf8')).toBe('line\n');
   expect(readFileSync(target, 'utf8')).toBe('untouched');
 });
 
-test('a read refuses a symlink and a FIFO without blocking', () => {
-  const dir = setupPlanted().dir;
+test('#setupLogFile opens the log as a regular file in place of a planted FIFO without blocking', () => {
+  const ctx = setupTest();
+  const fifo = join(ctx.dir, 'fifo');
 
-  expect(() => {
-    readRegularFile(join(dir, 'link'));
-  }).toThrow();
+  Bun.spawnSync(['mkfifo', fifo]);
 
-  expect(() => {
-    readRegularFile(join(dir, 'fifo'));
-  }).toThrow('not a regular file');
+  const fd = setupLogFile(fifo);
 
-  expect(readRegularFile(join(dir, 'target'))).toBe('untouched');
+  writeSync(fd, 'line\n');
+  closeSync(fd);
+
+  expect(lstatSync(fifo).isFile()).toBeTrue();
+  expect(readFileSync(fifo, 'utf8')).toBe('line\n');
 });
 
-test('a snapshot file is made new, in place of whatever was there', () => {
-  const planted = setupPlanted();
-  const dir = planted.dir;
-  const target = planted.target;
+test('#readRegularFile reads a regular file', () => {
+  const ctx = setupTest();
+  const file = join(ctx.dir, 'file');
 
-  for (const name of ['link', 'fifo', 'target']) {
-    createOwnedFile(join(dir, name), OWNER);
+  writeFileSync(file, 'untouched');
 
-    const made = lstatSync(join(dir, name));
-
-    expect(made.isFile()).toBeTrue();
-    expect(made.size).toBe(0);
-    expect(made.mode & 0o777).toBe(0o600);
-  }
-
-  expect(lstatSync(target).size).toBe(0);
+  expect(readRegularFile(file)).toBe('untouched');
 });
 
-test('impd connects only to a socket, never through a symlink', () => {
-  const dir = setupPlanted().dir;
-  const path = join(dir, 'api.sock');
+test('#readRegularFile refuses to read through a symlink', () => {
+  const ctx = setupTest();
+  const target = join(ctx.dir, 'target');
+  const link = join(ctx.dir, 'link');
+
+  writeFileSync(target, 'untouched');
+  symlinkSync(target, link);
+
+  expect(() => readRegularFile(link)).toThrow('ELOOP');
+});
+
+test('#readRegularFile refuses to read a FIFO without blocking', () => {
+  const ctx = setupTest();
+  const fifo = join(ctx.dir, 'fifo');
+
+  Bun.spawnSync(['mkfifo', fifo]);
+
+  expect(() => readRegularFile(fifo)).toThrowWithMessage(Error, `${fifo} is not a regular file`);
+});
+
+test('#createOwnedFile makes a snapshot file new in place of a planted symlink and leaves its target untouched', () => {
+  const ctx = setupTest();
+  const target = join(ctx.dir, 'target');
+  const link = join(ctx.dir, 'link');
+
+  writeFileSync(target, 'untouched');
+  symlinkSync(target, link);
+  createOwnedFile(link, ctx.owner);
+
+  const made = lstatSync(link);
+
+  expect(made.isFile()).toBeTrue();
+  expect(made.size).toBe(0);
+  expect(made.mode & 0o777).toBe(0o600);
+  expect(readFileSync(target, 'utf8')).toBe('untouched');
+});
+
+test('#createOwnedFile makes a snapshot file new in place of a planted FIFO', () => {
+  const ctx = setupTest();
+  const fifo = join(ctx.dir, 'fifo');
+
+  Bun.spawnSync(['mkfifo', fifo]);
+
+  createOwnedFile(fifo, ctx.owner);
+
+  const made = lstatSync(fifo);
+
+  expect(made.isFile()).toBeTrue();
+  expect(made.size).toBe(0);
+  expect(made.mode & 0o777).toBe(0o600);
+});
+
+test('#createOwnedFile makes a snapshot file new and empty in place of an old one', () => {
+  const ctx = setupTest();
+  const file = join(ctx.dir, 'mem');
+
+  writeFileSync(file, 'old snapshot');
+  createOwnedFile(file, ctx.owner);
+
+  const made = lstatSync(file);
+
+  expect(made.isFile()).toBeTrue();
+  expect(made.size).toBe(0);
+  expect(made.mode & 0o777).toBe(0o600);
+  expect(made.uid).toBe(ctx.owner.uid);
+});
+
+test('#requireSocket accepts a socket', () => {
+  const ctx = setupTest();
+  const path = join(ctx.dir, 'api.sock');
   const server = Bun.listen({ unix: path, socket: { data: () => {} } });
 
-  try {
-    requireSocket(path);
-    symlinkSync(path, join(dir, 'sock-link'));
-
-    expect(() => {
-      requireSocket(join(dir, 'sock-link'));
-    }).toThrow('not a socket');
-
-    expect(() => {
-      requireSocket(join(dir, 'fifo'));
-    }).toThrow('not a socket');
-  } finally {
+  onTestFinished(() => {
     server.stop(true);
-  }
+  });
+
+  expect(() => {
+    requireSocket(path);
+  }).not.toThrow();
+});
+
+test('#requireSocket refuses a symlink to a socket', () => {
+  const ctx = setupTest();
+  const path = join(ctx.dir, 'api.sock');
+  const link = join(ctx.dir, 'sock-link');
+  const server = Bun.listen({ unix: path, socket: { data: () => {} } });
+
+  onTestFinished(() => {
+    server.stop(true);
+  });
+
+  symlinkSync(path, link);
+
+  expect(() => {
+    requireSocket(link);
+  }).toThrowWithMessage(Error, `${link} is not a socket`);
+});
+
+test('#requireSocket refuses a FIFO in place of a socket', () => {
+  const ctx = setupTest();
+  const fifo = join(ctx.dir, 'fifo');
+
+  Bun.spawnSync(['mkfifo', fifo]);
+
+  expect(() => {
+    requireSocket(fifo);
+  }).toThrowWithMessage(Error, `${fifo} is not a socket`);
 });

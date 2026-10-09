@@ -1,17 +1,20 @@
 import { expect, test } from 'bun:test';
-import { readErrorMessage } from '../read-error-message';
-import { readRejection } from '../read-rejection';
 import { waitWithin } from './wait-within';
 
-test('it reports whether the promise settled in time and passes a rejection on', async () => {
-  const quick = await waitWithin(Promise.resolve(), 50);
-  const slow = await waitWithin(Bun.sleep(200), 10);
+test('it resolves true for a promise that settles within the time', async () => {
+  const isSettled = await waitWithin(Promise.resolve(), 50);
 
-  const failed = waitWithin(Promise.reject(new Error('boom')), 50);
+  expect(isSettled).toBeTrue();
+});
 
-  expect([quick, slow]).toEqual([true, false]);
+test('it resolves false for a promise still pending at the deadline', async () => {
+  const isSettled = await waitWithin(new Promise(() => {}), 1);
 
-  const error = await readRejection(failed);
+  expect(isSettled).toBeFalse();
+});
 
-  expect(readErrorMessage(error)).toBe('boom');
+test('it passes the rejection of the promise on', () => {
+  const failed = Promise.reject(new Error('boom'));
+
+  expect(waitWithin(failed, 50)).rejects.toThrowWithMessage(Error, 'boom');
 });

@@ -95,6 +95,11 @@ interface CpuCgroupOptions {
 
   // where /proc/<pid>/cgroup is read; /proc by default
   readonly procRoot?: string;
+
+  // how remove takes a cgroup and waits between tries; rmdirSync and
+  // Bun.sleep by default
+  readonly rmdir?: (path: string) => void;
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export function formatCpuMax(limit: number | null): string {
@@ -141,6 +146,8 @@ export function parseOomKills(text: string): number | null {
 export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
   const imps = join(options.root, 'imps');
   const procRoot = options.procRoot ?? '/proc';
+  const rmdir = options.rmdir ?? rmdirSync;
+  const sleep = options.sleep ?? Bun.sleep;
   const isEnforced = isControllerDelegated(imps, 'cpu');
   const isMemoryEnforced = isEnforced && isControllerDelegated(imps, 'memory');
   const findDir = (impId: string): string => join(imps, impId);
@@ -280,7 +287,7 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
 
       for (let attempt = 1; existsSync(findDir(impId)); attempt += 1) {
         try {
-          rmdirSync(findDir(impId));
+          rmdir(findDir(impId));
 
           return;
         } catch (error) {
@@ -291,7 +298,7 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
           }
         }
 
-        await Bun.sleep(REMOVE_WAIT_MS);
+        await sleep(REMOVE_WAIT_MS);
       }
     },
     removeOrphans: (impIds) => {

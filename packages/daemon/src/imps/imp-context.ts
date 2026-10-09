@@ -109,6 +109,10 @@ export interface ImpServiceDeps {
   // so tests can move it
   readonly now?: () => number;
 
+  // the pause between an elastic guest's looks while a sleep shrinks it;
+  // Bun.sleep by default
+  readonly sleep?: (ms: number) => Promise<void>;
+
   // `KEY=VALUE` entries every exec in the imp starts with, under the
   // caller's own: the credential broker's proxy and CA variables, or why
   // there are none
@@ -174,6 +178,7 @@ export interface ImpContext {
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly readServiceUrl: (name: string) => string | null;
   readonly now: () => number;
+  readonly sleep: (ms: number) => Promise<void>;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
   readonly growFilesystem: (disk: string) => Promise<boolean>;
   readonly storageGate: StorageGate;
@@ -253,6 +258,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readTailnetHostname: deps.readTailnetHostname,
     readServiceUrl: deps.readServiceUrl ?? (() => null),
     now: deps.now ?? Date.now,
+    sleep: deps.sleep ?? Bun.sleep,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve({ kind: 'ungranted' })),
     growFilesystem: deps.growFilesystem ?? growFilesystem,
     readDiskUsage: deps.readDiskUsage ?? (() => {}),

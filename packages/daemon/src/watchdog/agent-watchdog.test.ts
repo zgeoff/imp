@@ -1,167 +1,228 @@
-import { expect, test } from 'bun:test';
-import type { ImpRecord } from '../db/imps';
+import { expect, mock, test } from 'bun:test';
+import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
 import { createAgentWatchdog } from './agent-watchdog';
-import type { WatchdogAction } from './agent-watchdog';
 
-const IMP = { id: 'i1', name: 'dev' } as const satisfies Partial<ImpRecord>;
+// A clock the test moves and the watchdog's log; the agent's answer to the
+// longer ping and the recovery are the test's to give.
+function setupTest() {
+  const clock = { nowMs: 0 };
+  const logs: string[] = [];
 
-// the watchdog reads only the id and the name
-function buildImp(): ImpRecord {
   return {
-    ...IMP,
-    imageId: 'img',
-    state: 'running',
-    kind: 'user',
-    vcpus: 1,
-    memoryMib: 512,
-    maxMemoryMib: 512,
-    slot: 0,
-    ip: '10.66.0.2',
-    createdAt: new Date(0),
-    lastActiveAt: new Date(0),
-    sleptAt: null,
-    holdUntil: null,
-    error: null,
-    pid: 1,
-    firecrackerVersion: null,
-    httpPort: 8080,
-    diskBytes: 1024 ** 3,
-    isDiskGrowPending: false,
-    publicAuth: null,
-    cpu: { limit: null, weight: 100 },
-    wakeCount: 0,
-    awakeMs: 0,
-    awakeSince: null,
-    isIdentityResetPending: false,
-    isTrustPending: false,
-    moveState: null,
-    jailUid: null,
+    clock,
+    logs,
+    deps: {
+      now: () => clock.nowMs,
+      log: (message: string) => {
+        logs.push(message);
+      },
+    },
   };
 }
 
-function setupWatchdog(action: WatchdogAction) {
-  const clock = { now: 0 };
-  const logs: string[] = [];
-  const recovered: number[] = [];
-  const agent = { answersPing: false, lockFree: true };
+test('it reports a silent agent once, past the timeout and a failed ping', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
+  const recover = mock(() => Promise.resolve(true));
 
   const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover,
     timeoutMs: 60_000,
-    action,
-    now: () => clock.now,
-    log: (message) => {
-      logs.push(message);
-    },
-    confirmSilent: () => Promise.resolve(!agent.answersPing),
-    recover: () => {
-      if (agent.lockFree) {
-        recovered.push(clock.now);
-      }
-
-      return Promise.resolve(agent.lockFree);
-    },
+    action: 'report',
   });
 
-  // one idle-loop look `afterMs` later, and whatever it starts
-  const runLook = async (answered: boolean, afterMs = 0) => {
-    clock.now += afterMs;
+  watchdog.observe(imp, false);
 
-    watchdog.observe(buildImp(), answered);
+  ctx.clock.nowMs = 60_000;
 
-    await watchdog.settle();
-  };
+  watchdog.observe(imp, false);
 
-  return { watchdog, clock, logs, recovered, agent, runLook };
-}
+  await watchdog.settle();
 
-test('a silent agent is reported once, past the timeout and a failed ping', async () => {
-  const host = setupWatchdog('report');
+  ctx.clock.nowMs = 62_000;
 
-  await host.runLook(false);
-  await host.runLook(false, 30_000);
+  watchdog.observe(imp, false);
 
-  const early = host.watchdog.readSilentSince(IMP.id);
+  await watchdog.settle();
 
-  await host.runLook(false, 30_000);
-  await host.runLook(false, 2000);
+  expect(watchdog.readSilentSince(imp.id)).toStrictEqual(new Date(0));
 
-  expect(early).toBeNull();
-  expect(host.watchdog.readSilentSince(IMP.id)).toEqual(new Date(0));
-  expect(host.recovered).toEqual([]);
-
-  expect(host.logs).toEqual([
+  expect(ctx.logs).toStrictEqual([
     'impd: dev: the agent has not answered for 60s; its VM still runs (watchdog: report)',
   ]);
+
+  expect(recover).not.toHaveBeenCalled();
 });
 
-test('an agent that answers the longer ping, or the idle loop again, is not silent', async () => {
-  const host = setupWatchdog('report');
+test('it reports no silence before the timeout', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
 
-  host.agent.answersPing = true;
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
-  await host.runLook(false);
-  await host.runLook(false, 61_000);
+  watchdog.observe(imp, false);
 
-  const afterPing = host.watchdog.readSilentSince(IMP.id);
+  ctx.clock.nowMs = 59_999;
 
-  host.agent.answersPing = false;
+  watchdog.observe(imp, false);
 
-  await host.runLook(false, 1000);
-  await host.runLook(false, 61_000);
-  await host.runLook(true, 1000);
+  await watchdog.settle();
 
-  expect(afterPing).toBeNull();
-  expect(host.watchdog.readSilentSince(IMP.id)).toBeNull();
-  expect(host.logs.at(-1)).toBe('impd: dev: the agent answers again');
+  expect(watchdog.readSilentSince(imp.id)).toBeNull();
+  expect(ctx.logs).toStrictEqual([]);
 });
 
-test('restarts back off, then stop at three an hour', async () => {
-  const host = setupWatchdog('restart');
+test('it reports no silence for an agent that answers the longer ping', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
 
-  // silent for good: each restart's new agent goes silent too
-  const runSilence = async (ms: number) => {
-    await host.runLook(false);
-    await host.runLook(false, ms);
-  };
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(false),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
-  await runSilence(60_000);
-  await runSilence(30_000);
-  await runSilence(30_000);
-  await runSilence(120_000);
-  await runSilence(200_000);
-  await runSilence(60_000);
+  watchdog.observe(imp, false);
+
+  ctx.clock.nowMs = 61_000;
+
+  watchdog.observe(imp, false);
+
+  await watchdog.settle();
+
+  expect(watchdog.readSilentSince(imp.id)).toBeNull();
+  expect(ctx.logs).toStrictEqual([]);
+});
+
+test('it ends a reported silence and logs it when the idle loop gets an answer again', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
+
+  watchdog.observe(imp, false);
+
+  ctx.clock.nowMs = 61_000;
+
+  watchdog.observe(imp, false);
+
+  await watchdog.settle();
+
+  ctx.clock.nowMs = 62_000;
+
+  watchdog.observe(imp, true);
+
+  expect(watchdog.readSilentSince(imp.id)).toBeNull();
+  expect(ctx.logs.at(-1)).toBe('impd: dev: the agent answers again');
+});
+
+test('it backs off restarts, then stops at three an hour', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
+  const recoveredAt: number[] = [];
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => {
+      recoveredAt.push(ctx.clock.nowMs);
+
+      return Promise.resolve(true);
+    },
+    timeoutMs: 60_000,
+    action: 'restart',
+  });
+
+  // silent for good: each restart's new agent goes silent too, and each
+  // silence is two looks this far apart
+  for (const ms of [60_000, 30_000, 30_000, 120_000, 200_000, 60_000]) {
+    watchdog.observe(imp, false);
+
+    ctx.clock.nowMs += ms;
+
+    watchdog.observe(imp, false);
+
+    await watchdog.settle();
+  }
 
   // 60 s, then 60 s after the first, then 120 s after the second; none after
-  expect(host.recovered).toEqual([60_000, 120_000, 240_000]);
-  expect(host.logs.filter((line) => line.includes('only reports now'))).toHaveLength(1);
+  expect(recoveredAt).toStrictEqual([60_000, 120_000, 240_000]);
+  expect(ctx.logs.filter((line) => line.includes('it only reports now'))).toHaveLength(1);
 });
 
-test('a restart another operation held off is tried again, and does not count', async () => {
-  const host = setupWatchdog('restart');
+test('it tries a restart another operation held off again at the next look', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
 
-  host.agent.lockFree = false;
+  // the first try finds the imp's lock taken; the second gets it
+  const recover = mock(() => Promise.resolve(true)).mockResolvedValueOnce(false);
 
-  await host.runLook(false);
-  await host.runLook(false, 60_000);
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover,
+    timeoutMs: 60_000,
+    action: 'restart',
+  });
 
-  host.agent.lockFree = true;
+  watchdog.observe(imp, false);
 
-  await host.runLook(false, 2000);
+  ctx.clock.nowMs = 60_000;
 
-  expect(host.recovered).toEqual([62_000]);
+  watchdog.observe(imp, false);
+
+  await watchdog.settle();
+
+  ctx.clock.nowMs = 62_000;
+
+  watchdog.observe(imp, false);
+
+  await watchdog.settle();
+
+  expect(recover).toHaveBeenCalledTimes(2);
 });
 
-test('an imp that is held or gone starts its silence over', async () => {
-  const host = setupWatchdog('report');
+test('it starts the silence of an imp that is held or gone over', async () => {
+  const ctx = setupTest();
+  const imp = buildMockImpRecord({ name: 'dev' });
 
-  await host.runLook(false);
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
-  host.clock.now += 50_000;
+  watchdog.observe(imp, false);
 
-  host.watchdog.forget(IMP.id);
+  ctx.clock.nowMs = 50_000;
 
-  await host.runLook(false);
-  await host.runLook(false, 20_000);
+  watchdog.forget(imp.id);
+  watchdog.observe(imp, false);
 
-  expect(host.watchdog.readSilentSince(IMP.id)).toBeNull();
+  ctx.clock.nowMs = 70_000;
+
+  watchdog.observe(imp, false);
+
+  await watchdog.settle();
+
+  expect(watchdog.readSilentSince(imp.id)).toBeNull();
+  expect(ctx.logs).toStrictEqual([]);
 });

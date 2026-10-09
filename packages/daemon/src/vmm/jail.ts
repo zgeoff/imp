@@ -124,6 +124,9 @@ export interface JailDeps {
   readonly killCgroup?: (impId: string) => void;
   readonly listUidPids?: (uid: number) => readonly number[];
   readonly killUidPid?: (pid: number, uid: number) => void;
+
+  // the pause between two kill scans; Bun.sleep by default
+  readonly wait?: (ms: number) => Promise<void>;
 }
 
 const KILL_TRIES = 50;
@@ -136,6 +139,7 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
   const readMounts = deps.readMounts ?? (() => readFileSync('/proc/self/mounts', 'utf8'));
   const listUidPids = deps.listUidPids ?? listProcessesOfUid;
   const killUidPid = deps.killUidPid ?? stopProcessOfUid;
+  const wait = deps.wait ?? Bun.sleep;
 
   // Nothing of the jail's uid may outlive its Firecracker: root deletes,
   // unmounts and chowns in the jail next, and the uid goes to the next imp.
@@ -157,7 +161,7 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
         killUidPid(pid, uid);
       }
 
-      await Bun.sleep(KILL_WAIT_MS);
+      await wait(KILL_WAIT_MS);
     }
 
     throw new Error(`jail ${impId}: uid ${String(uid)} still runs processes`);

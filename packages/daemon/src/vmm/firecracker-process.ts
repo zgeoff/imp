@@ -103,10 +103,11 @@ export async function startFirecracker(
 
 // True when `pid` is a live Firecracker serving `apiSocket`; a recycled pid
 // fails the cmdline check.
-export function isFirecrackerAlive(pid: number, apiSocket: string): boolean {
+// `procRoot` is where /proc is mounted, /proc by default
+export function isFirecrackerAlive(pid: number, apiSocket: string, procRoot = '/proc'): boolean {
   try {
-    const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
-    const cmdline = readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').split('\0');
+    const stat = readFileSync(`${procRoot}/${String(pid)}/stat`, 'utf8');
+    const cmdline = readFileSync(`${procRoot}/${String(pid)}/cmdline`, 'utf8').split('\0');
 
     // the state field follows the parenthesised command name
     const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
