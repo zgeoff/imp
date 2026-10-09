@@ -1,107 +1,257 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import { createImage } from '../db/images';
 import { removeImp, updateImpMove } from '../db/imps';
-import { createImpTest, setupImpTest } from '../imps/test-imps';
-import { readRejection } from '../read-rejection';
+import { openDatabase } from '../db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
-// the slots of 10.99.0.0/24
-const SLOT_COUNT = 64;
-
-// free ports for the proxy and slot 0, the slot each test's imp takes; impd
-// refuses a proxy port among the imp ports, so a pick there is made again
-function pickPorts(): Readonly<Record<'IMP_PROXY_PORT' | 'IMP_PORT_BASE' | 'IMP_SUBNET', string>> {
-  const ports = findFreePorts(2);
-  const proxy = ports.take();
-  const base = ports.take();
-
-  if (proxy >= base && proxy < base + SLOT_COUNT) {
-    return pickPorts();
-  }
-
-  return {
-    IMP_PROXY_PORT: String(proxy),
-    IMP_PORT_BASE: String(base),
-    IMP_SUBNET: '10.99.0.0/24',
-  };
-}
-
-// True when this proxy still serves `name` on the port. The answer names the
-// imp: random ports can collide with another process on a busy host, and one
-// that merely listens there must not count.
-async function isServingImp(port: number, name: string): Promise<boolean> {
-  try {
-    const response = await fetch(`http://127.0.0.1:${String(port)}/`, {
-      signal: AbortSignal.timeout(5000),
-    });
-
-    const body = await response.text();
-
-    return body.includes(`There is no imp named ${name}.`);
-  } catch {
-    return false;
-  }
-}
-
-test('overlapping listener syncs end with the listeners the database holds', async () => {
-  const ports = pickPorts();
-
-  const ctx = await setupImpTest({ env: ports });
-
-  const proxy = startWakeProxy({
-    config: ctx.config,
-    db: ctx.db,
-    imps: ctx.imps,
-    log: () => {},
-    peers: createForwardedPeers(Date.now),
-  });
-
-  try {
-    await ctx.createTestImage('ubuntu');
-
-    // a listener for `old`, then `old` goes and `new` takes its slot
-    const old = await ctx.imps.createImp({ name: 'old' });
-
-    await proxy.syncListeners();
-
-    await removeImp(ctx.db, old.id);
-
-    const fresh = await ctx.imps.createImp({ name: 'new' });
-
-    // the first pass reads `new`, then waits on stopping old's listener; the
-    // second reads after `new` is gone too
-    const first = proxy.syncListeners();
-
-    await removeImp(ctx.db, fresh.id);
-
-    const second = proxy.syncListeners();
-
-    await Promise.all([first, second]);
-
-    const listening = await isServingImp(Number(ports.IMP_PORT_BASE) + fresh.slot, 'new');
-
-    expect(listening).toBe(false);
-  } finally {
-    await proxy.stop();
-  }
-});
-
-// An upstream on 127.0.0.1 that records the Cookie header of each request
-// and WebSocket upgrade, with an imp whose address points at it. `respond`
-// answers a plain request; `ok` by default.
-async function setupUpstreamTest(
-  respond: (request: Request) => Response | Promise<Response> = () => new Response('ok'),
-) {
-  const cookies: (string | null)[] = [];
-  const ports = pickPorts();
-
-  // one stack: the proxy stops, then the upstream, then the harness
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const ctx = await createImpTest(stack, { env: ports });
+  const dataDir = await mkdtemp(join(tmpdir(), 'wake-proxy-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer impd's own API checks; no test here calls it
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them, which a
+    // snapshot must match to load
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+
+    // no IPv6 and no tailnet on this host
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+
+    // the VMs, taps, cgroups, firewall and guest memory are the host's: stubs
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  // the image every imp here boots: a create needs one
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  return { config, db, impd, stack };
+}
+
+test('it ends overlapping listener syncs with no listener for an imp the database lost', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  // a listener for `old`, then `old` goes and `new` takes its slot
+  const old = await ctx.impd.imps.createImp({ name: 'old' });
+
+  await proxy.syncListeners();
+
+  await removeImp(ctx.db, old.id);
+
+  const fresh = await ctx.impd.imps.createImp({ name: 'new' });
+
+  // the first pass reads `new`, then waits on stopping old's listener; the
+  // second reads after `new` is gone too
+  const first = proxy.syncListeners();
+
+  await removeImp(ctx.db, fresh.id);
+
+  const second = proxy.syncListeners();
+
+  await Promise.all([first, second]);
+
+  expect(proxy.readImpPort(fresh.id)).toBeNull();
+});
+
+test('it stops the listener of an imp the database lost', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await proxy.syncListeners();
+
+  const port = proxy.readImpPort(imp.id);
+
+  invariant(port);
+
+  await removeImp(ctx.db, imp.id);
+
+  await proxy.syncListeners();
+
+  expect(fetch(`http://127.0.0.1:${String(port)}/`)).rejects.toThrow();
+});
+
+test('it keeps the dashboard session cookie from an imp over HTTP', async () => {
+  const ctx = await setupTest();
+
+  const cookies: (string | null)[] = [];
+
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request) => {
+      cookies.push(request.headers.get('cookie'));
+
+      return new Response('ok');
+    },
+  });
+
+  ctx.stack.defer(() => upstream.stop(true));
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: upstream.port });
+
+  // the imp's address is the upstream's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`, {
+    headers: { cookie: 'a=1; imp_session=v1.2.secret; __Host-imp_session=v1.2.secret; b=2' },
+  });
+
+  await response.text();
+
+  expect(cookies).toStrictEqual(['a=1; b=2']);
+});
+
+test('it keeps the dashboard session cookie from an imp over a WebSocket', async () => {
+  const ctx = await setupTest();
+
+  const cookies: (string | null)[] = [];
 
   const upstream = Bun.serve({
     port: 0,
@@ -109,63 +259,36 @@ async function setupUpstreamTest(
     fetch: (request, server) => {
       cookies.push(request.headers.get('cookie'));
 
-      // Bun ends a request it upgraded with no response
-      if (server.upgrade(request)) {
-        // oxlint-disable-next-line unicorn/no-useless-undefined
-        return undefined;
-      }
-
-      return respond(request);
+      return server.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 });
     },
-    websocket: {
-      message: (ws, message) => {
-        ws.send(message);
-      },
-    },
+    websocket: { message: () => {} },
   });
 
-  stack.defer(() => upstream.stop(true));
+  ctx.stack.defer(() => upstream.stop(true));
 
   const proxy = startWakeProxy({
     config: ctx.config,
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
     log: () => {},
     peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
   });
 
-  stack.defer(() => proxy.stop());
+  ctx.stack.defer(() => proxy.stop());
 
-  await ctx.createTestImage('ubuntu');
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: upstream.port });
 
-  const imp = await ctx.imps.createImp({ name: 'web', httpPort: upstream.port });
-
+  // the imp's address is the upstream's
   await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
   await proxy.syncListeners();
 
-  return {
-    cookies,
-    port: Number(ports.IMP_PORT_BASE) + imp.slot,
-  };
-}
-
-test('the proxy keeps the dashboard session cookie from an imp over HTTP', async () => {
-  const ctx = await setupUpstreamTest();
-
-  const response = await fetch(`http://127.0.0.1:${String(ctx.port)}/`, {
-    headers: { cookie: 'a=1; imp_session=v1.2.secret; __Host-imp_session=v1.2.secret; b=2' },
+  const socket = new WebSocket(`ws://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`, {
+    headers: { cookie: 'a=1; imp_session=v1.2.secret' },
   });
 
-  await response.text();
-
-  expect(ctx.cookies).toEqual(['a=1; b=2']);
-});
-
-test('the proxy keeps the dashboard session cookie from an imp over a WebSocket', async () => {
-  const ctx = await setupUpstreamTest();
-
-  const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.port)}/`, {
-    headers: { cookie: 'a=1; imp_session=v1.2.secret' },
+  onTestFinished(() => {
+    socket.close();
   });
 
   const opened = await new Promise<string>((resolve) => {
@@ -178,13 +301,122 @@ test('the proxy keeps the dashboard session cookie from an imp over a WebSocket'
     });
   });
 
-  socket.close();
-
   expect(opened).toBe('open');
-  expect(ctx.cookies).toEqual(['a=1']);
+  expect(cookies).toStrictEqual(['a=1']);
 });
 
-test('the API route hands a peer handle only to the paths that resolve a caller', async () => {
+test('it relays WebSocket messages both ways', async () => {
+  const ctx = await setupTest();
+
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request, server) =>
+      server.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 }),
+    websocket: {
+      message: (ws, message) => {
+        ws.send(`echo ${String(message)}`);
+      },
+    },
+  });
+
+  ctx.stack.defer(() => upstream.stop(true));
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: upstream.port });
+
+  // the imp's address is the upstream's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
+
+  const socket = new WebSocket(`ws://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`);
+
+  onTestFinished(() => {
+    socket.close();
+  });
+
+  const reply = new Promise<string>((resolve) => {
+    socket.addEventListener('message', (event) => {
+      resolve(String(event.data));
+    });
+  });
+
+  await new Promise((resolve) => {
+    socket.addEventListener('open', resolve);
+  });
+
+  socket.send('hello');
+
+  const echoed = await reply;
+
+  expect(echoed).toBe('echo hello');
+});
+
+test.each([['/ui/'], ['/ui/assets/app.js'], ['/health'], ['/rpcx']])(
+  'it hands the API no peer handle, and strips a forged one, on %s',
+  async (path) => {
+    const ctx = await setupTest();
+
+    const seen: (string | null)[] = [];
+
+    // impd's API, as far as the proxy can tell
+    const api = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: (request) => {
+        seen.push(request.headers.get(PEER_HEADER));
+
+        return new Response('ok');
+      },
+    });
+
+    ctx.stack.defer(() => api.stop(true));
+
+    const register = mock(() => 'handle');
+
+    const proxy = startWakeProxy({
+      config: { ...ctx.config, apiPort: api.port ?? 0 },
+      db: ctx.db,
+      imps: ctx.impd.imps,
+      log: () => {},
+      peers: { register, take: () => null },
+      ports: { proxy: 0, slot: () => 0 },
+    });
+
+    ctx.stack.defer(() => proxy.stop());
+
+    const apex = proxy.startListener({
+      port: 0,
+      hostname: '127.0.0.1',
+      route: () => ({ kind: 'api' }),
+    });
+
+    ctx.stack.defer(() => apex.stop(true));
+
+    const response = await fetch(`http://127.0.0.1:${String(apex.port)}${path}`, {
+      headers: { [PEER_HEADER]: 'forged' },
+    });
+
+    await response.text();
+
+    expect(seen).toStrictEqual([null]);
+    expect(register).not.toHaveBeenCalled();
+  },
+);
+
+test('it hands the API a peer handle for the client’s address on a path that resolves a caller', async () => {
+  const ctx = await setupTest();
+
   const seen: (string | null)[] = [];
 
   // impd's API, as far as the proxy can tell
@@ -198,28 +430,20 @@ test('the API route hands a peer handle only to the paths that resolve a caller'
     },
   });
 
-  const ports = pickPorts();
+  ctx.stack.defer(() => api.stop(true));
 
-  const ctx = await setupImpTest({
-    env: { ...ports, IMP_API_PORT: String(api.port) },
-  });
-
-  const registered: string[] = [];
+  const register = mock<(address: string) => string>(() => 'handle');
 
   const proxy = startWakeProxy({
-    config: ctx.config,
+    config: { ...ctx.config, apiPort: api.port ?? 0 },
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
     log: () => {},
-    peers: {
-      register: (address) => {
-        registered.push(address);
-
-        return 'handle';
-      },
-      take: () => null,
-    },
+    peers: { register, take: () => null },
+    ports: { proxy: 0, slot: () => 0 },
   });
+
+  ctx.stack.defer(() => proxy.stop());
 
   const apex = proxy.startListener({
     port: 0,
@@ -227,30 +451,88 @@ test('the API route hands a peer handle only to the paths that resolve a caller'
     route: () => ({ kind: 'api' }),
   });
 
-  try {
-    const base = `http://127.0.0.1:${String(apex.port)}`;
-    const forged = { [PEER_HEADER]: 'forged' };
+  ctx.stack.defer(() => apex.stop(true));
 
-    // a flood of page loads takes no handle, and a forged one never passes
-    for (const path of ['/ui/', '/ui/assets/app.js', '/health', '/rpcx']) {
-      await fetch(`${base}${path}`, { headers: forged });
-    }
+  const response = await fetch(`http://127.0.0.1:${String(apex.port)}/rpc/system/info`, {
+    method: 'POST',
+    headers: { [PEER_HEADER]: 'forged' },
+  });
 
-    await fetch(`${base}/rpc/system/info`, { method: 'POST', headers: forged });
+  await response.text();
 
-    expect(registered).toHaveLength(1);
-    expect(seen).toEqual([null, null, null, null, 'handle']);
-  } finally {
-    await apex.stop(true);
-    await proxy.stop();
-    await api.stop(true);
-  }
+  expect(seen).toStrictEqual(['handle']);
+  expect(register).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/127\.0\.0\.1$/v));
 });
 
 // A streamed build (docs/guides/images.md#build-an-image) lives on its
 // progress lines: the proxy in front of the API must pass each one on as it
 // comes, not hold the body until it ends.
-test('the API route passes a streamed answer on line by line', async () => {
+test('it passes the first line of a streamed API answer on while the API holds the next', async () => {
+  const ctx = await setupTest();
+
+  const second = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    second.resolve();
+  });
+
+  const api = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => {
+      const body = new ReadableStream<Uint8Array>({
+        start: async (controller) => {
+          controller.enqueue(new TextEncoder().encode('first\n'));
+
+          await second.promise;
+
+          controller.enqueue(new TextEncoder().encode('second\n'));
+          controller.close();
+        },
+      });
+
+      return new Response(body, { headers: { 'content-type': 'application/x-ndjson' } });
+    },
+  });
+
+  ctx.stack.defer(() => api.stop(true));
+
+  const proxy = startWakeProxy({
+    config: { ...ctx.config, apiPort: api.port ?? 0 },
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const apex = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  ctx.stack.defer(() => apex.stop(true));
+
+  const response = await fetch(`http://127.0.0.1:${String(apex.port)}/images/build`, {
+    method: 'POST',
+    body: 'tar',
+  });
+
+  invariant(response.body);
+
+  const lines = response.body.pipeThrough(new TextDecoderStream()).getReader();
+
+  const first = await lines.read();
+
+  expect(first.value).toBe('first\n');
+});
+
+test('it passes the rest of a streamed API answer on once the API sends it', async () => {
+  const ctx = await setupTest();
+
   const second = Promise.withResolvers<void>();
 
   const api = Bun.serve({
@@ -272,17 +554,18 @@ test('the API route passes a streamed answer on line by line', async () => {
     },
   });
 
-  const ctx = await setupImpTest({
-    env: { ...pickPorts(), IMP_API_PORT: String(api.port) },
-  });
+  ctx.stack.defer(() => api.stop(true));
 
   const proxy = startWakeProxy({
-    config: ctx.config,
+    config: { ...ctx.config, apiPort: api.port ?? 0 },
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
     log: () => {},
     peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
   });
+
+  ctx.stack.defer(() => proxy.stop());
 
   const apex = proxy.startListener({
     port: 0,
@@ -290,252 +573,620 @@ test('the API route passes a streamed answer on line by line', async () => {
     route: () => ({ kind: 'api' }),
   });
 
-  try {
-    const response = await fetch(`http://127.0.0.1:${String(apex.port)}/images/build`, {
-      method: 'POST',
-      body: 'tar',
-    });
+  ctx.stack.defer(() => apex.stop(true));
 
-    const lines = response.body?.pipeThrough(new TextDecoderStream()).getReader();
+  const response = await fetch(`http://127.0.0.1:${String(apex.port)}/images/build`, {
+    method: 'POST',
+    body: 'tar',
+  });
 
-    // the first line arrives while the API still holds the second
-    const first = await lines?.read();
+  second.resolve();
 
-    expect(first?.value).toBe('first\n');
+  const body = await response.text();
 
-    second.resolve();
-
-    const parts: string[] = [];
-
-    for (let chunk = await lines?.read(); chunk?.done === false; chunk = await lines?.read()) {
-      parts.push(chunk.value);
-    }
-
-    expect(parts.join('')).toBe('second\n');
-  } finally {
-    await apex.stop(true);
-    await proxy.stop();
-    await api.stop(true);
-  }
+  expect(body).toBe('first\nsecond\n');
 });
 
 // What `tailscale serve` sends for a per-imp name (docs/guides/tailscale.md):
 // the service's Host, its own forwarding headers and the member's login. On
 // the imp's own port every one goes to the imp, never to impd's API.
-test('a request on an imp’s port goes to the imp whatever its Host says', async () => {
-  const toImp: Headers[] = [];
-  const toApi: string[] = [];
+test.each([['box.tail1234.ts.net'], ['imp.example.com'], ['imp.tail1234.ts.net']])(
+  'it sends a request on an imp’s port to the imp, not the API, for Host %s',
+  async (host) => {
+    const ctx = await setupTest();
+
+    const toApi = mock();
+
+    const upstream = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: (request) => new Response(`imp got ${request.headers.get('host') ?? ''}`),
+    });
+
+    ctx.stack.defer(() => upstream.stop(true));
+
+    const api = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () => {
+        toApi();
+
+        return new Response('api');
+      },
+    });
+
+    ctx.stack.defer(() => api.stop(true));
+
+    const proxy = startWakeProxy({
+      config: { ...ctx.config, apiPort: api.port ?? 0 },
+      db: ctx.db,
+      imps: ctx.impd.imps,
+      log: () => {},
+      peers: createForwardedPeers(Date.now),
+      ports: { proxy: 0, slot: () => 0 },
+    });
+
+    ctx.stack.defer(() => proxy.stop());
+
+    const imp = await ctx.impd.imps.createImp({ name: 'box', httpPort: upstream.port });
+
+    // the imp's address is the upstream's
+    await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+    await proxy.syncListeners();
+
+    const response = await fetch(
+      `http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/rpc/system/info`,
+      { method: 'POST', headers: { host } },
+    );
+
+    const body = await response.text();
+
+    expect(body).toBe(`imp got ${host}`);
+    expect(toApi).not.toHaveBeenCalled();
+  },
+);
+
+test('it passes tailscale serve’s headers on to the imp, with the session and peer handle stripped', async () => {
+  const ctx = await setupTest();
+
+  const received: Headers[] = [];
 
   const upstream = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     fetch: (request) => {
-      toImp.push(request.headers);
+      received.push(request.headers);
 
       return new Response('imp');
     },
   });
 
-  const api = Bun.serve({
-    port: 0,
-    hostname: '127.0.0.1',
-    fetch: (request) => {
-      toApi.push(request.url);
-
-      return new Response('api');
-    },
-  });
-
-  const ctx = await setupImpTest({
-    env: {
-      ...pickPorts(),
-      IMP_API_PORT: String(api.port),
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-    },
-  });
+  ctx.stack.defer(() => upstream.stop(true));
 
   const proxy = startWakeProxy({
     config: ctx.config,
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
     log: () => {},
     peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
   });
 
-  try {
-    await ctx.createTestImage('ubuntu');
+  ctx.stack.defer(() => proxy.stop());
 
-    const imp = await ctx.imps.createImp({ name: 'box', httpPort: upstream.port });
+  const imp = await ctx.impd.imps.createImp({ name: 'box', httpPort: upstream.port });
 
-    await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
-    await proxy.syncListeners();
+  // the imp's address is the upstream's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
 
-    const port = ctx.config.portBase + imp.slot;
-    const bodies: string[] = [];
-
-    for (const host of ['box.tail1234.ts.net', 'imp.example.com', 'imp.tail1234.ts.net']) {
-      const response = await fetch(`http://127.0.0.1:${String(port)}/rpc/system/info`, {
-        method: 'POST',
-        headers: {
-          host,
-          'x-forwarded-for': '100.101.1.2',
-          'x-forwarded-proto': 'https',
-          'tailscale-user-login': 'alice@example.com',
-          cookie: 'a=1; imp_session=v1.2.secret',
-          [PEER_HEADER]: 'forged',
-        },
-      });
-
-      const body = await response.text();
-
-      bodies.push(body);
-    }
-
-    const [first] = toImp;
-
-    expect(bodies).toEqual(['imp', 'imp', 'imp']);
-    expect(toApi).toEqual([]);
-
-    expect(toImp.map((headers) => headers.get('host'))).toEqual([
-      'box.tail1234.ts.net',
-      'imp.example.com',
-      'imp.tail1234.ts.net',
-    ]);
-
-    expect(first?.get('x-forwarded-host')).toBe('box.tail1234.ts.net');
-
-    expect(first?.get('x-forwarded-for')).toMatch(
-      /^100\.101\.1\.2, (?<v4mapped>::ffff:)?127\.0\.0\.1$/v,
-    );
-
-    expect(first?.get('tailscale-user-login')).toBe('alice@example.com');
-    expect(first?.get('cookie')).toBe('a=1');
-  } finally {
-    await proxy.stop();
-    await upstream.stop(true);
-    await api.stop(true);
-  }
-});
-
-test('a client that goes away stops the request to the imp', async () => {
-  const reached = Promise.withResolvers<void>();
-  const aborted = Promise.withResolvers<void>();
-
-  // answers only once the request is aborted
-  const ctx = await setupUpstreamTest(async (request) => {
-    request.signal.addEventListener('abort', () => {
-      aborted.resolve();
-    });
-
-    reached.resolve();
-
-    await aborted.promise;
-
-    return new Response('late');
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`, {
+    headers: {
+      host: 'box.tail1234.ts.net',
+      'x-forwarded-for': '100.101.1.2',
+      'x-forwarded-proto': 'https',
+      'tailscale-user-login': 'alice@example.com',
+      cookie: 'a=1; imp_session=v1.2.secret',
+      [PEER_HEADER]: 'forged',
+    },
   });
 
-  const client = new AbortController();
+  await response.text();
 
-  const pending = readRejection(
-    fetch(`http://127.0.0.1:${String(ctx.port)}/slow`, { signal: client.signal }),
+  const [headers] = received;
+
+  invariant(headers);
+
+  expect(headers.get('x-forwarded-host')).toBe('box.tail1234.ts.net');
+
+  expect(headers.get('x-forwarded-for')).toMatch(
+    /^100\.101\.1\.2, (?<v4mapped>::ffff:)?127\.0\.0\.1$/v,
   );
 
-  await reached.promise;
-
-  client.abort();
-
-  const outcome = await Promise.race([
-    aborted.promise.then(() => 'upstream aborted'),
-    Bun.sleep(5000).then(() => 'upstream kept waiting'),
-  ]);
-
-  await pending;
-
-  expect(outcome).toBe('upstream aborted');
+  expect(headers.get('tailscale-user-login')).toBe('alice@example.com');
+  expect(headers.get('cookie')).toBe('a=1');
+  expect(headers.get(PEER_HEADER)).toBeNull();
 });
 
-test('a slot that could not listen warns again once a new imp holds it', async () => {
-  const ports = pickPorts();
-  const logs: string[] = [];
+test('it routes the Host-named imp on the proxy port', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupImpTest({ env: ports });
-
-  // something else holds the imp port of slot 0
-  const squatter = Bun.serve({
-    port: Number(ports.IMP_PORT_BASE),
-    hostname: '0.0.0.0',
-    fetch: () => new Response('squatter'),
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => new Response('imp'),
   });
+
+  ctx.stack.defer(() => upstream.stop(true));
 
   const proxy = startWakeProxy({
     config: ctx.config,
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: upstream.port });
+
+  // the imp's address is the upstream's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.port)}/`, {
+    headers: { host: 'web.imp.localhost' },
+  });
+
+  const body = await response.text();
+
+  expect(body).toBe('imp');
+});
+
+test('it answers a Host that names no imp on the proxy port with a 404 that says how', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.port)}/`, {
+    headers: { host: 'localhost' },
+  });
+
+  expect(response.status).toBe(404);
+
+  const body = await response.text();
+
+  expect(body).toInclude(`Use http://&lt;imp&gt;.imp.localhost:${String(ctx.config.proxyPort)}/.`);
+});
+
+test('it answers an imp that does not exist with a 404 that names it', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.port)}/`, {
+    headers: { host: 'nope.imp.localhost' },
+  });
+
+  expect(response.status).toBe(404);
+
+  const body = await response.text();
+
+  expect(body).toInclude('There is no imp named nope.');
+});
+
+test('it answers an unauthorized route with a 401 and its challenge', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const listener = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'unauthorized', challenge: 'Bearer realm="web", charset="UTF-8"' }),
+  });
+
+  ctx.stack.defer(() => listener.stop(true));
+
+  const response = await fetch(`http://127.0.0.1:${String(listener.port)}/`);
+
+  expect(response.status).toBe(401);
+  expect(response.headers.get('www-authenticate')).toBe('Bearer realm="web", charset="UTF-8"');
+});
+
+test('it answers a limited route with a 429 and its Retry-After', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const listener = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'limited', detail: 'Too many open requests.', retryAfterS: 7 }),
+  });
+
+  ctx.stack.defer(() => listener.stop(true));
+
+  const response = await fetch(`http://127.0.0.1:${String(listener.port)}/`);
+
+  expect(response.status).toBe(429);
+  expect(response.headers.get('retry-after')).toBe('7');
+});
+
+test('it wakes a sleeping imp and says how long the wake took', async () => {
+  const ctx = await setupTest();
+
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => new Response('imp'),
+  });
+
+  ctx.stack.defer(() => upstream.stop(true));
+
+  const logs: string[] = [];
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
     log: (message) => {
       logs.push(message);
     },
     peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
   });
 
-  try {
-    await ctx.createTestImage('ubuntu');
+  ctx.stack.defer(() => proxy.stop());
 
-    const first = await ctx.imps.createImp({ name: 'first' });
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: upstream.port });
 
-    await proxy.syncListeners();
-    await proxy.syncListeners();
+  // the imp's address is the upstream's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await ctx.impd.imps.sleepImp('web');
+  await proxy.syncListeners();
 
-    await removeImp(ctx.db, first.id);
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/a`);
 
-    await proxy.syncListeners();
+  await response.text();
 
-    const second = await ctx.imps.createImp({ name: 'second' });
+  expect(response.headers.get('x-imp-wake-ms')).toMatch(/^\d+$/v);
 
-    await proxy.syncListeners();
-
-    const warnings = logs.filter((line) => line.includes('cannot listen'));
-
-    expect(second.slot).toBe(first.slot);
-    expect(warnings).toHaveLength(2);
-  } finally {
-    await proxy.stop();
-    await squatter.stop(true);
-  }
+  expect(logs).toContain(
+    `impd: proxy: web woke in ${String(response.headers.get('x-imp-wake-ms'))}ms for GET /a`,
+  );
 });
 
-test('a request to a moving imp gets 503 with Retry-After', async () => {
-  const ports = pickPorts();
+test('it stops the request to the imp when the client goes away', async () => {
+  const ctx = await setupTest();
 
-  const ctx = await setupImpTest({ env: ports });
+  const reached = Promise.withResolvers<AbortSignal>();
+  const aborted = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    aborted.resolve();
+  });
+
+  // answers only once the request is aborted
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: async (request) => {
+      request.signal.addEventListener('abort', () => {
+        aborted.resolve();
+      });
+
+      reached.resolve(request.signal);
+
+      await aborted.promise;
+
+      return new Response('late');
+    },
+  });
+
+  ctx.stack.defer(() => upstream.stop(true));
 
   const proxy = startWakeProxy({
     config: ctx.config,
     db: ctx.db,
-    imps: ctx.imps,
+    imps: ctx.impd.imps,
     log: () => {},
     peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
   });
 
-  try {
-    await ctx.createTestImage('ubuntu');
+  ctx.stack.defer(() => proxy.stop());
 
-    const imp = await ctx.imps.createImp({ name: 'web' });
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: upstream.port });
 
-    await ctx.imps.stopImp('web');
+  // the imp's address is the upstream's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
 
-    await updateImpMove(ctx.db, imp.id, 'sending');
+  const client = new AbortController();
 
-    await proxy.syncListeners();
+  const url = `http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/slow`;
+  const pending = Promise.allSettled([fetch(url, { signal: client.signal })]);
 
-    const response = await fetch(
-      `http://127.0.0.1:${String(Number(ports.IMP_PORT_BASE) + imp.slot)}/`,
-    );
+  const upstreamSignal = await reached.promise;
 
-    expect(response.status).toBe(503);
-    expect(response.headers.get('retry-after')).toBe('30');
-  } finally {
-    await proxy.stop();
-  }
+  client.abort();
+
+  await waitFor(() => {
+    expect(upstreamSignal.aborted).toBeTrue();
+  });
+
+  const settled = await pending;
+
+  expect(settled).toStrictEqual([
+    {
+      status: 'rejected',
+      reason: expect.toSatisfy(
+        (reason: unknown) => reason instanceof Error && reason.name === 'AbortError',
+      ),
+    },
+  ]);
+});
+
+test('it answers a 502 that names the port when nothing answers on the imp’s HTTP port', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  // nothing listens on port 1 of loopback
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: 1 });
+
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`);
+
+  expect(response.status).toBe(502);
+
+  const body = await response.text();
+
+  expect(body).toInclude('web is awake, but nothing answered on port 1');
+});
+
+test('it answers a 502 when the imp’s WebSocket cannot be reached', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  // nothing listens on port 1 of loopback
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: 1 });
+
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/socket`, {
+    headers: {
+      connection: 'Upgrade',
+      upgrade: 'websocket',
+      'sec-websocket-version': '13',
+
+      // any 16 bytes, base64
+      'sec-websocket-key': Buffer.from('imp-test-socket!').toString('base64'),
+    },
+  });
+
+  expect(response.status).toBe(502);
+
+  const body = await response.text();
+
+  expect(body).toInclude('The WebSocket to ws://127.0.0.1:1/socket failed: connection failed');
+});
+
+test('it answers a 502 when the imp’s WebSocket does not open in time', async () => {
+  const ctx = await setupTest();
+
+  // takes the connection and never answers the handshake
+  const silent = Bun.listen({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: { data: () => {} },
+  });
+
+  ctx.stack.defer(() => {
+    silent.stop(true);
+  });
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+    upstreamSocketTimeoutMs: 50,
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: silent.port });
+
+  // the imp's address is the silent listener's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+  await proxy.syncListeners();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/socket`, {
+    headers: {
+      connection: 'Upgrade',
+      upgrade: 'websocket',
+      'sec-websocket-version': '13',
+
+      // any 16 bytes, base64
+      'sec-websocket-key': Buffer.from('imp-test-socket!').toString('base64'),
+    },
+  });
+
+  expect(response.status).toBe(502);
+
+  const body = await response.text();
+
+  expect(body).toInclude('failed: timed out');
+});
+
+test('it warns once about a slot whose port another process holds', async () => {
+  const ctx = await setupTest();
+
+  // a process that is not impd holds the port of the imp's slot
+  const squatter = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => new Response('squatter'),
+  });
+
+  ctx.stack.defer(() => squatter.stop(true));
+
+  const logs: string[] = [];
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: (message) => {
+      logs.push(message);
+    },
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => squatter.port ?? 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  await ctx.impd.imps.createImp({ name: 'first' });
+  await proxy.syncListeners();
+  await proxy.syncListeners();
+
+  expect(logs.filter((line) => line.includes('cannot listen'))).toStrictEqual([
+    expect.toStartWith(`impd: proxy: cannot listen on :${String(squatter.port)} for first: `),
+  ]);
+});
+
+test('it warns again about a slot that could not listen once a new imp holds it', async () => {
+  const ctx = await setupTest();
+
+  // a process that is not impd holds the port of the first imp's slot
+  const squatter = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => new Response('squatter'),
+  });
+
+  ctx.stack.defer(() => squatter.stop(true));
+
+  const first = await ctx.impd.imps.createImp({ name: 'first' });
+
+  const slotPorts = new Map([[first.slot, squatter.port ?? 0]]);
+
+  const logs: string[] = [];
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: (message) => {
+      logs.push(message);
+    },
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: (slot) => slotPorts.get(slot) ?? 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  await proxy.syncListeners();
+
+  await removeImp(ctx.db, first.id);
+
+  await proxy.syncListeners();
+  await ctx.impd.imps.createImp({ name: 'second' });
+  await proxy.syncListeners();
+
+  expect(logs.filter((line) => line.includes('cannot listen'))).toStrictEqual([
+    expect.toStartWith(`impd: proxy: cannot listen on :${String(squatter.port)} for first: `),
+    expect.toStartWith(`impd: proxy: cannot listen on :${String(squatter.port)} for second: `),
+  ]);
+});
+
+test('it answers a request to a moving imp with a 503 and Retry-After', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await ctx.impd.imps.stopImp('web');
+
+  await updateImpMove(ctx.db, imp.id, 'sending');
+
+  await proxy.syncListeners();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`);
+
+  expect(response.status).toBe(503);
+  expect(response.headers.get('retry-after')).toBe('30');
 });

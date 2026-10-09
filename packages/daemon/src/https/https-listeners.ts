@@ -12,11 +12,15 @@ export interface HttpsListeners {
   // the addresses to listen on: loopback and the tailnet IP, never 0.0.0.0,
   // so a port published to the internet never reaches these listeners
   readonly setAddresses: (addresses: readonly string[]) => void;
+
+  // the ports that running listeners hold; null while none does
+  readonly readPorts: () => { readonly https: number | null; readonly http: number | null };
   readonly stop: () => Promise<void>;
 }
 
 // a running server, as far as these listeners use one
 interface Listener {
+  readonly port: number | undefined;
   readonly stop: (closeActiveConnections?: boolean) => Promise<void>;
 }
 
@@ -28,6 +32,9 @@ export interface ProxyListen {
 interface HttpsListenersOptions {
   readonly proxy: ProxyListen;
   readonly domain: string;
+
+  // 0 takes a free port at the first bind, which every later bind and the
+  // redirect then keep
   readonly httpsPort: number;
   readonly httpPort: number;
   readonly log: (message: string) => void;
@@ -61,8 +68,8 @@ interface AddressListeners {
 // every name, so SNI needs no choice; the Host header picks the imp.
 export function createHttpsListeners(options: HttpsListenersOptions): HttpsListeners {
   const domain = options.domain;
-  const httpsPort = options.httpsPort;
   const log = options.log;
+  const ports = { https: options.httpsPort, http: options.httpPort };
 
   const byAddress = new Map<string, AddressListeners>();
 
@@ -73,7 +80,7 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
   const scope = options.scope;
 
   // Docker publishes the public listener as 443, whatever its port inside
-  const redirectPort = scope.kind === 'public' ? 443 : httpsPort;
+  const readRedirectPort = (): number => (scope.kind === 'public' ? 443 : ports.https);
 
   // the public 404 names no imp and no use of the domain
   const hint = scope.kind === 'public' ? 'No public imp here.' : `Use https://<imp>.${domain}/.`;
@@ -106,11 +113,17 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
     return parsed.kind === 'imp' ? scope.isPublic(parsed.name) : Promise.resolve(false);
   };
 
-  const tryBind = <T>(address: string, port: number, start: () => T): T | null => {
-    const key = `${address}:${String(port)}`;
+  const tryBind = (
+    address: string,
+    kind: 'https' | 'http',
+    start: () => Listener,
+  ): Listener | null => {
+    const key = `${address}:${String(ports[kind])}`;
 
     try {
       const server = start();
+
+      ports[kind] = server.port ?? ports[kind];
 
       if (failed.delete(key)) {
         log(`impd: https: listening on ${key}`);
@@ -129,10 +142,10 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
   };
 
   const startTls = (address: string, current: Certificate): Listener | null =>
-    tryBind(address, httpsPort, () =>
+    tryBind(address, 'https', () =>
       options.proxy.startListener({
         hostname: address,
-        port: httpsPort,
+        port: ports.https,
         tls: { key: current.keyPem, cert: current.chainPem },
         reusePort: true,
         route: resolveRoute,
@@ -140,15 +153,15 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
     );
 
   const startRedirect = (address: string): Listener | null =>
-    tryBind(address, options.httpPort, () =>
+    tryBind(address, 'http', () =>
       Bun.serve({
         hostname: address,
-        port: options.httpPort,
+        port: ports.http,
         fetch: async (request) => {
           const isRedirected = await checkRedirect(request);
 
           return isRedirected
-            ? buildRedirect(request, domain, redirectPort, hint)
+            ? buildRedirect(request, domain, readRedirectPort(), hint)
             : buildErrorPage(404, hint);
         },
       }),
@@ -203,6 +216,14 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
 
         startMissing(address);
       }
+    },
+    readPorts: () => {
+      const running = [...byAddress.values()];
+
+      return {
+        https: running.some((listeners) => listeners.tls !== null) ? ports.https : null,
+        http: running.some((listeners) => listeners.redirect !== null) ? ports.http : null,
+      };
     },
     stop: async () => {
       const servers = [...byAddress.values()].flatMap((listeners) => [

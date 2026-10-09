@@ -1,192 +1,446 @@
 import { expect, test } from 'bun:test';
-import type { ImpState } from '@imp/api';
-import type { StoredPublicAuth } from '../db/imps';
+import { buildMockStoredPublicAuth } from '../test-utils/build-mock-stored-public-auth';
 import { buildCredentialHash, createCredential, createPublicRoute } from './public-auth';
 import { createPublicLimits } from './public-limits';
 
-const CREDENTIAL = 'a:password:with:colons';
-const BASIC = { auth: 'basic' as const, user: 'ann', hash: buildCredentialHash(CREDENTIAL) };
+test('#createCredential makes 32 random bytes as base64url', () => {
+  expect(createCredential()).toMatch(/^[\w\-]{43}$/v);
+});
 
-interface RouteOptions {
-  readonly authorization?: string;
-  readonly state?: ImpState;
-  readonly limits?: ReturnType<typeof createPublicLimits>;
-}
+test('#createCredential makes a different credential each time', () => {
+  expect(createCredential()).not.toBe(createCredential());
+});
 
-function resolveRoute(stored: StoredPublicAuth | undefined, options: RouteOptions = {}) {
-  const found =
-    stored === undefined ? undefined : { id: 'i1', state: options.state ?? 'running', stored };
-
-  const route = createPublicRoute(
-    () => Promise.resolve(found),
-    options.limits ?? createPublicLimits(),
+test('#buildCredentialHash keeps the sha256 of the credential, not the credential', () => {
+  expect(buildCredentialHash('a:password:with:colons')).toBe(
+    new Bun.CryptoHasher('sha256').update('a:password:with:colons').digest('base64url'),
   );
+});
 
-  const authorization = options.authorization;
+test('#createPublicRoute gives no route for an imp that is not public, whatever the request carries', async () => {
+  const route = createPublicRoute(() => Promise.resolve(undefined), createPublicLimits());
 
-  return route(
+  const answer = await route(
     'web',
-    new Request('https://web.imp.test/', {
-      ...(authorization !== undefined && { headers: { authorization } }),
-    }),
+    new Request('https://web.imp.test/', { headers: { authorization: 'Bearer anything' } }),
   );
-}
 
-function encodeBasic(text: string): string {
-  return `Basic ${Buffer.from(text).toString('base64')}`;
-}
-
-test('a credential is 32 random bytes, and only its hash is kept', () => {
-  const credential = createCredential();
-
-  expect(credential).toMatch(/^[\w-]{43}$/);
-  expect(createCredential()).not.toBe(credential);
-  expect(buildCredentialHash(credential)).not.toContain(credential);
+  expect(answer).toBeNull();
 });
 
-test('an imp that is not public has no route, whatever the request carries', async () => {
-  const route = await resolveRoute(undefined, { authorization: 'Bearer anything' });
-
-  expect(route).toBeNull();
-});
-
-test('basic auth splits at the first colon, so the password may hold more', async () => {
-  const right = await resolveRoute(BASIC, { authorization: encodeBasic(`ann:${CREDENTIAL}`) });
-
-  const lowercase = await resolveRoute(BASIC, {
-    authorization: `basic ${Buffer.from(`ann:${CREDENTIAL}`).toString('base64')}`,
+test('#createPublicRoute routes basic auth whose password holds colons, split at the first colon', async () => {
+  const stored = buildMockStoredPublicAuth({
+    user: 'ann',
+    hash: buildCredentialHash('a:password:with:colons'),
   });
 
-  expect(right).toMatchObject({ kind: 'imp', name: 'web', public: { dropAuthorization: true } });
-  expect(lowercase).toMatchObject({ kind: 'imp' });
-
-  for (const header of [
-    'Basic',
-    'Basic !!!',
-    encodeBasic('no colon'),
-    encodeBasic(`bob:${CREDENTIAL}`),
-    `Bearer ${CREDENTIAL}`,
-  ]) {
-    const route = await resolveRoute(BASIC, { authorization: header });
-
-    expect({ header, kind: route?.kind }).toEqual({ header, kind: 'unauthorized' });
-  }
-});
-
-test('a token imp takes only its bearer token, and a hash impd did not write lets nobody in', async () => {
-  const token = createCredential();
-  const stored = { auth: 'token' as const, user: null, hash: buildCredentialHash(token) };
-
-  const right = await resolveRoute(stored, { authorization: `Bearer ${token}` });
-  const wrong = await resolveRoute(stored, { authorization: `Bearer ${token}x` });
-
-  const broken = await resolveRoute(
-    { ...stored, hash: 'short' },
-    { authorization: `Bearer ${token}` },
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
   );
 
-  expect(right).toMatchObject({ kind: 'imp', public: { dropAuthorization: true } });
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', {
+      headers: {
+        authorization: `Basic ${Buffer.from('ann:a:password:with:colons').toString('base64')}`,
+      },
+    }),
+  );
 
-  expect(wrong).toEqual({
+  expect(answer).toStrictEqual({
+    kind: 'imp',
+    name: 'web',
+    public: { dropAuthorization: true, release: expect.toBeFunction() },
+  });
+});
+
+test('#createPublicRoute takes the basic scheme in lowercase', async () => {
+  const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', {
+      headers: { authorization: `basic ${Buffer.from('ann:secret').toString('base64')}` },
+    }),
+  );
+
+  expect(answer?.kind).toBe('imp');
+});
+
+test.each([
+  ['Basic', 'a scheme with no value'],
+  ['Basic !!!', 'a value that is not base64 of a user and password'],
+  [`Basic ${Buffer.from('no colon').toString('base64')}`, 'a value with no colon'],
+  [`Basic ${Buffer.from('bob:secret').toString('base64')}`, 'another user'],
+  [`Basic ${Buffer.from('ann:wrong').toString('base64')}`, 'a wrong password'],
+  ['Bearer secret', 'a bearer token'],
+])('#createPublicRoute challenges basic auth given %s, %s', async (authorization) => {
+  const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', { headers: { authorization } }),
+  );
+
+  expect(answer).toStrictEqual({
+    kind: 'unauthorized',
+    challenge: 'Basic realm="web", charset="UTF-8"',
+  });
+});
+
+test('#createPublicRoute challenges a basic auth imp when the request has no credential', async () => {
+  const stored = buildMockStoredPublicAuth();
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
+  );
+
+  const answer = await route('web', new Request('https://web.imp.test/'));
+
+  expect(answer).toStrictEqual({
+    kind: 'unauthorized',
+    challenge: 'Basic realm="web", charset="UTF-8"',
+  });
+});
+
+test('#createPublicRoute routes a token imp given its bearer token', async () => {
+  const stored = buildMockStoredPublicAuth({
+    auth: 'token',
+    user: null,
+    hash: buildCredentialHash('app-token'),
+  });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', { headers: { authorization: 'Bearer app-token' } }),
+  );
+
+  expect(answer).toStrictEqual({
+    kind: 'imp',
+    name: 'web',
+    public: { dropAuthorization: true, release: expect.toBeFunction() },
+  });
+});
+
+test('#createPublicRoute challenges a token imp given another token', async () => {
+  const stored = buildMockStoredPublicAuth({
+    auth: 'token',
+    user: null,
+    hash: buildCredentialHash('app-token'),
+  });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', { headers: { authorization: 'Bearer app-tokenx' } }),
+  );
+
+  expect(answer).toStrictEqual({
     kind: 'unauthorized',
     challenge: 'Bearer realm="web", charset="UTF-8"',
   });
-
-  expect(broken?.kind).toBe('unauthorized');
 });
 
-test('an imp without auth passes the header on to the imp', async () => {
-  const route = await resolveRoute(
-    { auth: 'none', user: null, hash: null },
-    { authorization: 'Bearer app-token' },
+test('#createPublicRoute lets nobody in through a stored hash impd did not write', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'token', user: null, hash: 'short' });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
   );
 
-  expect(route).toMatchObject({ kind: 'imp', public: { dropAuthorization: false } });
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', { headers: { authorization: 'Bearer short' } }),
+  );
+
+  expect(answer?.kind).toBe('unauthorized');
 });
 
-test('failed sign-ins turn into 429s, and the right credential still passes', async () => {
-  const limits = createPublicLimits(() => 0);
-  const kinds: (string | undefined)[] = [];
+test('#createPublicRoute passes the authorization header on for an imp without auth', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
 
-  for (let index = 0; index < 21; index += 1) {
-    const route = await resolveRoute(BASIC, { limits, authorization: encodeBasic('ann:wrong') });
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(),
+  );
 
-    kinds.push(route?.kind);
-  }
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', { headers: { authorization: 'Bearer app-token' } }),
+  );
 
-  expect(kinds.slice(0, 20).every((kind) => kind === 'unauthorized')).toBe(true);
-  expect(kinds[20]).toBe('limited');
-
-  const right = await resolveRoute(BASIC, {
-    limits,
-    authorization: encodeBasic(`ann:${CREDENTIAL}`),
+  expect(answer).toStrictEqual({
+    kind: 'imp',
+    name: 'web',
+    public: { dropAuthorization: false, release: expect.toBeFunction() },
   });
-
-  // no credential at all still gets the challenge, for the password prompt
-  const bare = await resolveRoute(BASIC, { limits });
-
-  expect(right?.kind).toBe('imp');
-  expect(bare?.kind).toBe('unauthorized');
 });
 
-test('requests with no credential never use up the failure limit', async () => {
+test('#createPublicRoute limits sign-ins after 20 failures', async () => {
+  const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  const wrong = `Basic ${Buffer.from('ann:wrong').toString('base64')}`;
+
+  const failures = await Promise.all(
+    Array.from({ length: 20 }, () =>
+      route('web', new Request('https://web.imp.test/', { headers: { authorization: wrong } })),
+    ),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', { headers: { authorization: wrong } }),
+  );
+
+  expect(failures).toSatisfyAll(
+    (failure: Readonly<{ kind: string }> | null) => failure?.kind === 'unauthorized',
+  );
+
+  expect(answer).toStrictEqual({
+    kind: 'limited',
+    detail: 'Too many failed sign-ins; try again later.',
+    retryAfterS: 3,
+  });
+});
+
+test('#createPublicRoute routes the right credential after the failure limit is hit', async () => {
+  const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  const wrong = `Basic ${Buffer.from('ann:wrong').toString('base64')}`;
+
+  await Promise.all(
+    Array.from({ length: 21 }, () =>
+      route('web', new Request('https://web.imp.test/', { headers: { authorization: wrong } })),
+    ),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', {
+      headers: { authorization: `Basic ${Buffer.from('ann:secret').toString('base64')}` },
+    }),
+  );
+
+  expect(answer?.kind).toBe('imp');
+});
+
+test('#createPublicRoute still challenges a request with no credential after the failure limit is hit', async () => {
+  const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  const wrong = `Basic ${Buffer.from('ann:wrong').toString('base64')}`;
+
+  await Promise.all(
+    Array.from({ length: 21 }, () =>
+      route('web', new Request('https://web.imp.test/', { headers: { authorization: wrong } })),
+    ),
+  );
+
+  const answer = await route('web', new Request('https://web.imp.test/'));
+
+  expect(answer?.kind).toBe('unauthorized');
+});
+
+test('#createPublicRoute counts no failure for requests with no credential', async () => {
+  const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  await Promise.all(
+    Array.from({ length: 50 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
+
+  const answer = await route(
+    'web',
+    new Request('https://web.imp.test/', {
+      headers: { authorization: `Basic ${Buffer.from('ann:wrong').toString('base64')}` },
+    }),
+  );
+
+  expect(answer?.kind).toBe('unauthorized');
+});
+
+test('#createPublicRoute wakes a sleeping imp 10 times in a burst', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'sleeping', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  const answers = await Promise.all(
+    Array.from({ length: 10 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
+
+  expect(answers).toSatisfyAll(
+    (answer: Readonly<{ kind: string }> | null) => answer?.kind === 'imp',
+  );
+});
+
+test('#createPublicRoute limits the 11th wake of a sleeping imp in a burst', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'sleeping', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  await Promise.all(
+    Array.from({ length: 10 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
+
+  const answer = await route('web', new Request('https://web.imp.test/'));
+
+  expect(answer).toStrictEqual({
+    kind: 'limited',
+    detail: 'This site woke too often; try again later.',
+    retryAfterS: 6,
+  });
+});
+
+test('#createPublicRoute routes a running imp once the wake limit is hit', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = { id: 'i1', state: 'sleeping' as const, stored };
   const limits = createPublicLimits(() => 0);
+  const sleeping = createPublicRoute(() => Promise.resolve(imp), limits);
+  const running = createPublicRoute(() => Promise.resolve({ ...imp, state: 'running' }), limits);
 
-  for (let index = 0; index < 50; index += 1) {
-    await resolveRoute(BASIC, { limits });
-  }
+  await Promise.all(
+    Array.from({ length: 11 }, () => sleeping('web', new Request('https://web.imp.test/'))),
+  );
 
-  const wrong = await resolveRoute(BASIC, { limits, authorization: encodeBasic('ann:wrong') });
+  const answer = await running('web', new Request('https://web.imp.test/'));
 
-  expect(wrong?.kind).toBe('unauthorized');
+  expect(answer?.kind).toBe('imp');
 });
 
-test('a sleeping imp wakes a limited number of times, and open requests are capped', async () => {
-  const none = { auth: 'none' as const, user: null, hash: null };
+test('#createPublicRoute wakes a sleeping imp again 6 seconds after the wake limit is hit', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
   const clock = { ms: 0 };
-  const limits = createPublicLimits(() => clock.ms);
-  const releases: (() => void)[] = [];
 
-  for (let index = 0; index < 10; index += 1) {
-    const route = await resolveRoute(none, { limits, state: 'sleeping' });
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'sleeping', stored }),
+    createPublicLimits(() => clock.ms),
+  );
 
-    if (route?.kind === 'imp') {
-      route.public?.release();
-    }
+  await Promise.all(
+    Array.from({ length: 11 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
 
-    expect(route?.kind).toBe('imp');
+  clock.ms = 6000;
+
+  const answer = await route('web', new Request('https://web.imp.test/'));
+
+  expect(answer?.kind).toBe('imp');
+});
+
+test('#createPublicRoute limits the 65th open request to one imp', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  await Promise.all(
+    Array.from({ length: 64 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
+
+  const answer = await route('web', new Request('https://web.imp.test/'));
+
+  expect(answer).toStrictEqual({
+    kind: 'limited',
+    detail: 'Too many open requests to this site.',
+    retryAfterS: 1,
+  });
+});
+
+test('#createPublicRoute frees one open slot for a release, however often it runs', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+
+  const route = createPublicRoute(
+    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    createPublicLimits(() => 0),
+  );
+
+  const held = await Promise.all(
+    Array.from({ length: 64 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
+
+  const [first] = held;
+
+  if (first?.kind !== 'imp' || first.public === undefined) {
+    throw new Error('the first request was not routed to the imp');
   }
 
-  const eleventh = await resolveRoute(none, { limits, state: 'sleeping' });
+  first.public.release();
+  first.public.release();
 
-  expect(eleventh).toMatchObject({ kind: 'limited', retryAfterS: 6 });
+  const answers = await Promise.all(
+    Array.from({ length: 2 }, () => route('web', new Request('https://web.imp.test/'))),
+  );
 
-  // a running imp needs no wake, and a token comes back with time
-  const running = await resolveRoute(none, { limits });
+  expect(answers.map((answer) => answer?.kind)).toStrictEqual(['imp', 'limited']);
+});
 
-  clock.ms += 6000;
+test('#createPublicRoute gives back the open slot of a wake it limits', async () => {
+  const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = { id: 'i1', state: 'sleeping' as const, stored };
+  const limits = createPublicLimits(() => 0);
+  const sleeping = createPublicRoute(() => Promise.resolve(imp), limits);
+  const running = createPublicRoute(() => Promise.resolve({ ...imp, state: 'running' }), limits);
 
-  const later = await resolveRoute(none, { limits, state: 'sleeping' });
+  await Promise.all(
+    Array.from({ length: 10 }, () => sleeping('web', new Request('https://web.imp.test/'))),
+  );
 
-  expect([running?.kind, later?.kind]).toEqual(['imp', 'imp']);
+  // the ten wakes above stay open, so 53 more leave one slot below the cap of 64
+  await Promise.all(
+    Array.from({ length: 53 }, () => running('web', new Request('https://web.imp.test/'))),
+  );
 
-  for (let index = 0; index < 62; index += 1) {
-    const route = await resolveRoute(none, { limits });
+  await sleeping('web', new Request('https://web.imp.test/'));
 
-    if (route?.kind === 'imp' && route.public !== undefined) {
-      releases.push(route.public.release);
-    }
-  }
+  const answer = await running('web', new Request('https://web.imp.test/'));
 
-  // two held above, 62 here: the cap is 64
-  const capped = await resolveRoute(none, { limits });
-
-  expect(capped?.kind).toBe('limited');
-  releases[0]?.();
-  releases[0]?.();
-
-  const freed = await resolveRoute(none, { limits });
-  const full = await resolveRoute(none, { limits });
-
-  expect([freed?.kind, full?.kind]).toEqual(['imp', 'limited']);
+  expect(answer?.kind).toBe('imp');
 });

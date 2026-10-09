@@ -1,184 +1,509 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { connect } from 'node:tls';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
 import { findPublicImp } from '../db/exposure';
+import { createImage } from '../db/images';
 import { findImpByName, updateImpExposure } from '../db/imps';
-import { createImpTest } from '../imps/test-imps';
+import { openDatabase } from '../db/open-database';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
-import { readRejection } from '../read-rejection';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockCertificate } from '../test-utils/build-mock-certificate';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubHeaderEcho } from '../test-utils/start-stub-header-echo';
 import { createHttpsListeners } from './https-listeners';
-import type { ListenerScope } from './https-listeners';
 import { buildCredentialHash, createPublicScope } from './public-auth';
 import { createPublicLimits } from './public-limits';
 
-const DOMAIN = 'imp.test';
-const NAMES = [DOMAIN, `*.${DOMAIN}`];
-
-// free ports; `slots` is slot 0's, the slot the test's imp takes
-// the slots of 10.99.0.0/28
-const SLOT_COUNT = 4;
-
-// impd refuses an API or proxy port among the imp ports, so a pick there is
-// made again
-function pickPorts(): Readonly<Record<'api' | 'proxy' | 'https' | 'http' | 'slots', number>> {
-  const ports = findFreePorts(5);
-
-  const picked = {
-    api: ports.take(),
-    proxy: ports.take(),
-    https: ports.take(),
-    http: ports.take(),
-    slots: ports.take(),
-  };
-
-  const isAmongSlots = (port: number) => port >= picked.slots && port < picked.slots + SLOT_COUNT;
-
-  return isAmongSlots(picked.api) || isAmongSlots(picked.proxy) ? pickPorts() : picked;
-}
-
-// impd's API, as the bare domain reaches it: echoes what it was sent, and
-// echoes WebSocket messages
-function startFakeApi(port: number) {
-  return Bun.serve({
-    port,
-    hostname: '127.0.0.1',
-    fetch: (request, server) => {
-      if (request.headers.get('upgrade') === 'websocket') {
-        return server.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 });
-      }
-
-      return Response.json({
-        path: new URL(request.url).pathname,
-        proto: request.headers.get('x-forwarded-proto'),
-
-        // the dashboard's same-origin check compares the Origin with this
-        host: new URL(request.url).host,
-        cookie: request.headers.get('cookie'),
-        authorization: request.headers.get('authorization'),
-        forwardedFor: request.headers.get('x-forwarded-for'),
-        forwarded: request.headers.get('forwarded'),
-        realIp: request.headers.get('x-real-ip'),
-        forwardedHost: request.headers.get('x-forwarded-host'),
-      });
-    },
-    websocket: {
-      message: (ws, message) => {
-        ws.send(message);
-      },
-    },
-  });
-}
-
-async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
-  const ports = pickPorts();
-
-  // the listeners, proxy and fake API stop before the harness closes its
-  // database
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const ctx = await createImpTest(stack, {
-    env: {
-      IMP_API_PORT: String(ports.api),
-      IMP_PROXY_PORT: String(ports.proxy),
-      IMP_PORT_BASE: String(ports.slots),
-      IMP_SUBNET: '10.99.0.0/28',
-    },
+  const dataDir = await mkdtemp(join(tmpdir(), 'https-listeners-'));
+
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  const db = await openDatabase(':memory:');
+
+  stack.defer(() => db.destroy());
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
-  const api = startFakeApi(ports.api);
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-  stack.defer(() => api.stop(true));
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
+  const vmm = buildStubVmm();
+
+  const impd = await createImpd(config, {
+    db,
+
+    // the bearer impd's own API checks; no test here calls it
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+
+    // Firecracker, the kernel and the CPU as this host reports them, which a
+    // snapshot must match to load
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+
+    // no IPv6 and no tailnet on this host
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+
+    // the VMs, taps, cgroups, firewall and guest memory are the host's: stubs
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  // impd's API as the bare domain reaches it, and the upstream the tests'
+  // imps point at: it echoes what it got
+  const echo = startStubHeaderEcho(stack);
+
+  // the wake proxy the listeners serve through, on ports of its own
   const proxy = startWakeProxy({
-    config: ctx.config,
-    db: ctx.db,
-    imps: ctx.imps,
+    config: { ...config, apiPort: echo.port },
+    db,
+    imps: impd.imps,
     log: () => {},
     peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
   });
 
   stack.defer(() => proxy.stop());
 
-  const logs: string[] = [];
+  // the image every imp here boots: a create needs one
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  // the public limits, so a test can see what a request took
-  const limits = createPublicLimits();
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  const scope: ListenerScope =
-    scopeKind === 'tailnet'
-      ? { kind: 'tailnet' }
-      : createPublicScope((name) => findPublicImp(ctx.db, name), limits);
+  return { db, impd, stack, echo, proxy };
+}
+
+test('it listens on nothing before the first certificate', async () => {
+  const ctx = await setupTest();
 
   const listeners = createHttpsListeners({
-    proxy,
-    domain: DOMAIN,
-    httpsPort: ports.https,
-    httpPort: ports.http,
-    log: (message) => {
-      logs.push(message);
-    },
-    scope,
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
   });
 
-  stack.defer(() => listeners.stop());
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
 
-  // an imp whose address is the fake API's, so a request to it shows what
-  // the imp would get
-  await ctx.createTestImage('ubuntu');
+  expect(listeners.readPorts()).toStrictEqual({ https: null, http: null });
+});
 
-  const imp = await ctx.imps.createImp({ name: 'web', httpPort: ports.api });
+test('it sends the bare domain to the API over https', async () => {
+  const ctx = await setupTest();
 
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/health`, {
+    headers: { host: 'imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
+    path: '/health',
+    proto: 'https',
+    host: 'imp.test',
+    cookie: null,
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: 'imp.test',
+  });
+});
+
+test('it takes one label in front of the domain as an imp, even one named like the domain', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  // `imp.imp.test` is the imp named imp, which does not exist
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'imp.imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(404);
+
+  const body = await response.text();
+
+  expect(body).toInclude('There is no imp named imp.');
+});
+
+test('it answers two labels in front of the domain with a 404 that says how', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'a.b.imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(404);
+
+  const body = await response.text();
+
+  expect(body).toInclude('Use https://&lt;imp&gt;.imp.test/.');
+});
+
+test('it answers another domain with a 404', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'box.imp.localhost' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(404);
+});
+
+test('it hands the dashboard session to the API on the bare domain', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: {
+      host: 'imp.test',
+      cookie: 'a=1; __Host-imp_session=v1.2.secret; imp_session=v1.2.plain',
+    },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({
+    cookie: 'a=1; __Host-imp_session=v1.2.secret; imp_session=v1.2.plain',
+  });
+});
+
+test('it never hands the dashboard session to an imp', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: ctx.echo.port });
+
+  // the imp's address is the echo's
   await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
 
-  // public with this auth, its credential `secret-credential`
-  const updateWebExposure = async (auth: 'none' | 'token' | 'basic') => {
-    await updateImpExposure(ctx.db, imp.id, {
-      auth,
-      user: auth === 'basic' ? 'ann' : null,
-      hash: auth === 'none' ? null : buildCredentialHash('secret-credential'),
-    });
-  };
+  listeners.setAddresses(['127.0.0.1']);
 
-  const readWebState = async () => {
-    const web = await findImpByName(ctx.db, 'web');
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
-    return web?.state;
-  };
+  listeners.setCertificate(certificate);
 
-  return {
-    ports,
-    listeners,
-    logs,
-    updateWebExposure,
-    readWebState,
-    limits,
-    readWebId: () => imp.id,
-    sleepWeb: () => ctx.imps.sleepImp('web'),
-
-    // the imp's HTTP port to one nothing listens on
-    breakWeb: () =>
-      ctx.db.updateTable('imps').set({ http_port: 1 }).where('id', '=', imp.id).execute(),
-  };
-}
-
-function readTls(port: number, host: string, path = '/') {
-  return fetch(`https://127.0.0.1:${String(port)}${path}`, {
-    headers: { host },
-    redirect: 'manual',
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: {
+      host: 'web.imp.test',
+      cookie: 'a=1; __Host-imp_session=v1.2.secret; imp_session=v1.2.plain',
+    },
     tls: { rejectUnauthorized: false },
-    signal: AbortSignal.timeout(5000),
   });
-}
 
-// the CN of the certificate a new TLS connection gets
-function readPeerName(port: number): Promise<string> {
-  return new Promise((resolve, reject) => {
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({ host: 'web.imp.test', cookie: 'a=1' });
+});
+
+test('it redirects plain http on the domain to https on its port', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const ports = listeners.readPorts();
+
+  const response = await fetch(`http://127.0.0.1:${String(ports.http)}/a/b?c=d`, {
+    headers: { host: 'Box.imp.test' },
+    redirect: 'manual',
+  });
+
+  expect(response.status).toBe(308);
+
+  expect(response.headers.get('location')).toBe(
+    `https://box.imp.test:${String(ports.https)}/a/b?c=d`,
+  );
+});
+
+test('it answers plain http for another domain with a 404', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`http://127.0.0.1:${String(listeners.readPorts().http)}/`, {
+    headers: { host: 'evil.example' },
+    redirect: 'manual',
+  });
+
+  expect(response.status).toBe(404);
+});
+
+test('it wakes no imp for plain http on the domain', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  await ctx.impd.imps.createImp({ name: 'web' });
+  await ctx.impd.imps.sleepImp('web');
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`http://127.0.0.1:${String(listeners.readPorts().http)}/`, {
+    headers: { host: 'web.imp.test' },
+    redirect: 'manual',
+  });
+
+  await response.text();
+
+  const web = await findImpByName(ctx.db, 'web');
+
+  expect(web?.state).toBe('sleeping');
+});
+
+test('it serves the first certificate to a new connection', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const first = await buildMockCertificate({ names: ['first.test', 'imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(first);
+
+  const peer = await new Promise<string>((resolve, reject) => {
     const socket = connect(
-      { host: '127.0.0.1', port, servername: `box.${DOMAIN}`, rejectUnauthorized: false },
+      {
+        host: '127.0.0.1',
+        port: listeners.readPorts().https ?? 0,
+        servername: 'box.imp.test',
+        rejectUnauthorized: false,
+      },
       () => {
         resolve(String(socket.getPeerCertificate().subject.CN));
 
@@ -188,133 +513,94 @@ function readPeerName(port: number): Promise<string> {
 
     socket.on('error', reject);
   });
-}
 
-test('nothing listens before the first certificate', async () => {
-  const ctx = await setup();
-
-  ctx.listeners.setAddresses(['127.0.0.1']);
-
-  const error = await readRejection(readTls(ctx.ports.https, DOMAIN));
-
-  expect(error).not.toBeNull();
+  expect(peer).toBe('first.test');
 });
 
-test('the bare domain reaches the API over https, and only one label names an imp', async () => {
-  const ctx = await setup();
-  const certificate = await buildMockCertificate({ names: NAMES });
+test('it serves a new certificate to every new connection once it is set', async () => {
+  const ctx = await setupTest();
 
-  ctx.listeners.setAddresses(['127.0.0.1']);
-  ctx.listeners.setCertificate(certificate);
-
-  const apex = await readTls(ctx.ports.https, DOMAIN, '/health');
-  const apexBody: unknown = await apex.json();
-
-  expect(apexBody).toEqual({
-    path: '/health',
-    proto: 'https',
-    host: DOMAIN,
-    cookie: null,
-    authorization: null,
-    forwardedFor: '127.0.0.1',
-    forwarded: null,
-    realIp: null,
-    forwardedHost: DOMAIN,
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
   });
 
-  // `imp.imp.test` is the imp named imp, which does not exist
-  const imp = await readTls(ctx.ports.https, `imp.${DOMAIN}`);
-  const impBody = await imp.text();
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
 
-  expect(imp.status).toBe(404);
-  expect(impBody).toContain('There is no imp named imp.');
+  const first = await buildMockCertificate({ names: ['first.test', 'imp.test', '*.imp.test'] });
 
-  const nested = await readTls(ctx.ports.https, `a.b.${DOMAIN}`);
-  const nestedBody = await nested.text();
+  listeners.setCertificate(first);
 
-  expect(nested.status).toBe(404);
-  expect(nestedBody).toContain('Use https://&lt;imp&gt;.imp.test/.');
+  const second = await buildMockCertificate({ names: ['second.test', 'imp.test', '*.imp.test'] });
 
-  const other = await readTls(ctx.ports.https, 'box.imp.localhost');
+  listeners.setCertificate(second);
 
-  expect(other.status).toBe(404);
-});
+  // SO_REUSEPORT would spread new connections over both listeners if the
+  // old one still took any
+  const peers = await Array.from({ length: 5 }).reduce<Promise<string[]>>(async (previous) => {
+    const names = await previous;
 
-test('the API on the bare domain gets the dashboard session, and an imp never does', async () => {
-  const ctx = await setup();
-  const certificate = await buildMockCertificate({ names: NAMES });
+    const name = await new Promise<string>((resolve, reject) => {
+      const socket = connect(
+        {
+          host: '127.0.0.1',
+          port: listeners.readPorts().https ?? 0,
+          servername: 'box.imp.test',
+          rejectUnauthorized: false,
+        },
+        () => {
+          resolve(String(socket.getPeerCertificate().subject.CN));
 
-  ctx.listeners.setAddresses(['127.0.0.1']);
-  ctx.listeners.setCertificate(certificate);
+          socket.end();
+        },
+      );
 
-  const cookie = 'a=1; __Host-imp_session=v1.2.secret; imp_session=v1.2.plain';
-
-  const send = async (host: string) => {
-    const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
-      headers: { host, cookie },
-      tls: { rejectUnauthorized: false },
-      signal: AbortSignal.timeout(5000),
+      socket.on('error', reject);
     });
 
-    const body: unknown = await response.json();
+    return [...names, name];
+  }, Promise.resolve([]));
 
-    return body;
-  };
-
-  const apex = await send(DOMAIN);
-  const imp = await send(`web.${DOMAIN}`);
-
-  expect(apex).toMatchObject({ cookie });
-  expect(imp).toMatchObject({ host: `web.${DOMAIN}`, cookie: 'a=1' });
+  expect(peers).toStrictEqual(Array.from({ length: 5 }, () => 'second.test'));
 });
 
-test('plain http on the domain redirects to https, and wakes nothing', async () => {
-  const ctx = await setup();
-  const certificate = await buildMockCertificate({ names: NAMES });
+test('it keeps an open WebSocket up across a new certificate', async () => {
+  const ctx = await setupTest();
 
-  ctx.listeners.setAddresses(['127.0.0.1']);
-  ctx.listeners.setCertificate(certificate);
-
-  const response = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/a/b?c=d`, {
-    headers: { host: `Box.${DOMAIN}` },
-    redirect: 'manual',
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
   });
 
-  expect(response.status).toBe(308);
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
 
-  expect(response.headers.get('location')).toBe(
-    `https://box.${DOMAIN}:${String(ctx.ports.https)}/a/b?c=d`,
-  );
+  const first = await buildMockCertificate({ names: ['first.test', 'imp.test', '*.imp.test'] });
 
-  const unknown = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/`, {
-    headers: { host: 'evil.example' },
-    redirect: 'manual',
-  });
+  listeners.setCertificate(first);
 
-  expect(unknown.status).toBe(404);
-});
-
-test('a new certificate serves new connections while an open WebSocket stays up', async () => {
-  const ctx = await setup();
-  const first = await buildMockCertificate({ names: ['first.test', ...NAMES] });
-  const second = await buildMockCertificate({ names: ['second.test', ...NAMES] });
-
-  ctx.listeners.setAddresses(['127.0.0.1']);
-  ctx.listeners.setCertificate(first);
-
-  const before = await readPeerName(ctx.ports.https);
-
-  expect(before).toBe('first.test');
-
-  const socket = new WebSocket(`wss://127.0.0.1:${String(ctx.ports.https)}/`, {
-    headers: { host: DOMAIN },
+  const socket = new WebSocket(`wss://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'imp.test' },
     tls: { rejectUnauthorized: false },
   });
 
-  const messages: string[] = [];
+  onTestFinished(() => {
+    socket.close();
+  });
 
-  socket.addEventListener('message', (event) => {
-    messages.push(String(event.data));
+  const reply = new Promise<string>((resolve) => {
+    socket.addEventListener('message', (event) => {
+      resolve(String(event.data));
+    });
   });
 
   await new Promise((resolve, reject) => {
@@ -322,227 +608,659 @@ test('a new certificate serves new connections while an open WebSocket stays up'
     socket.addEventListener('error', reject);
   });
 
-  ctx.listeners.setCertificate(second);
+  const second = await buildMockCertificate({ names: ['second.test', 'imp.test', '*.imp.test'] });
 
-  // SO_REUSEPORT would spread new connections over both listeners if the
-  // old one still took any
-  for (let index = 0; index < 5; index += 1) {
-    const after = await readPeerName(ctx.ports.https);
-
-    expect(after).toBe('second.test');
-  }
-
+  listeners.setCertificate(second);
   socket.send('still here');
 
-  await waitUntil(() => messages.length > 0);
+  const echoed = await reply;
 
-  expect(messages).toEqual(['still here']);
-  expect(socket.readyState).toBe(WebSocket.OPEN);
-
-  socket.close();
+  expect(echoed).toBe('still here');
 });
 
-test('an address that goes away stops being served', async () => {
-  const ctx = await setup();
-  const certificate = await buildMockCertificate({ names: NAMES });
+test('it stops serving an address that goes away', async () => {
+  const ctx = await setupTest();
 
-  ctx.listeners.setAddresses(['127.0.0.1']);
-  ctx.listeners.setCertificate(certificate);
-
-  const served = await readTls(ctx.ports.https, DOMAIN);
-
-  expect(served.ok).toBe(true);
-
-  ctx.listeners.setAddresses([]);
-
-  await Bun.sleep(50);
-
-  const error = await readRejection(readTls(ctx.ports.https, DOMAIN));
-
-  expect(error).not.toBeNull();
-});
-
-test('an address it cannot bind is logged once and tried again', async () => {
-  const ctx = await setup();
-  const certificate = await buildMockCertificate({ names: NAMES });
-
-  // TEST-NET-1: no interface has it
-  ctx.listeners.setCertificate(certificate);
-  ctx.listeners.setAddresses(['192.0.2.1']);
-  ctx.listeners.setAddresses(['192.0.2.1']);
-
-  const failures = ctx.logs.filter((line) => line.includes(`192.0.2.1:${String(ctx.ports.https)}`));
-
-  expect(failures).toHaveLength(1);
-  expect(failures[0]).toContain('cannot listen');
-});
-
-// the public listeners, serving with a certificate on loopback
-async function setupPublic() {
-  const ctx = await setup('public');
-
-  ctx.listeners.setAddresses(['127.0.0.1']);
-
-  const certificate = await buildMockCertificate({ names: NAMES });
-
-  ctx.listeners.setCertificate(certificate);
-
-  return ctx;
-}
-
-test('a tailnet-only imp is a 404 on the public listener, whatever the Host says', async () => {
-  const ctx = await setupPublic();
-
-  await ctx.sleepWeb();
-
-  for (const host of [`web.${DOMAIN}`, `WEB.${DOMAIN}.`, `web.${DOMAIN}:443`, DOMAIN]) {
-    const response = await readTls(ctx.ports.https, host);
-    const body = await response.text();
-
-    expect({ host, status: response.status }).toEqual({ host, status: 404 });
-    expect(body).toContain('No public imp here.');
-  }
-
-  const unknown = await readTls(ctx.ports.https, `nope.${DOMAIN}`);
-  const unknownBody = await unknown.text();
-
-  // the same page as for an imp that does not exist: nothing tells them apart
-  expect(unknown.status).toBe(404);
-  expect(unknownBody).toContain('No public imp here.');
-
-  const redirect = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/`, {
-    headers: { host: `web.${DOMAIN}` },
-    redirect: 'manual',
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: { kind: 'tailnet' },
   });
 
-  expect(redirect.status).toBe(404);
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
 
-  const state = await ctx.readWebState();
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
-  expect(state).toBe('sleeping');
+  listeners.setCertificate(certificate);
+
+  const port = listeners.readPorts().https;
+
+  invariant(port);
+
+  listeners.setAddresses([]);
+
+  await waitFor(() => {
+    expect(
+      fetch(`https://127.0.0.1:${String(port)}/`, {
+        headers: { host: 'imp.test' },
+        tls: { rejectUnauthorized: false },
+      }),
+    ).rejects.toThrow();
+  });
 });
 
-test('a public imp without auth is served, and plain http redirects to port 443', async () => {
-  const ctx = await setupPublic();
+test('it logs an address it cannot bind once', async () => {
+  const ctx = await setupTest();
 
-  await ctx.updateWebExposure('none');
+  // a process that is not impd holds the HTTPS port on loopback
+  const squatter = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('') });
 
-  const response = await readTls(ctx.ports.https, `web.${DOMAIN}`, '/x');
-  const body: unknown = await response.json();
+  ctx.stack.defer(() => squatter.stop(true));
 
-  expect(body).toMatchObject({ path: '/x', proto: 'https', host: `web.${DOMAIN}` });
+  const logs: string[] = [];
 
-  const redirect = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/a?b=c`, {
-    headers: { host: `web.${DOMAIN}` },
-    redirect: 'manual',
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: squatter.port ?? 0,
+    httpPort: 0,
+    log: (message) => {
+      logs.push(message);
+    },
+    scope: { kind: 'tailnet' },
   });
 
-  expect(redirect.status).toBe(308);
-  expect(redirect.headers.get('location')).toBe(`https://web.${DOMAIN}/a?b=c`);
+  ctx.stack.defer(() => listeners.stop());
 
-  // the bare domain is impd's API on the tailnet, never on the internet
-  const apex = await readTls(ctx.ports.https, DOMAIN);
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
-  expect(apex.status).toBe(404);
+  listeners.setCertificate(certificate);
+  listeners.setAddresses(['127.0.0.1']);
+  listeners.setAddresses(['127.0.0.1']);
+
+  expect(logs.filter((line) => line.includes('cannot listen'))).toStrictEqual([
+    expect.toStartWith(`impd: https: cannot listen on 127.0.0.1:${String(squatter.port)}: `),
+  ]);
 });
 
-test('a token imp asks for its token before the wake, and never forwards it', async () => {
-  const ctx = await setupPublic();
+test('it binds an address it could not bind once the port is free, and says so', async () => {
+  const ctx = await setupTest();
 
-  await ctx.updateWebExposure('token');
-  await ctx.sleepWeb();
+  // a process that is not impd holds the HTTPS port on loopback, for a while
+  const squatter = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('') });
 
-  for (const authorization of [null, 'Bearer wrong', 'Basic c2VjcmV0LWNyZWRlbnRpYWw=']) {
-    const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
-      headers: {
-        host: `web.${DOMAIN}`,
-        ...(authorization !== null && { authorization }),
-      },
+  ctx.stack.defer(() => squatter.stop(true));
+
+  const port = squatter.port ?? 0;
+  const logs: string[] = [];
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: port,
+    httpPort: 0,
+    log: (message) => {
+      logs.push(message);
+    },
+    scope: { kind: 'tailnet' },
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+  listeners.setAddresses(['127.0.0.1']);
+
+  await squatter.stop(true);
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  expect(logs).toContain(`impd: https: listening on 127.0.0.1:${String(port)}`);
+});
+
+test.each([['web.imp.test'], ['WEB.imp.test.'], ['web.imp.test:443']])(
+  'it answers a tailnet-only imp on the public listener with the 404 for no imp, for Host %s',
+  async (host) => {
+    const ctx = await setupTest();
+
+    const listeners = createHttpsListeners({
+      proxy: ctx.proxy,
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      log: () => {},
+      scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+    });
+
+    ctx.stack.defer(() => listeners.stop());
+
+    await ctx.impd.imps.createImp({ name: 'web' });
+
+    listeners.setAddresses(['127.0.0.1']);
+
+    const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+    listeners.setCertificate(certificate);
+
+    const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+      headers: { host },
       tls: { rejectUnauthorized: false },
     });
 
-    expect({ authorization, status: response.status }).toEqual({ authorization, status: 401 });
-    expect(response.headers.get('www-authenticate')).toBe('Bearer realm="web", charset="UTF-8"');
-  }
+    expect(response.status).toBe(404);
 
-  const state = await ctx.readWebState();
+    const body = await response.text();
 
-  expect(state).toBe('sleeping');
+    expect(body).toInclude('No public imp here.');
+  },
+);
 
-  const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
-    headers: { host: `web.${DOMAIN}`, authorization: 'Bearer secret-credential' },
+test('it answers an imp that does not exist on the public listener with the same 404', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'nope.imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(404);
+
+  const body = await response.text();
+
+  expect(body).toInclude('No public imp here.');
+});
+
+test('it answers the bare domain on the public listener with the 404 for no imp', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(404);
+
+  const body = await response.text();
+
+  expect(body).toInclude('No public imp here.');
+});
+
+test('it answers plain http for a tailnet-only imp on the public listener with a 404', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  await ctx.impd.imps.createImp({ name: 'web' });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`http://127.0.0.1:${String(listeners.readPorts().http)}/`, {
+    headers: { host: 'web.imp.test' },
+    redirect: 'manual',
+  });
+
+  expect(response.status).toBe(404);
+});
+
+test('it wakes no tailnet-only imp for a request on the public listener', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  await ctx.impd.imps.createImp({ name: 'web' });
+  await ctx.impd.imps.sleepImp('web');
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'web.imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  await response.text();
+
+  const web = await findImpByName(ctx.db, 'web');
+
+  expect(web?.state).toBe('sleeping');
+});
+
+test('it serves a public imp without auth on the public listener', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: ctx.echo.port });
+
+  // the imp's address is the echo's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+
+  await updateImpExposure(ctx.db, imp.id, { auth: 'none', user: null, hash: null });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/x`, {
+    headers: { host: 'web.imp.test' },
     tls: { rejectUnauthorized: false },
   });
 
   const body: unknown = await response.json();
 
-  expect(response.status).toBe(200);
-  expect(body).toMatchObject({ host: `web.${DOMAIN}`, authorization: null });
+  expect(body).toStrictEqual({
+    path: '/x',
+    proto: 'https',
+    host: 'web.imp.test',
+    cookie: null,
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: 'web.imp.test',
+  });
 });
 
-test('a basic auth imp takes its user and password, and nothing else', async () => {
-  const ctx = await setupPublic();
+test('it redirects plain http for a public imp to port 443', async () => {
+  const ctx = await setupTest();
 
-  await ctx.updateWebExposure('basic');
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
 
-  const send = (credentials: string) =>
-    fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
-      headers: {
-        host: `web.${DOMAIN}`,
-        authorization: `Basic ${Buffer.from(credentials).toString('base64')}`,
-      },
-      tls: { rejectUnauthorized: false },
-    });
+  ctx.stack.defer(() => listeners.stop());
 
-  const wrongUser = await send('bob:secret-credential');
-  const wrongPassword = await send('ann:secret');
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
 
-  expect([wrongUser.status, wrongPassword.status]).toEqual([401, 401]);
-  expect(wrongUser.headers.get('www-authenticate')).toBe('Basic realm="web", charset="UTF-8"');
+  await updateImpExposure(ctx.db, imp.id, { auth: 'none', user: null, hash: null });
 
-  const right = await send('ann:secret-credential');
-  const body: unknown = await right.json();
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`http://127.0.0.1:${String(listeners.readPorts().http)}/a?b=c`, {
+    headers: { host: 'web.imp.test' },
+    redirect: 'manual',
+  });
+
+  expect(response.status).toBe(308);
+  expect(response.headers.get('location')).toBe('https://web.imp.test/a?b=c');
+});
+
+test.each([
+  ['no credential', null],
+  ['a wrong token', 'Bearer wrong'],
+  ['the token as basic auth', `Basic ${Buffer.from('secret-credential').toString('base64')}`],
+])('it asks a token imp’s caller for the token, given %s', async (_label, authorization) => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await updateImpExposure(ctx.db, imp.id, {
+    auth: 'token',
+    user: null,
+    hash: buildCredentialHash('secret-credential'),
+  });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'web.imp.test', ...(authorization !== null && { authorization }) },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(401);
+  expect(response.headers.get('www-authenticate')).toBe('Bearer realm="web", charset="UTF-8"');
+});
+
+test('it wakes no token imp for a request without its token', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await updateImpExposure(ctx.db, imp.id, {
+    auth: 'token',
+    user: null,
+    hash: buildCredentialHash('secret-credential'),
+  });
+
+  await ctx.impd.imps.sleepImp('web');
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'web.imp.test', authorization: 'Bearer wrong' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  await response.text();
+
+  const web = await findImpByName(ctx.db, 'web');
+
+  expect(web?.state).toBe('sleeping');
+});
+
+test('it serves a token imp given its token, without passing the token on', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: ctx.echo.port });
+
+  // the imp's address is the echo's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+
+  await updateImpExposure(ctx.db, imp.id, {
+    auth: 'token',
+    user: null,
+    hash: buildCredentialHash('secret-credential'),
+  });
+
+  await ctx.impd.imps.sleepImp('web');
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'web.imp.test', authorization: 'Bearer secret-credential' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({ host: 'web.imp.test', authorization: null });
+});
+
+test.each([
+  ['another user', 'bob:secret-credential'],
+  ['a wrong password', 'ann:secret'],
+])('it asks a basic auth imp’s caller again, given %s', async (_label, credentials) => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await updateImpExposure(ctx.db, imp.id, {
+    auth: 'basic',
+    user: 'ann',
+    hash: buildCredentialHash('secret-credential'),
+  });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: {
+      host: 'web.imp.test',
+      authorization: `Basic ${Buffer.from(credentials).toString('base64')}`,
+    },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(response.status).toBe(401);
+  expect(response.headers.get('www-authenticate')).toBe('Basic realm="web", charset="UTF-8"');
+});
+
+test('it serves a basic auth imp given its user and password, without passing them on', async () => {
+  const ctx = await setupTest();
+
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
+
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: ctx.echo.port });
+
+  // the imp's address is the echo's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+
+  await updateImpExposure(ctx.db, imp.id, {
+    auth: 'basic',
+    user: 'ann',
+    hash: buildCredentialHash('secret-credential'),
+  });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: {
+      host: 'web.imp.test',
+      authorization: `Basic ${Buffer.from('ann:secret-credential').toString('base64')}`,
+    },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body: unknown = await response.json();
 
   expect(body).toMatchObject({ authorization: null });
 });
 
-test('plain http on the public listener takes no slot and no wake', async () => {
-  const ctx = await setupPublic();
+test('it takes no open slot and no wake for plain http on the public listener', async () => {
+  const ctx = await setupTest();
 
-  await ctx.updateWebExposure('none');
-  await ctx.sleepWeb();
+  const limits = createPublicLimits(() => 0);
 
-  // more than the 64 slots and the 10 wakes
-  for (let index = 0; index < 100; index += 1) {
-    const redirect = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/`, {
-      headers: { host: `web.${DOMAIN}` },
-      redirect: 'manual',
-    });
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), limits),
+  });
 
-    expect(redirect.status).toBe(308);
-  }
+  ctx.stack.defer(() => listeners.stop());
 
-  const id = ctx.readWebId();
-  const releases = Array.from({ length: 64 }, () => ctx.limits.tryOpen(id));
-  const wakes = Array.from({ length: 10 }, () => ctx.limits.tryWake(id));
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
 
-  expect(releases.every((release) => release !== null)).toBe(true);
-  expect(wakes.every(Boolean)).toBe(true);
+  await updateImpExposure(ctx.db, imp.id, { auth: 'none', user: null, hash: null });
 
-  for (const release of releases) {
-    release?.();
-  }
+  await ctx.impd.imps.sleepImp('web');
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  // more than the 64 open slots and the 10 wakes
+  const statuses = await Promise.all(
+    Array.from({ length: 100 }, async () => {
+      const response = await fetch(`http://127.0.0.1:${String(listeners.readPorts().http)}/`, {
+        headers: { host: 'web.imp.test' },
+        redirect: 'manual',
+      });
+
+      return response.status;
+    }),
+  );
+
+  const releases = Array.from({ length: 64 }, () => limits.tryOpen(imp.id));
+  const wakes = Array.from({ length: 10 }, () => limits.tryWake(imp.id));
+
+  expect(statuses).toSatisfyAll((status: number) => status === 308);
+  expect(releases).toSatisfyAll((release: (() => void) | null) => release !== null);
+  expect(wakes).toSatisfyAll((isWoken: boolean) => isWoken);
 });
 
-test('a WebSocket upgrade without the token gets a 401 and wakes nothing', async () => {
-  const ctx = await setupPublic();
+test('it answers a WebSocket upgrade without the token with a 401', async () => {
+  const ctx = await setupTest();
 
-  await ctx.updateWebExposure('token');
-  await ctx.sleepWeb();
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
 
-  const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await updateImpExposure(ctx.db, imp.id, {
+    auth: 'token',
+    user: null,
+    hash: buildCredentialHash('secret-credential'),
+  });
+
+  await ctx.impd.imps.sleepImp('web');
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
     headers: {
-      host: `web.${DOMAIN}`,
+      host: 'web.imp.test',
       connection: 'Upgrade',
       upgrade: 'websocket',
       'sec-websocket-version': '13',
@@ -553,20 +1271,44 @@ test('a WebSocket upgrade without the token gets a 401 and wakes nothing', async
     tls: { rejectUnauthorized: false },
   });
 
-  const state = await ctx.readWebState();
+  await response.text();
+
+  const web = await findImpByName(ctx.db, 'web');
 
   expect(response.status).toBe(401);
-  expect(state).toBe('sleeping');
+  expect(web?.state).toBe('sleeping');
 });
 
-test('the public listener names nothing in its errors, and resets X-Forwarded-For', async () => {
-  const ctx = await setupPublic();
+test('it replaces a public client’s forwarding headers with its own', async () => {
+  const ctx = await setupTest();
 
-  await ctx.updateWebExposure('none');
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
 
-  const forwarded = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+  ctx.stack.defer(() => listeners.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: ctx.echo.port });
+
+  // the imp's address is the echo's
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+
+  await updateImpExposure(ctx.db, imp.id, { auth: 'none', user: null, hash: null });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
     headers: {
-      host: `web.${DOMAIN}`,
+      host: 'web.imp.test',
       'x-forwarded-for': '198.51.100.9',
       forwarded: 'for=198.51.100.9;proto=http',
       'x-real-ip': '198.51.100.9',
@@ -576,34 +1318,52 @@ test('the public listener names nothing in its errors, and resets X-Forwarded-Fo
     tls: { rejectUnauthorized: false },
   });
 
-  const body: unknown = await forwarded.json();
+  const body: unknown = await response.json();
 
   expect(body).toMatchObject({
     forwardedFor: '127.0.0.1',
     forwarded: null,
     realIp: null,
-    forwardedHost: `web.${DOMAIN}`,
+    forwardedHost: 'web.imp.test',
     proto: 'https',
   });
-
-  await ctx.breakWeb();
-
-  const broken = await readTls(ctx.ports.https, `web.${DOMAIN}`);
-  const page = await broken.text();
-
-  expect(broken.status).toBe(502);
-  expect(page).toContain('This site did not answer.');
-  expect(page).not.toContain('port 1');
 });
 
-async function waitUntil(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
+test('it names neither the imp’s port nor the error on the public listener when the imp does not answer', async () => {
+  const ctx = await setupTest();
 
-  while (!check()) {
-    if (Date.now() > deadline) {
-      throw new Error('timed out');
-    }
+  const listeners = createHttpsListeners({
+    proxy: ctx.proxy,
+    domain: 'imp.test',
+    httpsPort: 0,
+    httpPort: 0,
+    log: () => {},
+    scope: createPublicScope((name) => findPublicImp(ctx.db, name), createPublicLimits()),
+  });
 
-    await Bun.sleep(10);
-  }
-}
+  ctx.stack.defer(() => listeners.stop());
+
+  // nothing listens on port 1 of loopback
+  const imp = await ctx.impd.imps.createImp({ name: 'web', httpPort: 1 });
+
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+
+  await updateImpExposure(ctx.db, imp.id, { auth: 'none', user: null, hash: null });
+
+  listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  listeners.setCertificate(certificate);
+
+  const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
+    headers: { host: 'web.imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const page = await response.text();
+
+  expect(response.status).toBe(502);
+  expect(page).toInclude('This site did not answer.');
+  expect(page).not.toInclude('port 1');
+});
