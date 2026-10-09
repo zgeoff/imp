@@ -5,8 +5,11 @@ test('it appends the path to a bare base', () => {
   expect(resolveImpdUrl('http://localhost:7070', '/rpc').href).toBe('http://localhost:7070/rpc');
 });
 
-test('it keeps a path prefix, with or without a trailing slash', () => {
+test('it keeps a path prefix without a trailing slash', () => {
   expect(resolveImpdUrl('https://host/imp', '/exec').href).toBe('https://host/imp/exec');
+});
+
+test('it keeps a path prefix with a trailing slash', () => {
   expect(resolveImpdUrl('https://host/imp/', '/exec').href).toBe('https://host/imp/exec');
 });
 

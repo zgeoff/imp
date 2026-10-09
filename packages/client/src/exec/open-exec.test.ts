@@ -1,329 +1,261 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CONSOLE_SHELL } from '@imp/api';
-import type { SessionOutput } from '@imp/api';
-import { AgentError } from '@imp/daemon/src/agent-client/agent-connection';
-import type {
-  AgentAttachRequest,
-  AgentExecRequest,
-  ExecEvent,
-  ExecStream,
-} from '@imp/daemon/src/agent-client/exec-stream';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import type { ImpdDeps } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
+import {
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
+import { server } from '@imp/test-utils/mock-server';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/client';
+import { http } from 'msw';
 import { createImpClient } from '../create-imp-client';
+import {
+  STUB_BOOT_ID,
+  STUB_FLOOD_BYTES,
+  STUB_GENERATION,
+  buildStubExecAgent,
+} from '../test-utils/build-stub-exec-agent';
+import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
 import { InvalidStateError } from './invalid-state-error';
 import { NoSessionError } from './no-session-error';
-import { openExecSession } from './open-exec-session';
-import { toExecError } from './to-exec-error';
 
-const BIG_BYTES = 512 * 1024;
-const GENERATION = 'd'.repeat(32);
-const COLD_BOOT = { bootId: 'boot-2', cause: 'recovery', at: '2026-10-03T00:00:00.000Z' } as const;
+// impd on stub VMs, listening on a loopback port for /exec, with the imp
+// `dev` and the stub agent on its vsock; also served at http://impd.test/
+// through the run's MSW server, so a test can answer as an older impd
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-const COUNTED_OUTPUT: SessionOutput = {
-  continuity: 'offsets',
-  bootId: 'boot-2',
-  executionGeneration: GENERATION,
-  bufferStart: 0,
-  end: 100,
-  offset: 95,
-  prelude: 0,
-  coldBoots: [COLD_BOOT],
-  resume: { kind: 'exact' },
-};
+  onTestFinished(() => stack.disposeAsync());
 
-// A guest agent for the fake VMs, by argv[0]: `cat` echoes stdin until EOF,
-// `fail` exits 3, `big` floods both streams, `tick` writes once, and `tick`,
-// `wait` or the console's shell runs until a signal or ^C or impd closes it.
-function buildFakeAgent() {
-  const requests: AgentExecRequest[] = [];
-  const input: string[] = [];
+  // impd boots with a root token, the bearer the test's client sends
+  const rootToken = 'root-token';
 
-  // the commands whose stream impd closed: the client went away
-  const closed: string[] = [];
+  const dataDir = await mkdtemp(join(tmpdir(), 'imp-client-exec-'));
 
-  const openExec = (_name: string, request: Readonly<AgentExecRequest>): Promise<ExecStream> => {
-    requests.push(request);
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-    if (request.argv[0] === 'nope') {
-      return Promise.reject(new AgentError('EXEC_FAILED', 'no such file'));
-    }
+  const db = await openDatabase(':memory:');
 
-    if (request.argv[0] === 'full') {
-      return Promise.reject(
-        new ORPCError('RAM_BUDGET_EXCEEDED', {
-          message: 'no room',
-          data: { budgetMib: 1024, usedMib: 900, requestedMib: 512 },
-        }),
-      );
-    }
+  stack.defer(() => db.destroy());
 
-    const command = request.argv[0] ?? '';
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
 
-    const stream = buildScriptedStream(command, (entry) => {
-      input.push(entry);
-    });
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
 
-    return Promise.resolve({
-      ...stream,
-      session: request.session ?? null,
-      created: request.session !== undefined,
+  // the image `dev` boots
+  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-      // an agent that runs `old` predates the group kill
-      groupKill: request.killGraceMs !== undefined && command !== 'old',
-      close: () => {
-        closed.push(command);
-      },
-    });
-  };
-
-  // `main` runs: its replay, then `taken` detaches the attach as another
-  // client would; any other session is not there
-  const attaches: AgentAttachRequest[] = [];
-
-  const openAttach = (
-    _name: string,
-    request: Readonly<AgentAttachRequest>,
-  ): Promise<ExecStream> => {
-    attaches.push(request);
-
-    if (request.wake === false) {
-      return Promise.reject(
-        new ORPCError('INVALID_STATE', {
-          message: 'cannot attach without a wake to an imp that is sleeping',
-          data: { state: 'sleeping', allowed: ['running'], coldBoots: [COLD_BOOT] },
-        }),
-      );
-    }
-
-    if ((request.resumeFrom?.offset ?? 0) > 100) {
-      return Promise.reject(
-        new AgentError('INVALID_RESUME', 'past the end', { end: 100, bufferStart: 0 }),
-      );
-    }
-
-    if (request.session === 'counted') {
-      return Promise.resolve({
-        ...buildScriptedStream('counted', (entry) => {
-          input.push(entry);
-        }),
-        session: 'counted',
-        output: COUNTED_OUTPUT,
-      });
-    }
-
-    if (request.session === 'ended') {
-      return Promise.reject(
-        new AgentError('NO_SESSION', 'no session "ended"', {
-          bootId: 'boot-2',
-          coldBoots: [COLD_BOOT],
-          previous: { executionGeneration: GENERATION, end: 100, exitCode: 0 },
-        }),
-      );
-    }
-
-    if (request.session !== 'main') {
-      return Promise.reject(new AgentError('NO_SESSION', `no session "${request.session}"`));
-    }
-
-    const stream = buildScriptedStream('attach', (entry) => {
-      input.push(entry);
-    });
-
-    return Promise.resolve({
-      ...stream,
-      session: 'main',
-      created: false,
-      close: () => {
-        closed.push('attach main');
-      },
-    });
-  };
-
-  return { openExec, openAttach, requests, attaches, input, closed };
-}
-
-interface EventQueue {
-  readonly events: ExecEvent[];
-  wake: (() => void) | null;
-}
-
-function buildScriptedStream(command: string, record: (entry: string) => void): ExecStream {
-  const queue: EventQueue = { events: [], wake: null };
-
-  const encoder = new TextEncoder();
-
-  const emitEvent = (event: ExecEvent): void => {
-    queue.events.push(event);
-    queue.wake?.();
-  };
-
-  const emitText = (type: 'stdout' | 'stderr', text: string): void => {
-    emitEvent({ type, data: encoder.encode(text) });
-  };
-
-  if (command === 'fail') {
-    emitText('stdout', 'out');
-    emitText('stderr', 'err');
-    emitEvent({ type: 'exit', code: 3, signal: 0 });
-  }
-
-  if (command === 'attach') {
-    emitText('stdout', 'replay');
-  }
-
-  if (command === 'tick') {
-    emitText('stdout', 'tick');
-  }
-
-  // a resume: the tail after offset 95, then the exit
-  if (command === 'counted') {
-    emitText('stdout', 'tail!');
-    emitEvent({ type: 'exit', code: 0, signal: 0 });
-  }
-
-  if (command === 'big') {
-    for (let sent = 0; sent < BIG_BYTES; sent += 16_384) {
-      emitEvent({ type: 'stdout', data: new Uint8Array(16_384).fill(111) });
-      emitEvent({ type: 'stderr', data: new Uint8Array(16_384).fill(101) });
-    }
-
-    emitEvent({ type: 'exit', code: 0, signal: 0 });
-  }
-
-  const waitForEvent = async (): Promise<ExecEvent> => {
-    for (;;) {
-      const event = queue.events.shift();
-
-      if (event !== undefined) {
-        return event;
-      }
-
-      await new Promise<void>((resolve) => {
-        queue.wake = resolve;
-      });
-    }
-  };
-
-  return {
-    pid: 42,
-    session: null,
-    created: false,
-    groupKill: false,
-    output: null,
-    writeStdin: (data) => {
-      const text = new TextDecoder().decode(data);
-
-      record(text);
-
-      if (command === 'cat') {
-        emitText('stdout', text);
-      }
-
-      if ((command === 'wait' || command === '/bin/sh') && text.includes('\u0003')) {
-        emitEvent({ type: 'exit', code: 130, signal: 2 });
-      }
-
-      if (command === 'attach' && text === 'taken') {
-        emitEvent({ type: 'detached', reason: 'taken_over' });
-      }
-    },
-    stdinDrained: () => Promise.resolve(),
-    closeStdin: () => {
-      record('eof');
-
-      if (command === 'cat') {
-        emitEvent({ type: 'exit', code: 0, signal: 0 });
-      }
-    },
-    resize: (cols, rows) => {
-      record(`resize:${String(cols)}x${String(rows)}`);
-    },
-    sendSignal: (signal) => {
-      record(`signal:${String(signal)}`);
-      emitEvent({ type: 'exit', code: 128 + signal, signal });
-    },
-    events: () => readUntilExit(waitForEvent),
-    close: () => {},
-  };
-}
-
-async function* readUntilExit(
-  next: () => Promise<ExecEvent>,
-): AsyncGenerator<ExecEvent, void, undefined> {
-  for (;;) {
-    const event = await next();
-
-    yield event;
-
-    if (event.type === 'exit' || event.type === 'detached') {
-      return;
-    }
-  }
-}
-
-// impd's app on a real port, with the fake agent, and a client that opens
-// `/exec` with a ticket and no header, as a browser or Node does
-async function setupExecTest() {
-  const harness = await setupImpTest();
-
-  const agent = buildFakeAgent();
-
-  const built = buildTestApp(harness, harness, TEST_TOKEN, {
-    openExec: agent.openExec,
-    openAttach: agent.openAttach,
+  await createImage(db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
   });
 
-  const server = built.app.listen(0);
-  const port = String(server.server?.port);
-  const client = createImpClient({ url: `http://127.0.0.1:${port}`, token: TEST_TOKEN });
+  const vmm = buildStubVmm();
 
-  await harness.createTestImage('ubuntu');
-  await client.imps.create({ name: 'dev' });
+  // an agent with sessions, kill graces and session logs
+  vmm.agent.version = '0.18.0';
 
-  return {
-    ...harness,
-    ...agent,
-    client,
-    url: `http://127.0.0.1:${port}`,
-    closeExecSessions: built.closeExecSessions,
-    async [Symbol.asyncDispose]() {
-      await server.stop(true);
-      await harness[Symbol.asyncDispose]();
+  const deps: ImpdDeps = {
+    db,
+
+    rootToken,
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
     },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: () => {},
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   };
+
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+  });
+
+  const impd = await createImpd(config, deps);
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+    impd.diskUsage.stop();
+  });
+
+  impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  stack.defer(async () => {
+    await impd.api.app.stop(true);
+  });
+
+  server.use(http.all('http://impd.test/*', (info) => impd.api.app.handle(info.request)));
+
+  const url = `http://127.0.0.1:${String(impd.api.app.server?.port)}`;
+  const client = createImpClient({ url, token: rootToken });
+
+  // the imp every exec runs in, and its agent
+  const dev = await client.imps.create({ name: 'dev' });
+
+  const agent = buildStubExecAgent();
+
+  const agentServer = await startStubAgent(
+    buildImpPaths(dataDir, dev.id).vsockSocket,
+    agent.readFrame,
+  );
+
+  stack.defer(() => {
+    agentServer.close();
+  });
+
+  return { impd, url, client, agent, rootToken };
 }
 
-const decoder = new TextDecoder();
-
-test('run collects both streams and the exit code', async () => {
-  await using ctx = await setupExecTest();
-
+test('#runCommand collects both streams and the exit code', async () => {
+  const ctx = await setupTest();
   const result = await ctx.client.run('dev', ['fail']);
 
-  expect(result.code).toBe(3);
-  expect(result.signal).toBeNull();
-  expect(decoder.decode(result.stdout)).toBe('out');
-  expect(decoder.decode(result.stderr)).toBe('err');
+  expect(result).toStrictEqual({
+    code: 3,
+    signal: null,
+    stdout: new TextEncoder().encode('out'),
+    stderr: new TextEncoder().encode('err'),
+  });
 });
 
-test('run sends stdin, closes it, and drains both streams at once', async () => {
-  await using ctx = await setupExecTest();
+test('#runCommand sends its stdin and closes it', async () => {
+  const ctx = await setupTest();
+  const result = await ctx.client.run('dev', ['cat'], { stdin: 'hello', cwd: '/srv' });
 
-  const echoed = await ctx.client.run('dev', ['cat'], { stdin: 'hello', cwd: '/srv' });
-  const flood = await ctx.client.run('dev', ['big']);
-
-  expect(decoder.decode(echoed.stdout)).toBe('hello');
-  expect(ctx.input.slice(0, 2)).toEqual(['hello', 'eof']);
-  expect(ctx.requests[0]).toMatchObject({ argv: ['cat'], tty: false, cwd: '/srv' });
-  expect([flood.stdout.byteLength, flood.stderr.byteLength]).toEqual([BIG_BYTES, BIG_BYTES]);
+  expect(new TextDecoder().decode(result.stdout)).toBe('hello');
+  expect(ctx.agent.input).toStrictEqual(['hello', 'eof']);
+  expect(ctx.agent.requests).toMatchObject([{ argv: ['cat'], tty: false, cwd: '/srv' }]);
 });
 
-test('openExec streams stdout as the command writes it', async () => {
-  await using ctx = await setupExecTest();
+test('#runCommand drains both streams at once', async () => {
+  const ctx = await setupTest();
+  const result = await ctx.client.run('dev', ['big']);
 
+  expect(result.stdout).toStrictEqual(new Uint8Array(STUB_FLOOD_BYTES).fill(111));
+  expect(result.stderr).toStrictEqual(new Uint8Array(STUB_FLOOD_BYTES).fill(101));
+});
+
+test('#runCommand sends a stdin over 16 MiB in frames impd takes', async () => {
+  const ctx = await setupTest();
+
+  // impd, as Bun serves it, closes a socket that sends one frame over 16 MiB
+  const stdin = 'a'.repeat(17 * 1024 ** 2);
+
+  const result = await ctx.client.run('dev', ['cat'], { stdin });
+
+  expect(result.code).toBe(0);
+  expect(result.stdout).toHaveLength(stdin.length);
+});
+
+// a fast command over a slow link: its exit can arrive with its start
+test('#runCommand returns the exit and output of a command that exits as it starts', async () => {
+  const ctx = await setupTest();
+  const result = await ctx.client.run('dev', ['fail'], { stdin: 'unread' });
+
+  expect(result).toStrictEqual({
+    code: 3,
+    signal: null,
+    stdout: new TextEncoder().encode('out'),
+    stderr: new TextEncoder().encode('err'),
+  });
+});
+
+test('#runCommand rejects with the agent code of a command that cannot start', async () => {
+  const ctx = await setupTest();
+
+  const running = ctx.client.run('dev', ['nope']);
+
+  expect(running).rejects.toBeInstanceOf(ExecError);
+  expect(running).rejects.toMatchObject({ code: 'EXEC_FAILED' });
+});
+
+test('#runCommand rejects with NOT_FOUND for an imp that does not exist', async () => {
+  const ctx = await setupTest();
+
+  // the ticket is refused before any socket opens
+  const running = ctx.client.run('ghost', ['cat']);
+
+  expect(running).rejects.toBeInstanceOf(ORPCError);
+  expect(running).rejects.toMatchObject({ code: 'NOT_FOUND' });
+});
+
+test('#openExec streams stdout as the command writes it', async () => {
+  const ctx = await setupTest();
   const handle = await ctx.client.openExec('dev', ['cat']);
 
   const reader = handle.stdout.getReader();
@@ -339,16 +271,261 @@ test('openExec streams stdout as the command writes it', async () => {
   await handle.closeStdin();
 
   const exit = await handle.exit;
-  const started = await handle.started;
 
-  expect([decoder.decode(first.value), decoder.decode(second.value)]).toEqual(['one', 'two']);
-  expect(exit).toEqual({ code: 0, signal: null });
-  expect(started.pid).toBe(42);
+  expect(first.value).toStrictEqual(new TextEncoder().encode('one'));
+  expect(second.value).toStrictEqual(new TextEncoder().encode('two'));
+  expect(exit).toStrictEqual({ code: 0, signal: null });
 });
 
-test('openConsole opens a login shell with a tty, and ^C goes as a key', async () => {
-  await using ctx = await setupExecTest();
+test('#openExec sends a signal as a signal without a tty', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait']);
 
+  await handle.started;
+
+  handle.sendSignal('SIGTERM');
+
+  const exit = await handle.exit;
+
+  expect(ctx.agent.input).toStrictEqual(['signal:15']);
+  expect(exit).toStrictEqual({ code: null, signal: 'SIGTERM' });
+});
+
+test('#openExec rejects with RESTARTING when impd closes the session for a restart', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait']);
+
+  await handle.started;
+
+  ctx.impd.api.closeExecSessions();
+
+  expect(handle.exit).rejects.toMatchObject({ code: 'RESTARTING' });
+});
+
+test('#openExec ends the session and its streams on close', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait']);
+
+  await handle.started;
+
+  handle.close();
+
+  const rest = await handle.stdout.getReader().read();
+
+  expect(handle.exit).rejects.toMatchObject({ code: 'CLOSED' });
+  expect(rest.done).toBeTrue();
+});
+
+test('#openExec ends the session on an abort once the command runs', async () => {
+  const ctx = await setupTest();
+
+  const abort = new AbortController();
+
+  const handle = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
+
+  await handle.started;
+
+  abort.abort();
+
+  expect(handle.exit).rejects.toMatchObject({ code: 'CLOSED' });
+});
+
+test('#openExec rejects with an AbortError for an abort during the connect', async () => {
+  const ctx = await setupTest();
+
+  const abort = new AbortController();
+
+  const handle = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
+
+  abort.abort();
+
+  const rest = await handle.stdout.getReader().read();
+
+  expect(handle.started).rejects.toMatchObject({ name: 'AbortError' });
+  expect(handle.exit).rejects.toBe(Bun.peek(handle.started));
+  expect(rest.done).toBeTrue();
+});
+
+test('#openExec rejects with the reason of an abort during the connect', async () => {
+  const ctx = await setupTest();
+
+  const abort = new AbortController();
+  const reason = new Error('gave up');
+
+  const handle = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
+
+  abort.abort(reason);
+
+  expect(handle.exit).rejects.toBe(reason);
+});
+
+test('#openExec ends a session whose unread output passes maxUnreadBytes', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['big'], { maxUnreadBytes: 64 * 1024 });
+
+  expect(handle.exit).rejects.toBeInstanceOf(ExecError);
+  expect(handle.exit).rejects.toMatchObject({ code: 'OUTPUT_OVERFLOW' });
+});
+
+test('#openExec stops the command after a break out of the output loop and a cancelled stderr', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['tick']);
+
+  const chunks: Uint8Array[] = [];
+
+  for await (const chunk of handle.stdout) {
+    chunks.push(chunk);
+    break;
+  }
+
+  await handle.stderr.cancel();
+
+  await waitFor(() => {
+    expect(ctx.agent.closed).toStrictEqual(['tick']);
+  });
+
+  expect(chunks).toStrictEqual([new TextEncoder().encode('tick')]);
+  expect(handle.exit).rejects.toMatchObject({ code: 'CLOSED' });
+});
+
+test('#openExec answers started and exit with the same promise on every read', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['fail']);
+
+  const reads = [handle.started, handle.started, handle.exit, handle.exit];
+
+  await handle.exit;
+
+  expect(reads[0]).toBe(reads[1]);
+  expect(reads[2]).toBe(reads[3]);
+});
+
+test('#openExec rejects a write after the exit with CLOSED', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['fail']);
+
+  await handle.exit;
+
+  expect(handle.write('late')).rejects.toMatchObject({ code: 'CLOSED' });
+});
+
+test('#openExec does nothing when closing the stdin of a command that already exited', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['fail']);
+
+  await handle.exit;
+
+  expect(handle.closeStdin()).resolves.toBeUndefined();
+});
+
+test('#openExec rejects a write after the session failed with why it failed', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait']);
+
+  await handle.started;
+
+  ctx.impd.api.closeExecSessions();
+
+  await handle.exit.catch(() => null);
+
+  expect(handle.write('late')).rejects.toMatchObject({ code: 'RESTARTING' });
+});
+
+test('#openExec resolves a close of the stdin after the session failed', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait']);
+
+  await handle.started;
+
+  ctx.impd.api.closeExecSessions();
+
+  await handle.exit.catch(() => null);
+
+  expect(handle.closeStdin()).resolves.toBeUndefined();
+});
+
+test('#openExec passes a kill grace to the agent and reports that it kills the group', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait'], { killGraceMs: 2000 });
+  const started = await handle.started;
+
+  handle.close();
+
+  await handle.exit.catch(() => null);
+
+  expect(started.groupKill).toBeTrue();
+  expect(ctx.agent.requests).toMatchObject([{ argv: ['wait'], kill_grace_ms: 2000 }]);
+});
+
+test('#openExec reports no group kill from an agent from before it', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['old'], { killGraceMs: 2000 });
+  const started = await handle.started;
+
+  handle.close();
+
+  await handle.exit.catch(() => null);
+
+  expect(started.groupKill).toBeFalse();
+});
+
+test('#openExec reports no group kill without a kill grace', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['wait']);
+  const started = await handle.started;
+
+  handle.close();
+
+  await handle.exit.catch(() => null);
+
+  expect(started.groupKill).toBeFalse();
+});
+
+test("#openExec starts a command that requires the broker with the broker's variables", async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+
+  const handle = await ctx.client.openExec('dev', ['fail'], { require: ['broker'] });
+
+  await handle.exit;
+
+  expect(ctx.agent.requests).toMatchObject([
+    {
+      argv: ['fail'],
+      env: expect.toSatisfyAny((entry: string) => entry.startsWith('HTTPS_PROXY=')),
+    },
+  ]);
+});
+
+test('#openExec starts nothing that requires anything on an impd without execRequire', async () => {
+  const ctx = await setupTest();
+
+  const older = buildStubImpdBeforeExecRequire((request) => ctx.impd.api.app.handle(request));
+
+  server.use(http.all('http://impd.test/*', (info) => older(info.request)));
+
+  const client = createImpClient({
+    url: 'http://impd.test/',
+    token: ctx.rootToken,
+    connect: (url) => new WebSocket(url.replace('ws://impd.test', ctx.url.replace('http', 'ws'))),
+  });
+
+  const handle = await client.openExec('dev', ['tick'], { require: ['broker'] });
+
+  expect(handle.exit).rejects.toBeInstanceOf(ExecError);
+
+  expect(handle.exit).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'impd_outdated' },
+  });
+
+  expect(ctx.agent.requests).toStrictEqual([]);
+});
+
+test('#openConsole opens a login shell with a tty, and sends ^C as a key', async () => {
+  const ctx = await setupTest();
   const shell = await ctx.client.openConsole('dev', { cols: 100, rows: 30 });
 
   await shell.started;
@@ -358,279 +535,22 @@ test('openConsole opens a login shell with a tty, and ^C goes as a key', async (
 
   const exit = await shell.exit;
 
-  expect(ctx.requests[0]).toMatchObject({
-    argv: ['/bin/sh', '-c', CONSOLE_SHELL],
-    tty: true,
-    env: ['TERM=xterm-256color'],
-    cols: 100,
-    rows: 30,
-  });
-
-  expect(ctx.input).toEqual(['resize:120x40', '\u0003']);
-  expect(exit).toEqual({ code: null, signal: 'SIGINT' });
-});
-
-test('without a tty, a signal goes as a signal', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['wait']);
-
-  await handle.started;
-
-  handle.sendSignal('SIGTERM');
-
-  const exit = await handle.exit;
-
-  expect(ctx.input).toEqual(['signal:15']);
-  expect(exit).toEqual({ code: null, signal: 'SIGTERM' });
-});
-
-test('an exec error keeps impd code and data', async () => {
-  await using ctx = await setupExecTest();
-
-  const notStarted = await ctx.client.run('dev', ['nope']).catch((error: unknown) => error);
-  const noRoom = await ctx.client.run('dev', ['full']).catch((error: unknown) => error);
-  const noImp = await ctx.client.run('ghost', ['cat']).catch((error: unknown) => error);
-
-  expect(notStarted).toBeInstanceOf(ExecError);
-  expect(notStarted).toMatchObject({ code: 'EXEC_FAILED' });
-
-  expect(noRoom).toMatchObject({
-    code: 'RAM_BUDGET_EXCEEDED',
-    data: { budgetMib: 1024, usedMib: 900, requestedMib: 512 },
-  });
-
-  // the ticket is refused before any socket opens
-  expect(noImp).toBeInstanceOf(ORPCError);
-  expect(noImp).toMatchObject({ code: 'NOT_FOUND' });
-});
-
-test('a session impd closes for a restart is RESTARTING', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['wait']);
-
-  await handle.started;
-
-  ctx.closeExecSessions();
-
-  const rejection = await handle.exit.catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'RESTARTING' });
-});
-
-test('close and an abort end the session and the streams', async () => {
-  await using ctx = await setupExecTest();
-
-  const closed = await ctx.client.openExec('dev', ['wait']);
-
-  await closed.started;
-
-  closed.close();
-
-  const abort = new AbortController();
-
-  const aborted = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
-
-  await aborted.started;
-
-  abort.abort();
-
-  const closedExit = await closed.exit.catch((error: unknown) => error);
-  const abortedExit = await aborted.exit.catch((error: unknown) => error);
-  const rest = await closed.stdout.getReader().read();
-
-  expect(closedExit).toMatchObject({ code: 'CLOSED' });
-  expect(abortedExit).toMatchObject({ code: 'CLOSED' });
-  expect(rest.done).toBeTrue();
-});
-
-test('an abort during the connect rejects with an AbortError, as one during the ticket call does', async () => {
-  await using ctx = await setupExecTest();
-
-  const abort = new AbortController();
-
-  const handle = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
-
-  abort.abort();
-
-  const startError = await handle.started.catch((error: unknown) => error);
-  const exitError = await handle.exit.catch((error: unknown) => error);
-  const rest = await handle.stdout.getReader().read();
-
-  expect(startError).toMatchObject({ name: 'AbortError' });
-  expect(exitError).toBe(startError);
-  expect(rest.done).toBeTrue();
-
-  const reason = new Error('gave up');
-  const custom = new AbortController();
-
-  const second = await ctx.client.openExec('dev', ['wait'], { signal: custom.signal });
-
-  custom.abort(reason);
-
-  const secondError = await second.exit.catch((error: unknown) => error);
-
-  expect(secondError).toBe(reason);
-});
-
-test('a stream nobody reads ends the session past maxUnreadBytes', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['big'], { maxUnreadBytes: 64 * 1024 });
-  const rejection = await handle.exit.catch((error: unknown) => error);
-
-  expect(rejection).toBeInstanceOf(ExecError);
-  expect(rejection).toMatchObject({ code: 'OUTPUT_OVERFLOW' });
-});
-
-test('a break out of the output loop and a cancelled stderr stop the command', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['tick']);
-
-  for await (const chunk of handle.stdout) {
-    expect(decoder.decode(chunk)).toBe('tick');
-    break;
-  }
-
-  await handle.stderr.cancel();
-
-  const rejection = await handle.exit.catch((error: unknown) => error);
-
-  await waitUntil(() => ctx.closed.includes('tick'));
-
-  expect(rejection).toMatchObject({ code: 'CLOSED' });
-});
-
-test('started and exit are the same promise on every read, and a late write is CLOSED', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['fail']);
-
-  expect(handle.exit).toBe(handle.exit);
-  expect(handle.started).toBe(handle.started);
-
-  await handle.exit;
-
-  const rejection = await handle.write('late').catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'CLOSED' });
-});
-
-// a command whose exit arrives with its start, as a fast one over a slow
-// link does: run must still return its exit and output (atc #273)
-test('closing the stdin of a command that already exited does nothing, and run still returns', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['fail']);
-
-  await handle.exit;
-
-  await handle.closeStdin();
-
-  const late = await ctx.client.run('dev', ['fail'], { stdin: 'unread' });
-
-  expect(late.code).toBe(3);
-  expect(decoder.decode(late.stdout)).toBe('out');
-  expect(decoder.decode(late.stderr)).toBe('err');
-});
-
-// impd, as Bun serves it, closes a socket that sends one frame over 16 MiB
-// (atc #273: an 88 MB tar on stdin)
-test('run sends a stdin over 16 MiB in frames impd takes', async () => {
-  await using ctx = await setupExecTest();
-
-  const stdin = 'a'.repeat(17 * 1024 ** 2);
-
-  const result = await ctx.client.run('dev', ['cat'], { stdin });
-
-  const writes = ctx.input.filter((entry) => entry !== 'eof');
-
-  expect(result.code).toBe(0);
-  expect(result.stdout.byteLength).toBe(stdin.length);
-  expect(Math.max(...writes.map((entry) => entry.length))).toBeLessThanOrEqual(1024 ** 2);
-});
-
-test('a write after the session failed rejects with why it failed, not CLOSED', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['wait']);
-
-  await handle.started;
-
-  ctx.closeExecSessions();
-
-  await handle.exit.catch(() => null);
-
-  const rejections = await Promise.all([
-    handle.write('late').catch((error: unknown) => error),
-    handle.closeStdin().catch((error: unknown) => error),
+  expect(ctx.agent.requests).toMatchObject([
+    {
+      argv: ['/bin/sh', '-c', CONSOLE_SHELL],
+      tty: true,
+      env: ['TERM=xterm-256color'],
+      cols: 100,
+      rows: 30,
+    },
   ]);
 
-  expect(rejections[0]).toMatchObject({ code: 'RESTARTING' });
-  expect(rejections[1]).toBeUndefined();
+  expect(ctx.agent.input).toStrictEqual(['resize:120x40', '\u0003']);
+  expect(exit).toStrictEqual({ code: null, signal: 'SIGINT' });
 });
 
-test('a refused ticket with a good token is UNAUTHORIZED and names the ticket', async () => {
-  await using ctx = await setupExecTest();
-
-  const session = openExecSession({
-    baseUrl: ctx.url,
-    token: TEST_TOKEN,
-    ticket: 'used.ticket',
-    start: { name: 'dev', argv: ['cat'], tty: false },
-    onStarted: () => {},
-    onOutput: () => {},
-    connect: (url) => new WebSocket(url),
-  });
-
-  const outcome = await session.outcome;
-
-  expect(outcome).toEqual({ kind: 'unauthorized', ticketRefused: true });
-
-  if (outcome.kind === 'unauthorized') {
-    expect(toExecError(outcome).message).toContain('exec ticket');
-  }
-});
-
-// Node's WebSocket fires `error` and no `close` for a refused upgrade
-function openSocketWithoutClose(url: string): WebSocket {
-  const socket = new WebSocket(url);
-
-  const listen = socket.addEventListener.bind(socket);
-
-  Object.defineProperty(socket, 'addEventListener', {
-    value: (type: string, listener: EventListener) => {
-      if (type !== 'close') {
-        listen(type, listener);
-      }
-    },
-  });
-
-  return socket;
-}
-
-test('a refused upgrade reported by an error alone is still UNAUTHORIZED', async () => {
-  await using ctx = await setupExecTest();
-
-  const session = openExecSession({
-    baseUrl: ctx.url,
-    token: 'not-the-token',
-    start: { name: 'dev', argv: ['cat'], tty: false },
-    onStarted: () => {},
-    onOutput: () => {},
-    connect: openSocketWithoutClose,
-  });
-
-  const outcome = await session.outcome;
-
-  expect(outcome).toEqual({ kind: 'unauthorized' });
-});
-
-test('openConsole with a session starts it and reports it', async () => {
-  await using ctx = await setupExecTest();
-
+test('#openConsole starts the session it names and reports it', async () => {
+  const ctx = await setupTest();
   const handle = await ctx.client.openConsole('dev', { session: 'main', cols: 100, rows: 30 });
   const started = await handle.started;
 
@@ -638,7 +558,7 @@ test('openConsole with a session starts it and reports it', async () => {
 
   await handle.exit.catch(() => null);
 
-  expect(started).toEqual({
+  expect(started).toStrictEqual({
     pid: 42,
     session: 'main',
     created: true,
@@ -646,324 +566,11 @@ test('openConsole with a session starts it and reports it', async () => {
     output: { continuity: 'none' },
   });
 
-  expect(ctx.requests[0]).toMatchObject({ tty: true, session: 'main', cols: 100, rows: 30 });
+  expect(ctx.agent.requests).toMatchObject([{ tty: true, session: 'main', cols: 100, rows: 30 }]);
 });
 
-test('openAttach streams the replay and rejects with DETACHED on a takeover', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openAttach('dev', 'main', { cols: 80, rows: 24 });
-
-  const reader = handle.stdout.getReader();
-
-  const first = await reader.read();
-
-  await handle.write('taken');
-
-  const failure = await handle.exit.catch((error: unknown) => error);
-
-  expect(decoder.decode(first.value)).toBe('replay');
-  expect(ctx.attaches).toEqual([{ session: 'main', cols: 80, rows: 24 }]);
-  expect(failure).toBeInstanceOf(ExecError);
-  expect(failure).toMatchObject({ code: 'DETACHED', data: { reason: 'taken_over' } });
-});
-
-test('openAttach to no such session fails with the agent code', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openAttach('dev', 'gone');
-  const failure = await handle.exit.catch((error: unknown) => error);
-
-  expect(failure).toBeInstanceOf(NoSessionError);
-  expect(failure).toMatchObject({ code: 'NO_SESSION', data: undefined });
-});
-
-test('openAttach with resumeFrom gets its place in the output and the offset at the exit', async () => {
-  await using ctx = await setupExecTest();
-
-  const resumeFrom = { executionGeneration: GENERATION, offset: 95 };
-
-  const handle = await ctx.client.openAttach('dev', 'counted', { resumeFrom });
-  const started = await handle.started;
-
-  const tail = await new Response(handle.stdout).text();
-
-  const exit = await handle.exit;
-
-  expect(ctx.attaches).toEqual([{ session: 'counted', resumeFrom }]);
-  expect(started.output).toEqual(COUNTED_OUTPUT);
-  expect(tail).toBe('tail!');
-  expect(exit).toEqual({ code: 0, signal: null, offset: 100 });
-});
-
-test('NO_SESSION, INVALID_STATE and INVALID_RESUME reject as typed errors with their data', async () => {
-  await using ctx = await setupExecTest();
-
-  const ended = await ctx.client.openAttach('dev', 'ended');
-  const noSession = await ended.exit.catch((error: unknown) => error);
-  const asleep = await ctx.client.openAttach('dev', 'main', { wake: false });
-  const invalidState = await asleep.exit.catch((error: unknown) => error);
-
-  const resumeFrom = { executionGeneration: GENERATION, offset: 101 };
-
-  const past = await ctx.client.openAttach('dev', 'main', { resumeFrom });
-  const invalidResume = await past.exit.catch((error: unknown) => error);
-
-  expect(noSession).toBeInstanceOf(NoSessionError);
-
-  expect(noSession).toMatchObject({
-    data: {
-      bootId: 'boot-2',
-      coldBoots: [COLD_BOOT],
-      previous: { executionGeneration: GENERATION, end: 100, exitCode: 0 },
-    },
-  });
-
-  expect(invalidState).toBeInstanceOf(InvalidStateError);
-
-  expect(invalidState).toMatchObject({
-    data: { state: 'sleeping', allowed: ['running'], coldBoots: [COLD_BOOT] },
-  });
-
-  expect(invalidResume).toBeInstanceOf(InvalidResumeError);
-  expect(invalidResume).toMatchObject({ data: { end: 100, bufferStart: 0 } });
-});
-
-async function waitUntil(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
-
-  while (!check()) {
-    if (Date.now() > deadline) {
-      throw new Error('timed out');
-    }
-
-    await Bun.sleep(5);
-  }
-}
-
-test('a kill grace reaches the agent, and started says whether it kills the group', async () => {
-  await using ctx = await setupExecTest();
-
-  for (const [command, groupKill] of [
-    ['wait', true],
-    ['old', false],
-  ] as const) {
-    const handle = await ctx.client.openExec('dev', [command], { killGraceMs: 2000 });
-    const started = await handle.started;
-
-    handle.close();
-
-    await handle.exit.catch(() => null);
-
-    expect(started.groupKill).toBe(groupKill);
-  }
-
-  expect(ctx.requests.map((request) => request.killGraceMs)).toEqual([2000, 2000]);
-
-  const plain = await ctx.client.openExec('dev', ['wait']);
-  const plainStarted = await plain.started;
-
-  expect(plainStarted.groupKill).toBe(false);
-
-  plain.close();
-
-  await plain.exit.catch(() => null);
-});
-
-// an impd from before offsets sends no output: the client reads it as none
-test('a started without output, from an older impd, reads as continuity none', async () => {
-  using server = Bun.serve({
-    port: 0,
-    fetch: (request, bunServer) =>
-      bunServer.upgrade(request) ? undefined : new Response('no', { status: 400 }),
-    websocket: {
-      message: (ws) => {
-        ws.send(JSON.stringify({ type: 'started', pid: 5, session: 'main', created: false }));
-        ws.send(JSON.stringify({ type: 'exit', code: 0, signal: null }));
-      },
-    },
-  });
-
-  const started: unknown[] = [];
-
-  const session = openExecSession({
-    baseUrl: `http://127.0.0.1:${String(server.port)}`,
-    token: null,
-    start: { name: 'dev', session: 'main' },
-    onStarted: (info) => {
-      started.push(info);
-    },
-    onOutput: () => {},
-    connect: (url) => new WebSocket(url),
-  });
-
-  const outcome = await session.outcome;
-
-  expect(started).toEqual([
-    { pid: 5, session: 'main', created: false, groupKill: false, output: { continuity: 'none' } },
-  ]);
-
-  expect(outcome).toEqual({ kind: 'exit', code: 0, signal: null });
-});
-
-test('a start that requires the broker passes it to impd', async () => {
-  await using ctx = await setupExecTest();
-
-  const handle = await ctx.client.openExec('dev', ['fail'], { require: ['broker'] });
-
-  await handle.exit;
-
-  expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
-});
-
-// impd answers system.info as an older one would: execRequire is not true;
-// `calls` holds the path of each request
-function buildOlderFetch() {
-  const calls: string[] = [];
-
-  const readAsOlder = async (request: Request): Promise<Response> => {
-    const path = new URL(request.url).pathname;
-
-    calls.push(path);
-
-    const response = await fetch(request);
-
-    if (path !== '/rpc/system/info') {
-      return response;
-    }
-
-    const text = await response.text();
-
-    return new Response(text.replace('"execRequire":true', '"execRequire":false'), response);
-  };
-
-  return { calls, fetch: readAsOlder };
-}
-
-test('an impd without execRequire gets no start that requires anything', async () => {
-  await using ctx = await setupExecTest();
-
-  const older = buildOlderFetch();
-  const client = createImpClient({ url: ctx.url, token: TEST_TOKEN, fetch: older.fetch });
-
-  const handle = await client.openExec('dev', ['tick'], { require: ['broker'] });
-  const refused = await handle.exit.catch((error: unknown) => error);
-
-  expect(refused).toBeInstanceOf(ExecError);
-
-  expect(refused).toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    data: { reason: 'impd_outdated' },
-  });
-
-  expect(older.calls).toContain('/rpc/system/info');
-  expect(ctx.requests).toEqual([]);
-});
-
-test('a session opened directly asks impd before it sends a start that requires anything', async () => {
-  await using ctx = await setupExecTest();
-
-  const older = buildOlderFetch();
-
-  const session = openExecSession({
-    baseUrl: ctx.url,
-    token: TEST_TOKEN,
-    start: { name: 'dev', argv: ['tick'], tty: false, require: ['broker'] },
-    onStarted: () => {},
-    onOutput: () => {},
-    connect: (url, headers) => new WebSocket(url, { headers }),
-    fetch: older.fetch,
-  });
-
-  const outcome = await session.outcome;
-
-  expect(outcome).toMatchObject({
-    kind: 'failed',
-    code: 'PRECONDITION_FAILED',
-    data: { reason: 'impd_outdated' },
-  });
-
-  expect(older.calls).toEqual(['/rpc/system/info']);
-  expect(ctx.requests).toEqual([]);
-});
-
-test('a resize while a start that requires anything waits on impd goes after the start', async () => {
-  await using ctx = await setupExecTest();
-
-  const held: { session: ReturnType<typeof openExecSession> | null } = { session: null };
-
-  // the resize lands after the socket opened, while the feature check runs
-  const readResizing = (request: Request): Promise<Response> => {
-    held.session?.resize(100, 40);
-
-    return fetch(request);
-  };
-
-  held.session = openExecSession({
-    baseUrl: ctx.url,
-    token: TEST_TOKEN,
-    start: { name: 'dev', argv: ['fail'], tty: false, require: ['broker'] },
-    onStarted: () => {},
-    onOutput: () => {},
-    connect: (url, headers) => new WebSocket(url, { headers }),
-    fetch: readResizing,
-  });
-
-  const outcome = await held.session.outcome;
-
-  expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
-  expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
-});
-
-test('stdin held while a start that requires anything waits on impd counts toward backpressure', async () => {
-  await using ctx = await setupExecTest();
-
-  const held: { session: ReturnType<typeof openExecSession> | null } = { session: null };
-
-  const seen: { accepted: boolean | null; drainedEarly: boolean | null } = {
-    accepted: null,
-    drainedEarly: null,
-  };
-
-  // more than the high-water mark lands while the feature check runs
-  const readFlooding = async (request: Request): Promise<Response> => {
-    const session = held.session;
-
-    if (session !== null) {
-      seen.accepted = session.sendStdin(new Uint8Array(1_048_577));
-
-      seen.drainedEarly = await Promise.race([
-        session.waitForDrain().then(() => true),
-        new Promise<boolean>((resolve) => {
-          setTimeout(() => {
-            resolve(false);
-          }, 50);
-        }),
-      ]);
-    }
-
-    return fetch(request);
-  };
-
-  held.session = openExecSession({
-    baseUrl: ctx.url,
-    token: TEST_TOKEN,
-    start: { name: 'dev', argv: ['fail'], tty: false, require: ['broker'] },
-    onStarted: () => {},
-    onOutput: () => {},
-    connect: (url, headers) => new WebSocket(url, { headers }),
-    fetch: readFlooding,
-  });
-
-  const outcome = await held.session.outcome;
-
-  expect(seen).toEqual({ accepted: false, drainedEarly: false });
-  expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
-});
-
-test('a log reaches impd with the session that starts', async () => {
-  await using ctx = await setupExecTest();
-
+test('#openConsole asks impd for a log of the session it starts', async () => {
+  const ctx = await setupTest();
   const handle = await ctx.client.openConsole('dev', { session: 'main', log: true });
 
   await handle.started;
@@ -972,5 +579,106 @@ test('a log reaches impd with the session that starts', async () => {
 
   await handle.exit.catch(() => null);
 
-  expect(ctx.requests[0]).toMatchObject({ session: 'main', log: true });
+  expect(ctx.agent.requests).toMatchObject([{ session: 'main', log: true }]);
+});
+
+test('#openAttach streams the replay and rejects with DETACHED on a takeover', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openAttach('dev', 'main', { cols: 80, rows: 24 });
+  const first = await handle.stdout.getReader().read();
+
+  await handle.write('taken');
+
+  expect(first.value).toStrictEqual(new TextEncoder().encode('replay'));
+
+  expect(ctx.agent.requests).toStrictEqual([
+    { op: 'session.attach', session: 'main', cols: 80, rows: 24 },
+  ]);
+
+  expect(handle.exit).rejects.toBeInstanceOf(ExecError);
+  expect(handle.exit).rejects.toMatchObject({ code: 'DETACHED', data: { reason: 'taken_over' } });
+});
+
+test('#openAttach resumes at its place in the output and gives the offset at the exit', async () => {
+  const ctx = await setupTest();
+
+  const resumeFrom = { executionGeneration: STUB_GENERATION, offset: 95 };
+
+  const handle = await ctx.client.openAttach('dev', 'counted', { resumeFrom });
+  const started = await handle.started;
+
+  const tail = await new Response(handle.stdout).text();
+
+  const exit = await handle.exit;
+
+  expect(ctx.agent.requests).toStrictEqual([
+    {
+      op: 'session.attach',
+      session: 'counted',
+      resume_from: { execution_generation: STUB_GENERATION, offset: 95 },
+    },
+  ]);
+
+  expect(started.output).toStrictEqual({
+    continuity: 'offsets',
+    bootId: STUB_BOOT_ID,
+    executionGeneration: STUB_GENERATION,
+    bufferStart: 0,
+    end: 100,
+    offset: 95,
+    prelude: 0,
+    coldBoots: expect.toBeArrayOfSize(1),
+    resume: { kind: 'exact' },
+  });
+
+  expect(tail).toBe('tail!');
+  expect(exit).toStrictEqual({ code: 0, signal: null, offset: 100 });
+});
+
+test('#openAttach rejects a session that is not there as a NoSessionError without data', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openAttach('dev', 'gone');
+
+  expect(handle.exit).rejects.toBeInstanceOf(NoSessionError);
+  expect(handle.exit).rejects.toMatchObject({ code: 'NO_SESSION', data: undefined });
+});
+
+test('#openAttach rejects a session that ended as a NoSessionError with its data', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openAttach('dev', 'ended');
+
+  expect(handle.exit).rejects.toBeInstanceOf(NoSessionError);
+
+  expect(handle.exit).rejects.toMatchObject({
+    data: {
+      bootId: STUB_BOOT_ID,
+      coldBoots: [{ cause: expect.toBeString() }],
+      previous: { executionGeneration: STUB_GENERATION, end: 100, exitCode: 0 },
+    },
+  });
+});
+
+test('#openAttach rejects an attach without a wake to a sleeping imp as an InvalidStateError', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const handle = await ctx.client.openAttach('dev', 'main', { wake: false });
+
+  expect(handle.exit).rejects.toBeInstanceOf(InvalidStateError);
+
+  expect(handle.exit).rejects.toMatchObject({
+    data: { state: 'sleeping', allowed: ['running'], coldBoots: expect.toBeArray() },
+  });
+});
+
+test('#openAttach rejects a resume past the end as an InvalidResumeError with its data', async () => {
+  const ctx = await setupTest();
+
+  const resumeFrom = { executionGeneration: STUB_GENERATION, offset: 101 };
+
+  const handle = await ctx.client.openAttach('dev', 'main', { resumeFrom });
+
+  expect(handle.exit).rejects.toBeInstanceOf(InvalidResumeError);
+  expect(handle.exit).rejects.toMatchObject({ data: { end: 100, bufferStart: 0 } });
 });

@@ -17,7 +17,7 @@ the rules for writing tests live in the testing skill.
 
 | Run                     | Command                                                                | Needs                                                                                   |
 | ----------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Unit and package tests  | `bun test` at the root                                                 | Bun, bash, git, jq; the gated files below skip                                          |
+| Unit and package tests  | `bun test` at the root                                                 | Bun, bash, git, jq, tar, truncate, mkfs.ext4; the gated files below skip                |
 | Dashboard components    | `bun run test:dashboard`                                               | Nothing beyond Bun                                                                      |
 | Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; root-only tests skip                                            |
 | End to end              | `scripts/test-e2e.sh`                                                  | KVM, Docker; some suites need more (below)                                              |
@@ -339,54 +339,62 @@ this checkout whatever its `-C` says.
 
 Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/` or `packages/`.
 
-| Boundary             | Stand-in                                                                                           | What it replaces                                                                   |
-| -------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| VMM                  | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)                                                    | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step                          |
-| impd                 | `create-impd.ts` (`createImpd`) with stubs as its deps                                             | The host: see Booting impd below                                                   |
-| Governed imps        | `imps/test-imps.ts` (`setupImpTest`, `createImpTest`, `buildTestApp`)                              | A shim over createImpd's parts, without its start steps                            |
-| Firecracker API      | `Bun.serve({ unix })` (1); a Bun script (2)                                                        | Firecracker's HTTP API on its socket                                               |
-| Firecracker process  | `bash` run under the name `firecracker` (3)                                                        | A process whose cmdline matches Firecracker's                                      |
-| Guest agent          | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                                | The agent on the vsock socket: CONNECT and frames                                  |
-| Builder guest        | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                                | A builder's agent: output and exit per exec                                        |
-| zfs                  | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                                    | `zfs`, send and receive, and the mount table                                       |
-| Docker engine        | `test-utils/start-stub-docker-engine.ts` (4)                                                       | The engine API on its unix socket                                                  |
-| Docker CLI           | `test-utils/build-stub-docker-cli.ts` (`buildStubDockerCli`)                                       | The host's `docker` binary, first on `PATH`                                        |
-| Image builder        | `test-utils/build-stub-image-builder.ts` (`buildStubImageBuilder`)                                 | A builder's engine: pull, pin, build, create and export                            |
-| mkfs.ext4            | `test-utils/build-stub-image-mkfs.ts` (`buildStubImageMkfs`)                                       | `mkfs.ext4` held until the test releases or fails it                               |
-| Silent build engine  | `test-utils/start-stub-silent-build-engine.ts` (4)                                                 | An engine silent through a build's quiet RUN step                                  |
-| CLIs a script calls  | `scripts/test-utils/create-stub-bin.ts` (7)                                                        | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`                            |
-| Docker for upgrade   | `scripts/test-utils/build-stub-host-docker.ts`                                                     | The docker that `deploy/upgrade.sh` drives on a host                               |
-| Docker for dev.sh    | `scripts/test-utils/build-stub-dev-docker.ts`                                                      | The images, labels and containers `dev.sh prune` reads                             |
-| Registry for base    | `scripts/test-utils/build-stub-registry-docker.ts`                                                 | `docker buildx imagetools inspect` in the release Plan step                        |
-| impd for the client  | `packages/client/smoke/run-stub-impd.ts`                                                           | impd's app on loopback, run by `check-client-runtimes.sh`                          |
-| nft                  | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                               | `nft` from the egress service                                                      |
-| nft binary           | `test-utils/create-stub-nft-bin.ts` (`createStubNftBin`)                                           | The `nft` that `createNftRunner` spawns                                            |
-| Upstream DNS         | `test-utils/start-stub-dns-upstream.ts`                                                            | An IMP_DNS server over UDP and TCP, with chosen faults                             |
-| Egress for resolver  | `test-utils/build-stub-egress-service.ts`                                                          | The egress service as `createQueryHandler`'s deps                                  |
-| Host routes          | `test-utils/build-stub-host-routes.ts` (`buildStubHostRoutes`)                                     | The container's links and default routes egress reads                              |
-| Tunnel far end       | `test-utils/start-stub-echo-server.ts` (`startStubEchoServer`)                                     | A host a broker tunnel dials: it echoes and holds open                             |
-| ip and sysctl        | `buildFakeIp` in `net/tap-devices.test.ts`                                                         | `ip` and `sysctl -n`, as `createTapDevices`'s `run`                                |
-| mount                | A `run` with a mount table in `vmm/jail.test.ts`                                                   | `mount` and `umount` for the jailer                                                |
-| cgroups and `/proc`  | Temp dirs as `root` and `procRoot` (5)                                                             | The cgroup tree and `/proc`                                                        |
-| cgroups for impd     | `test-utils/build-stub-cpu-cgroups.ts`                                                             | `CpuCgroups`: an in-memory tree that records each change                           |
-| Imp guest agent      | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
-| Imp exec agent       | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                       | An imp's agent on its vsock socket, driving `buildStubExecGuest`                   |
-| tailscale CLI        | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                        | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                |
-| MCP upstream         | `test-utils/build-stub-mcp-transport.ts`                                                           | The `HttpTransport` to an imp's MCP server: calls held open until ended            |
-| tailscale whois      | A `whois` function passed to `createTailnetIdentities`                                             | `tailscale whois --json` (`runWhois`)                                              |
-| Connector upstreams  | `test-utils/start-stub-broker-tls-upstream.ts` (6); `test/e2e/lib/start-stub-upstream.ts`          | github.com, api.github.com, an OAuth token endpoint                                |
-| Git over SSH         | `test/e2e/lib/start-stub-git-ssh-server.ts` (`startStubGitSshServer`)                              | A forge's SSH git: one allowed key, push to `repo.git` only                        |
-| Cloudflare API       | A `server.use` MSW handler in `https/acme/acme-issuer.pebble.ts`                                   | `api.cloudflare.com/client/v4`                                                     |
-| Host networks        | `test-utils/build-stub-public-network.ts` (8)                                                      | Guests on taps, an uplink to the internet, a tailnet peer                          |
-| GitHub releases      | `packages/test-utils/src/start-stub-github-releases.ts` (9)                                        | The releases pages `install.sh` fetches with curl                                  |
-| gh and uname         | `packages/test-utils/src/create-stub-gh-attestation.ts`, `create-stub-uname.ts` (9)                | `gh auth status`, `gh attestation verify`, `uname -s -m`                           |
-| shasum and PATH      | `packages/test-utils/src/create-stub-shasum.ts`, `create-command-links.ts` (9)                     | macOS's `shasum -a 256`; a PATH of only the linked commands                        |
-| OAuth token endpoint | `test-utils/build-stub-broker-token-endpoint.ts` (11)                                              | A token endpoint: queued answers per refresh token                                 |
-| Rule upstreams       | Per-test MSW handlers in `broker/broker.test.ts`; `test-utils/start-stub-broker-plain-upstream.ts` | A secret rule's own `upstream` origin; the plain listener for the Host on the wire |
-| Guest's HTTPS tools  | `test-utils/build-stub-broker-guest.ts` (`curl`)                                                   | A guest's client through the broker's front port                                   |
-| Guest's CONNECT      | `test-utils/start-stub-broker-tunnel.ts`                                                           | A raw CONNECT a guest holds open through the front port                            |
-| Tunnel targets       | `test-utils/start-stub-broker-reply-target.ts`, `start-stub-broker-hold-target.ts`                 | The far end of a plain tunnel: a reply after the request, or a held socket         |
-| Guest's raw socket   | `test-utils/start-stub-broker-guest-socket.ts`                                                     | A guest's socket to the front port, read until it closes                           |
+| Boundary                     | Stand-in                                                                                           | What it replaces                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| VMM                          | `test-utils/build-stub-vmm.ts` (`buildStubVmm`)                                                    | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step                          |
+| impd                         | `create-impd.ts` (`createImpd`) with stubs as its deps                                             | The host: see Booting impd below                                                   |
+| Governed imps                | `imps/test-imps.ts` (`setupImpTest`, `createImpTest`, `buildTestApp`)                              | A shim over createImpd's parts, without its start steps                            |
+| Firecracker API              | `Bun.serve({ unix })` (1); a Bun script (2)                                                        | Firecracker's HTTP API on its socket                                               |
+| Firecracker process          | `bash` run under the name `firecracker` (3)                                                        | A process whose cmdline matches Firecracker's                                      |
+| Guest agent                  | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                                | The agent on the vsock socket: CONNECT and frames                                  |
+| Builder guest                | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                                | A builder's agent: output and exit per exec                                        |
+| zfs                          | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                                    | `zfs`, send and receive, and the mount table                                       |
+| Docker engine                | `test-utils/start-stub-docker-engine.ts` (4)                                                       | The engine API on its unix socket                                                  |
+| Docker CLI                   | `test-utils/build-stub-docker-cli.ts` (`buildStubDockerCli`)                                       | The host's `docker` binary, first on `PATH`                                        |
+| Image builder                | `test-utils/build-stub-image-builder.ts` (`buildStubImageBuilder`)                                 | A builder's engine: pull, pin, build, create and export                            |
+| mkfs.ext4                    | `test-utils/build-stub-image-mkfs.ts` (`buildStubImageMkfs`)                                       | `mkfs.ext4` held until the test releases or fails it                               |
+| Silent build engine          | `test-utils/start-stub-silent-build-engine.ts` (4)                                                 | An engine silent through a build's quiet RUN step                                  |
+| CLIs a script calls          | `scripts/test-utils/create-stub-bin.ts` (7)                                                        | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`                            |
+| Docker for upgrade           | `scripts/test-utils/build-stub-host-docker.ts`                                                     | The docker that `deploy/upgrade.sh` drives on a host                               |
+| Docker for dev.sh            | `scripts/test-utils/build-stub-dev-docker.ts`                                                      | The images, labels and containers `dev.sh prune` reads                             |
+| Registry for base            | `scripts/test-utils/build-stub-registry-docker.ts`                                                 | `docker buildx imagetools inspect` in the release Plan step                        |
+| impd for the client          | `packages/client/smoke/run-stub-impd.ts`                                                           | impd's app on loopback, run by `check-client-runtimes.sh`                          |
+| nft                          | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                               | `nft` from the egress service                                                      |
+| nft binary                   | `test-utils/create-stub-nft-bin.ts` (`createStubNftBin`)                                           | The `nft` that `createNftRunner` spawns                                            |
+| Upstream DNS                 | `test-utils/start-stub-dns-upstream.ts`                                                            | An IMP_DNS server over UDP and TCP, with chosen faults                             |
+| Egress for resolver          | `test-utils/build-stub-egress-service.ts`                                                          | The egress service as `createQueryHandler`'s deps                                  |
+| Host routes                  | `test-utils/build-stub-host-routes.ts` (`buildStubHostRoutes`)                                     | The container's links and default routes egress reads                              |
+| Tunnel far end               | `test-utils/start-stub-echo-server.ts` (`startStubEchoServer`)                                     | A host a broker tunnel dials: it echoes and holds open                             |
+| ip and sysctl                | `buildFakeIp` in `net/tap-devices.test.ts`                                                         | `ip` and `sysctl -n`, as `createTapDevices`'s `run`                                |
+| mount                        | A `run` with a mount table in `vmm/jail.test.ts`                                                   | `mount` and `umount` for the jailer                                                |
+| cgroups and `/proc`          | Temp dirs as `root` and `procRoot` (5)                                                             | The cgroup tree and `/proc`                                                        |
+| cgroups for impd             | `test-utils/build-stub-cpu-cgroups.ts`                                                             | `CpuCgroups`: an in-memory tree that records each change                           |
+| Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
+| Imp exec agent               | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                       | An imp's agent on its vsock socket, driving `buildStubExecGuest`                   |
+| tailscale CLI                | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                        | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                |
+| MCP upstream                 | `test-utils/build-stub-mcp-transport.ts`                                                           | The `HttpTransport` to an imp's MCP server: calls held open until ended            |
+| tailscale whois              | A `whois` function passed to `createTailnetIdentities`                                             | `tailscale whois --json` (`runWhois`)                                              |
+| Connector upstreams          | `test-utils/start-stub-broker-tls-upstream.ts` (6); `test/e2e/lib/start-stub-upstream.ts`          | github.com, api.github.com, an OAuth token endpoint                                |
+| Git over SSH                 | `test/e2e/lib/start-stub-git-ssh-server.ts` (`startStubGitSshServer`)                              | A forge's SSH git: one allowed key, push to `repo.git` only                        |
+| Cloudflare API               | A `server.use` MSW handler in `https/acme/acme-issuer.pebble.ts`                                   | `api.cloudflare.com/client/v4`                                                     |
+| Host networks                | `test-utils/build-stub-public-network.ts` (8)                                                      | Guests on taps, an uplink to the internet, a tailnet peer                          |
+| GitHub releases              | `packages/test-utils/src/start-stub-github-releases.ts` (9)                                        | The releases pages `install.sh` fetches with curl                                  |
+| gh and uname                 | `packages/test-utils/src/create-stub-gh-attestation.ts`, `create-stub-uname.ts` (9)                | `gh auth status`, `gh attestation verify`, `uname -s -m`                           |
+| shasum and PATH              | `packages/test-utils/src/create-stub-shasum.ts`, `create-command-links.ts` (9)                     | macOS's `shasum -a 256`; a PATH of only the linked commands                        |
+| Client's exec agent          | `packages/client/src/test-utils/build-stub-exec-agent.ts`                                          | An imp's agent for exec and attach, scripted by argv                               |
+| Client's fwd agent           | `packages/client/src/test-utils/build-stub-forward-agent.ts`                                       | An imp's agent for reverse forwards: listen and accept                             |
+| impd's /exec socket          | `packages/client/src/test-utils/start-stub-impd-socket.ts`                                         | Protocol faults a real impd never sends                                            |
+| Host engine for client       | `packages/client/src/test-utils/start-stub-docker-engine.ts`                                       | Docker's POST /build on a unix socket                                              |
+| Docker CLI for client        | `packages/client/src/test-utils/create-stub-docker-bin.ts`                                         | inspect, create, export and rm of the images a test names                          |
+| impd before the build stream | `packages/client/src/test-utils/build-stub-impd-before-build-stream.ts`                            | Real impd, with no Accept read on POST /images/build                               |
+| A newer impd                 | `packages/client/src/test-utils/build-stub-impd-with-new-reason.ts`                                | Real impd's events, with an ImpChanged reason it lacks                             |
+| impd before 0.30.0           | `packages/client/src/test-utils/build-stub-impd-before-exec-require.ts`                            | Real impd's answers, with system.info lacking execRequire                          |
+| OAuth token endpoint         | `test-utils/build-stub-broker-token-endpoint.ts` (11)                                              | A token endpoint: queued answers per refresh token                                 |
+| Rule upstreams               | Per-test MSW handlers in `broker/broker.test.ts`; `test-utils/start-stub-broker-plain-upstream.ts` | A secret rule's own `upstream` origin; the plain listener for the Host on the wire |
+| Guest's HTTPS tools          | `test-utils/build-stub-broker-guest.ts` (`curl`)                                                   | A guest's client through the broker's front port                                   |
+| Guest's CONNECT              | `test-utils/start-stub-broker-tunnel.ts`                                                           | A raw CONNECT a guest holds open through the front port                            |
+| Tunnel targets               | `test-utils/start-stub-broker-reply-target.ts`, `start-stub-broker-hold-target.ts`                 | The far end of a plain tunnel: a reply after the request, or a held socket         |
+| Guest's raw socket           | `test-utils/start-stub-broker-guest-socket.ts`                                                     | A guest's socket to the front port, read until it closes                           |
 
 1. `vmm/firecracker-client.test.ts`, `vmm/vm-runner.test.ts`.
 2. `vmm/template-vm.test.ts` spawns it as the VMM process.
@@ -459,6 +467,29 @@ port; the parser, formatter, config and other pure tests boot nothing. The stand
 - `start-warm-move-hosts.ts`: `createMoveHosts(stack, { isShared: true })` with both apps on
   loopback, because two impds in one process cannot share the data dir a warm move needs.
 
+The client package's tests boot impd through `createImpd` in each file's `setupTest()`, with the
+client stub agents on the imp's vsock socket. Image builds and adds run with
+`IMP_BUILD_ISOLATION=host` against `packages/client/src/test-utils/start-stub-docker-engine.ts` (at
+`DOCKER_HOST`) and `create-stub-docker-bin.ts` (first on `PATH` through `updateEnv`), with the real
+`tar` and `mkfs.ext4`; no builder imp runs. An older or newer impd is a `build-stub-impd-*` stand-in
+in front of the real app, at `http://impd.test/` through MSW. Answers impd never sends (a proxy's
+502, a cut stream, bad frames) go to the pure cores: `read-build-answer.ts` on literal responses,
+and `start-stub-impd-socket.ts` for `/exec`. Over a socket, Bun's fetch replaces the Content-Length
+of a Blob's stream with the Blob's real size, but keeps the one a caller sets on a `ReadableStream`
+it made, so `build-image.test.ts` sends a declared size with a hand-made stream to impd's real
+listener. That listener takes `main.ts`'s `maxRequestBodySize`, since Bun's own 128 MiB default
+answers a bare 413 before the build route can. The keepalive tests there boot impd with a
+`keepaliveMs` of 500 and run the client in a Bun child with `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1`, which
+Bun's coarse timer turns into a deadline of about 8 s (measured 7.99 s from the engine's hold, four
+runs); the engine holds the build silent for 28 keepalives, about 13.5 s. A streamed build outlasts
+the deadline; through `build-stub-impd-before-build-stream.ts` the client gives up at it, and impd
+then stops the build on the engine (the engine's `signals` record it), so no image lands. The stub
+engine serves with `idleTimeout: 0` behind a type assertion, as `docker-proxy/main.ts` does: Bun's
+types leave the option off unix servers, its 10 s default closes a silent build after 10 to 12 s,
+and `server.timeout(request, 0)` does not lift it once the answer has started. The 13.5 s hold fails
+without it. Its image factory is `packages/client/src/test-utils/build-mock-image.ts`
+(`buildMockImage`).
+
 Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
 `host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
 ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.
@@ -478,9 +509,10 @@ no port: `main.ts` then listens, starts the tickers and owns the stop. `deps` ta
 the root token, an unstarted storage backend and the system files, and optional stand-ins for each
 boundary (`vms`, `runCommand`, `taps`, `cgroups`, `broker`, `egress`, `imps`, `images`,
 `readDiskSpace`, `readIdentity`, `resolveIpv6`, `readTailscale`, `whois`, `freezer`, `oauthKey`,
-`now`, `log`); `now` reaches leases, the RAM governor and memory control, egress, the broker (its CA
-and leaves, the leaf renewal check, its route caches, OAuth refreshes), tokens, OAuth, the audit
-log, moves and the API. It does not reach `buildTailnetNames`' services API, the template service's
+`now`, `log`, and `keepaliveMs`, the gap between a streamed image call's progress events, 15 s by
+default); `now` reaches leases, the RAM governor and memory control, egress, the broker (its CA and
+leaves, the leaf renewal check, its route caches, OAuth refreshes), tokens, OAuth, the audit log,
+moves and the API. It does not reach `buildTailnetNames`' services API, the template service's
 timings (`performance.now`), the disk usage cache, backups or the builders' engine wait, which stay
 on the wall clock: a known gap. A field left out takes the host's real one. Its parts
 (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`,

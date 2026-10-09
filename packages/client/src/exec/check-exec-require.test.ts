@@ -1,11 +1,11 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { SystemInfo } from '@imp/api';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import type { ImpdDeps } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
@@ -13,11 +13,12 @@ import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-c
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { server } from '@imp/test-utils/mock-server';
-import { http } from 'msw';
-import { createImpClient } from './create-imp-client';
-import { buildStubImpdWithNewReason } from './test-utils/build-stub-impd-with-new-reason';
+import { HttpResponse, http } from 'msw';
+import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
+import { checkExecRequire } from './check-exec-require';
 
-// impd booted in process on stub VMs
+// impd booted in process on stub VMs, served at http://impd.test/ through
+// the run's MSW server
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -26,7 +27,7 @@ async function setupTest() {
   // impd boots with a root token, the bearer the test's client sends
   const rootToken = 'root-token';
 
-  const dataDir = await mkdtemp(join(tmpdir(), 'imp-client-events-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'imp-client-require-'));
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
@@ -40,16 +41,6 @@ async function setupTest() {
 
   await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
   await writeFile(systemDrivePath, drive);
-
-  // the image every imps.create boots when it names none
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
 
   const vmm = buildStubVmm();
 
@@ -130,40 +121,104 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  return { impd, rootToken };
+  server.use(http.all('http://impd.test/*', (info) => impd.api.app.handle(info.request)));
+
+  return { impd, url: 'http://impd.test', rootToken };
 }
 
-// A newer impd sends a reason this client does not know: the client passes
-// it through, since oRPC checks outputs on the server, not here. A new
-// ImpChangeReason needs no EVENT_VERSION bump.
-test('it passes on an event whose reason this client does not know', async () => {
+test('it passes an impd that checks exec requirements', async () => {
+  const ctx = await setupTest();
+  const refusal = await checkExecRequire(ctx.url, ctx.rootToken);
+
+  expect(refusal).toBeNull();
+});
+
+test('it sends the bearer token with the check', async () => {
   const ctx = await setupTest();
 
-  const newer = buildStubImpdWithNewReason(
-    (request) => ctx.impd.api.app.handle(request),
-    'from-the-future',
+  const received = mock<(authorization: string | null) => void>();
+
+  server.use(
+    http.post('http://impd.test/rpc/system/info', (info) => {
+      received(info.request.headers.get('authorization'));
+
+      return ctx.impd.api.app.handle(info.request);
+    }),
   );
 
-  server.use(http.all('http://impd.test/*', (info) => newer(info.request)));
+  await checkExecRequire('http://impd.test', ctx.rootToken);
 
-  const client = createImpClient({ url: 'http://impd.test/', token: ctx.rootToken });
+  expect(received).toHaveBeenCalledExactlyOnceWith(`Bearer ${ctx.rootToken}`);
+});
 
-  await client.imps.create({ name: 'dev' });
+test('it reports an impd that rejects the token as unauthorized', async () => {
+  const ctx = await setupTest();
+  const refusal = await checkExecRequire(ctx.url, 'wrong');
 
-  const events = await client.events.stream();
+  expect(refusal).toStrictEqual({ kind: 'unauthorized' });
+});
 
-  const reading = events[Symbol.asyncIterator]();
+test('it refuses an impd from before exec requirements as PRECONDITION_FAILED', async () => {
+  const ctx = await setupTest();
 
-  onTestFinished(() => reading.return?.());
+  const older = buildStubImpdBeforeExecRequire((request) => ctx.impd.api.app.handle(request));
 
-  await reading.next();
-  await client.imps.sleep({ name: 'dev' });
+  server.use(http.all('http://impd.test/*', (info) => older(info.request)));
 
-  const changed = await reading.next();
+  const refusal = await checkExecRequire('http://impd.test', ctx.rootToken);
 
-  expect(changed.value).toMatchObject({
-    ev: 'ImpChanged',
-    reason: 'from-the-future',
-    imp: { name: 'dev' },
+  expect(refusal).toStrictEqual({
+    kind: 'failed',
+    code: 'PRECONDITION_FAILED',
+    message:
+      'nothing was started: this impd is older than 0.30.0 and does not check exec requirements',
+    data: {
+      reason: 'impd_outdated',
+      detail: 'this impd is older than 0.30.0 and does not check exec requirements',
+    },
+  });
+});
+
+test('it reports an impd it cannot reach as unreachable', async () => {
+  // nothing listens on a free port
+  const baseUrl = `http://127.0.0.1:${String(findFreePorts(1).take())}`;
+
+  const refusal = await checkExecRequire(baseUrl, 'root-token');
+
+  expect(refusal).toStrictEqual({
+    kind: 'unreachable',
+    detail: expect.toStartWith('system.info: '),
+  });
+});
+
+test('it refuses a start when impd fails the check', async () => {
+  // a proxy in front of impd answers while impd is down
+  server.use(
+    http.post('http://impd.test/rpc/system/info', () => new HttpResponse('down', { status: 503 })),
+  );
+
+  const refusal = await checkExecRequire('http://impd.test', 'root-token');
+
+  expect(refusal).toStrictEqual({
+    kind: 'failed',
+    code: null,
+    message: 'impd answered system.info with 503; nothing was started',
+  });
+});
+
+test('it refuses a start when impd answers the check with what it cannot read', async () => {
+  // system.info's answer without oRPC's envelope, which no impd sends
+  server.use(
+    http.post('http://impd.test/rpc/system/info', () =>
+      HttpResponse.json({ version: '0.40.1' } satisfies Pick<SystemInfo, 'version'>),
+    ),
+  );
+
+  const refusal = await checkExecRequire('http://impd.test', 'root-token');
+
+  expect(refusal).toStrictEqual({
+    kind: 'failed',
+    code: null,
+    message: 'impd answered system.info with 200; nothing was started',
   });
 });
