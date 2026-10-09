@@ -633,6 +633,37 @@ test('#buildStubZfs unmounts a mounted dir', async () => {
   expect(fake.isReadOnlyAt('/var/lib/imp/a')).toBeFalse();
 });
 
+test('#buildStubZfs unmounts a dir and every mount beneath it under -R', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  await fake.run(['zfs', 'create', 'tank/imp/a']);
+  await fake.run(['zfs', 'create', 'tank/imp/a/b']);
+  await fake.run(['zfs', 'create', 'tank/imp/c']);
+  await fake.run(['mount', '-t', 'zfs', 'tank/imp/a', '/var/lib/imp/a']);
+  await fake.run(['mount', '-t', 'zfs', '-o', 'ro', 'tank/imp/a/b', '/var/lib/imp/a/b']);
+  await fake.run(['mount', '-t', 'zfs', 'tank/imp/c', '/var/lib/imp/ab']);
+
+  const result = await fake.run(['umount', '-R', '/var/lib/imp/a']);
+
+  expect(result).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
+  expect(fake.readMountedAt('/var/lib/imp/a')).toBeNull();
+  expect(fake.readMountedAt('/var/lib/imp/a/b')).toBeNull();
+  expect(fake.isReadOnlyAt('/var/lib/imp/a/b')).toBeFalse();
+  expect(fake.readMountedAt('/var/lib/imp/ab')).toBe('tank/imp/c');
+});
+
+test('#buildStubZfs refuses to unmount a dir with no mount under -R', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  const result = await fake.run(['umount', '-R', '/var/lib/imp/a']);
+
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'umount: /var/lib/imp/a: not mounted.',
+  });
+});
+
 test('#buildStubZfs refuses to unmount a dir with no mount', async () => {
   const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
 
@@ -707,6 +738,65 @@ test('#buildStubZfs lists only the tree under the root given', async () => {
     exitCode: 0,
     stdout: 'tank/imp/a\tfilesystem\t-\t-\ntank/imp/a/b\tfilesystem\t-\t-\n',
     stderr: '',
+  });
+});
+
+test('#buildStubZfs refuses to list a dataset that does not exist', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  const result = await fake.run(['zfs', 'list', '-H', '-o', 'name', 'tank/imp/a']);
+
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: "cannot open 'tank/imp/a': dataset does not exist",
+  });
+});
+
+test('#buildStubZfs destroys a dataset with its children, snapshots and their clones under -R', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  await fake.run(['zfs', 'create', 'tank/imp/a']);
+  await fake.run(['zfs', 'create', 'tank/imp/a/b']);
+  await fake.run(['zfs', 'snapshot', 'tank/imp/a/b@one']);
+  await fake.run(['zfs', 'clone', 'tank/imp/a/b@one', 'tank/imp/c']);
+  await fake.run(['zfs', 'snapshot', 'tank/imp/c@two']);
+  await fake.run(['zfs', 'create', 'tank/imp/ab']);
+
+  const result = await fake.run(['zfs', 'destroy', '-R', 'tank/imp/a']);
+
+  expect(result).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
+  expect(fake.listDatasets()).toStrictEqual(['tank/imp', 'tank/imp/ab']);
+  expect(fake.listSnapshots()).toStrictEqual([]);
+});
+
+test('#buildStubZfs refuses a destroy under -R that would take a mounted dataset', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  await fake.run(['zfs', 'create', 'tank/imp/a']);
+  await fake.run(['zfs', 'create', 'tank/imp/a/b']);
+  await fake.run(['mount', '-t', 'zfs', 'tank/imp/a/b', '/var/lib/imp/b']);
+
+  const result = await fake.run(['zfs', 'destroy', '-R', 'tank/imp/a']);
+
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: "cannot destroy 'tank/imp/a/b': dataset is busy",
+  });
+
+  expect(fake.listDatasets()).toStrictEqual(['tank/imp', 'tank/imp/a', 'tank/imp/a/b']);
+});
+
+test('#buildStubZfs refuses a destroy under -R of a dataset that does not exist', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  const result = await fake.run(['zfs', 'destroy', '-R', 'tank/imp/a']);
+
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: "cannot open 'tank/imp/a': dataset does not exist",
   });
 });
 

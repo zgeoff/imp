@@ -1,134 +1,118 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { createImage } from '../../db/images';
 import { findImpByName } from '../../db/imps';
 import { createMoveHosts } from '../../moves/test-moves';
-import { runChecked, runCommand } from '../../process/run-command';
+import { runChecked } from '../../process/run-command';
 import { readSnapshotMeta } from '../../sleep/snapshot-meta';
+import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
+import { readZfsTestPool } from '../../test-utils/read-zfs-test-pool';
+import { writeSyncedFile } from '../../test-utils/write-synced-file';
 import { createZfsBackend } from './zfs-backend';
-import type { ZfsBackend } from './zfs-backend';
 
 // Whole moves, as `imp move` runs them, between two impds on one real pool,
-// as root: the `zfs` CI job runs these through scripts/test-zfs.sh. Skipped
-// everywhere else. Only the VMs are fakes.
-const POOL_ROOT = process.env['IMP_TEST_ZFS_ROOT'];
-const POOL_DIR = process.env['IMP_TEST_ZFS_DIR'];
-const isReal = POOL_ROOT !== undefined && POOL_DIR !== undefined;
+// as root: scripts/test-zfs.sh sets the pool, in the `zfs` CI job and on a
+// host. Each test skips everywhere else; only the VMs are fakes.
 
-// zfs commands on a shared CI runner take seconds each
-const REAL_TEST_TIMEOUT_MS = 180_000;
-const MOVE_TIMEOUT_MS = 120_000;
-
-function writeSyncedFile(path: string, text: string): void {
-  const fd = openSync(path, 'w');
-
-  try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-// one impd's root dataset, mounted as setup-storage.sh mounts one, and its
-// backend; the release waits for the backend's reclaim, then destroys it all
-async function createPoolHost(stack: Readonly<AsyncDisposableStack>, name: string) {
-  const root = `${POOL_ROOT ?? ''}/${name}`;
-  const dataDir = join(POOL_DIR ?? '', name);
-
-  await runChecked(['zfs', 'create', '-o', 'mountpoint=legacy', root]);
-
-  stack.defer(async () => {
-    await runChecked(['zfs', 'destroy', '-R', root]);
-  });
-
-  mkdirSync(dataDir, { recursive: true });
-
-  await runChecked(['mount', '-t', 'zfs', root, dataDir]);
-
-  const made: { backend: ZfsBackend | null } = { backend: null };
-
-  stack.defer(async () => {
-    await made.backend?.waitForReclaim();
-
-    await runCommand(['umount', '-R', dataDir]);
-  });
-
-  const createStorage = (dir: string): ZfsBackend => {
-    made.backend = createZfsBackend({ dataDir: dir, root, log: () => {} });
-
-    return made.backend;
-  };
-
-  return { root, options: { dataDir, createStorage } };
-}
-
-async function listDatasets(root: string): Promise<string[]> {
-  const listed = await runChecked(['zfs', 'list', '-H', '-o', 'name', '-t', 'all', '-r', root]);
-
-  return listed.split('\n').filter((line) => line !== '');
-}
-
-// two impds on the pool, each with the `ubuntu` image as a dataset
-async function setupPoolMove(options: Readonly<{ isShared?: boolean }> = {}) {
-  const stamp = String(Date.now());
-
-  // one stack: both impds stop before their datasets go
+// zfs commands on a shared CI runner take seconds each: each test gets 180 s
+// and each move 120 s
+async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
+  // one stack: both impds stop, and their reclaims end, before their datasets go
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const source = await createPoolHost(stack, `s${stamp}`);
-  const target = await createPoolHost(stack, `t${stamp}`);
+  const pool = readZfsTestPool();
+
+  invariant(pool);
+
+  const sourceSet = await createZfsTestDataset(stack, pool);
+  const targetSet = await createZfsTestDataset(stack, pool);
 
   const hosts = await createMoveHosts(stack, {
     isShared: options.isShared === true,
-    source: source.options,
-    target: target.options,
-    moveTimeoutMs: MOVE_TIMEOUT_MS,
+    source: {
+      dataDir: sourceSet.dataDir,
+      createStorage: (dir) => {
+        const backend = createZfsBackend({ dataDir: dir, root: sourceSet.root, log: () => {} });
+
+        stack.defer(() => backend.waitForReclaim());
+
+        return backend;
+      },
+    },
+    target: {
+      dataDir: targetSet.dataDir,
+      createStorage: (dir) => {
+        const backend = createZfsBackend({ dataDir: dir, root: targetSet.root, log: () => {} });
+
+        stack.defer(() => backend.waitForReclaim());
+
+        return backend;
+      },
+    },
+    moveTimeoutMs: 120_000,
   });
 
-  for (const host of [hosts.source, hosts.target]) {
-    await host.storage.start({
-      impIds: new Set(),
-      checkpointIds: new Set(),
-      imageDigests: new Set(),
-    });
+  await hosts.source.storage.start({
+    impIds: new Set(),
+    checkpointIds: new Set(),
+    imageDigests: new Set(),
+  });
 
-    await host.storage.createImage('sha256:ubuntu', (dir) => {
+  await hosts.target.storage.start({
+    impIds: new Set(),
+    checkpointIds: new Set(),
+    imageDigests: new Set(),
+  });
+
+  return { ...hosts, sourceRoot: sourceSet.root, targetRoot: targetSet.root };
+}
+
+test.skipIf(readZfsTestPool() === null)(
+  'it moves a stopped imp cold between two ZFS impds with its checkpoint and its disk',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.source.storage.createImage('sha256:ubuntu', (dir) => {
       writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
       writeSyncedFile(join(dir, 'config.json'), '{}');
 
       return Promise.resolve();
     });
 
-    await createImage(host.db, {
+    await createImage(ctx.source.db, {
       name: 'ubuntu',
       ref: 'ubuntu:latest',
       digest: 'sha256:ubuntu',
       sizeBytes: 6,
     });
-  }
 
-  return { ...hosts, sourceRoot: source.root, targetRoot: target.root };
-}
+    await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
 
-test.skipIf(!isReal)(
-  'a stopped imp moves cold between two ZFS impds with its checkpoint and its disk',
-  async () => {
-    const ctx = await setupPoolMove();
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.target.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
+
     const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
     await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
-    const disk = ctx.source.storage.resolveImpPaths(created.id).disk;
-
-    writeSyncedFile(disk, 'hello');
+    writeSyncedFile(ctx.source.storage.resolveImpPaths(created.id).disk, 'hello');
 
     await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
-    writeSyncedFile(disk, 'world');
+    writeSyncedFile(ctx.source.storage.resolveImpPaths(created.id).disk, 'world');
 
     const status = await ctx.runMove('dev');
     const moved = await ctx.targetApp.client.imps.get({ name: 'dev' });
@@ -137,33 +121,83 @@ test.skipIf(!isReal)(
 
     const movedDisk = readFileSync(ctx.target.storage.resolveImpPaths(created.id).disk, 'utf8');
 
-    const targetSets = await listDatasets(ctx.targetRoot);
-    const sourceSets = await listDatasets(ctx.sourceRoot);
+    const targetSets = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-o',
+      'name',
+      '-t',
+      'all',
+      '-r',
+      ctx.targetRoot,
+    ]);
+
+    const sourceSets = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-o',
+      'name',
+      '-t',
+      'all',
+      '-r',
+      ctx.sourceRoot,
+    ]);
+
     const started = await ctx.targetApp.client.imps.start({ name: 'dev' });
 
     expect(status).toMatchObject({ isDone: true, error: null });
     expect(moved).toMatchObject({ id: created.id, state: 'stopped' });
     expect(moved.move).toBeUndefined();
-    expect(checkpoints.map((checkpoint) => checkpoint.label)).toEqual(['one']);
-    expect(movedDisk.startsWith('world')).toBe(true);
+    expect(checkpoints.map((checkpoint) => checkpoint.label)).toStrictEqual(['one']);
+    expect(movedDisk).toStartWith('world');
 
-    expect(targetSets).toContain(
+    expect(targetSets.split('\n')).toContain(
       `${ctx.targetRoot}/disks/${created.id}@${checkpoints[0]?.id ?? ''}`,
     );
 
-    expect(sourceSets.filter((name) => name.includes(created.id))).toEqual([]);
+    expect(sourceSets).not.toInclude(created.id);
     expect(left).toBeUndefined();
     expect(started.state).toBe('running');
   },
-  REAL_TEST_TIMEOUT_MS,
+  180_000,
 );
 
-test.skipIf(!isReal)(
-  'a sleeping imp moves warm between two ZFS impds into its slot, and wakes from its memory',
+test.skipIf(readZfsTestPool() === null)(
+  'it moves a sleeping imp warm between two ZFS impds into its slot, and wakes it from its memory',
   async () => {
     // two impds in one process differ in their data dirs: both report the
     // target's facts, as two hosts with the same IMP_DATA_DIR would
-    const ctx = await setupPoolMove({ isShared: true });
+    const ctx = await setupTest({ isShared: true });
+
+    await ctx.source.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
+
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.source.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
+
+    await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
+
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.target.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
 
     // slot 0 goes to another imp, so the target's lowest free slot is not dev's
     await ctx.sourceApp.client.imps.create({ name: 'first', image: 'ubuntu' });
@@ -183,7 +217,19 @@ test.skipIf(!isReal)(
     const movedDisk = readFileSync(paths.disk, 'utf8');
 
     const left = await findImpByName(ctx.source.db, 'dev');
-    const sourceSets = await listDatasets(ctx.sourceRoot);
+
+    const sourceSets = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-o',
+      'name',
+      '-t',
+      'all',
+      '-r',
+      ctx.sourceRoot,
+    ]);
+
     const woken = await ctx.targetApp.client.imps.wake({ name: 'dev' });
 
     expect(status).toMatchObject({ isDone: true, error: null });
@@ -198,11 +244,11 @@ test.skipIf(!isReal)(
     expect(created.slot).toBe(1);
     expect(meta).not.toBeNull();
     expect(mem).toBe('mem');
-    expect(movedDisk.startsWith('warm')).toBe(true);
-    expect(sourceSets.filter((name) => name.includes(created.id))).toEqual([]);
+    expect(movedDisk).toStartWith('warm');
+    expect(sourceSets).not.toInclude(created.id);
     expect(left).toBeUndefined();
     expect(woken.state).toBe('running');
     expect(ctx.target.fake.wakes).toHaveLength(1);
   },
-  REAL_TEST_TIMEOUT_MS,
+  180_000,
 );
