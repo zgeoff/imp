@@ -1083,22 +1083,54 @@ test('#buildStubZfs commits a receive once the end record is in, though the inpu
 
 test('#buildStubZfs holds a matching command until it is released', async () => {
   const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
-  const release = fake.blockBefore((command) => command.startsWith('zfs create'));
-  const seen = { whileHeld: [] as string[] };
+  const block = fake.blockBefore((command) => command.startsWith('zfs create'));
+  const created = fake.run(['zfs', 'create', 'tank/imp/a']);
 
-  await Promise.all([
-    fake.run(['zfs', 'create', 'tank/imp/a']),
-    (async () => {
-      await fake.run(['zfs', 'version']);
+  await block.reached;
 
-      seen.whileHeld = fake.listDatasets();
+  const whileHeld = fake.listDatasets();
 
-      release();
-    })(),
-  ]);
+  block.release();
 
-  expect(seen.whileHeld).toStrictEqual(['tank/imp']);
+  await created;
+
+  expect(whileHeld).toStrictEqual(['tank/imp']);
   expect(fake.listDatasets()).toStrictEqual(['tank/imp', 'tank/imp/a']);
+});
+
+test('#buildStubZfs reports a blocked command as reached only once one waits', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+  const block = fake.blockBefore((command) => command.startsWith('zfs create'));
+  const state = { isReached: false };
+
+  const watched = (async () => {
+    await block.reached;
+
+    state.isReached = true;
+  })();
+
+  await fake.run(['zfs', 'version']);
+
+  const beforeCreate = state.isReached;
+  const created = fake.run(['zfs', 'create', 'tank/imp/a']);
+
+  await watched;
+
+  block.release();
+
+  await created;
+
+  expect(beforeCreate).toBeFalse();
+  expect(state.isReached).toBeTrue();
+});
+
+test('#buildStubZfs gives each dataset and snapshot a creation an hour after the fake epoch per txg', async () => {
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: '/var/lib/imp' });
+
+  await fake.run(['zfs', 'create', 'tank/imp/a']);
+  await fake.run(['zfs', 'snapshot', 'tank/imp/a@one']);
+
+  expect(fake.readCreatedAt('tank/imp/a@one')).toStrictEqual(new Date('2026-10-03T02:00:00Z'));
 });
 
 test('#buildStubZfs fails the next matching command once and changes nothing', async () => {

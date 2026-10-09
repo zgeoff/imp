@@ -67,7 +67,13 @@ export function buildStubZfs(options: FakeZfsOptions) {
   const readOnlyDirs = new Set<string>();
 
   const commands: string[] = [];
-  const gates: { match: (command: string) => boolean; opened: Promise<void> }[] = [];
+
+  const gates: {
+    match: (command: string) => boolean;
+    opened: Promise<void>;
+    reach: () => void;
+  }[] = [];
+
   const failures: ((command: string) => boolean)[] = [];
   const state = { txg: 1, crashAt: null as ((command: string) => boolean) | null, crashed: false };
 
@@ -545,6 +551,8 @@ export function buildStubZfs(options: FakeZfsOptions) {
       }
 
       for (const gate of gates.filter((candidate) => candidate.match(command))) {
+        gate.reach();
+
         await gate.opened;
       }
 
@@ -561,14 +569,19 @@ export function buildStubZfs(options: FakeZfsOptions) {
       return handleCommand(argv);
     },
 
-    // matching commands wait until the returned function runs
+    // matching commands wait until release runs; reached resolves once the
+    // first one waits
     blockBefore: (match: (command: string) => boolean) => {
       const gate = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
 
-      gates.push({ match, opened: gate.promise });
+      gates.push({ match, opened: gate.promise, reach: reached.resolve });
 
-      return () => {
-        gate.resolve();
+      return {
+        reached: reached.promise,
+        release: () => {
+          gate.resolve();
+        },
       };
     },
 
@@ -609,6 +622,12 @@ export function buildStubZfs(options: FakeZfsOptions) {
     listSnapshots: () => [...snapshots.keys()].toSorted(),
     readOrigin: (name: string) => datasets.get(name)?.origin ?? null,
     readTxg: (name: string) => (datasets.get(name) ?? snapshots.get(name))?.txg ?? 0,
+
+    // the `creation` the space rows give `name`: an hour after STUB_EPOCH_S per txg
+    readCreatedAt: (name: string) =>
+      new Date(
+        (STUB_EPOCH_S + ((datasets.get(name) ?? snapshots.get(name))?.txg ?? 0) * 3600) * 1000,
+      ),
     readProperty: (name: string, key: string) => datasets.get(name)?.properties?.[key] ?? null,
     isDeferred: (name: string) => snapshots.get(name)?.deferDestroy ?? false,
     readMountedAt: (dir: string) => mounts.get(dir) ?? null,
