@@ -113,7 +113,10 @@ test('#createImp rejects a duplicate name', async () => {
   await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id, slot: 0 }));
 
   expect(
-    createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id, slot: 1 })),
+    createImp(
+      ctx.db,
+      buildMockNewImp({ name: 'dev', imageId: image.id, slot: 1, ip: '10.66.0.3' }),
+    ),
   ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: imps\.name/u);
 });
 
@@ -143,7 +146,10 @@ test('#createImp gives each imp the lowest free jail uid', async () => {
 
   await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
 
-  const second = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+  const second = await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }),
+  );
 
   expect(second.jailUid).toBe(JAIL_UIDS.first + 1);
 });
@@ -153,10 +159,14 @@ test('#createImp gives a destroyed imp’s jail uid to the next imp', async () =
   const image = await createImage(ctx.db, buildMockNewImage());
   const first = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
 
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }));
   await removeImp(ctx.db, first.id);
 
-  const third = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2 }));
+  const third = await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, slot: 2, ip: '10.66.0.4' }),
+  );
+
   const stored = await findImpById(ctx.db, third.id);
 
   expect(stored?.jailUid).toBe(JAIL_UIDS.first);
@@ -212,7 +222,11 @@ test('#listImps lists every imp by name', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
 
   await createImp(ctx.db, buildMockNewImp({ name: 'b', imageId: image.id, slot: 0 }));
-  await createImp(ctx.db, buildMockNewImp({ name: 'a', imageId: image.id, slot: 1 }));
+
+  await createImp(
+    ctx.db,
+    buildMockNewImp({ name: 'a', imageId: image.id, slot: 1, ip: '10.66.0.3' }),
+  );
 
   const imps = await listImps(ctx.db);
 
@@ -224,8 +238,8 @@ test('#countImpsByState counts the imps in each state that has one', async () =>
   const image = await createImage(ctx.db, buildMockNewImage());
   const running = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
 
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2 }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2, ip: '10.66.0.4' }));
   await updateImpState(ctx.db, running.id, { reason: 'booted', state: 'running' });
 
   const counts = await countImpsByState(ctx.db);
@@ -244,8 +258,8 @@ test('#countImpsUsingImage counts the imps of one image', async () => {
   const other = await createImage(ctx.db, buildMockNewImage());
 
   await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
-  await createImp(ctx.db, buildMockNewImp({ imageId: other.id, slot: 2 }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: other.id, slot: 2, ip: '10.66.0.4' }));
 
   const count = await countImpsUsingImage(ctx.db, image.id);
 
@@ -257,7 +271,7 @@ test('#allocateSlot takes the lowest free slot, reusing a gap', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
 
   await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2 }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2, ip: '10.66.0.4' }));
 
   const slot = await allocateSlot(ctx.db, 16);
 
@@ -273,7 +287,10 @@ test('#allocateSlot gives concurrent creates distinct slots', async () => {
       ctx.db.transaction().execute(async (trx) => {
         const slot = await allocateSlot(trx, 16);
 
-        return createImp(trx, buildMockNewImp({ name, imageId: image.id, slot }));
+        return createImp(
+          trx,
+          buildMockNewImp({ name, imageId: image.id, slot, ip: `10.66.0.${String(slot + 2)}` }),
+        );
       }),
     ),
   );
@@ -286,7 +303,7 @@ test('#allocateSlot throws when every slot is taken', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
 
   await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }));
 
   expect(allocateSlot(ctx.db, 2)).rejects.toThrowWithMessage(
     Error,
@@ -461,7 +478,7 @@ test('#createImpInFreeSlot refuses a warm move a slot an imp holds', async () =>
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
 
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }));
 
   expect(
     createImpInFreeSlot(

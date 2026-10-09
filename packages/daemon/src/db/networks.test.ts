@@ -93,7 +93,13 @@ test('#listNetworks lists each network with its members by name', async () => {
 
   await createImp(
     ctx.db,
-    buildMockNewImp({ name: 'db', imageId: image.id, slot: 1, networkIds: [lab.id] }),
+    buildMockNewImp({
+      name: 'db',
+      imageId: image.id,
+      slot: 1,
+      ip: '10.66.0.3',
+      networkIds: [lab.id],
+    }),
   );
 
   const networks = await listNetworks(ctx.db);
@@ -153,7 +159,13 @@ test('#removeImp takes a destroyed imp’s memberships with its row', async () =
 
   await createImp(
     ctx.db,
-    buildMockNewImp({ name: 'db', imageId: image.id, slot: 1, networkIds: [network.id] }),
+    buildMockNewImp({
+      name: 'db',
+      imageId: image.id,
+      slot: 1,
+      ip: '10.66.0.3',
+      networkIds: [network.id],
+    }),
   );
 
   await removeImp(ctx.db, web.id);

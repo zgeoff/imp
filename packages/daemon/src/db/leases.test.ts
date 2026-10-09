@@ -221,7 +221,11 @@ test('#listLeases lists only the leases of the imps it names', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const dev = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
-  const other = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+
+  const other = await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }),
+  );
 
   await writeLease(ctx.db, buildMockLeaseRecord({ impId: dev.id }), {
     at: 1_800_000_000_000,

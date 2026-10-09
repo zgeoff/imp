@@ -156,7 +156,11 @@ test('#listCheckpoints leaves out another imp’s checkpoints', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const dev = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0 }));
-  const other = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1 }));
+
+  const other = await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }),
+  );
 
   await createCheckpoint(ctx.db, { id: 'cp-1', impId: other.id, label: null, sizeBytes: null });
 

@@ -32,6 +32,7 @@ test('it copies the user imps and leaves out image builders', async () => {
     memoryMib: 1024,
     maxMemoryMib: 2048,
     slot: 1,
+    ip: '10.66.0.3',
     httpPort: 8080,
     diskBytes: 4096,
     egress: { mode: 'box', allow: ['github.com'] },
@@ -40,7 +41,10 @@ test('it copies the user imps and leaves out image builders', async () => {
 
   const dev = await createImp(ctx.db, newDev);
 
-  await createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 2, kind: 'builder' }));
+  await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, slot: 2, ip: '10.66.0.4', kind: 'builder' }),
+  );
 
   const copy = await readDatabaseCopy(ctx.db, join(ctx.dir, 'copy.sqlite'));
 
