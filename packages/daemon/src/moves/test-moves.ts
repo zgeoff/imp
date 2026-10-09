@@ -1,6 +1,9 @@
 import { onTestFinished } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import type { MoveStatus } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createImage } from '../db/images';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
 import { deriveSlotAddress } from '../net/addressing';
@@ -13,9 +16,26 @@ export const TARGET_URL = 'http://100.100.0.2:7070';
 // the source's address, as the target's socket sees it
 export const SOURCE_PEER = '100.100.0.1';
 
-export type FetchHook = (request: Request, forward: () => Promise<Response>) => Promise<Response>;
+// what a hook may reach when a request goes: the target's clock and the
+// source's client
+interface MoveHookHosts {
+  readonly target: Readonly<Pick<HostTest, 'advance'>>;
+  readonly sourceApp: Readonly<Pick<TestApp, 'client'>>;
+}
 
-interface MoveHostsOptions {
+// `forward` sends the request to the target's move routes, or the one it is
+// given in its place
+export type FetchHook = (
+  request: Request,
+  forward: (replacement?: Request) => Promise<Response>,
+  hosts: Readonly<MoveHookHosts>,
+) => Promise<Response>;
+
+type HostTest = Awaited<ReturnType<typeof createImpTest>>;
+
+type TestApp = ReturnType<typeof buildTestApp>;
+
+export interface MoveHostsOptions {
   // sees each request the source sends to the target's move routes
   readonly hook?: FetchHook;
   readonly partBytes?: number;
@@ -83,31 +103,39 @@ export async function createMoveHosts(
   const sendToTarget = (request: Request) => targetApp.moves.handle(request, SOURCE_PEER);
   const hook = options.hook;
 
+  // the source's app, once built, for the hook to see; no request goes before
+  const built: { hosts: MoveHookHosts | null } = { hosts: null };
+
+  const runHook = (request: Request, call: FetchHook): Promise<Response> => {
+    invariant(built.hosts);
+
+    return call(request, (replacement) => sendToTarget(replacement ?? request), built.hosts);
+  };
+
   const sourceApp = buildTestApp(source, sourceImpd, undefined, {}, null, {
     ...shared,
     readTapMac:
       options.readTapMac ??
       ((tap) => deriveSlotAddress(Number(tap.slice('imp'.length)), slotPlan).hostMac),
-    fetch: (request) =>
-      hook === undefined ? sendToTarget(request) : hook(request, () => sendToTarget(request)),
+    fetch: (request) => (hook === undefined ? sendToTarget(request) : runHook(request, hook)),
     ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
   });
 
-  const waitForMove = async (name: string): Promise<MoveStatus> => {
-    const deadline = Date.now() + (options.moveTimeoutMs ?? 5000);
+  built.hosts = { target, sourceApp };
 
-    while (Date.now() < deadline) {
-      const status = await sourceApp.client.moves.status({ name });
+  const waitForMove = (name: string): Promise<MoveStatus> =>
+    waitFor(
+      async () => {
+        const status = await sourceApp.client.moves.status({ name });
 
-      if (status.isDone || status.error !== null) {
+        if (!status.isDone && status.error === null) {
+          throw new Error(`the move of ${name} never ended`);
+        }
+
         return status;
-      }
-
-      await Bun.sleep(10);
-    }
-
-    throw new Error(`the move of ${name} never ended`);
-  };
+      },
+      { timeoutMs: options.moveTimeoutMs ?? 5000 },
+    );
 
   // a whole move, as `imp move` runs it (packages/cli/src/commands/move.ts):
   // ZFS streams to a ZFS target, and the memory too when the facts match;
@@ -153,4 +181,28 @@ export async function createUbuntuImage(
   await host.createTestImage('ubuntu');
 
   writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').config, '{}');
+}
+
+// the `ubuntu` image on a host whose storage is buildStubZfsStorage's: the
+// storage starts, then the image is a dataset with the files a create reads
+export async function createZfsUbuntuImage(
+  host: Readonly<Pick<ImpTest, 'db' | 'dataDir' | 'storage'>>,
+): Promise<void> {
+  await host.storage.start({
+    impIds: new Set(),
+    checkpointIds: new Set(),
+    imageDigests: new Set(),
+  });
+
+  await host.storage.createImage('sha256:ubuntu', () => Promise.resolve());
+
+  writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').rootfs, 'rootfs');
+  writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').config, '{}');
+
+  await createImage(host.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 }

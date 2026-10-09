@@ -26,9 +26,27 @@ interface Part {
   readonly consumed: PromiseWithResolvers<void>;
 }
 
+// The clock a pipe's wait for the next part reads, and the timer that wakes
+// it at the deadline; schedule returns the timer's cancel
+export interface PartTimer {
+  readonly now: () => number;
+  readonly schedule: (run: () => void, ms: number) => () => void;
+}
+
+const WALL_TIMER: PartTimer = {
+  now: Date.now,
+  schedule: (run, ms) => {
+    const timer = setTimeout(run, ms);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  },
+};
+
 // The receiving end: each POST hands its body over, and the frame reader
 // reads them in turn as if they were one stream.
-export function createPartPipe(waitMs = PART_WAIT_MS): PartPipe {
+export function createPartPipe(waitMs = PART_WAIT_MS, timer: PartTimer = WALL_TIMER): PartPipe {
   const parts: Part[] = [];
 
   const state: {
@@ -47,7 +65,7 @@ export function createPartPipe(waitMs = PART_WAIT_MS): PartPipe {
   };
 
   const waitForPart = async (): Promise<Part | null> => {
-    const deadline = Date.now() + waitMs;
+    const deadline = timer.now() + waitMs;
 
     while (parts.length === 0) {
       if (state.error !== null) {
@@ -58,7 +76,7 @@ export function createPartPipe(waitMs = PART_WAIT_MS): PartPipe {
         return null;
       }
 
-      if (Date.now() > deadline) {
+      if (timer.now() > deadline) {
         throw new Error('the next part of the move stream did not come');
       }
 
@@ -66,16 +84,16 @@ export function createPartPipe(waitMs = PART_WAIT_MS): PartPipe {
 
       state.waiter = waiter;
 
-      const timer = setTimeout(
+      const cancel = timer.schedule(
         () => {
           waiter.resolve();
         },
-        Math.max(0, deadline - Date.now()),
+        Math.max(0, deadline - timer.now()),
       );
 
       await waiter.promise;
 
-      clearTimeout(timer);
+      cancel();
     }
 
     return parts[0] ?? null;

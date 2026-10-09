@@ -14,6 +14,9 @@ interface IdleLoopDeps {
   readonly db: ImpDatabase;
   readonly imps: Pick<Imps, 'isImpBusy' | 'readActivity' | 'tracker' | 'trySleepImp' | 'watchdog'>;
   readonly log: (message: string) => void;
+
+  // the clock idle time is read on; Date.now by default
+  readonly now?: () => number;
 }
 
 export interface IdleLoop {
@@ -55,7 +58,7 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
       return;
     }
 
-    const now = Date.now();
+    const now = (deps.now ?? Date.now)();
     const cpuPercent = readCpuPercent(imp, pid, now);
 
     // a busy or wedged agent: the other signals decide; a detached session
