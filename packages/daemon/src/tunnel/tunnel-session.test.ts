@@ -586,6 +586,68 @@ test('it closes a client that sends a binary message larger than a frame', async
   expect(dial.state.written).toStrictEqual([]);
 });
 
+test('it names the imp limit it was given in the TUNNEL_LIMIT message', async () => {
+  const limits = createTunnelLimits(2);
+
+  const first = setupTest({
+    backend: {
+      findImpId: () => Promise.resolve('imp-1'),
+      openDial: () => Promise.resolve(buildStubDialStream().stream),
+      openListener: mock(),
+      openAccept: mock(),
+      owner: 'token:me:1',
+    },
+    limits,
+    forwards: createReverseForwards(),
+  });
+
+  const second = setupTest({
+    backend: {
+      findImpId: () => Promise.resolve('imp-1'),
+      openDial: () => Promise.resolve(buildStubDialStream().stream),
+      openListener: mock(),
+      openAccept: mock(),
+      owner: 'token:me:1',
+    },
+    limits,
+    forwards: createReverseForwards(),
+  });
+
+  const third = setupTest({
+    backend: {
+      findImpId: () => Promise.resolve('imp-1'),
+      openDial: () => Promise.resolve(buildStubDialStream().stream),
+      openListener: mock(),
+      openAccept: mock(),
+      owner: 'token:me:1',
+    },
+    limits,
+    forwards: createReverseForwards(),
+  });
+
+  first.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+  second.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+
+  await waitFor(() => {
+    expect(first.sent).toHaveLength(1);
+    expect(second.sent).toHaveLength(1);
+  });
+
+  third.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+
+  await waitFor(() => {
+    expect(third.closed.code).not.toBeNull();
+  });
+
+  expect(third.sent).toStrictEqual([
+    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 2 tunnels open already' },
+  ]);
+});
+
+test('it holds 256 tunnels per imp by default', () => {
+  expect(createTunnelLimits().max).toBe(256);
+});
+
 test('it refuses a tunnel past the limit of its imp with TUNNEL_LIMIT', async () => {
   const limits = createTunnelLimits(1);
 
@@ -626,7 +688,7 @@ test('it refuses a tunnel past the limit of its imp with TUNNEL_LIMIT', async ()
   });
 
   expect(second.sent).toStrictEqual([
-    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 256 tunnels open already' },
+    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 1 tunnel open already' },
   ]);
 });
 
@@ -1431,7 +1493,7 @@ test('it counts every relay against the tunnel limit of its imp', async () => {
   });
 
   expect(second.sent).toStrictEqual([
-    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 256 tunnels open already' },
+    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 1 tunnel open already' },
   ]);
 });
 
@@ -1477,7 +1539,7 @@ test('it refuses a listen past the tunnel limit of its imp, since a listener hol
   });
 
   expect(second.sent).toStrictEqual([
-    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 256 tunnels open already' },
+    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 1 tunnel open already' },
   ]);
 });
 
