@@ -54,15 +54,28 @@ test('it publishes the sleep it made room with and the admission', async () => {
 
   await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 600 });
 
-  expect(published).toMatchObject([
+  expect(published).toStrictEqual([
     {
+      v: 1,
+      at: new Date(1_000_000),
       ev: 'GovernorDecision',
+      budgetMib: 1000,
       decision: 'slept',
       name: 'old',
       trigger: 'to make room for x',
       usedMib: 900,
     },
-    { ev: 'GovernorDecision', decision: 'admitted', name: 'x', trigger: 'admission', usedMib: 600 },
+    {
+      v: 1,
+      at: new Date(1_000_000),
+      ev: 'GovernorDecision',
+      budgetMib: 1000,
+      decision: 'admitted',
+      name: 'x',
+      trigger: 'admission',
+      usedMib: 600,
+      reserveMib: 300,
+    },
   ]);
 });
 
@@ -97,11 +110,19 @@ test('it refuses an admit that sleeping the other idle imps cannot make room for
   // sleeping `new` alone could not make room, so it stays awake
   expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old']);
 
-  expect(published.at(-1)).toMatchObject({
+  // 900 in use and 900 asked: 800 short, with the busy `pinned` in the way
+  expect(published.at(-1)).toStrictEqual({
+    v: 1,
+    at: new Date(1_000_000),
+    ev: 'GovernorDecision',
+    budgetMib: 1000,
     decision: 'refused',
     name: 'y',
     trigger: 'admission',
     usedMib: 900,
+    reserveMib: 900,
+    neededMib: 800,
+    protectedCount: 1,
   });
 });
 
@@ -259,6 +280,11 @@ test('it sleeps every idle imp, oldest first, when together they cannot reach th
   await governor.enforce();
 
   expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old', 'mid', 'new']);
+
+  expect(['big', 'old', 'mid', 'new'].filter((id) => host.findImp(id).awake)).toStrictEqual([
+    'big',
+  ]);
+
   expect(logs).toStrictEqual(['impd: governor: slept 3, RAM still over budget by 1000 MiB']);
 });
 
@@ -433,6 +459,27 @@ test('it refuses an admission that may not sleep imps once the free room is gone
   expect(host.sleepCalls).toStrictEqual([]);
 });
 
+test('it reports no headroom while KSM saves nothing', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['a', 'b'],
+    awake: [
+      { id: 'a', rssMib: 300 },
+      { id: 'b', rssMib: 300 },
+    ],
+  });
+
+  const governor = createRamGovernor({
+    ...host.deps,
+    readHeadroomMib: () => Promise.resolve(0),
+    log: () => {},
+  });
+
+  const usage = await governor.readUsage();
+
+  expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
+});
+
 test('it reports the KSM headroom in the usage', async () => {
   const host = buildStubGovernedHost({
     budgetMib: 1000,
@@ -572,11 +619,17 @@ test('it refuses a grow when only busy imps could make room, and publishes why',
   expect(host.sleepCalls).toStrictEqual([]);
 
   // the two busy imps were in the way; the grower itself is not counted
-  expect(published).toMatchObject([
+  expect(published).toStrictEqual([
     {
+      v: 1,
+      at: new Date(1_000_000),
+      ev: 'GovernorDecision',
+      budgetMib: 1000,
       decision: 'refused',
       name: 'grower',
       trigger: 'grow',
+      usedMib: 900,
+      reserveMib: 260,
       neededMib: 160,
       protectedCount: 2,
     },

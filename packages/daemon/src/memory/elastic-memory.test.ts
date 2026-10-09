@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import { ORPCError } from '@orpc/server';
 import {
   findLowMib,
   findRegionMib,
@@ -24,12 +23,14 @@ test.each([
   expect(findLowMib(totalMib)).toBe(lowMib);
 });
 
+// 200 used: its grow mark is 128 MiB free, and a 256 MiB step above it
 test('#findSpareTotalMib leaves a small guest a step more than 128 MiB free', () => {
-  expect(findSpareTotalMib(200)).toBe(200 + 128 + 256);
+  expect(findSpareTotalMib(200)).toBe(584);
 });
 
+// 2000 used: of 2655 MiB, 15 % is 398.25 free and the guest has 655
 test('#findSpareTotalMib leaves a large guest a step more than 15 % of it free', () => {
-  expect(findSpareTotalMib(2000)).toBe(Math.ceil((2000 + 256) / 0.85));
+  expect(findSpareTotalMib(2000)).toBe(2655);
 });
 
 test('#findStructPageMib costs 16 MiB of struct pages per GiB plugged, rounded up', () => {
@@ -48,14 +49,17 @@ test('#resolveMaxMemoryMib takes a max up to 4 times the memory', () => {
   expect(resolveMaxMemoryMib(512, 2048)).toBe(2048);
 });
 
-test('#resolveMaxMemoryMib refuses a max below the memory', () => {
-  expect(() => resolveMaxMemoryMib(512, 256)).toThrow(
-    'the max memory (256 MiB) is less than the memory (512 MiB)',
-  );
+test('#resolveMaxMemoryMib refuses a max below the memory as a bad request', () => {
+  expect(Promise.try(() => resolveMaxMemoryMib(512, 256))).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'the max memory (256 MiB) is less than the memory (512 MiB)',
+  });
 });
 
 test('#resolveMaxMemoryMib refuses a max past 4 times the memory as a bad request', () => {
-  expect(() => resolveMaxMemoryMib(512, 2050)).toThrow(ORPCError);
+  expect(Promise.try(() => resolveMaxMemoryMib(512, 2050))).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+  });
 });
 
 test('#resolveMaxMemoryMib says to raise the memory with a max past 4 times it', () => {

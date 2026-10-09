@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startStubFirecrackerApi } from '../test-utils/start-stub-firecracker-api';
@@ -41,6 +41,17 @@ test('it gives up on a snapshot that never finishes after the snapshot timeout',
 });
 
 test('it refuses to call a path that is not a socket', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.socket, '');
+
+  expect(createFirecrackerClient(ctx.socket).pause()).rejects.toThrowWithMessage(
+    Error,
+    `${ctx.socket} is not a socket`,
+  );
+});
+
+test('it refuses to call a socket path that does not exist', () => {
   const ctx = setupTest();
 
   expect(createFirecrackerClient(ctx.socket).pause()).rejects.toThrow(

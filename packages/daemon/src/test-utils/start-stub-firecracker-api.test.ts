@@ -14,7 +14,19 @@ function setupTest() {
   return { socket: join(dir, 'api.sock') };
 }
 
-test('it answers a call it has no answer for with 204 and no body', async () => {
+test('it answers a GET it has no answer for with 200 and a JSON object, as Firecracker does', async () => {
+  const ctx = setupTest();
+
+  startStubFirecrackerApi(ctx.socket);
+
+  const response = await fetch('http://localhost/machine-config', { unix: ctx.socket });
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(body).toStrictEqual({});
+});
+
+test('it answers a PUT it has no answer for with 204 and no body', async () => {
   const ctx = setupTest();
 
   startStubFirecrackerApi(ctx.socket);

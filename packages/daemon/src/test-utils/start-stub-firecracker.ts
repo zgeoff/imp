@@ -16,7 +16,7 @@ interface StubFirecrackerOptions {
   readonly isLoggingBodies?: boolean;
 }
 
-// The command that runs run-stub-firecracker-api.ts in place of Firecracker,
+// The command that runs run-stub-firecracker.ts in place of Firecracker,
 // for a jail stand-in to hand to startFirecracker. Its argv names the API
 // socket, as the liveness check of a Firecracker expects.
 export function buildStubFirecrackerArgv(options: Readonly<StubFirecrackerOptions>): string[] {
@@ -24,7 +24,7 @@ export function buildStubFirecrackerArgv(options: Readonly<StubFirecrackerOption
 
   return [
     process.execPath,
-    join(import.meta.dir, 'run-stub-firecracker-api.ts'),
+    join(import.meta.dir, 'run-stub-firecracker.ts'),
     '--api-sock',
     options.apiSocket,
     options.logPath,

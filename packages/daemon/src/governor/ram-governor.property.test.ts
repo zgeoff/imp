@@ -1,15 +1,15 @@
 import { expect, test } from 'bun:test';
 import fc from 'fast-check';
-import { buildMockGovernorArbitraries } from '../test-utils/build-mock-governor-arbitraries';
 import { buildStubGovernedHost } from '../test-utils/build-stub-governed-host';
 import type { RoomLeft } from '../test-utils/build-stub-governed-host';
+import { buildStubGovernedHostArbitraries } from '../test-utils/build-stub-governed-host-arbitraries';
 import { createRamGovernor } from './ram-governor';
 
 // Each case builds its own host and governor, which hold no resource to
 // release. A failure reports fast-check's seed, path and shrunk counterexample.
 
 test('it keeps each admission within the budget and never asks a pinned imp to sleep, one op at a time', async () => {
-  const arbitraries = buildMockGovernorArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
+  const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
 
   const opArb = fc.oneof(
     arbitraries.admit,
@@ -136,7 +136,7 @@ test('it gets a crowded host under the budget or sleeps every imp it may', async
 }, 30_000);
 
 test('it settles concurrent admits with holds and RSS changes inside them, leaving no reservation for a rejected one', async () => {
-  const arbitraries = buildMockGovernorArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
+  const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
 
   // up to four admits for different imps, started at once
   const admitsArb = fc.uniqueArray(arbitraries.admit, {
@@ -225,7 +225,7 @@ test('it settles concurrent admits with holds and RSS changes inside them, leavi
 }, 30_000);
 
 test('it keeps a grow within the budget, never sleeps its grower, and sleeps only for room it then has', async () => {
-  const arbitraries = buildMockGovernorArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
+  const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c', 'd', 'e', 'f']);
 
   const opArb = fc.oneof(
     fc.record({

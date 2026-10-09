@@ -1,8 +1,8 @@
-// A clock with timers that moves only with runFor: each timer whose time the
-// clock passes fires in time order, with the clock at that time, as
-// setTimeout's would. `delays` and `sleeps` record each timer and each sleep.
-export function buildStubClock() {
-  const state = { nowMs: 0, nextId: 0 };
+// A clock from `startMs` (0) that moves only with runFor: each timer it passes
+// fires in time order, with the clock at that time, as setTimeout's would.
+// `delays` and `sleeps` record each timer and each sleep.
+export function buildStubClock(options: Readonly<{ startMs?: number }> = {}) {
+  const state = { nowMs: options.startMs ?? 0, nextId: 0 };
 
   const pending = new Map<number, { at: number; fire: () => void }>();
 

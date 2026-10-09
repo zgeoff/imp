@@ -123,6 +123,7 @@ type ImpBoundaries = Pick<
   | 'hostCpus'
   | 'memoryLimit'
   | 'now'
+  | 'sleep'
   | 'openTap'
 >;
 

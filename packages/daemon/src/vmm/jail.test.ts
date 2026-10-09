@@ -37,16 +37,31 @@ function setupTest() {
   const processes = buildStubUidProcesses();
   const logs: string[] = [];
 
+  // the mount commands and the kills in the order the jailer makes them
+  const steps: string[] = [];
+
   const jails = createJails({
     jailerBin: 'jailer',
     firecrackerBin: '/usr/local/bin/firecracker',
     chrootBase: join(dataDir, 'jail'),
-    run: mounts.run,
+    run: (argv) => {
+      steps.push(argv.join(' '));
+
+      return mounts.run(argv);
+    },
     readMounts: mounts.readMounts,
     log: (message) => {
       logs.push(message);
     },
     ...processes.deps,
+    killCgroup: (impId) => {
+      steps.push(`kill cgroup ${impId}`);
+      processes.deps.killCgroup(impId);
+    },
+    killUidPid: (pid, uid) => {
+      steps.push(`kill ${String(pid)}`);
+      processes.deps.killUidPid(pid, uid);
+    },
 
     // no real pause between two kill scans
     wait: () => Promise.resolve(),
@@ -62,6 +77,7 @@ function setupTest() {
     mounts,
     processes,
     logs,
+    steps,
     jails,
     paths,
 
@@ -371,8 +387,12 @@ test('#prepare kills the jail cgroup and each process of the jail uid before it 
     `umount --lazy ${ctx.root}: umount: ${ctx.root}: target is busy.`,
   );
 
-  expect(ctx.processes.cgroupKills).toStrictEqual(['i1']);
-  expect(ctx.processes.kills).toStrictEqual([{ pid: 4242, uid: 900_001 }]);
+  expect(ctx.steps).toStrictEqual([
+    'kill cgroup i1',
+    'kill 4242',
+    `umount ${ctx.root}`,
+    `umount --lazy ${ctx.root}`,
+  ]);
 });
 
 test('#prepare refuses a start while a process of the jail uid survives the kills', () => {
@@ -693,6 +713,28 @@ test('#seal refuses a dir the VM left in run/ and deletes nothing', async () => 
   expect(readFileSync(ctx.paths.pidFile, 'utf8')).toBe('1\n');
 });
 
+test('#seal leaves run/ readable by all when it refuses what the VM left there', async () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.paths.disk, '');
+
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+
+  chmodSync(ctx.paths.runDir, 0o700);
+  writeFileSync(ctx.paths.logFile, 'boot\n');
+  writeFileSync(ctx.paths.pidFile, '1\n');
+  mkdirSync(join(ctx.paths.runDir, 'planted'));
+
+  expect(() => {
+    ctx.jails.seal(ctx.paths, 4242);
+  }).toThrowWithMessage(
+    Error,
+    `${ctx.paths.runDir}: the VM left planted there; a VM that writes there is compromised`,
+  );
+
+  expect(lstatSync(ctx.paths.runDir).mode & 0o777).toBe(0o755);
+});
+
 test('#seal refuses a FIFO the VM left in run/ and deletes nothing', async () => {
   const ctx = setupTest();
 
@@ -825,6 +867,33 @@ test('#prepare sweeps a second link to the log out of run/', async () => {
 
   expect(readdirSync(ctx.paths.runDir)).not.toContain('log-link');
   expect(readdirSync(ctx.paths.runDir)).toContain('pid');
+});
+
+test('#prepare keeps only regular files in run/ after it sweeps what the last VM left', async () => {
+  const ctx = setupTest();
+  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+
+  writeFileSync(ctx.paths.disk, '');
+
+  await ctx.jails.prepare(plan);
+
+  writeFileSync(ctx.paths.logFile, 'boot\n');
+  writeFileSync(ctx.paths.pidFile, '1\n');
+  mkdirSync(join(ctx.paths.runDir, 'planted'));
+  symlinkSync('/etc/hostname', join(ctx.paths.runDir, 'link'));
+
+  const mkfifo = Bun.spawnSync(['mkfifo', join(ctx.paths.runDir, 'fifo')]);
+
+  expect(mkfifo.exitCode).toBe(0);
+
+  await ctx.jails.release('i1');
+  await ctx.jails.prepare(plan);
+
+  expect(
+    readdirSync(ctx.paths.runDir).filter(
+      (name) => !lstatSync(join(ctx.paths.runDir, name)).isFile(),
+    ),
+  ).toStrictEqual([]);
 });
 
 test('#prepare sweeps a symlink the last VM left as the pid file', async () => {

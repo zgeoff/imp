@@ -2,15 +2,20 @@ import { faker } from '@faker-js/faker';
 import { buildImpPaths } from '../storage/data-layout';
 import type { TemplateRestorePlan } from '../vmm/template-vm';
 
-// One imp's restore of a template: unjailed, outside any cgroup, its disk
-// ready at once. Its disk path follows its paths, and the claim's id theirs.
-export function buildMockTemplateRestorePlan(
-  overrides: Partial<TemplateRestorePlan> = {},
-): TemplateRestorePlan {
-  const paths =
-    overrides.paths ??
-    buildImpPaths('/data', faker.string.alphanumeric({ length: 12, casing: 'lower' }));
+type TemplateRestorePlanOverrides = Partial<Omit<TemplateRestorePlan, 'paths' | 'claim'>> & {
+  readonly paths?: Partial<TemplateRestorePlan['paths']>;
+  readonly claim?: Partial<TemplateRestorePlan['claim']>;
+};
 
+// One imp's restore of a template: unjailed, outside any cgroup, its disk
+// ready at once. Its paths follow its imp id, its disk path its paths, and
+// the claim's id the imp's; `paths` and `claim` overrides merge into those.
+export function buildMockTemplateRestorePlan(
+  overrides: TemplateRestorePlanOverrides = {},
+): TemplateRestorePlan {
+  const { paths: pathOverrides, claim: claimOverrides, ...rest } = overrides;
+  const impId = pathOverrides?.impId ?? faker.string.alphanumeric({ length: 12, casing: 'lower' });
+  const paths = { ...buildImpPaths('/data', impId), ...pathOverrides };
   const templateDir = `/data/templates/${faker.string.hexadecimal({ length: 12, casing: 'lower', prefix: '' })}`;
 
   return {
@@ -36,7 +41,8 @@ export function buildMockTemplateRestorePlan(
       mac: faker.internet.mac(),
       seed: new Uint8Array(64),
       isIdentityReset: false,
+      ...claimOverrides,
     },
-    ...overrides,
+    ...rest,
   };
 }

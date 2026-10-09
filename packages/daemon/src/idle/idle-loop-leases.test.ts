@@ -107,8 +107,12 @@ async function setupTest() {
       readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
     },
     imps: {
+      // what a live stub VM measures, well inside the default RAM budget, so
+      // no boot waits on the governor
       readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
       readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+
+      // the host grows no disk, as no test here resizes one
       growFilesystem: () => Promise.resolve(false),
       hostCpus: 8,
     },
@@ -171,6 +175,44 @@ test('it holds the imp until the end of its earlier lease once the later lease i
   const held = await findImpByName(ctx.db, 'dev');
 
   expect(held?.holdUntil).toStrictEqual(new Date(at + 60_000));
+});
+
+test('it reports that it released a lease the caller held', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const imp = await ctx.impd.imps.createImp({ name: 'dev' });
+
+  const at = ctx.now();
+
+  await writeLease(
+    ctx.db,
+    {
+      impId: imp.id,
+      principal: 'token:a',
+      display: 'a',
+      createdAt: new Date(at),
+      label: 'late',
+      until: new Date(at + 600_000),
+    },
+    { at, reason: 'held' },
+  );
+
+  const released = await ctx.impd.imps.releaseLease(
+    'dev',
+    { principal: 'token:a', display: 'a' },
+    'late',
+  );
+
+  expect(released).toBeTrue();
 });
 
 test('it keeps an idle imp awake while the earlier of its leases runs', async () => {

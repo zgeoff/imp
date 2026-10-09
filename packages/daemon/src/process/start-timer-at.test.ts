@@ -43,6 +43,8 @@ test('it waits for a far time in steps no longer than setTimeout can take', () =
 
   clock.runFor(30 * 86_400_000);
 
+  // 30 days is more than one longest step of 2^31 - 1 ms and less than two
+  expect(clock.delays).toHaveLength(2);
   expect(clock.delays).toSatisfyAll((ms: number) => ms <= 2 ** 31 - 1);
 });
 

@@ -186,6 +186,11 @@ test('#buildSnapshotIdentity records for a VM with no identity one that boots co
     guestKernel: 'unknown',
     systemDrive: 'unknown',
   });
+});
+
+test('#findColdBootReason boots cold the snapshot of a VM that had no identity', () => {
+  const host = buildMockHostIdentity();
+  const identity = buildSnapshotIdentity(null, host);
 
   expect(findColdBootReason(identity, host)).toBe('the snapshot is from an older impd');
 });
@@ -286,8 +291,9 @@ test('#readSnapshotMeta reads a planted FIFO as meta.json as no snapshot without
   writeFileSync(ctx.paths.vmstate, 'vmstate');
   writeFileSync(ctx.paths.memFile, 'mem');
 
-  Bun.spawnSync(['mkfifo', ctx.paths.snapshotMeta]);
+  const mkfifo = Bun.spawnSync(['mkfifo', ctx.paths.snapshotMeta]);
 
+  expect(mkfifo.exitCode).toBe(0);
   expect(readSnapshotMeta(ctx.paths)).toBeNull();
 });
 

@@ -143,9 +143,12 @@ export function parseKsmStat(text: string): ReadonlyMap<string, string> {
   return fields;
 }
 
-async function readKsmStat(pid: number): Promise<ReadonlyMap<string, string> | null> {
+async function readKsmStat(
+  pid: number,
+  procRoot: string,
+): Promise<ReadonlyMap<string, string> | null> {
   try {
-    const text = await readFile(`/proc/${String(pid)}/ksm_stat`, 'utf8');
+    const text = await readFile(`${procRoot}/${String(pid)}/ksm_stat`, 'utf8');
 
     return parseKsmStat(text);
   } catch {
@@ -155,8 +158,12 @@ async function readKsmStat(pid: number): Promise<ReadonlyMap<string, string> | n
 
 // Whether KSM may merge the VM's guest memory; null when that cannot be read.
 // ksm_stat's ksm_merge_any (6.12) answers at once; before it, the smaps flags.
-export async function checkGuestMemoryMergeable(pid: number): Promise<boolean | null> {
-  const stat = await readKsmStat(pid);
+// `procRoot` is where /proc is mounted, /proc by default.
+export async function checkGuestMemoryMergeable(
+  pid: number,
+  procRoot = '/proc',
+): Promise<boolean | null> {
+  const stat = await readKsmStat(pid, procRoot);
 
   const mergeAny = stat?.get('ksm_merge_any');
 
@@ -165,7 +172,7 @@ export async function checkGuestMemoryMergeable(pid: number): Promise<boolean | 
   }
 
   try {
-    const smaps = await readFile(`/proc/${String(pid)}/smaps`, 'utf8');
+    const smaps = await readFile(`${procRoot}/${String(pid)}/smaps`, 'utf8');
 
     return checkMergeableMappings(smaps);
   } catch {
@@ -175,8 +182,8 @@ export async function checkGuestMemoryMergeable(pid: number): Promise<boolean | 
 
 // What KSM saves in this process less its metadata (ksm_process_profit), in
 // MiB; negative while little is merged, null when unreadable
-export async function readKsmProfitMib(pid: number): Promise<number | null> {
-  const stat = await readKsmStat(pid);
+export async function readKsmProfitMib(pid: number, procRoot = '/proc'): Promise<number | null> {
+  const stat = await readKsmStat(pid, procRoot);
 
   const profit = stat?.get('ksm_process_profit');
 

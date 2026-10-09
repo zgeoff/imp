@@ -33,7 +33,7 @@ function setupTest() {
   return { dir, logPath: join(dir, 'calls.log') };
 }
 
-test('it owns the disk of a jailed restore once the clone is done, before it patches the drive', async () => {
+test('#loadTemplateVm owns the disk of a jailed restore once the clone is done, before it patches the drive', async () => {
   const ctx = setupTest();
   const paths = buildImpPaths(ctx.dir, 'i1');
 
@@ -56,14 +56,19 @@ test('it owns the disk of a jailed restore once the clone is done, before it pat
 
   const restoring = loadTemplateVm(plan, stub.jails);
 
+  // the start writes the pid file in the same tick as the spawn
   await waitFor(() => {
-    expect(existsSync(paths.apiSocket)).toBeTrue();
+    expect(existsSync(paths.pidFile)).toBeTrue();
   });
 
   const pid = Number(readFileSync(paths.pidFile, 'utf8'));
 
   onTestFinished(() => {
     stopProcess(pid);
+  });
+
+  await waitFor(() => {
+    expect(existsSync(paths.apiSocket)).toBeTrue();
   });
 
   await startStubParkedAgent(paths.vsockSocket);
@@ -102,7 +107,7 @@ test('it owns the disk of a jailed restore once the clone is done, before it pat
   ]);
 });
 
-test('it fails a restore whose load fails as a fault of the template', () => {
+test('#loadTemplateVm fails a restore whose load fails as a fault of the template', () => {
   const ctx = setupTest();
   const paths = buildImpPaths(ctx.dir, 'i1');
 
@@ -126,7 +131,7 @@ test('it fails a restore whose load fails as a fault of the template', () => {
   expect(restoring).rejects.toThrow(/^template restore failed: /);
 });
 
-test('it fails a restore whose drive patch fails as a fault of the imp', async () => {
+test('#loadTemplateVm fails a restore whose drive patch fails as a fault of the imp', async () => {
   const ctx = setupTest();
   const paths = buildImpPaths(ctx.dir, 'i1');
 
@@ -156,7 +161,7 @@ test('it fails a restore whose drive patch fails as a fault of the imp', async (
   expect(restoring).rejects.toMatchObject({ isTemplateFault: false });
 });
 
-test('it kills the VM and releases the jail of a restore that fails', () => {
+test('#loadTemplateVm kills the VM and releases the jail of a restore that fails', () => {
   const ctx = setupTest();
   const paths = buildImpPaths(ctx.dir, 'i1');
 
@@ -183,7 +188,7 @@ test('it kills the VM and releases the jail of a restore that fails', () => {
   expect(stub.notes.at(-1)).toBe('release i1');
 });
 
-test('it releases the jail of a restore whose prepare fails, and passes the error on', () => {
+test('#loadTemplateVm releases the jail of a restore whose prepare fails, and passes the error on', () => {
   const ctx = setupTest();
   const paths = buildImpPaths(ctx.dir, 'i1');
   const stub = buildStubJails({ argv: [] });
@@ -200,7 +205,7 @@ test('it releases the jail of a restore whose prepare fails, and passes the erro
   expect(stub.notes).toStrictEqual(['prepare i1 late=true disk=false', 'release i1']);
 });
 
-test('it releases the jail of a build before its files go to root, readable by all', async () => {
+test('#buildTemplateVm releases the jail of a build before its files go to root, readable by all', async () => {
   const ctx = setupTest();
 
   // a build chowns its snapshot files to its uid: the test's own, without root
@@ -250,7 +255,7 @@ test('it releases the jail of a build before its files go to root, readable by a
   expect(lstatSync(plan.vmstate).mode & 0o777).toBe(0o644);
 });
 
-test('it binds the kernel and the system drive into a jailed build read-only', async () => {
+test('#buildTemplateVm binds the kernel and the system drive into a jailed build read-only', async () => {
   const ctx = setupTest();
   const user = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
 
@@ -287,7 +292,7 @@ test('it binds the kernel and the system drive into a jailed build read-only', a
   ]);
 });
 
-test('it fails a build whose VM refuses its config', () => {
+test('#buildTemplateVm fails a build whose VM refuses its config', () => {
   const ctx = setupTest();
 
   const plan = buildMockTemplateBuildPlan({
@@ -309,7 +314,7 @@ test('it fails a build whose VM refuses its config', () => {
   expect(buildTemplateVm(plan, stub.jails)).rejects.toThrow(/^template build failed: /);
 });
 
-test('it releases the jail of a build that fails, and leaves no snapshot', () => {
+test('#buildTemplateVm releases the jail of a build that fails, and leaves no snapshot', () => {
   const ctx = setupTest();
 
   const plan = buildMockTemplateBuildPlan({

@@ -33,14 +33,24 @@ test('it lists a held imp with a hold that never expires', async () => {
   expect(awake[0]?.holdUntil).toBe(Number.MAX_SAFE_INTEGER);
 });
 
-test('it measures an awake imp and nothing for an asleep one', () => {
+test('it measures an awake imp', () => {
   const host = buildStubGovernedHost({
     budgetMib: 1000,
     ids: ['a', 'b'],
     awake: [{ id: 'a', rssMib: 100 }],
   });
 
-  expect([host.deps.readRamMib(1, 'a'), host.deps.readRamMib(2, 'b')]).toStrictEqual([100, null]);
+  expect(host.deps.readRamMib(1, 'a')).toBe(100);
+});
+
+test('it measures nothing for an asleep imp', () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['a', 'b'],
+    awake: [{ id: 'a', rssMib: 100 }],
+  });
+
+  expect(host.deps.readRamMib(2, 'b')).toBeNull();
 });
 
 test('it sleeps an awake imp the governor asks for', async () => {
@@ -175,7 +185,15 @@ test('it marks an admitted imp awake, measuring nothing, active now', () => {
 
   host.markAdmitted('a');
 
-  expect(host.findImp('a')).toMatchObject({ awake: true, rssMib: 0, lastActiveAt: 1_000_000 });
+  expect(host.findImp('a')).toStrictEqual({
+    awake: true,
+    rssMib: 0,
+    lastActiveAt: 1_000_000,
+    held: false,
+    busy: false,
+    failsSleep: false,
+    spareMib: 0,
+  });
 });
 
 test('it finds how far awake imps are over the budget and how many may still sleep', () => {
@@ -208,7 +226,16 @@ test('it reads what an asleep imp holds reserved from the governor usage', async
   });
 
   expect(reserved).toBe(300);
-  expect(host.findImp('a')).toMatchObject({ awake: false, rssMib: 0 });
+
+  expect(host.findImp('a')).toStrictEqual({
+    awake: false,
+    rssMib: 0,
+    lastActiveAt: 0,
+    held: false,
+    busy: false,
+    failsSleep: false,
+    spareMib: 0,
+  });
 });
 
 test('it reads no reservation for an awake imp', async () => {

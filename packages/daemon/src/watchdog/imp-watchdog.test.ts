@@ -310,12 +310,14 @@ test('it writes the memory to the owner-only watchdog slot under snapshot, then 
   const slot = buildWatchdogSlot(buildImpPaths(ctx.dataDir, created.id).dir);
 
   const imp = await findImpByName(ctx.db, 'dev');
+  const boots = await listColdBoots(ctx.db, created.id);
 
   expect(statSync(slot.snapshotDir).mode & 0o777).toBe(0o700);
   expect(statSync(slot.memFile).mode & 0o777).toBe(0o600);
   expect(statSync(slot.snapshotMeta).mode & 0o777).toBe(0o600);
   expect(imp?.state).toBe('running');
   expect(ctx.vmm.alive.has(created.pid)).toBeFalse();
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['watchdog', 'start']);
 });
 
 test('it removes the watchdog slot with a destroyed imp', async () => {

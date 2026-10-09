@@ -897,6 +897,49 @@ test('#buildStubVmm never settles an in-flight call once its impd is replaced', 
   expect(Bun.peek.status(call)).toBe('pending');
 });
 
+test('#buildStubVmm never settles an in-flight call that fails once its impd is replaced', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.queue('grow', 'fail');
+
+  const hold = ctx.fake.hold('grow');
+  const call = ctx.runner.growDrive(ctx.paths, 1024);
+
+  await hold.reached;
+
+  ctx.fake.startGeneration();
+  hold.release();
+
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
+
+  expect(Bun.peek.status(call)).toBe('pending');
+});
+
+test('#buildStubVmm never settles a jail sweep by a runner whose impd was replaced', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.startGeneration();
+
+  const call = ctx.runner.removeOrphanJails(new Set());
+
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
+
+  expect(Bun.peek.status(call)).toBe('pending');
+  expect(ctx.fake.sweeps).toStrictEqual([]);
+});
+
+test('#buildStubVmm throws on a VM listing by a runner whose impd was replaced', async () => {
+  const ctx = await setupTest();
+
+  ctx.fake.startGeneration();
+
+  expect(() => ctx.runner.listVms()).toThrowWithMessage(Error, 'this impd was replaced');
+});
+
 test('#buildStubVmm throws on a liveness check by a runner whose impd was replaced', async () => {
   const ctx = await setupTest();
 

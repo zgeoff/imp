@@ -1,35 +1,20 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
 import { createAgentWatchdog } from './agent-watchdog';
 
+// A clock the test moves and the watchdog's log; the agent's answer to the
+// longer ping and the recovery are the test's to give.
 function setupTest() {
   const clock = { nowMs: 0 };
   const logs: string[] = [];
 
-  // when each recovery that went ahead started
-  const recoveries: number[] = [];
-
-  // whether the agent answers the watchdog's longer ping, and whether no
-  // other operation holds the imp when a recovery takes its lock
-  const agent = { answersPing: false, isLockFree: true };
-
   return {
     clock,
     logs,
-    recoveries,
-    agent,
     deps: {
       now: () => clock.nowMs,
       log: (message: string) => {
         logs.push(message);
-      },
-      confirmSilent: () => Promise.resolve(!agent.answersPing),
-      recover: () => {
-        if (agent.isLockFree) {
-          recoveries.push(clock.nowMs);
-        }
-
-        return Promise.resolve(agent.isLockFree);
       },
     },
   };
@@ -38,7 +23,15 @@ function setupTest() {
 test('it reports a silent agent once, past the timeout and a failed ping', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'report' });
+  const recover = mock(() => Promise.resolve(true));
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover,
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
   watchdog.observe(imp, false);
 
@@ -60,13 +53,20 @@ test('it reports a silent agent once, past the timeout and a failed ping', async
     'impd: dev: the agent has not answered for 60s; its VM still runs (watchdog: report)',
   ]);
 
-  expect(ctx.recoveries).toStrictEqual([]);
+  expect(recover).not.toHaveBeenCalled();
 });
 
 test('it reports no silence before the timeout', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'report' });
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
   watchdog.observe(imp, false);
 
@@ -83,9 +83,14 @@ test('it reports no silence before the timeout', async () => {
 test('it reports no silence for an agent that answers the longer ping', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'report' });
 
-  ctx.agent.answersPing = true;
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(false),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
   watchdog.observe(imp, false);
 
@@ -102,7 +107,14 @@ test('it reports no silence for an agent that answers the longer ping', async ()
 test('it ends a reported silence and logs it when the idle loop gets an answer again', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'report' });
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
   watchdog.observe(imp, false);
 
@@ -123,7 +135,19 @@ test('it ends a reported silence and logs it when the idle loop gets an answer a
 test('it backs off restarts, then stops at three an hour', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'restart' });
+  const recoveredAt: number[] = [];
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => {
+      recoveredAt.push(ctx.clock.nowMs);
+
+      return Promise.resolve(true);
+    },
+    timeoutMs: 60_000,
+    action: 'restart',
+  });
 
   // silent for good: each restart's new agent goes silent too, and each
   // silence is two looks this far apart
@@ -138,16 +162,24 @@ test('it backs off restarts, then stops at three an hour', async () => {
   }
 
   // 60 s, then 60 s after the first, then 120 s after the second; none after
-  expect(ctx.recoveries).toStrictEqual([60_000, 120_000, 240_000]);
+  expect(recoveredAt).toStrictEqual([60_000, 120_000, 240_000]);
   expect(ctx.logs.filter((line) => line.includes('it only reports now'))).toHaveLength(1);
 });
 
 test('it tries a restart another operation held off again at the next look', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'restart' });
 
-  ctx.agent.isLockFree = false;
+  // the first try finds the imp's lock taken; the second gets it
+  const recover = mock(() => Promise.resolve(true)).mockResolvedValueOnce(false);
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover,
+    timeoutMs: 60_000,
+    action: 'restart',
+  });
 
   watchdog.observe(imp, false);
 
@@ -157,20 +189,26 @@ test('it tries a restart another operation held off again at the next look', asy
 
   await watchdog.settle();
 
-  ctx.agent.isLockFree = true;
   ctx.clock.nowMs = 62_000;
 
   watchdog.observe(imp, false);
 
   await watchdog.settle();
 
-  expect(ctx.recoveries).toStrictEqual([62_000]);
+  expect(recover).toHaveBeenCalledTimes(2);
 });
 
 test('it starts the silence of an imp that is held or gone over', async () => {
   const ctx = setupTest();
   const imp = buildMockImpRecord({ name: 'dev' });
-  const watchdog = createAgentWatchdog({ ...ctx.deps, timeoutMs: 60_000, action: 'report' });
+
+  const watchdog = createAgentWatchdog({
+    ...ctx.deps,
+    confirmSilent: () => Promise.resolve(true),
+    recover: () => Promise.resolve(true),
+    timeoutMs: 60_000,
+    action: 'report',
+  });
 
   watchdog.observe(imp, false);
 

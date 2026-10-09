@@ -2,11 +2,18 @@ import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
 import type { TemplateBuildPlan } from '../vmm/template-vm';
 
+type TemplateBuildPlanOverrides = Partial<Omit<TemplateBuildPlan, 'paths'>> & {
+  readonly paths?: Partial<TemplateBuildPlan['paths']>;
+};
+
 // The cold boot a template is made from: unjailed, outside any cgroup, with
-// no wait for the guest's age. Its run paths and snapshot follow its work dir.
+// no wait for the guest's age. Its run paths and snapshot follow its work
+// dir; a `paths` override merges into those.
 export function buildMockTemplateBuildPlan(
-  overrides: Partial<TemplateBuildPlan> = {},
+  overrides: TemplateBuildPlanOverrides = {},
 ): TemplateBuildPlan {
+  const { paths: pathOverrides, ...rest } = overrides;
+
   const workDir =
     overrides.workDir ??
     `/data/templates/.build-${faker.string.alphanumeric({ length: 8, casing: 'lower' })}`;
@@ -28,6 +35,7 @@ export function buildMockTemplateBuildPlan(
       vsockSocket: join(runDir, 'vsock.sock'),
       logFile: join(runDir, 'firecracker.log'),
       pidFile: join(runDir, 'pid'),
+      ...pathOverrides,
     },
     placeholderPath: join(workDir, 'placeholder.ext4'),
     tap: 'imp-tpl',
@@ -39,6 +47,6 @@ export function buildMockTemplateBuildPlan(
     snapshotDir,
     vmstate: join(snapshotDir, 'vmstate'),
     memFile: join(snapshotDir, 'mem'),
-    ...overrides,
+    ...rest,
   };
 }

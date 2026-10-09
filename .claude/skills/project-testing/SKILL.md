@@ -435,8 +435,8 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 
 1. `vmm/firecracker-client.test.ts`: a `Bun.serve({ unix })` that records each call and answers from
    a table, or never answers.
-2. `vmm/template-vm.test.ts` and `vmm/vm-runner.test.ts` run
-   `test-utils/run-stub-firecracker-api.ts` as the VMM process, with the API socket in its argv.
+2. `vmm/template-vm.test.ts` and `vmm/vm-runner.test.ts` run `test-utils/run-stub-firecracker.ts` as
+   the VMM process, with the API socket in its argv.
 3. `vmm/firecracker-process.test.ts`: `bash` run under the name `firecracker`; it serves nothing.
 4. `startStubDockerEngine`: a `Bun.serve({ unix })` in the test's temp dir, over `@msw/data`
    collections of containers and images; a call it does not model gets a 500 that names it and lands
@@ -463,11 +463,14 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 11. An MSW handler a test adds with `server.use`; an unissued refresh token gets `invalid_grant`.
 12. `countHungCalls` and `countParkedCalls` count the calls that wait on a `hang` or on a runner of
     an older generation; a test waits for them with `waitFor` before it peeks at the call.
-13. `buildStubGuestMemory` finds each plug or unplug done on the next read, for the memory
-    controller; `buildStubElasticGuest` unplugs one step per read, for `memory/shrink-guest.ts`.
+13. The three guest-memory stand-ins apply an unplug at different times. `buildStubVmm` applies it
+    when the request comes, down to the guest's floor. `buildStubGuestMemory` shows it done on the
+    next read, for the memory controller. `buildStubElasticGuest` unplugs one step per read, for
+    `memory/shrink-guest.ts`. The last two refuse a size that is not whole 2 MiB blocks within the
+    region, with Firecracker's 400.
 14. `governor/ram-governor.property.test.ts` draws its cases from
-    `test-utils/build-mock-governor-arbitraries.ts`. Each case builds its own host and governor,
-    which hold nothing to release.
+    `test-utils/build-stub-governed-host-arbitraries.ts`. Each case builds its own host and
+    governor, which hold nothing to release.
 
 The mcp package's tests boot impd's real app with `createImpd` and reach it through the real
 `@zgeoff/imp-client`, whose `fetch` is `impd.api.app.handle`. A test that needs a tool call to wait

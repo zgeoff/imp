@@ -41,6 +41,39 @@ test('it derives the disk path and the claim id from overridden paths', () => {
   expect(plan.claim.id).toBe('i1');
 });
 
+test('it merges a partial claim override into the default claim', () => {
+  const plan = buildMockTemplateRestorePlan({
+    paths: buildImpPaths('/srv', 'i1'),
+    claim: { hostname: 'dev', isIdentityReset: true },
+  });
+
+  expect(plan.claim).toStrictEqual({
+    id: 'i1',
+    hostname: 'dev',
+    ip: '10.66.0.2/30',
+    gw: '10.66.0.1',
+    ip6: null,
+    gw6: null,
+    dns: ['1.1.1.1'],
+    mac: expect.toBeString(),
+    seed: new Uint8Array(64),
+    isIdentityReset: true,
+  });
+});
+
+test('it merges a partial paths override into the paths of its imp id', () => {
+  const plan = buildMockTemplateRestorePlan({
+    paths: { impId: 'i1', disk: '/elsewhere/disk.ext4' },
+  });
+
+  expect(plan.paths).toStrictEqual({
+    ...buildImpPaths('/data', 'i1'),
+    disk: '/elsewhere/disk.ext4',
+  });
+
+  expect(plan.diskPath).toBe('/elsewhere/disk.ext4');
+});
+
 test('it applies overrides on top of the defaults', () => {
   const diskReady = Promise.resolve(0);
 

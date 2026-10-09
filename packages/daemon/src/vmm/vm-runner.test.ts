@@ -347,6 +347,37 @@ test('#stopVm releases the jail on a hard stop, as a checkpoint restore asks', a
   expect(stub.notes).toStrictEqual(['release vm']);
 });
 
+test('#isVmAlive reads the liveness of a VM from the given /proc', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'proc', '42'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'proc', '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+
+  writeFileSync(
+    join(ctx.dir, 'proc', '42', 'cmdline'),
+    `firecracker\0--api-sock\0${ctx.paths.apiSocket}\0`,
+  );
+
+  const runner = createVmRunner(buildStubJails().jails, null, sendPing, join(ctx.dir, 'proc'));
+
+  expect(runner.isVmAlive(42, ctx.paths)).toBeTrue();
+});
+
+test('#stopVm only releases the jail of a VM the given /proc shows gone', async () => {
+  const ctx = setupTest();
+  const stub = buildStubJails();
+
+  mkdirSync(join(ctx.dir, 'proc'));
+
+  await createVmRunner(stub.jails, null, sendPing, join(ctx.dir, 'proc')).stopVm(
+    42,
+    ctx.paths,
+    true,
+  );
+
+  expect(stub.notes).toStrictEqual(['release vm']);
+});
+
 test('#wakeVm releases the mounts of a jail prepare that fails partway, and restores the limit', () => {
   const ctx = setupTest();
   const calls: string[] = [];

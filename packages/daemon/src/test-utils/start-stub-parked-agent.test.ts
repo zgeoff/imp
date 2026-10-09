@@ -20,7 +20,7 @@ test('it answers a ping as a parked template guest a minute old', async () => {
 
   const ping = await sendPing(join(ctx.dir, 'v.sock'));
 
-  expect(ping).toMatchObject({ ok: true, version: '0.1.0', uptime_ms: 60_000, stage: 'template' });
+  expect(ping).toStrictEqual({ ok: true, version: '0.1.0', uptime_ms: 60_000, stage: 'template' });
 });
 
 test('it answers a ping as a booted imp once claimed', async () => {

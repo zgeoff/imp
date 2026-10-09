@@ -33,16 +33,25 @@ test('it waits out the rest of the minimum uptime for a young guest', async () =
 
 test('it checks whether the sleep is still wanted every 50 ms of the wait', async () => {
   const clock = buildStubClock();
+  const steps: (number | 'check')[] = [];
 
   await waitForGuestAge({
     readUptimeMs: () => Promise.resolve(1380),
     minUptimeMs: 1500,
-    isWanted: () => Promise.resolve(true),
+    isWanted: () => {
+      steps.push('check');
+
+      return Promise.resolve(true);
+    },
     now: clock.now,
-    sleep: clock.sleep,
+    sleep: (ms) => {
+      steps.push(ms);
+
+      return clock.sleep(ms);
+    },
   });
 
-  expect(clock.sleeps).toStrictEqual([50, 50, 20]);
+  expect(steps).toStrictEqual(['check', 50, 'check', 50, 'check', 20, 'check']);
 });
 
 test('it turns the wait off at a minimum of 0 without asking the agent', async () => {

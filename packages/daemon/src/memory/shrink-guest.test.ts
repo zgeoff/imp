@@ -34,6 +34,7 @@ test('#shrinkGuest waits until the guest gets to the target', async () => {
   const stub = buildStubElasticGuest({
     baseMib: 512,
     usedMib: 600,
+    regionMib: 1024,
     pluggedMib: 1024,
     requestedMib: 1024,
     stepMib: 200,
@@ -56,6 +57,7 @@ test('#shrinkGuest asks an unplug that stops partway back to what it reached', a
   const stub = buildStubElasticGuest({
     baseMib: 512,
     usedMib: 600,
+    regionMib: 1024,
     pluggedMib: 1024,
     requestedMib: 1024,
     stepMib: 200,
@@ -81,6 +83,7 @@ test('#shrinkGuest ends a slow unplug at the time limit with what the guest hold
   const stub = buildStubElasticGuest({
     baseMib: 512,
     usedMib: 600,
+    regionMib: 1024,
     pluggedMib: 1024,
     requestedMib: 1024,
     stepMib: 16,
@@ -102,6 +105,7 @@ test('#shrinkGuest asks nothing of a guest with nothing to spare', async () => {
   const stub = buildStubElasticGuest({
     baseMib: 512,
     usedMib: 600,
+    regionMib: 1024,
     pluggedMib: 300,
     requestedMib: 300,
     stepMib: 200,
@@ -119,6 +123,7 @@ test('#shrinkGuest counts a plug under way at its request', async () => {
   const stub = buildStubElasticGuest({
     baseMib: 512,
     usedMib: 600,
+    regionMib: 1024,
     pluggedMib: 300,
     requestedMib: 556,
     stepMib: 200,

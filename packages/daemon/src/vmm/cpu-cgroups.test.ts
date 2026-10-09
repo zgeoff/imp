@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import {
   buildMemoryMax,
   createCpuCgroups,
@@ -92,7 +93,10 @@ test('#liftLimit lifts the CPU limit while a snapshot is made', () => {
   const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
   const cgroup = cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
 
-  cgroup?.liftLimit();
+  invariant(cgroup);
+
+  cgroup.liftLimit();
+
   expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.max'), 'utf8')).toBe('max 100000');
 });
 
@@ -104,8 +108,11 @@ test('#applyLimit puts the CPU limit back after a snapshot', () => {
   const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
   const cgroup = cgroups.setup('a', { limit: 0.5, weight: 200 }, 512);
 
-  cgroup?.liftLimit();
-  cgroup?.applyLimit();
+  invariant(cgroup);
+
+  cgroup.liftLimit();
+  cgroup.applyLimit();
+
   expect(readFileSync(join(ctx.root, 'imps', 'a', 'cpu.max'), 'utf8')).toBe('50000 100000');
 });
 
@@ -273,7 +280,9 @@ test('#liftLimit keeps memory.max while a snapshot is made', () => {
   const cgroups = createCpuCgroups({ root: ctx.root, procRoot: ctx.proc, log: ctx.log });
   const cgroup = cgroups.setup('a', { limit: null, weight: 100 }, 1024);
 
-  cgroup?.liftLimit();
+  invariant(cgroup);
+
+  cgroup.liftLimit();
 
   expect(readFileSync(join(ctx.root, 'imps', 'a', 'memory.max'), 'utf8')).toBe(
     String(1280 * 1024 * 1024),

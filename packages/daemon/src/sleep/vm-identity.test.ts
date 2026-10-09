@@ -2,13 +2,13 @@ import { expect, test } from 'bun:test';
 import { buildMockHostIdentity } from '../test-utils/build-mock-host-identity';
 import { findOutdatedParts } from './vm-identity';
 
-test('#findOutdatedParts finds nothing outdated in a VM booted as the host boots now', () => {
+test('it finds nothing outdated in a VM booted as the host boots now', () => {
   const host = buildMockHostIdentity();
 
   expect(findOutdatedParts(host, host)).toStrictEqual([]);
 });
 
-test('#findOutdatedParts names each part the host has a newer one of', () => {
+test('it names each part the host has a newer one of', () => {
   const host = buildMockHostIdentity();
 
   expect(
@@ -22,13 +22,13 @@ test('#findOutdatedParts names each part the host has a newer one of', () => {
 test.each([
   ['no prefix', null],
   ['a prefix left out by an older impd', undefined],
-])('#findOutdatedParts names ipv6 for a VM with %s on a host with IPv6', (_label, ipv6Prefix) => {
+])('it names ipv6 for a VM with %s on a host with IPv6', (_label, ipv6Prefix) => {
   const host = buildMockHostIdentity({ ipv6Prefix: 'fd12:3456:789a::/64' });
 
   expect(findOutdatedParts({ ...host, ipv6Prefix }, host)).toStrictEqual(['ipv6']);
 });
 
-test('#findOutdatedParts names no ipv6 when the host has IPv6 off', () => {
+test('it names no ipv6 when the host has IPv6 off', () => {
   const host = buildMockHostIdentity({ ipv6Prefix: null });
 
   expect(findOutdatedParts(host, host)).toStrictEqual([]);

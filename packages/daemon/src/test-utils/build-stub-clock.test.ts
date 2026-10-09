@@ -9,6 +9,14 @@ test('it starts at 0 and moves only with runFor', () => {
   expect(clock.now()).toBe(1500);
 });
 
+test('it starts at the time it is given', () => {
+  const clock = buildStubClock({ startMs: 1_700_000_000_000 });
+
+  clock.runFor(1500);
+
+  expect(clock.now()).toBe(1_700_000_001_500);
+});
+
 test('it fires no timer before its time', () => {
   const clock = buildStubClock();
   const fired: number[] = [];

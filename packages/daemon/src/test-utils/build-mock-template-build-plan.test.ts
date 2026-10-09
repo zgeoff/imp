@@ -39,6 +39,18 @@ test('it derives the run paths and the snapshot from an overridden work dir', ()
   expect(plan.memFile).toBe('/tmp/b/snapshot/mem');
 });
 
+test('it merges a partial paths override into the run paths of its work dir', () => {
+  const plan = buildMockTemplateBuildPlan({ workDir: '/w', paths: { pidFile: '/elsewhere/pid' } });
+
+  expect(plan.paths).toStrictEqual({
+    runDir: '/w/run',
+    apiSocket: '/w/run/api.sock',
+    vsockSocket: '/w/run/vsock.sock',
+    logFile: '/w/run/firecracker.log',
+    pidFile: '/elsewhere/pid',
+  });
+});
+
 test('it applies overrides on top of the defaults', () => {
   const paths = {
     runDir: '/w/run',

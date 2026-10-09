@@ -32,7 +32,7 @@ function setupTest() {
   return { dir, owner };
 }
 
-test('it writes a regular file in place of a planted symlink and leaves its target untouched', () => {
+test('#writeRegularFile writes a regular file in place of a planted symlink and leaves its target untouched', () => {
   const ctx = setupTest();
   const target = join(ctx.dir, 'target');
   const link = join(ctx.dir, 'link');
@@ -46,7 +46,7 @@ test('it writes a regular file in place of a planted symlink and leaves its targ
   expect(readFileSync(target, 'utf8')).toBe('untouched');
 });
 
-test('it writes a regular file in place of a planted FIFO without blocking', () => {
+test('#writeRegularFile writes a regular file in place of a planted FIFO without blocking', () => {
   const ctx = setupTest();
   const fifo = join(ctx.dir, 'fifo');
 
@@ -58,7 +58,7 @@ test('it writes a regular file in place of a planted FIFO without blocking', () 
   expect(readFileSync(fifo, 'utf8')).toBe('pid 1\n');
 });
 
-test('it opens the log as a regular file in place of a planted symlink and leaves its target untouched', () => {
+test('#setupLogFile opens the log as a regular file in place of a planted symlink and leaves its target untouched', () => {
   const ctx = setupTest();
   const target = join(ctx.dir, 'target');
   const link = join(ctx.dir, 'link');
@@ -76,7 +76,7 @@ test('it opens the log as a regular file in place of a planted symlink and leave
   expect(readFileSync(target, 'utf8')).toBe('untouched');
 });
 
-test('it opens the log as a regular file in place of a planted FIFO without blocking', () => {
+test('#setupLogFile opens the log as a regular file in place of a planted FIFO without blocking', () => {
   const ctx = setupTest();
   const fifo = join(ctx.dir, 'fifo');
 
@@ -91,7 +91,7 @@ test('it opens the log as a regular file in place of a planted FIFO without bloc
   expect(readFileSync(fifo, 'utf8')).toBe('line\n');
 });
 
-test('it reads a regular file', () => {
+test('#readRegularFile reads a regular file', () => {
   const ctx = setupTest();
   const file = join(ctx.dir, 'file');
 
@@ -100,7 +100,7 @@ test('it reads a regular file', () => {
   expect(readRegularFile(file)).toBe('untouched');
 });
 
-test('it refuses to read through a symlink', () => {
+test('#readRegularFile refuses to read through a symlink', () => {
   const ctx = setupTest();
   const target = join(ctx.dir, 'target');
   const link = join(ctx.dir, 'link');
@@ -111,7 +111,7 @@ test('it refuses to read through a symlink', () => {
   expect(() => readRegularFile(link)).toThrow('ELOOP');
 });
 
-test('it refuses to read a FIFO without blocking', () => {
+test('#readRegularFile refuses to read a FIFO without blocking', () => {
   const ctx = setupTest();
   const fifo = join(ctx.dir, 'fifo');
 
@@ -120,7 +120,7 @@ test('it refuses to read a FIFO without blocking', () => {
   expect(() => readRegularFile(fifo)).toThrowWithMessage(Error, `${fifo} is not a regular file`);
 });
 
-test('it makes a snapshot file new in place of a planted symlink and leaves its target untouched', () => {
+test('#createOwnedFile makes a snapshot file new in place of a planted symlink and leaves its target untouched', () => {
   const ctx = setupTest();
   const target = join(ctx.dir, 'target');
   const link = join(ctx.dir, 'link');
@@ -137,7 +137,7 @@ test('it makes a snapshot file new in place of a planted symlink and leaves its 
   expect(readFileSync(target, 'utf8')).toBe('untouched');
 });
 
-test('it makes a snapshot file new in place of a planted FIFO', () => {
+test('#createOwnedFile makes a snapshot file new in place of a planted FIFO', () => {
   const ctx = setupTest();
   const fifo = join(ctx.dir, 'fifo');
 
@@ -152,7 +152,7 @@ test('it makes a snapshot file new in place of a planted FIFO', () => {
   expect(made.mode & 0o777).toBe(0o600);
 });
 
-test('it makes a snapshot file new and empty in place of an old one', () => {
+test('#createOwnedFile makes a snapshot file new and empty in place of an old one', () => {
   const ctx = setupTest();
   const file = join(ctx.dir, 'mem');
 
@@ -167,7 +167,7 @@ test('it makes a snapshot file new and empty in place of an old one', () => {
   expect(made.uid).toBe(ctx.owner.uid);
 });
 
-test('it accepts a socket', () => {
+test('#requireSocket accepts a socket', () => {
   const ctx = setupTest();
   const path = join(ctx.dir, 'api.sock');
   const server = Bun.listen({ unix: path, socket: { data: () => {} } });
@@ -181,7 +181,7 @@ test('it accepts a socket', () => {
   }).not.toThrow();
 });
 
-test('it refuses a symlink to a socket', () => {
+test('#requireSocket refuses a symlink to a socket', () => {
   const ctx = setupTest();
   const path = join(ctx.dir, 'api.sock');
   const link = join(ctx.dir, 'sock-link');
@@ -198,7 +198,7 @@ test('it refuses a symlink to a socket', () => {
   }).toThrowWithMessage(Error, `${link} is not a socket`);
 });
 
-test('it refuses a FIFO in place of a socket', () => {
+test('#requireSocket refuses a FIFO in place of a socket', () => {
   const ctx = setupTest();
   const fifo = join(ctx.dir, 'fifo');
 

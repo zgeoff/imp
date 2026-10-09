@@ -1,9 +1,9 @@
 import fc from 'fast-check';
 import type { HostChange } from './build-stub-governed-host';
 
-// Generators for a governed host's property cases over imps `ids`: the imps
-// awake at the start, an admit, and a change to the host between calls.
-export function buildMockGovernorArbitraries(ids: readonly string[]) {
+// Generators for the property cases of buildStubGovernedHost over imps
+// `ids`: the imps awake at the start, an admit, and a change between calls.
+export function buildStubGovernedHostArbitraries(ids: readonly string[]) {
   const id = fc.constantFrom(...ids);
 
   return {

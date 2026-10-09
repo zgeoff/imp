@@ -18,9 +18,8 @@ function setupTest() {
 
   const plugged = new Map<string, number>();
 
-  const ram = { mib: 400 };
-
-  const deps: MemoryControllerDeps = {
+  // the RAM each VM owns is the test's to give, as `readRamMib`
+  const deps: Omit<MemoryControllerDeps, 'readRamMib'> = {
     listElastic: () => Promise.resolve(imps),
     vms: guests.vms,
     isLocked: () => false,
@@ -43,7 +42,6 @@ function setupTest() {
         limits.push(`${id} ${String(guestMib)}`);
       },
     },
-    readRamMib: () => ram.mib,
     setPluggedMib: (id, mib) => {
       if (mib === null) {
         plugged.delete(id);
@@ -67,7 +65,6 @@ function setupTest() {
     releases,
     logs,
     plugged,
-    ram,
     advance: (ms: number) => {
       clock.now += ms;
     },
@@ -87,7 +84,7 @@ test('it grows a guest low on memory by a step, its limit raised before the plug
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 490 });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
 
@@ -110,7 +107,7 @@ test('it records what a grown guest holds without growing it again', async () =>
   ctx.imps.push(imp);
 
   const guest = ctx.guests.addGuest(imp.paths, { usedMib: 490 });
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -132,8 +129,9 @@ test('it grows a guest step by step to its max and no further', async () => {
 
   ctx.imps.push(imp);
 
-  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 2000 });
-  const controller = createMemoryController(ctx.deps);
+  // 488 MiB of growth to the max, in whole 128 MiB slots
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 2000, regionMib: 512 });
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   for (let tick = 0; tick < 5; tick += 1) {
     await controller.runTick();
@@ -159,7 +157,7 @@ test('it leaves a guest whose grow is refused at its size, and logs it once', as
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 500 });
 
-  const controller = createMemoryController({ ...ctx.deps, admitGrow });
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400, admitGrow });
 
   await controller.runTick();
   await controller.runTick();
@@ -180,7 +178,7 @@ test.each([
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 490 });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -207,7 +205,7 @@ test('it waits for a plug under way and never asks twice', async () => {
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -228,9 +226,8 @@ test('it keeps a guest that could give back a step for less than a minute', asyn
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
 
-  ctx.ram.mib = 1400;
-
-  const controller = createMemoryController(ctx.deps);
+  const ram = { mib: 1400 };
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => ram.mib });
 
   await controller.runTick();
 
@@ -254,9 +251,8 @@ test('it shrinks a guest that could give back a step for a minute', async () => 
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
 
-  ctx.ram.mib = 1400;
-
-  const controller = createMemoryController(ctx.deps);
+  const ram = { mib: 1400 };
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => ram.mib });
 
   await controller.runTick();
 
@@ -286,9 +282,8 @@ test('it keeps the limit of a shrunk guest until its RSS falls', async () => {
     usedMib: 600,
   });
 
-  ctx.ram.mib = 1400;
-
-  const controller = createMemoryController(ctx.deps);
+  const ram = { mib: 1400 };
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => ram.mib });
 
   await controller.runTick();
 
@@ -314,9 +309,8 @@ test('it lowers the limit of a shrunk guest once its RSS falls', async () => {
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
 
-  ctx.ram.mib = 1400;
-
-  const controller = createMemoryController(ctx.deps);
+  const ram = { mib: 1400 };
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => ram.mib });
 
   await controller.runTick();
 
@@ -325,7 +319,7 @@ test('it lowers the limit of a shrunk guest once its RSS falls', async () => {
   await controller.runTick();
   await controller.runTick();
 
-  ctx.ram.mib = 800;
+  ram.mib = 800;
 
   await controller.runTick();
 
@@ -351,9 +345,7 @@ test('it counts what the guest holds once an unplug stops partway', async () => 
     unplugFloorMib: 768,
   });
 
-  ctx.ram.mib = 100;
-
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 100 });
 
   await controller.runTick();
 
@@ -384,9 +376,7 @@ test('it asks an unplug that stops partway back to what the guest holds, and log
     unplugFloorMib: 768,
   });
 
-  ctx.ram.mib = 100;
-
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 100 });
 
   await controller.runTick();
 
@@ -423,9 +413,7 @@ test('it sets the limit to what the guest holds after an unplug stops partway', 
     unplugFloorMib: 768,
   });
 
-  ctx.ram.mib = 100;
-
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 100 });
 
   await controller.runTick();
 
@@ -461,9 +449,7 @@ test('it starts no new shrink before the back-off of a stopped unplug ends', asy
     unplugFloorMib: 768,
   });
 
-  ctx.ram.mib = 100;
-
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 100 });
 
   await controller.runTick();
 
@@ -500,6 +486,7 @@ test('it leaves a locked imp alone', async () => {
 
   const controller = createMemoryController({
     ...ctx.deps,
+    readRamMib: () => 400,
     isLocked: () => true,
     tryWhileRunning: () => Promise.resolve(false),
   });
@@ -523,7 +510,7 @@ test('it sets the limit of an adopted VM to what its guest holds', async () => {
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { pluggedMib: 512, requestedMib: 512, usedMib: 600 });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
 
@@ -544,7 +531,7 @@ test('it forgets what an imp held once the imp no longer runs', async () => {
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { pluggedMib: 512, requestedMib: 512, usedMib: 600 });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
 
@@ -590,7 +577,11 @@ test('it reclaims from idle guests only, and counts what they gave back', async 
   ctx.guests.addGuest(busy.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
   ctx.guests.addGuest(asker.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
 
-  const controller = createMemoryController({ ...ctx.deps, isBusy: (id) => id === 'busy' });
+  const controller = createMemoryController({
+    ...ctx.deps,
+    readRamMib: () => 400,
+    isBusy: (id) => id === 'busy',
+  });
 
   const freed = await controller.reclaimIdle('asker');
 
@@ -617,9 +608,10 @@ test('it shrinks a large guest to leave 15 % of it free', async () => {
     pluggedMib: 2048,
     requestedMib: 2048,
     usedMib: 2000,
+    regionMib: 3072,
   });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
 
@@ -648,9 +640,10 @@ test('it never grows a large guest back on the ticks after it shrinks', async ()
     pluggedMib: 2048,
     requestedMib: 2048,
     usedMib: 2000,
+    regionMib: 3072,
   });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
 
@@ -682,7 +675,7 @@ test('it asks a plug that never finishes back, and logs it', async () => {
   ctx.imps.push(imp);
 
   const guest = ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -709,7 +702,7 @@ test('it lowers the limit again after a plug that never finishes', async () => {
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -735,7 +728,7 @@ test('it asks for no grow before the back-off of a plug that never finished ends
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -765,7 +758,7 @@ test('it logs a second plug that never finishes no more', async () => {
   ctx.imps.push(imp);
   ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
 
-  const controller = createMemoryController(ctx.deps);
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
 
   await controller.runTick();
   await controller.runTick();
@@ -803,6 +796,7 @@ test('it plugs nothing for a grow that a sleep overtakes, and gives its reservat
 
   const controller = createMemoryController({
     ...ctx.deps,
+    readRamMib: () => 400,
     tryWhileRunning: () => Promise.resolve(false),
   });
 

@@ -8,8 +8,8 @@ interface StubFirecrackerAnswer {
 }
 
 interface StubFirecrackerApiOptions {
-  // answers by `<METHOD> <path>`; any other call gets 204 and no body, as
-  // Firecracker answers a PUT or PATCH it takes
+  // answers by `<METHOD> <path>`; any other GET gets 200 and an empty JSON
+  // object, and any other PUT or PATCH 204 and no body
   readonly answers?: Readonly<Record<string, StubFirecrackerAnswer>>;
 
   // true: it takes each request and never answers, like a wedged VMM
@@ -45,6 +45,10 @@ export function startStubFirecrackerApi(
       }
 
       const answer = options.answers?.[`${request.method} ${path}`];
+
+      if (answer === undefined && request.method === 'GET') {
+        return Response.json({}, { status: 200 });
+      }
 
       if (answer === undefined) {
         return new Response(null, { status: 204 });

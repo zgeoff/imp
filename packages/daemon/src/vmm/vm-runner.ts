@@ -210,6 +210,9 @@ export function createVmRunner(
 
   // asks the agent with a deadline; sendPing by default
   sendUptimePing: typeof sendPing = sendPing,
+
+  // where /proc is mounted, for the liveness checks
+  procRoot = '/proc',
 ): VmRunner {
   const removeVmMounts = (paths: ImpPaths): Promise<void> => jails.release(paths.impId);
 
@@ -261,7 +264,7 @@ export function createVmRunner(
   };
 
   const stopVm = async (pid: number, paths: ImpPaths, graceful: boolean): Promise<void> => {
-    if (!isFirecrackerAlive(pid, paths.apiSocket)) {
+    if (!isFirecrackerAlive(pid, paths.apiSocket, procRoot)) {
       await removeVmMounts(paths);
 
       return;
@@ -529,7 +532,7 @@ export function createVmRunner(
     requestPluggedMib: async (paths, mib) => {
       await createFirecrackerClient(paths.apiSocket, GUEST_MEMORY_TIMEOUTS).patchHotplugMemory(mib);
     },
-    isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket),
+    isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket, procRoot),
     isAgentReady: async (paths, deadlineMs = 2000) => {
       try {
         await waitForAgent(paths.vsockSocket, { deadlineMs });

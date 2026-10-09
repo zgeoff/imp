@@ -15,6 +15,7 @@ import { openDatabase } from '../db/open-database';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -67,6 +68,9 @@ async function setupTest() {
   const vmm = buildStubVmm();
   const cgroups = buildStubCpuCgroups();
   const logs: string[] = [];
+
+  // a sleep's shrink waits on this clock, which only its own pauses move
+  const clock = buildStubClock({ startMs: Date.now() });
 
   const deps: ImpdDeps = {
     db,
@@ -127,8 +131,12 @@ async function setupTest() {
       readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
     },
     imps: {
+      // what a live stub VM measures, well inside the default RAM budget, so
+      // no boot or wake waits on the governor
       readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
       readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      now: clock.now,
+      sleep: clock.sleep,
 
       // the host grows a new disk's filesystem, so no guest boot has to
       growFilesystem: () => Promise.resolve(true),
@@ -157,7 +165,7 @@ async function setupTest() {
     }),
   );
 
-  return { config, deps, db, dataDir, vmm, cgroups, logs, impd, client, stack };
+  return { config, deps, db, dataDir, vmm, cgroups, logs, clock, impd, client, stack };
 }
 
 test('it refuses a max above 4 × the memory at create', async () => {
@@ -383,6 +391,60 @@ test('it raises memory.max with a grow of the guest', async () => {
   const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
 
   expect(memoryMax).toBe(buildMemoryMax(512));
+});
+
+test('it sets memory.max to the memory at the first boot', async () => {
+  const ctx = await setupTest();
+  const root = await mkdtemp(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  ctx.stack.defer(() => rm(root, { recursive: true, force: true }));
+
+  await mkdir(join(root, 'imps'));
+  await writeFile(join(root, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  const impd = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    {
+      ...ctx.deps,
+      cgroups: createCpuCgroups({ root, log: () => {} }),
+      vms: ctx.vmm.startGeneration(),
+    },
+  );
+
+  ctx.stack.defer(() => impd.broker.stop());
+
+  ctx.stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  const created = await impd.imps.createImp({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+  const memoryMax = await readFile(join(root, 'imps', created.id, 'memory.max'), 'utf8');
+
+  expect(memoryMax).toBe(buildMemoryMax(256));
+});
+
+test('it consumes the snapshot meta of an elastic imp on a wake', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+
+  const paths = buildImpPaths(ctx.dataDir, created.id);
+
+  ctx.vmm.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 512,
+    requestedMib: 512,
+    usedMib: 700,
+    unplugFloorMib: 512,
+  });
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(readSnapshotMeta(paths)).toBeNull();
 });
 
 test('it keeps memory.max at the plugged size across a sleep and a wake', async () => {

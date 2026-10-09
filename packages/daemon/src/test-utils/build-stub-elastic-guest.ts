@@ -6,6 +6,9 @@ interface StubElasticGuestOptions {
   readonly pluggedMib: number;
   readonly requestedMib: number;
 
+  // the hot-plug region: a request past it is refused
+  readonly regionMib: number;
+
   // what one read finds unplugged since the last, as virtio-mem migrates
   // pages away a block at a time
   readonly stepMib: number;
@@ -42,7 +45,18 @@ export function buildStubElasticGuest(options: Readonly<StubElasticGuestOptions>
           availableMib: options.baseMib + guest.pluggedMib - options.usedMib,
         });
       },
+
+      // Firecracker's PATCH /hotplug/memory takes whole 2 MiB blocks within
+      // the region and answers 400 to anything else
       requestPluggedMib: (_paths: unknown, mib: number): Promise<void> => {
+        if (!Number.isInteger(mib / 2) || mib < 0 || mib > options.regionMib) {
+          return Promise.reject(
+            new Error(
+              `firecracker PATCH /hotplug/memory: 400 requested size ${String(mib)} MiB is not whole blocks within the region`,
+            ),
+          );
+        }
+
         guest.requestedMib = mib;
 
         requests.push(mib);
