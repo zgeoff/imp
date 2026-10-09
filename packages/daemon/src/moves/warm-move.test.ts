@@ -8,7 +8,17 @@ import { writeMember, writeNetwork } from '../db/networks';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
+import {
+  buildJsonMoveFrame,
+  buildStubMoveStreamRewrite,
+} from '../test-utils/build-stub-move-stream-rewrite';
+import { MOVE_FRAMES, readJsonPayload } from './move-frames';
+import {
+  MOVE_PART_HEADER,
+  MOVE_PATHS,
+  MoveHeaderSchema,
+  MoveOfferReplySchema,
+} from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { MoveHostsOptions } from './test-moves';
 
@@ -292,10 +302,178 @@ test('it refuses a commit with the memory snapshot incomplete, and the source ke
   const staged = await findImpByName(ctx.target.db, 'dev');
   const kept = await findImpByName(ctx.source.db, 'dev');
 
-  expect(status.error).toInclude('not complete');
+  expect(status.error).toInclude('the received memory snapshot is not complete');
   expect(staged).toMatchObject({ moveState: 'receiving' });
   expect(kept).toMatchObject({ moveState: 'moved', state: 'sleeping' });
   expect(existsSync(ctx.source.storage.resolveImpPaths(created.id).memFile)).toBe(true);
+});
+
+test('it refuses a warm stream whose header names another slot than its ticket keeps', async () => {
+  const ctx = await setupTest({
+    isShared: true,
+
+    // a faulty source: the header's slot is one past the slot it was offered
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        invariant(header.warm);
+
+        return buildJsonMoveFrame(MOVE_FRAMES.header, {
+          ...header,
+          warm: { ...header.warm, move: { ...header.warm.move, slot: header.warm.move.slot + 1 } },
+        });
+      }),
+    ),
+  });
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toInclude(`the ticket keeps slot ${String(created.slot)}, not this one`);
+  expect(staged).toBeUndefined();
+});
+
+test('it refuses a cold stream on the ticket of a warm move', async () => {
+  const ctx = await setupTest({
+    isShared: true,
+
+    // a faulty source: the header drops the memory it was offered with
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        return buildJsonMoveFrame(MOVE_FRAMES.header, { ...header, warm: null });
+      }),
+    ),
+  });
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toInclude('the ticket is for a warm move, and the stream is cold');
+  expect(staged).toBeUndefined();
+});
+
+test('it refuses a warm stream whose header names facts the target does not share', async () => {
+  const ctx = await setupTest({
+    isShared: true,
+
+    // a faulty source: the header's CPU flags are not the ones it offered
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        invariant(header.warm);
+
+        const move = header.warm.move;
+
+        return buildJsonMoveFrame(MOVE_FRAMES.header, {
+          ...header,
+          warm: {
+            ...header.warm,
+            move: { ...move, snapshot: { ...move.snapshot, cpuFlags: 'other-flags' } },
+          },
+        });
+      }),
+    ),
+  });
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toInclude('this host cannot load the memory: the CPU flags differ');
+  expect(staged).toBeUndefined();
+});
+
+test('it refuses a warm stream whose snapshot record the target cannot load', async () => {
+  const ctx = await setupTest({
+    isShared: true,
+
+    // a faulty source: the snapshot record names a kernel the move facts do not
+    hook: buildStubMoveStreamRewrite((frames) =>
+      frames.map((frame) => {
+        if (frame.type !== MOVE_FRAMES.header) {
+          return frame;
+        }
+
+        const header = MoveHeaderSchema.parse(readJsonPayload(frame.payload));
+
+        invariant(header.warm);
+
+        return buildJsonMoveFrame(MOVE_FRAMES.header, {
+          ...header,
+          warm: { ...header.warm, meta: { ...header.warm.meta, hostKernel: '0.0.1' } },
+        });
+      }),
+    ),
+  });
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  const kernel = ctx.target.readIdentity().hostKernel;
+
+  expect(status.error).toInclude(
+    `the memory snapshot cannot load here: hostKernel changed (0.0.1 → ${kernel})`,
+  );
+
+  expect(staged).toBeUndefined();
+  expect(readSnapshotMeta(ctx.target.storage.resolveImpPaths(created.id))).toBeNull();
+});
+
+test('it fails a warm send whose snapshot record went missing after the prepare', async () => {
+  const ctx = await setupTest({ isShared: true });
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const plan = await ctx.sourceApp.client.moves.prepare({
+    name: 'dev',
+    target: await ctx.targetApp.client.moves.facts(),
+  });
+
+  invariant(plan.warm);
+
+  const ticket = await ctx.targetApp.client.moves.receive({
+    name: 'dev',
+    bytes: plan.bytes,
+    warm: plan.warm,
+  });
+
+  rmSync(ctx.source.storage.resolveImpPaths(created.id).snapshotMeta);
+
+  await ctx.sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
+
+  const status = await ctx.waitForMove('dev');
+
+  expect(status.error).toInclude('dev has no memory snapshot to move');
 });
 
 test("it installs the target's broker CA once at the first wake after a warm move", async () => {
