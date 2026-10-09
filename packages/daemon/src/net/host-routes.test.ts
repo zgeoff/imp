@@ -1,7 +1,26 @@
-import { expect, test } from 'bun:test';
-import { parseConnectedPrefixes4, parseRouteDevice, parseUplinks } from './host-routes';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildStubIpCommand } from '../test-utils/build-stub-ip-command';
+import {
+  parseConnectedPrefixes4,
+  parseRouteDevice,
+  parseUplinks,
+  readConnectedPrefixes4,
+  readRouteDevice,
+  readUplinks,
+} from './host-routes';
 
-test('the IPv4 networks on the links, and every address, off the taps', () => {
+async function setupTest() {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-host-routes-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  return { dir };
+}
+
+test('it reads the on-link IPv4 networks and every address off the taps', () => {
   const routes = [
     'default via 172.17.0.1 dev eth0',
     '10.66.0.0/30 dev imp0 proto kernel scope link src 10.66.0.1',
@@ -21,7 +40,7 @@ test('the IPv4 networks on the links, and every address, off the taps', () => {
     String.raw`5: tailscale0    inet 100.101.102.103/32 scope global tailscale0\       valid_lft forever`,
   ].join('\n');
 
-  expect(parseConnectedPrefixes4(routes, addresses)).toEqual([
+  expect(parseConnectedPrefixes4(routes, addresses)).toStrictEqual([
     '44.0.0.0/24',
     '172.17.0.0/16',
     '198.18.5.7/32',
@@ -33,7 +52,29 @@ test('the IPv4 networks on the links, and every address, off the taps', () => {
   ]);
 });
 
-test('the uplinks are the default routes’ interfaces, in each family, never a tap', () => {
+test('it reads the connected IPv4 prefixes from the host routes and addresses', async () => {
+  const ip = buildStubIpCommand({
+    outputs: {
+      'ip -4 route show': '172.17.0.0/16 dev eth0 proto kernel scope link src 172.17.0.2\n',
+      'ip -4 -o addr show': String.raw`3: eth0    inet 172.17.0.2/16 scope global eth0\       valid_lft forever`,
+    },
+  });
+
+  const prefixes = await readConnectedPrefixes4(ip.runChecked);
+
+  expect(prefixes).toStrictEqual(['172.17.0.0/16', '172.17.0.2/32']);
+});
+
+test('it fails the connected prefix read when ip fails', () => {
+  const ip = buildStubIpCommand({ failures: { 'ip -4 -o addr': 'Cannot open netlink socket' } });
+
+  expect(readConnectedPrefixes4(ip.runChecked)).rejects.toThrowWithMessage(
+    Error,
+    'ip -4 -o addr show exited 2: Cannot open netlink socket',
+  );
+});
+
+test("it reads the default routes' interfaces as the uplinks, never a tap", () => {
   const routes = [
     'default via 172.17.0.1 dev eth0',
     'default via fe80::1 dev eth0 metric 1024 pref medium',
@@ -42,11 +83,14 @@ test('the uplinks are the default routes’ interfaces, in each family, never a 
     'default via 10.66.0.1 dev imp0',
   ].join('\n');
 
-  expect(parseUplinks(routes)).toEqual(['eth0', 'wg0']);
-  expect(parseUplinks('')).toEqual([]);
+  expect(parseUplinks(routes)).toStrictEqual(['eth0', 'wg0']);
 });
 
-test('a multipath default route’s uplinks are on its nexthop lines', () => {
+test('it reads no uplinks from no routes', () => {
+  expect(parseUplinks('')).toStrictEqual([]);
+});
+
+test("it reads a multipath default route's uplinks from its nexthop lines", () => {
   const routes = [
     'default proto ra metric 1024 expires 1797sec pref medium',
     '\tnexthop via fe80::1 dev eth0 weight 1',
@@ -56,20 +100,63 @@ test('a multipath default route’s uplinks are on its nexthop lines', () => {
     '\tnexthop via fe80::9 dev wg0 weight 1',
   ].join('\n');
 
-  expect(parseUplinks(routes)).toEqual(['eth0', 'eth1']);
+  expect(parseUplinks(routes)).toStrictEqual(['eth0', 'eth1']);
 });
 
-test('the interface a route leaves by, and an error for a route with none', () => {
-  expect(
-    parseRouteDevice(
-      '93.184.216.34 via 172.17.0.1 dev eth0 src 172.17.0.2 uid 0\n    cache\n',
-      'x',
-    ),
-  ).toBe('eth0');
+test('it reads the uplinks of each family from the default routes', async () => {
+  const ctx = await setupTest();
 
-  expect(parseRouteDevice('local 172.17.0.2 dev lo table local src 172.17.0.2', 'x')).toBe('lo');
+  const ip = buildStubIpCommand({
+    outputs: {
+      'ip -4 route show default': 'default via 172.17.0.1 dev eth0\n',
+      'ip -6 route show default': 'default via fe80::1 dev eth1 metric 1024 pref medium\n',
+    },
+  });
 
-  expect(() => parseRouteDevice('unreachable 203.0.113.9 table main', '203.0.113.9')).toThrow(
+  await mkdir(join(ctx.dir, 'ipv6'));
+
+  const uplinks = await readUplinks(join(ctx.dir, 'ipv6'), ip.runChecked);
+
+  expect(uplinks).toStrictEqual({ ipv4: ['eth0'], ipv6: ['eth1'] });
+});
+
+test('it reads no IPv6 uplinks, and runs no IPv6 read, on a kernel without IPv6', async () => {
+  const ctx = await setupTest();
+
+  const ip = buildStubIpCommand({
+    outputs: { 'ip -4 route show default': 'default via 172.17.0.1 dev eth0\n' },
+  });
+
+  const uplinks = await readUplinks(join(ctx.dir, 'ipv6'), ip.runChecked);
+
+  expect(uplinks).toStrictEqual({ ipv4: ['eth0'], ipv6: [] });
+  expect(ip.calls).toStrictEqual(['ip -4 route show default']);
+});
+
+test.each([
+  ['93.184.216.34 via 172.17.0.1 dev eth0 src 172.17.0.2 uid 0\n    cache\n', 'eth0'],
+  ['local 172.17.0.2 dev lo table local src 172.17.0.2', 'lo'],
+])('it reads the interface a route leaves by from %p', (route, dev) => {
+  expect(parseRouteDevice(route, '93.184.216.34')).toBe(dev);
+});
+
+test('it rejects a route that names no interface', () => {
+  expect(() =>
+    parseRouteDevice('unreachable 203.0.113.9 table main', '203.0.113.9'),
+  ).toThrowWithMessage(
+    Error,
     'ip route get 203.0.113.9 named no interface: unreachable 203.0.113.9 table main',
   );
+});
+
+test('it asks ip which interface a route to the address leaves by', async () => {
+  const ip = buildStubIpCommand({
+    outputs: {
+      'ip route get 93.184.216.34': '93.184.216.34 via 172.17.0.1 dev eth0 src 172.17.0.2\n',
+    },
+  });
+
+  const dev = await readRouteDevice('93.184.216.34', ip.runChecked);
+
+  expect(dev).toBe('eth0');
 });

@@ -19,9 +19,14 @@ const NON_UNICAST = new Set([
   'nat',
 ]);
 
-export async function readConnectedPrefixes4(): Promise<readonly string[]> {
-  const routes = await runChecked(['ip', '-4', 'route', 'show']);
-  const addresses = await runChecked(['ip', '-4', '-o', 'addr', 'show']);
+// `run` runs each command and throws on a failure, runChecked by default.
+type RunChecked = (argv: readonly string[]) => Promise<string>;
+
+export async function readConnectedPrefixes4(
+  run: RunChecked = runChecked,
+): Promise<readonly string[]> {
+  const routes = await run(['ip', '-4', 'route', 'show']);
+  const addresses = await run(['ip', '-4', '-o', 'addr', 'show']);
 
   return parseConnectedPrefixes4(routes, addresses);
 }
@@ -67,12 +72,15 @@ export interface Uplinks {
   readonly ipv6: readonly string[];
 }
 
-export async function readUplinks(procNet = '/proc/sys/net/ipv6'): Promise<Uplinks> {
-  const ipv4 = await runChecked(['ip', '-4', 'route', 'show', 'default']);
+// `procNet` is where the kernel shows its IPv6 settings; with no such
+// directory, it has no IPv6.
+export async function readUplinks(
+  procNet = '/proc/sys/net/ipv6',
+  run: RunChecked = runChecked,
+): Promise<Uplinks> {
+  const ipv4 = await run(['ip', '-4', 'route', 'show', 'default']);
 
-  const ipv6 = existsSync(procNet)
-    ? await runChecked(['ip', '-6', 'route', 'show', 'default'])
-    : '';
+  const ipv6 = existsSync(procNet) ? await run(['ip', '-6', 'route', 'show', 'default']) : '';
 
   return { ipv4: parseUplinks(ipv4), ipv6: parseUplinks(ipv6) };
 }
@@ -98,8 +106,11 @@ export function parseUplinks(routes: string): readonly string[] {
 // The interface the host container would send to `address` by, as `ip
 // route get` reads every rule and table; the broker dials from the same
 // namespace, so this is the route its tunnel takes.
-export async function readRouteDevice(address: string): Promise<string> {
-  const route = await runChecked(['ip', 'route', 'get', address]);
+export async function readRouteDevice(
+  address: string,
+  run: RunChecked = runChecked,
+): Promise<string> {
+  const route = await run(['ip', 'route', 'get', address]);
 
   return parseRouteDevice(route, address);
 }

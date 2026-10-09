@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { runCommand } from '../process/run-command';
+import type { CommandResult } from '../process/run-command';
 
 export interface TailscaleStatus {
   // tailscaled's BackendState: `Running` once the node is up
@@ -52,13 +53,18 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
   }
 }
 
-export async function readTailscaleStatus(configured: boolean): Promise<TailscaleStatus> {
+// The node's status, or all null when tailscale is off, fails or is missing.
+// `run` runs the command, runCommand by default.
+export async function readTailscaleStatus(
+  configured: boolean,
+  run: (argv: readonly string[]) => Promise<CommandResult> = runCommand,
+): Promise<TailscaleStatus> {
   if (!configured) {
     return UNKNOWN;
   }
 
   try {
-    const result = await runCommand(['tailscale', 'status', '--json']);
+    const result = await run(['tailscale', 'status', '--json']);
 
     return parseTailscaleStatus(result.stdout);
   } catch {

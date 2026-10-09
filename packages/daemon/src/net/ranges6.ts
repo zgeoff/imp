@@ -3,7 +3,7 @@ import { parseIpv6 } from './addressing6';
 
 // What no open, public or box imp reaches over IPv6, and no broker tunnel
 // dials; docs/architecture/networking.md#blocked-ranges says why, and
-// special-ranges.test.ts checks them against the IANA registry.
+// ranges6.test.ts checks them against the IANA registry.
 export const BLOCKED_RANGES6: readonly string[] = [
   'fc00::/7',
   'fe80::/10',
