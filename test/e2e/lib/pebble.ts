@@ -38,9 +38,18 @@ function buildNames(prefix: string) {
 }
 
 // Starts Pebble and challtestsrv on a network of their own, named after the
-// prefix, with their ports published on loopback.
+// prefix, with their ports published on loopback, and returns once both
+// answer. It logs how long each phase took, so a slow start names its phase.
 export async function startPebbleStack(prefix: string): Promise<PebbleEndpoints> {
   const names = buildNames(prefix);
+  const started = performance.now();
+  const timings: string[] = [];
+
+  const writePhaseTiming = (phase: string): void => {
+    const elapsedMs = Math.round(performance.now() - started);
+
+    timings.push(`${phase} ${String(elapsedMs)} ms`);
+  };
 
   await stopPebbleStack(prefix);
 
@@ -106,15 +115,45 @@ export async function startPebbleStack(prefix: string): Promise<PebbleEndpoints>
     names.minicaFile,
   ]);
 
+  writePhaseTiming('containers started');
+
   const endpoints = await readPebbleEndpoints(prefix);
 
-  await waitFor('Pebble to answer', async () => {
-    const response = await fetch(endpoints.directoryUrl, { tls: { ca: endpoints.minicaPem } });
+  await waitFor(
+    'Pebble to answer',
+    async () => {
+      const response = await fetch(endpoints.directoryUrl, { tls: { ca: endpoints.minicaPem } });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${String(response.status)}`);
-    }
-  });
+      if (!response.ok) {
+        throw new Error(`HTTP ${String(response.status)}`);
+      }
+    },
+    { intervalMs: 50 },
+  );
+
+  writePhaseTiming('Pebble ready');
+
+  // an issuance sets its TXT record through this API first: a call that
+  // reaches the published port before challtestsrv listens stalls or fails
+  await waitFor(
+    'challtestsrv to answer',
+    async () => {
+      const response = await fetch(new URL('/clear-txt', endpoints.challtestsrvUrl), {
+        method: 'POST',
+        body: JSON.stringify({ host: 'startup-probe.invalid.' }),
+        signal: AbortSignal.timeout(1000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${String(response.status)}`);
+      }
+    },
+    { intervalMs: 50 },
+  );
+
+  writePhaseTiming('challtestsrv ready');
+
+  console.error(`pebble ${prefix}: ${timings.join(', ')}`);
 
   return endpoints;
 }
