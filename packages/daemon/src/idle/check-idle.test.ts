@@ -1,50 +1,101 @@
 import { expect, test } from 'bun:test';
 import { checkIdle } from './check-idle';
-import type { IdleSignals } from './check-idle';
-
-const QUIET: IdleSignals = {
-  execSessions: 0,
-  proxyConnections: 0,
-  sshConnections: 0,
-  tunnelConnections: 0,
-  tcpEstablished: 0,
-  cpuPercent: 1,
-  holdUntil: null,
-  lastActiveAt: 0,
-};
-
-const SETTINGS = { now: 60_000, idleTimeoutMs: 60_000, cpuPercent: 10 };
 
 test('it sleeps an imp that has been quiet for the timeout', () => {
-  expect(checkIdle(QUIET, SETTINGS)).toEqual({ activeReason: null, sleep: true });
-
-  expect(checkIdle(QUIET, { ...SETTINGS, now: 59_999 })).toEqual({
-    activeReason: null,
-    sleep: false,
-  });
+  expect(
+    checkIdle(
+      {
+        execSessions: 0,
+        proxyConnections: 0,
+        sshConnections: 0,
+        tunnelConnections: 0,
+        tcpEstablished: 0,
+        cpuPercent: 1,
+        holdUntil: null,
+        lastActiveAt: 0,
+      },
+      { now: 60_000, idleTimeoutMs: 60_000, cpuPercent: 10 },
+    ),
+  ).toStrictEqual({ activeReason: null, sleep: true });
 });
 
-test('it keeps an imp awake for each kind of activity', () => {
-  const cases: [Partial<IdleSignals>, string][] = [
-    [{ holdUntil: 60_001 }, 'hold'],
-    [{ execSessions: 1 }, 'exec'],
-    [{ proxyConnections: 2 }, 'proxy'],
-    [{ sshConnections: 1 }, 'ssh'],
-    [{ tunnelConnections: 1 }, 'tunnel'],
-    [{ tcpEstablished: 1 }, 'tcp'],
-    [{ cpuPercent: 25 }, 'cpu'],
-  ];
-
-  for (const [change, reason] of cases) {
-    expect(checkIdle({ ...QUIET, ...change }, SETTINGS)).toEqual({
-      activeReason: reason,
-      sleep: false,
-    });
-  }
+test('it keeps a quiet imp awake until the timeout has passed', () => {
+  expect(
+    checkIdle(
+      {
+        execSessions: 0,
+        proxyConnections: 0,
+        sshConnections: 0,
+        tunnelConnections: 0,
+        tcpEstablished: 0,
+        cpuPercent: 1,
+        holdUntil: null,
+        lastActiveAt: 0,
+      },
+      { now: 59_999, idleTimeoutMs: 60_000, cpuPercent: 10 },
+    ),
+  ).toStrictEqual({ activeReason: null, sleep: false });
 });
 
-test('it ignores an expired hold and a first CPU sample', () => {
-  const decision = checkIdle({ ...QUIET, holdUntil: 59_000, cpuPercent: null }, SETTINGS);
+test.each([
+  ['a hold', { holdUntil: 60_001 }, 'hold'],
+  ['an exec session', { execSessions: 1 }, 'exec'],
+  ['proxied connections', { proxyConnections: 2 }, 'proxy'],
+  ['an SSH connection', { sshConnections: 1 }, 'ssh'],
+  ['a tunnel connection', { tunnelConnections: 1 }, 'tunnel'],
+  ['an established TCP connection', { tcpEstablished: 1 }, 'tcp'],
+  ['CPU above the threshold', { cpuPercent: 25 }, 'cpu'],
+])('it keeps an imp awake for %s', (_label, change, reason) => {
+  expect(
+    checkIdle(
+      {
+        execSessions: 0,
+        proxyConnections: 0,
+        sshConnections: 0,
+        tunnelConnections: 0,
+        tcpEstablished: 0,
+        cpuPercent: 1,
+        holdUntil: null,
+        lastActiveAt: 0,
+        ...change,
+      },
+      { now: 60_000, idleTimeoutMs: 60_000, cpuPercent: 10 },
+    ),
+  ).toStrictEqual({ activeReason: reason, sleep: false });
+});
 
-  expect(decision).toEqual({ activeReason: null, sleep: true });
+test('it ignores an expired hold', () => {
+  expect(
+    checkIdle(
+      {
+        execSessions: 0,
+        proxyConnections: 0,
+        sshConnections: 0,
+        tunnelConnections: 0,
+        tcpEstablished: 0,
+        cpuPercent: 1,
+        holdUntil: 59_000,
+        lastActiveAt: 0,
+      },
+      { now: 60_000, idleTimeoutMs: 60_000, cpuPercent: 10 },
+    ),
+  ).toStrictEqual({ activeReason: null, sleep: true });
+});
+
+test('it ignores a first CPU sample', () => {
+  expect(
+    checkIdle(
+      {
+        execSessions: 0,
+        proxyConnections: 0,
+        sshConnections: 0,
+        tunnelConnections: 0,
+        tcpEstablished: 0,
+        cpuPercent: null,
+        holdUntil: null,
+        lastActiveAt: 0,
+      },
+      { now: 60_000, idleTimeoutMs: 60_000, cpuPercent: 10 },
+    ),
+  ).toStrictEqual({ activeReason: null, sleep: true });
 });
