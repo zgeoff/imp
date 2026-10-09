@@ -1,46 +1,68 @@
 import { expect, test } from 'bun:test';
+import type { ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { canTransition, findStatesLeadingTo, requireTransition } from './imp-transitions';
 
-test('it allows the M3 lifecycle', () => {
-  expect(canTransition('creating', 'running')).toBe(true);
-  expect(canTransition('running', 'stopped')).toBe(true);
-  expect(canTransition('stopped', 'running')).toBe(true);
-  expect(canTransition('error', 'running')).toBe(true);
-  expect(canTransition('creating', 'error')).toBe(true);
+test.each<[ImpState, ImpState]>([
+  ['creating', 'running'],
+  ['creating', 'error'],
+  ['running', 'stopped'],
+  ['running', 'sleeping'],
+  ['running', 'error'],
+  ['sleeping', 'running'],
+  ['sleeping', 'stopped'],
+  ['sleeping', 'error'],
+  ['stopped', 'running'],
+  ['stopped', 'error'],
+  ['error', 'running'],
+  ['error', 'stopped'],
+])('#canTransition allows %s to %s', (from, to) => {
+  expect(canTransition(from, to)).toBeTrue();
 });
 
-test('it reserves sleep and wake transitions', () => {
-  expect(canTransition('running', 'sleeping')).toBe(true);
-  expect(canTransition('sleeping', 'running')).toBe(true);
-  expect(canTransition('stopped', 'sleeping')).toBe(false);
+test.each<[ImpState, ImpState]>([
+  ['creating', 'stopped'],
+  ['creating', 'sleeping'],
+  ['running', 'running'],
+  ['stopped', 'sleeping'],
+  ['error', 'sleeping'],
+])('#canTransition refuses %s to %s', (from, to) => {
+  expect(canTransition(from, to)).toBeFalse();
 });
 
-test('it refuses transitions outside the table', () => {
-  expect(canTransition('creating', 'stopped')).toBe(false);
-  expect(canTransition('running', 'running')).toBe(false);
-  expect(canTransition('error', 'sleeping')).toBe(false);
+test('#findStatesLeadingTo names every state that can reach running', () => {
+  expect(findStatesLeadingTo('running')).toStrictEqual([
+    'creating',
+    'sleeping',
+    'stopped',
+    'error',
+  ]);
 });
 
-test('it names the states that lead to a target', () => {
-  expect(findStatesLeadingTo('running')).toEqual(['creating', 'sleeping', 'stopped', 'error']);
-  expect(findStatesLeadingTo('stopped')).toEqual(['running', 'sleeping', 'error']);
+test('#findStatesLeadingTo names every state that can reach stopped', () => {
+  expect(findStatesLeadingTo('stopped')).toStrictEqual(['running', 'sleeping', 'error']);
 });
 
-test('it throws INVALID_STATE with the allowed states', () => {
-  let caught: unknown;
+test('#findStatesLeadingTo names no state for creating', () => {
+  expect(findStatesLeadingTo('creating')).toBeEmpty();
+});
 
-  try {
+test('#requireTransition passes an allowed transition', () => {
+  expect(() => {
+    requireTransition('running', 'stopped', 'stop');
+  }).not.toThrow();
+});
+
+test('#requireTransition throws INVALID_STATE with the states that lead to the target', () => {
+  const refusal = Promise.try(() => {
     requireTransition('creating', 'stopped', 'stop');
-  } catch (error) {
-    caught = error;
-  }
-
-  expect(caught).toBeInstanceOf(ORPCError);
-
-  expect(caught).toMatchObject({
-    code: 'INVALID_STATE',
-    status: 409,
-    data: { state: 'creating', allowed: ['running', 'sleeping', 'error'] },
   });
+
+  expect(refusal).rejects.toStrictEqual(
+    new ORPCError('INVALID_STATE', {
+      status: 409,
+      message: 'cannot stop an imp that is creating (allowed: running, sleeping, error)',
+      data: { state: 'creating', allowed: ['running', 'sleeping', 'error'] },
+    }),
+  );
 });

@@ -51,6 +51,10 @@ export interface ImpLock {
   // true while a lifecycle operation runs or waits on the imp
   readonly isLocked: (id: string) => boolean;
 
+  // the lifecycle operations that run or wait on the imp: 2 once a second
+  // one queues behind the first
+  readonly countQueued: (id: string) => number;
+
   // resolves once no lifecycle operation runs or waits on any imp
   readonly waitForAll: () => Promise<void>;
 }
@@ -66,6 +70,29 @@ export function toLockedImp(held: LockedImp, next: ImpRecord): LockedImp {
 
 export function createImpLock(context: ImpContext): ImpLock {
   const mutex = createKeyedMutex();
+
+  // per imp, the operations queued on its lock, the running one included
+  const queued = new Map<string, number>();
+
+  const runCounted = async <T>(id: string, task: () => Promise<T>): Promise<T> => {
+    queued.set(id, (queued.get(id) ?? 0) + 1);
+
+    try {
+      return await task();
+    } finally {
+      const left = (queued.get(id) ?? 1) - 1;
+
+      if (left === 0) {
+        queued.delete(id);
+      } else {
+        queued.set(id, left);
+      }
+    }
+  };
+
+  // counted from the moment it queues, until it is done
+  const runExclusive = <T>(id: string, task: () => Promise<T>) =>
+    runCounted(id, () => mutex.runExclusive(id, task));
 
   // under the imp's lock, inside the storage gate: the GC never runs while an
   // operation may have storage its rows do not name yet
@@ -99,7 +126,7 @@ export function createImpLock(context: ImpContext): ImpLock {
     withImp: async (name, action, options = {}) => {
       const found = await findImp(name);
 
-      return mutex.runExclusive(found.id, () =>
+      return runExclusive(found.id, () =>
         runJoined(async () => {
           const imp = await readLocked(found.id);
 
@@ -116,7 +143,7 @@ export function createImpLock(context: ImpContext): ImpLock {
       );
     },
     withImpId: (id, action) =>
-      mutex.runExclusive(id, () =>
+      runExclusive(id, () =>
         runJoined(async () => {
           const imp = await readLocked(id);
 
@@ -124,22 +151,27 @@ export function createImpLock(context: ImpContext): ImpLock {
         }),
       ),
     withNewImp: (id, insert, action) =>
-      mutex.runExclusive(id, () =>
+      runExclusive(id, () =>
         runJoined(async () => {
           const imp = await insert();
 
           return action({ ...imp, [LOCKED]: true });
         }),
       ),
+
+    // counted only once it runs: a refused try never queued
     tryWithImpId: (id, action) =>
       mutex.tryRunExclusive(id, () =>
-        runJoined(async () => {
-          const imp = await readLocked(id);
+        runCounted(id, () =>
+          runJoined(async () => {
+            const imp = await readLocked(id);
 
-          return action(imp);
-        }),
+            return action(imp);
+          }),
+        ),
       ),
     isLocked: (id) => mutex.isLocked(id),
+    countQueued: (id) => queued.get(id) ?? 0,
     waitForAll: () => mutex.waitForAll(),
   };
 }

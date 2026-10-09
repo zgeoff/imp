@@ -105,7 +105,9 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
     };
   };
 
-  const readVmUsage = (vm: SampledVm): ResourceDelta | null => {
+  // samples one VM into `tracked`; the entry it stored and the delta
+  // readVmUsage answers
+  const readVmSample = (vm: SampledVm): { entry: Tracked; delta: ResourceDelta | null } => {
     const now = readers.now();
     const counters = readCounters(vm);
     const memory = readers.readMemory(vm.pid, vm.apiSocket);
@@ -113,16 +115,18 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
 
     // a new Firecracker: its counters start here
     if (previous?.pid !== vm.pid) {
-      tracked.set(vm.impId, {
+      const entry = {
         pid: vm.pid,
         since: now,
         last: counters,
         lastAt: now,
         totals: ZERO,
         sample: buildSample(now, now, ZERO, memory, undefined),
-      });
+      };
 
-      return null;
+      tracked.set(vm.impId, entry);
+
+      return { entry, delta: null };
     }
 
     const step = {
@@ -142,24 +146,31 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
       tx: previous.totals.tx + step.tx,
     };
 
-    tracked.set(vm.impId, {
+    const entry = {
       pid: vm.pid,
       since: previous.since,
       last: counters,
       lastAt: now,
       totals,
       sample: buildSample(now, previous.since, totals, memory, cpuPercent),
-    });
+    };
+
+    tracked.set(vm.impId, entry);
 
     return {
-      intervalMs,
-      cpuPercent,
-      cpuUsec: step.cpuUsec,
-      throttledUsec: step.throttledUsec,
-      netRxBytes: step.rx,
-      netTxBytes: step.tx,
+      entry,
+      delta: {
+        intervalMs,
+        cpuPercent,
+        cpuUsec: step.cpuUsec,
+        throttledUsec: step.throttledUsec,
+        netRxBytes: step.rx,
+        netTxBytes: step.tx,
+      },
     };
   };
+
+  const readVmUsage = (vm: SampledVm): ResourceDelta | null => readVmSample(vm).delta;
 
   return {
     readVmUsage,
@@ -175,15 +186,7 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
         return cached.sample;
       }
 
-      readVmUsage(vm);
-
-      const fresh = tracked.get(vm.impId);
-
-      if (fresh === undefined) {
-        throw new Error(`no sample of imp ${vm.impId}`);
-      }
-
-      return fresh.sample;
+      return readVmSample(vm).entry.sample;
     },
     readLastSeenAt: (impId) => {
       const seen = tracked.get(impId);

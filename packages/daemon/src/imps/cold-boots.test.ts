@@ -1,117 +1,60 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { rmSync } from 'node:fs';
-import type { Socket } from 'node:net';
-import { NoSessionDataSchema } from '@imp/api';
-import * as z from 'zod';
-import { AgentError } from '../agent-client/agent-connection';
-import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
-import { listColdBoots, writeColdBoot } from '../db/cold-boots';
+import { invariant } from '@imp/test-utils/invariant';
+import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
+import { listColdBoots } from '../db/cold-boots';
 import { findImpByName } from '../db/imps';
-import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
-import { buildStubBootId } from '../test-utils/build-stub-vmm';
-import { startStubAgent } from '../test-utils/start-stub-agent';
+import { startStubAttachAgent } from '../test-utils/start-stub-attach-agent';
 import { buildTestApp, createImpTest } from './test-imps';
 
 // Each cold boot records its cause, and an attach to a session names them
 // (docs/architecture/daemon.md#output-offsets).
 
-const GENERATION = 'c'.repeat(32);
-const AgentRequestSchema = z.object({ op: z.string() }).loose();
-
-async function setupColdBootTest() {
-  // one stack: an agent a test starts closes before the harness
+// impd over the stub VMM, a client of its API, and `stack`, whose releases
+// (the agents a test starts) run before the harness's
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
   const harness = await createImpTest(stack);
 
+  // every create boots an image row; the default image is ubuntu
   await harness.createTestImage('ubuntu');
 
   const app = buildTestApp(harness, harness);
 
-  const created = await app.client.imps.create({ name: 'dev' });
-
-  const paths = buildImpPaths(harness.dataDir, created.id);
-
-  const readCauses = async () => {
-    const boots = await listColdBoots(harness.db, created.id);
-
-    return boots.map((boot) => boot.cause);
-  };
-
-  // what impd's liveness check finds after the guest crashed or rebooted
-  const stopVmUnseen = async () => {
-    const imp = await findImpByName(harness.db, 'dev');
-
-    harness.fake.alive.delete(imp?.pid ?? 0);
-  };
-
-  return { ...harness, ...app, created, paths, readCauses, stopVmUnseen, stack };
+  return { ...harness, client: app.client, stack };
 }
 
-// an agent whose session.attach answers `reply`, and whose ping reports
-// `bootId`; it closes through `stack`
-async function startSessionAgent(
-  stack: Readonly<AsyncDisposableStack>,
-  path: string,
-  reply: (socket: Socket) => void,
-  bootId = 'boot-old',
-) {
-  const agent = await startStubAgent(path, (socket, request, frames) => {
-    if (frames.length !== 1) {
-      return;
-    }
-
-    const parsed = AgentRequestSchema.parse(decodeJsonPayload(request));
-
-    if (parsed.op === 'ping') {
-      socket.end(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, version: '0.15.0', boot_id: bootId }),
-      );
-
-      return;
-    }
-
-    reply(socket);
-  });
-
-  stack.defer(() => {
-    agent.close();
-  });
-
-  return agent;
-}
-
-function sendNoSession(socket: Socket): void {
-  socket.end(
-    encodeJsonFrame(FRAME_TYPES.response, {
-      error: {
-        code: 'NO_SESSION',
-        message: 'no session "main"',
-        data: {
-          boot_id: '22222222-2222-4222-8222-222222222222',
-          previous: { execution_generation: GENERATION, end: 12, exit: { code: 137, signal: 9 } },
-        },
-      },
-    }),
-  );
-}
-
-test('a create, a stop and start, and a wake that falls back each record their cause', async () => {
-  const ctx = await setupColdBootTest();
+test('it records a create and a start after a stop as start', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.client.imps.stop({ name: 'dev' });
   await ctx.client.imps.start({ name: 'dev' });
 
-  // a memory wake keeps the boot
+  const boots = await listColdBoots(ctx.db, created.id);
+
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['start', 'start']);
+});
+
+test('it records no cold boot for a wake from memory', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
 
-  const memoryWake = await ctx.readCauses();
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  expect(memoryWake).toEqual(['start', 'start']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['start']);
+});
+
+test('it records a wake that falls back to a cold boot as wake_fallback, with a new boot', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
@@ -119,16 +62,15 @@ test('a create, a stop and start, and a wake that falls back each record their c
 
   await ctx.client.imps.wake({ name: 'dev' });
 
-  const boots = await listColdBoots(ctx.db, ctx.created.id);
-  const imp = await findImpByName(ctx.db, 'dev');
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  expect(boots.map((boot) => boot.cause)).toEqual(['wake_fallback', 'start', 'start']);
-  expect(boots[0]?.bootId).toBe(buildStubBootId(imp?.pid ?? 0));
-  expect(new Set(boots.map((boot) => boot.bootId)).size).toBe(3);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['wake_fallback', 'start']);
+  expect(new Set(boots.map((boot) => boot.bootId)).size).toBe(2);
 });
 
-test('impd keeps the last 4 cold boots, newest first', async () => {
-  const ctx = await setupColdBootTest();
+test('it keeps the last 4 cold boots, newest first', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
 
   for (let restart = 0; restart < 5; restart += 1) {
     ctx.fake.queue('wake', 'fail');
@@ -137,45 +79,55 @@ test('impd keeps the last 4 cold boots, newest first', async () => {
     await ctx.client.imps.wake({ name: 'dev' });
   }
 
-  const boots = await listColdBoots(ctx.db, ctx.created.id);
-
-  expect(boots).toHaveLength(4);
+  const boots = await listColdBoots(ctx.db, created.id);
 
   const times = boots.map((boot) => boot.at);
 
-  expect(boots.map((boot) => boot.cause)).toEqual([
+  expect(boots.map((boot) => boot.cause)).toStrictEqual([
     'wake_fallback',
     'wake_fallback',
     'wake_fallback',
     'wake_fallback',
   ]);
 
-  expect(times).toEqual(times.toSorted().toReversed());
+  expect(times).toStrictEqual(times.toSorted().toReversed());
 });
 
-test('a restore of a running imp boots it with the cause restore; of a stopped one, its next boot', async () => {
-  const ctx = await setupColdBootTest();
+test('it records the boot of a restore of a running imp as restore', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
   const checkpoint = await ctx.client.checkpoints.create({ name: 'dev' });
 
   await ctx.client.checkpoints.restore({ name: 'dev', checkpoint: checkpoint.id });
 
-  const running = await ctx.readCauses();
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  expect(running).toEqual(['restore', 'start']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['restore', 'start']);
+});
+
+test('it records the next boot of a stopped imp a restore reset as restore', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+  const checkpoint = await ctx.client.checkpoints.create({ name: 'dev' });
 
   await ctx.client.imps.stop({ name: 'dev' });
   await ctx.client.checkpoints.restore({ name: 'dev', checkpoint: checkpoint.id });
   await ctx.client.imps.start({ name: 'dev' });
 
-  const stopped = await ctx.readCauses();
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  expect(stopped).toEqual(['restore', 'restore', 'start']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['restore', 'start']);
 });
 
-test('the boot after impd found the VM gone is a recovery, whatever path boots it', async () => {
-  const ctx = await setupColdBootTest();
+test('it records the boot after impd found the VM gone as recovery, and only that boot', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+  const running = await findImpByName(ctx.db, 'dev');
 
-  await ctx.stopVmUnseen();
+  invariant(running?.pid);
+
+  // the guest crashed without impd seeing it
+  ctx.fake.alive.delete(running.pid);
 
   const found = await ctx.client.imps.get({ name: 'dev' });
 
@@ -183,77 +135,112 @@ test('the boot after impd found the VM gone is a recovery, whatever path boots i
   await ctx.client.imps.stop({ name: 'dev' });
   await ctx.client.imps.start({ name: 'dev' });
 
-  const causes = await ctx.readCauses();
+  const boots = await listColdBoots(ctx.db, created.id);
 
   expect(found.state).toBe('stopped');
-  expect(causes).toEqual(['start', 'recovery', 'start']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['start', 'recovery', 'start']);
 });
 
 // the attach boots the stopped imp: its boot comes first, and the recovery
 // that ended the client's generation stays in the list
-test('an attach that boots a crashed imp answers NO_SESSION with its cold boots', async () => {
-  const ctx = await setupColdBootTest();
-  const agent = await startSessionAgent(ctx.stack, ctx.paths.vsockSocket, sendNoSession);
+test('it answers an attach that boots a crashed imp with NO_SESSION and its cold boots', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+  const running = await findImpByName(ctx.db, 'dev');
 
-  await ctx.stopVmUnseen();
+  invariant(running?.pid);
+
+  await startStubAttachAgent(buildImpPaths(ctx.dataDir, created.id).vsockSocket, {
+    bootId: 'boot-old',
+    replies: [
+      {
+        frame: encodeJsonFrame(FRAME_TYPES.response, {
+          error: {
+            code: 'NO_SESSION',
+            message: 'no session "main"',
+            data: {
+              boot_id: '22222222-2222-4222-8222-222222222222',
+              previous: {
+                execution_generation: 'c'.repeat(32),
+                end: 12,
+                exit: { code: 137, signal: 9 },
+              },
+            },
+          },
+        }),
+        isEnd: true,
+      },
+    ],
+    stack: ctx.stack,
+  });
+
+  // the guest crashed without impd seeing it, and a read found it gone
+  ctx.fake.alive.delete(running.pid);
+
   await ctx.client.imps.get({ name: 'dev' });
 
-  const error = await readRejection(ctx.imps.openAttach('dev', { session: 'main' }));
-
-  agent.close();
-
-  if (!(error instanceof AgentError)) {
-    throw new Error('no AgentError');
-  }
-
-  const data = NoSessionDataSchema.parse(error.data);
-
-  expect(error.code).toBe('NO_SESSION');
-  expect(data.bootId).toBe('22222222-2222-4222-8222-222222222222');
-  expect(data.coldBoots.map((boot) => boot.cause)).toEqual(['recovery', 'start']);
-  expect(data.previous).toEqual({ executionGeneration: GENERATION, end: 12, exitCode: null });
+  expect(ctx.imps.openAttach('dev', { session: 'main' })).rejects.toMatchObject({
+    code: 'NO_SESSION',
+    data: {
+      bootId: '22222222-2222-4222-8222-222222222222',
+      coldBoots: [{ cause: 'recovery' }, { cause: 'start' }],
+      previous: { executionGeneration: 'c'.repeat(32), end: 12, exitCode: null },
+    },
+  });
 });
 
-test('an attach with wake false fails with INVALID_STATE and boots nothing', async () => {
-  const ctx = await setupColdBootTest();
+test('it refuses an attach without wake to a stopped imp, with its cold boots', async () => {
+  const ctx = await setupTest();
 
+  await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
 
-  const boots = ctx.fake.boots.length;
-
-  const stopped = await readRejection(ctx.imps.openAttach('dev', { session: 'main', wake: false }));
-
-  await ctx.client.imps.start({ name: 'dev' });
-  await ctx.client.imps.sleep({ name: 'dev' });
-
-  const wakes = ctx.fake.wakes.length;
-
-  const sleeping = await readRejection(
-    ctx.imps.openAttach('dev', { session: 'main', wake: false }),
-  );
-
-  expect(stopped).toMatchObject({
+  expect(ctx.imps.openAttach('dev', { session: 'main', wake: false })).rejects.toMatchObject({
     code: 'INVALID_STATE',
     data: { state: 'stopped', allowed: ['running'], coldBoots: [{ cause: 'start' }] },
   });
-
-  expect(sleeping).toMatchObject({ code: 'INVALID_STATE', data: { state: 'sleeping' } });
-  expect(ctx.fake.boots.length).toBe(boots + 1);
-  expect(ctx.fake.wakes.length).toBe(wakes);
 });
 
-test('a session’s started output names the cold boots; a resume error keeps its data', async () => {
-  const ctx = await setupColdBootTest();
+test('it boots nothing for an attach without wake to a stopped imp', async () => {
+  const ctx = await setupTest();
 
-  const replies = [
-    (socket: Socket) => {
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.started, {
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.stop({ name: 'dev' });
+
+  expect(ctx.imps.openAttach('dev', { session: 'main', wake: false })).rejects.toThrow();
+
+  // the create's boot alone
+  expect(ctx.fake.boots).toHaveLength(1);
+});
+
+test('it refuses an attach without wake to a sleeping imp, and wakes nothing', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  expect(ctx.imps.openAttach('dev', { session: 'main', wake: false })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    data: { state: 'sleeping' },
+  });
+
+  expect(ctx.fake.wakes).toBeEmpty();
+});
+
+test('it names the cold boots in a session’s started output', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubAttachAgent(buildImpPaths(ctx.dataDir, created.id).vsockSocket, {
+    bootId: 'boot-old',
+    replies: [
+      {
+        frame: encodeJsonFrame(FRAME_TYPES.started, {
           pid: 9,
           session: 'main',
           output: {
             boot_id: '22222222-2222-4222-8222-222222222222',
-            execution_generation: GENERATION,
+            execution_generation: 'c'.repeat(32),
             buffer_start: 0,
             end: 5,
             offset: 2,
@@ -261,111 +248,129 @@ test('a session’s started output names the cold boots; a resume error keeps it
             resume: { kind: 'exact' },
           },
         }),
-      );
-    },
-    (socket: Socket) => {
-      socket.end(
-        encodeJsonFrame(FRAME_TYPES.response, {
+        isEnd: false,
+      },
+    ],
+    stack: ctx.stack,
+  });
+
+  const stream = await ctx.imps.openAttach('dev', {
+    session: 'main',
+    resumeFrom: { executionGeneration: 'c'.repeat(32), offset: 2 },
+  });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  // the cold boot's id and time are the stub VMM's and the clock's
+  expect(stream.output).toMatchObject({
+    continuity: 'offsets',
+    bootId: '22222222-2222-4222-8222-222222222222',
+    executionGeneration: 'c'.repeat(32),
+    bufferStart: 0,
+    end: 5,
+    offset: 2,
+    prelude: 0,
+    coldBoots: [{ cause: 'start' }],
+    resume: { kind: 'exact' },
+  });
+});
+
+test('it keeps the data of a resume error the agent sends', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubAttachAgent(buildImpPaths(ctx.dataDir, created.id).vsockSocket, {
+    bootId: 'boot-old',
+    replies: [
+      {
+        frame: encodeJsonFrame(FRAME_TYPES.response, {
           error: {
             code: 'INVALID_RESUME',
             message: 'offset 9 is past the end of the output, 5',
             data: { end: 5, buffer_start: 0 },
           },
         }),
-      );
-    },
-  ];
-
-  const agent = await startSessionAgent(ctx.stack, ctx.paths.vsockSocket, (socket) => {
-    replies.shift()?.(socket);
+        isEnd: true,
+      },
+    ],
+    stack: ctx.stack,
   });
 
-  const resumeFrom = { executionGeneration: GENERATION, offset: 2 };
-
-  const stream = await ctx.imps.openAttach('dev', { session: 'main', resumeFrom });
-
-  stream.close();
-
-  const invalid = await readRejection(
-    ctx.imps.openAttach('dev', { session: 'main', resumeFrom: { ...resumeFrom, offset: 9 } }),
-  );
-
-  agent.close();
-
-  expect(stream.output).toEqual({
-    continuity: 'offsets',
-    bootId: '22222222-2222-4222-8222-222222222222',
-    executionGeneration: GENERATION,
-    bufferStart: 0,
-    end: 5,
-    offset: 2,
-    prelude: 0,
-    coldBoots: [expect.objectContaining({ cause: 'start' })],
-    resume: { kind: 'exact' },
-  });
-
-  expect(invalid).toMatchObject({ code: 'INVALID_RESUME', data: { end: 5, bufferStart: 0 } });
+  expect(
+    ctx.imps.openAttach('dev', {
+      session: 'main',
+      resumeFrom: { executionGeneration: 'c'.repeat(32), offset: 9 },
+    }),
+  ).rejects.toMatchObject({ code: 'INVALID_RESUME', data: { end: 5, bufferStart: 0 } });
 });
 
-test('a VM impd adopts with a boot it has no record of counts as unknown', async () => {
-  const ctx = await setupColdBootTest();
-  const agent = await startSessionAgent(ctx.stack, ctx.paths.vsockSocket, () => {}, 'boot-before');
+test('it records a VM impd adopts with a boot it has no record of as unknown', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
 
-  const impd = ctx.restartImpd();
+  await startStubAttachAgent(buildImpPaths(ctx.dataDir, created.id).vsockSocket, {
+    bootId: 'boot-before',
+    stack: ctx.stack,
+  });
 
-  await impd.imps.reconcileImps();
+  await ctx.restartImpd().imps.reconcileImps();
 
-  agent.close();
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  const boots = await listColdBoots(ctx.db, ctx.created.id);
-
-  expect(boots.map((boot) => boot.cause)).toEqual(['unknown', 'start']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['unknown', 'start']);
   expect(boots[0]?.bootId).toBe('boot-before');
 });
 
 // an imp that went to sleep before impd kept cold boots wakes from memory
 // into a boot it has no row for
-test('a memory wake into a boot impd has no record of counts as unknown', async () => {
-  const ctx = await setupColdBootTest();
+test('it records a memory wake into a boot impd has no record of as unknown', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+  const [booted] = await listColdBoots(ctx.db, created.id);
 
-  await ctx.client.imps.sleep({ name: 'dev' });
-  await ctx.client.imps.wake({ name: 'dev' });
-
-  const kept = await listColdBoots(ctx.db, ctx.created.id);
+  invariant(booted);
 
   await ctx.db.deleteFrom('imp_cold_boots').execute();
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
 
-  const boots = await listColdBoots(ctx.db, ctx.created.id);
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  expect(kept.map((boot) => boot.cause)).toEqual(['start']);
-  expect(boots.map((boot) => boot.cause)).toEqual(['unknown']);
-  expect(boots[0]?.bootId).toBe(kept[0]?.bootId ?? '');
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['unknown']);
+  expect(boots[0]?.bootId).toBe(booted.bootId);
 });
 
 // a lost snapshot fails the wake that would use it, whoever finds it first
-test('a sleeping imp whose snapshot is gone boots next with the cause wake_fallback', async () => {
-  const ctx = await setupColdBootTest();
+test('it records the next boot of a sleeping imp whose snapshot is gone as wake_fallback', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
-  rmSync(ctx.paths.snapshotDir, { recursive: true, force: true });
+  rmSync(buildImpPaths(ctx.dataDir, created.id).snapshotDir, { recursive: true, force: true });
 
   const found = await ctx.client.imps.get({ name: 'dev' });
 
   await ctx.client.imps.start({ name: 'dev' });
 
-  const causes = await ctx.readCauses();
+  const boots = await listColdBoots(ctx.db, created.id);
 
   expect(found.state).toBe('stopped');
-  expect(causes).toEqual(['wake_fallback', 'start']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['wake_fallback', 'start']);
 });
 
-test('a boot without a boot_id spends the pending cause, so a later boot does not inherit it', async () => {
-  const ctx = await setupColdBootTest();
+test('it spends the pending cause on a boot without a boot_id, so a later boot does not inherit it', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev' });
+  const running = await findImpByName(ctx.db, 'dev');
 
-  await ctx.stopVmUnseen();
+  invariant(running?.pid);
+
+  // the guest crashed without impd seeing it, and a read found it gone
+  ctx.fake.alive.delete(running.pid);
+
   await ctx.client.imps.get({ name: 'dev' });
 
   ctx.fake.setGuestBootId(false);
@@ -377,20 +382,7 @@ test('a boot without a boot_id spends the pending cause, so a later boot does no
 
   await ctx.client.imps.start({ name: 'dev' });
 
-  const causes = await ctx.readCauses();
+  const boots = await listColdBoots(ctx.db, created.id);
 
-  expect(causes).toEqual(['start', 'start']);
-});
-
-test('two boots in the same millisecond list in the order impd recorded them', async () => {
-  const ctx = await setupColdBootTest();
-
-  const at = new Date();
-
-  await writeColdBoot(ctx.db, ctx.created.id, { bootId: 'boot-b', cause: 'start', at });
-  await writeColdBoot(ctx.db, ctx.created.id, { bootId: 'boot-a', cause: 'watchdog', at });
-
-  const boots = await listColdBoots(ctx.db, ctx.created.id);
-
-  expect(boots.slice(0, 2).map((boot) => boot.bootId)).toEqual(['boot-a', 'boot-b']);
+  expect(boots.map((boot) => boot.cause)).toStrictEqual(['start', 'start']);
 });

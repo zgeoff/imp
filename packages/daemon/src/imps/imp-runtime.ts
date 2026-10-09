@@ -142,6 +142,13 @@ export interface ImpRuntime {
   readonly reconcileImps: () => Promise<void>;
   readonly isImpBusy: (id: string) => boolean;
 
+  // the lifecycle operations that run or wait on the imp's lock
+  readonly countLockQueue: (id: string) => number;
+
+  // true while a background sleep of the imp waits for its young guest to
+  // grow old enough (IMP_SLEEP_MIN_GUEST_UPTIME_MS)
+  readonly isWaitingForYoungGuest: (id: string) => boolean;
+
   // for the memory controller: runs `action` under the imp's lock when the
   // lock is free and the imp still runs; false when it did not run
   readonly tryWhileRunning: (id: string, action: () => Promise<void>) => Promise<boolean>;
@@ -167,6 +174,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const ops = parts.ops;
   const reconciler = createVmReconciler(context, ops);
   const lastDiskFull: { error: Error | null } = { error: null };
+
+  // imps whose background sleep found a young guest and waits for it; each
+  // leaves once its sleep ends
+  const youngGuestWaits = new Set<string>();
 
   // An elastic guest may hold more than its memory, and a new impd's cgroup
   // writer knows nothing of it: the limit covers what the guest holds, or the
@@ -307,7 +318,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       return { wait: false };
     }
 
+    // the wait asks only once the guest proved young
     const isWanted = async (): Promise<boolean> => {
+      youngGuestWaits.add(id);
+
       const fresh = await findImpById(context.db, id);
 
       return fresh !== undefined && isSleepAllowed(fresh, policy);
@@ -341,6 +355,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
 
       return 'failed';
+    } finally {
+      youngGuestWaits.delete(imp.id);
     }
   };
 
@@ -680,6 +696,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     waitForLifecycle: () => lock.waitForAll(),
     isImpBusy: (id) => lock.isLocked(id),
+    countLockQueue: (id) => lock.countQueued(id),
+    isWaitingForYoungGuest: (id) => youngGuestWaits.has(id),
 
     tryWhileRunning: async (id, action) => {
       const result = await lock.tryWithImpId(id, async (imp) => {

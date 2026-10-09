@@ -1,233 +1,270 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName, updateImpActivity } from '../db/imps';
 import { writeLease } from '../db/leases';
-import type { ImpDatabase } from '../db/open-database';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
+import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
 import { startStubAgent } from '../test-utils/start-stub-agent';
-import { createImpTest, setupImpTest, waitForOutcome } from './test-imps';
+import { createImpTest } from './test-imps';
 
-// these tests wait up to 10 s for held calls to settle; a loaded host is slow
-const SLOW_TEST_TIMEOUT_MS = 30_000;
-
-// a hold from now for `ms`, as `imps.hold` writes it
-async function holdFor(db: ImpDatabase, impId: string, ms: number): Promise<void> {
-  const at = Date.now();
-
-  await writeLease(
-    db,
-    {
-      impId,
-      principal: 'token:test-token-id',
-      label: 'hold',
-      display: 'test',
-      until: new Date(at + ms),
-      createdAt: new Date(at),
-    },
-    { at, reason: 'held' },
-  );
+interface SetupOptions {
+  readonly env?: Readonly<Record<string, string>>;
 }
 
-async function setupRunningImp(env: Readonly<Record<string, string>> = {}) {
+async function setupTest(options: SetupOptions = {}) {
   // one stack: an agent a test starts closes before the harness
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const ctx = await createImpTest(stack, { env });
+  const harness = await createImpTest(stack, { env: options.env ?? {} });
 
-  await ctx.createTestImage('ubuntu');
+  // every imp boots from an image row
+  await harness.createTestImage('ubuntu');
 
-  const imp = await ctx.imps.createImp({ name: 'dev' });
-
-  return { ...ctx, impId: imp.id, stack };
+  return { ...harness, stack };
 }
 
-test('a background sleep skips an imp that was held after the caller looked', async () => {
-  const ctx = await setupRunningImp();
+test('it skips an idle sleep of an imp held after the idle loop looked', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const id = ctx.impId;
+  const until = new Date(ctx.now() + 60_000);
 
-  const seen = await findImpByName(ctx.db, 'dev');
-
-  await holdFor(ctx.db, id, 60_000);
-
-  const byIdle = await ctx.imps.trySleepImp(id, 'idle', {
-    by: 'idle',
-    seenActiveAt: seen?.lastActiveAt.getTime() ?? 0,
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id, until }), {
+    at: ctx.now(),
+    reason: 'held',
   });
 
-  const byGovernor = await ctx.imps.trySleepImp(id, 'budget', { by: 'governor' });
+  const outcome = await ctx.imps.trySleepImp(imp.id, 'idle', {
+    by: 'idle',
+    seenActiveAt: imp.lastActiveAt.getTime(),
+  });
 
-  expect([byIdle, byGovernor]).toEqual(['skipped', 'skipped']);
+  expect(outcome).toBe('skipped');
 });
 
-test('the idle loop skips an imp active since it looked; the governor does not', async () => {
-  const ctx = await setupRunningImp();
+test('it skips a governor sleep of an imp held after the governor looked', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const id = ctx.impId;
+  const until = new Date(ctx.now() + 60_000);
 
-  const seen = await findImpByName(ctx.db, 'dev');
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id, until }), {
+    at: ctx.now(),
+    reason: 'held',
+  });
 
-  const seenActiveAt = seen?.lastActiveAt.getTime() ?? 0;
+  const outcome = await ctx.imps.trySleepImp(imp.id, 'budget', { by: 'governor' });
 
-  await updateImpActivity(ctx.db, id, new Date(seenActiveAt + 1000));
-
-  const byIdle = await ctx.imps.trySleepImp(id, 'idle', { by: 'idle', seenActiveAt });
-  const byGovernor = await ctx.imps.trySleepImp(id, 'budget', { by: 'governor' });
-
-  expect([byIdle, byGovernor]).toEqual(['skipped', 'slept']);
+  expect(outcome).toBe('skipped');
 });
 
-test('a background sleep skips an imp with an open connection or a taken lock', async () => {
-  const ctx = await setupRunningImp();
+test('it skips an idle sleep of an imp active since the idle loop looked', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const id = ctx.impId;
-  const release = ctx.imps.tracker.open(id, 'proxy');
+  const seenActiveAt = imp.lastActiveAt.getTime();
 
-  const connected = await ctx.imps.trySleepImp(id, 'budget', { by: 'governor' });
+  await updateImpActivity(ctx.db, imp.id, new Date(seenActiveAt + 1000));
 
-  release();
+  const outcome = await ctx.imps.trySleepImp(imp.id, 'idle', { by: 'idle', seenActiveAt });
+
+  expect(outcome).toBe('skipped');
+});
+
+test('it sleeps an imp for the governor however recently it was active', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await updateImpActivity(ctx.db, imp.id, new Date(imp.lastActiveAt.getTime() + 1000));
+
+  const outcome = await ctx.imps.trySleepImp(imp.id, 'budget', { by: 'governor' });
+
+  expect(outcome).toBe('slept');
+});
+
+test('it skips a background sleep of an imp with an open connection', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const release = ctx.imps.tracker.open(imp.id, 'proxy');
+
+  onTestFinished(release);
+
+  const outcome = await ctx.imps.trySleepImp(imp.id, 'budget', { by: 'governor' });
+
+  expect(outcome).toBe('skipped');
+});
+
+test('it skips a background sleep of an imp whose lock is taken', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const gate = Promise.withResolvers<void>();
   const holding = ctx.imps.lockImp('dev', () => gate.promise);
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(ctx.imps.isImpBusy(imp.id)).toBeTrue();
+  });
 
-  const locked = await ctx.imps.trySleepImp(id, 'budget', { by: 'governor' });
+  const outcome = await ctx.imps.trySleepImp(imp.id, 'budget', { by: 'governor' });
 
   gate.resolve();
 
   await holding;
 
-  expect([connected, locked]).toEqual(['skipped', 'skipped']);
+  expect(outcome).toBe('skipped');
 });
 
-test('a sleep right after a cold boot waits until the guest is old enough', async () => {
-  const ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
+test('it waits for a young guest to reach the minimum uptime before it sleeps it', async () => {
+  const ctx = await setupTest({ env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '150' } });
+
+  await ctx.imps.createImp({ name: 'dev' });
 
   ctx.fake.setGuestUptime(100);
 
-  const started = performance.now();
-
   const asleep = await ctx.imps.sleepImp('dev');
 
+  const waitedMs = ctx.logs
+    .map((line) => /waited (?<ms>\d+)ms for a young guest/u.exec(line)?.groups?.['ms'])
+    .find((ms) => ms !== undefined);
+
   expect(asleep.state).toBe('sleeping');
-  expect(performance.now() - started).toBeGreaterThanOrEqual(190);
-  expect(ctx.logs.some((line) => line.includes('for a young guest'))).toBe(true);
+  expect(Number(waitedMs)).toBeGreaterThanOrEqual(50);
 });
 
-test('an idle sleep that waits for a young guest gives way to a request', async () => {
-  const ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
+// the guest needs ten minutes more, so only a give-way ends the wait within
+// the test's timeout
+test('it gives way to a request while an idle sleep waits for a young guest', async () => {
+  const ctx = await setupTest({ env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '600000' } });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
   ctx.fake.setGuestUptime(0);
 
-  const seen = await findImpByName(ctx.db, 'dev');
+  const sleeping = ctx.imps.trySleepImp(imp.id, 'idle', {
+    by: 'idle',
+    seenActiveAt: imp.lastActiveAt.getTime(),
+  });
 
-  const seenActiveAt = seen?.lastActiveAt.getTime() ?? 0;
-  const started = performance.now();
-  const sleeping = ctx.imps.trySleepImp(ctx.impId, 'idle', { by: 'idle', seenActiveAt });
-
-  await Bun.sleep(20);
+  await waitFor(() => {
+    expect(ctx.imps.isWaitingForYoungGuest(imp.id)).toBeTrue();
+  });
 
   // as the wake proxy does: the connection counts before it waits for the lock
   const opened = { release: () => {} };
+
+  onTestFinished(() => {
+    opened.release();
+  });
 
   const request = ctx.imps.requireRunning('dev', (found) => {
     opened.release = ctx.imps.tracker.open(found.id, 'proxy');
   });
 
-  const [outcome, running] = await Promise.all([sleeping, request]);
-
-  opened.release();
+  const outcome = await sleeping;
+  const running = await request;
 
   expect(outcome).toBe('skipped');
-  expect(running).toMatchObject({ imp: { state: 'running' }, wokeMs: null });
-  expect(performance.now() - started).toBeLessThan(2000);
+  expect(running.imp.state).toBe('running');
+  expect(running.wokeMs).toBeNull();
+  expect(ctx.logs).toContain('impd: dev: sleep (idle) gave way: the imp turned busy');
 });
 
-test('an idle sleep that waits for a young guest gives way to a hold', async () => {
-  const ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
+// the guest needs ten minutes more, so only a give-way ends the wait within
+// the test's timeout
+test('it gives way to a hold while an idle sleep waits for a young guest', async () => {
+  const ctx = await setupTest({ env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '600000' } });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
   ctx.fake.setGuestUptime(0);
 
-  const seen = await findImpByName(ctx.db, 'dev');
+  const sleeping = ctx.imps.trySleepImp(imp.id, 'idle', {
+    by: 'idle',
+    seenActiveAt: imp.lastActiveAt.getTime(),
+  });
 
-  const seenActiveAt = seen?.lastActiveAt.getTime() ?? 0;
-  const started = performance.now();
-  const sleeping = ctx.imps.trySleepImp(ctx.impId, 'idle', { by: 'idle', seenActiveAt });
+  await waitFor(() => {
+    expect(ctx.imps.isWaitingForYoungGuest(imp.id)).toBeTrue();
+  });
 
-  await Bun.sleep(20);
+  const until = new Date(ctx.now() + 60_000);
 
-  await holdFor(ctx.db, ctx.impId, 60_000);
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id, until }), {
+    at: ctx.now(),
+    reason: 'held',
+  });
 
   const outcome = await sleeping;
-  const imp = await findImpByName(ctx.db, 'dev');
+  const after = await findImpByName(ctx.db, 'dev');
 
   expect(outcome).toBe('skipped');
-  expect(imp?.state).toBe('running');
-  expect(performance.now() - started).toBeLessThan(2000);
+  expect(after?.state).toBe('running');
+  expect(ctx.logs).toContain('impd: dev: sleep (idle) gave way: the imp turned busy');
 });
 
-test('the governor sleeps young guests at once to admit a boot', async () => {
+// the guests need ten minutes more, so a governor that waited for them would
+// not admit the boot within the test's timeout
+test('it sleeps young guests at once when the governor makes room for a boot', async () => {
   // three imps own 300 MiB each; a 720 MiB boot needs all three asleep
-  const ctx = await setupImpTest({
+  const ctx = await setupTest({
     env: {
       IMP_RAM_BUDGET_MIB: '1000',
       IMP_DEFAULT_MEMORY_MIB: '256',
       IMP_BOOT_RESERVE_PERCENT: '100',
-      IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000',
+      IMP_SLEEP_MIN_GUEST_UPTIME_MS: '600000',
     },
   });
 
-  await ctx.createTestImage('ubuntu');
-
-  for (const name of ['a', 'b', 'c']) {
-    await ctx.imps.createImp({ name });
-  }
+  await ctx.imps.createImp({ name: 'a' });
+  await ctx.imps.createImp({ name: 'b' });
+  await ctx.imps.createImp({ name: 'c' });
 
   ctx.fake.setGuestUptime(0);
-
-  const started = performance.now();
 
   await ctx.imps.createImp({ name: 'big', memoryMib: 720 });
 
   const imps = await ctx.imps.listImps();
 
-  expect(imps.map((imp) => [imp.name, imp.state])).toEqual([
+  expect(imps.map((imp) => [imp.name, imp.state])).toStrictEqual([
     ['a', 'sleeping'],
     ['b', 'sleeping'],
     ['big', 'running'],
     ['c', 'sleeping'],
   ]);
 
-  expect(performance.now() - started).toBeLessThan(2000);
+  expect(ctx.logs).not.toSatisfyAny((line: string) => line.includes('for a young guest'));
 });
 
-test('impd stopping sleeps held and connected imps too', async () => {
-  const ctx = await setupRunningImp();
+test('it sleeps held and connected imps when impd stops', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const id = ctx.impId;
+  const until = new Date(ctx.now() + 60_000);
 
-  await holdFor(ctx.db, id, 60_000);
+  await writeLease(ctx.db, buildMockLeaseRecord({ impId: imp.id, until }), {
+    at: ctx.now(),
+    reason: 'held',
+  });
 
-  const release = ctx.imps.tracker.open(id, 'exec');
+  const release = ctx.imps.tracker.open(imp.id, 'exec');
+
+  onTestFinished(release);
 
   await ctx.imps.sleepAllImps();
 
-  release();
+  const after = await findImpByName(ctx.db, 'dev');
 
-  const imp = await findImpByName(ctx.db, 'dev');
-
-  expect(imp?.state).toBe('sleeping');
+  expect(after?.state).toBe('sleeping');
 });
 
-test('exec counts its session before the wake and drops it when the wake fails', async () => {
-  const ctx = await setupRunningImp();
-
-  const id = ctx.impId;
+test('it counts an exec before its wake and drops it when the wake fails', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
   await ctx.imps.stopImp('dev');
 
@@ -239,21 +276,18 @@ test('exec counts its session before the wake and drops it when the wake fails',
 
   await gate.reached;
 
-  const during = ctx.imps.tracker.count(id, 'exec');
+  const during = ctx.imps.tracker.count(imp.id, 'exec');
 
   gate.release();
 
-  const rejection = await exec.catch((error: unknown) => error);
-
+  expect(exec).rejects.toThrow('boot failed');
   expect(during).toBe(1);
-  expect(rejection).toBeInstanceOf(Error);
-  expect(ctx.imps.tracker.count(id)).toBe(0);
+  expect(ctx.imps.tracker.count(imp.id)).toBe(0);
 });
 
-test('a tunnel counts as a tunnel, not an exec, from before the wake', async () => {
-  const ctx = await setupRunningImp();
-
-  const id = ctx.impId;
+test('it counts a tunnel as a tunnel, not an exec, from before its wake', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
   await ctx.imps.stopImp('dev');
 
@@ -265,21 +299,20 @@ test('a tunnel counts as a tunnel, not an exec, from before the wake', async () 
 
   await gate.reached;
 
-  const during = {
-    tunnel: ctx.imps.tracker.count(id, 'tunnel'),
-    exec: ctx.imps.tracker.count(id, 'exec'),
-  };
+  const tunnels = ctx.imps.tracker.count(imp.id, 'tunnel');
+  const execs = ctx.imps.tracker.count(imp.id, 'exec');
 
   gate.release();
 
-  await dial.catch(() => null);
-
-  expect(during).toEqual({ tunnel: 1, exec: 0 });
-  expect(ctx.imps.tracker.count(id)).toBe(0);
+  expect(dial).rejects.toThrow('boot failed');
+  expect(tunnels).toBe(1);
+  expect(execs).toBe(0);
+  expect(ctx.imps.tracker.count(imp.id)).toBe(0);
 });
 
-test('impd stopping waits for a boot under way, sleeps that imp, and refuses later boots', async () => {
-  const ctx = await setupRunningImp();
+test('it waits for a boot under way and sleeps that imp when impd stops', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
   await ctx.imps.stopImp('dev');
 
@@ -290,78 +323,90 @@ test('impd stopping waits for a boot under way, sleeps that imp, and refuses lat
 
   const stopping = ctx.imps.sleepAllImps();
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(ctx.imps.countLockQueue(imp.id)).toBe(2);
+  });
 
   gate.release();
 
   await Promise.all([starting, stopping]);
 
-  const later = await ctx.imps.startImp('dev').catch((error: unknown) => error);
-  const imp = await findImpByName(ctx.db, 'dev');
+  const after = await findImpByName(ctx.db, 'dev');
 
-  expect(imp?.state).toBe('sleeping');
-  expect(later).toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: 'impd is stopping' });
+  expect(after?.state).toBe('sleeping');
 });
 
-test(
-  'a governor pass during impd stopping neither hangs nor wakes anything',
-  async () => {
-    const ctx = await setupImpTest({
-      env: { IMP_RAM_BUDGET_MIB: '500', IMP_DEFAULT_MEMORY_MIB: '256' },
-    });
+test('it refuses a boot once impd is stopping', async () => {
+  const ctx = await setupTest();
 
-    await ctx.createTestImage('ubuntu');
-    await ctx.imps.createImp({ name: 'a' });
-    await ctx.imps.createImp({ name: 'b' });
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.stopImp('dev');
+  await ctx.imps.sleepAllImps();
 
-    const gate = ctx.fake.hold('sleep');
+  expect(ctx.imps.startImp('dev')).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+    message: 'impd is stopping',
+  });
+});
 
-    // 600 MiB awake against a budget of 500: the pass wants one asleep
-    const enforcing = ctx.governor.enforce();
-    const stopping = ctx.imps.sleepAllImps();
+// a pass that hung, or a stop that waited on it forever, fails on the test's
+// timeout
+test('it neither hangs nor wakes anything when a governor pass meets impd stopping', async () => {
+  const ctx = await setupTest({
+    env: { IMP_RAM_BUDGET_MIB: '500', IMP_DEFAULT_MEMORY_MIB: '256' },
+  });
 
-    await gate.reached;
+  await ctx.imps.createImp({ name: 'a' });
+  await ctx.imps.createImp({ name: 'b' });
 
-    gate.release();
+  const gate = ctx.fake.hold('sleep');
 
-    const outcomes = await Promise.all([
-      waitForOutcome(enforcing, 10_000),
-      waitForOutcome(stopping, 10_000),
-    ]);
+  // 600 MiB awake against a budget of 500: the pass wants one asleep
+  const enforcing = ctx.governor.enforce();
+  const stopping = ctx.imps.sleepAllImps();
 
-    const imps = await ctx.imps.listImps();
+  await gate.reached;
 
-    expect(outcomes).toEqual(['done', 'done']);
-    expect(imps.map((imp) => imp.state)).toEqual(['sleeping', 'sleeping']);
-  },
-  SLOW_TEST_TIMEOUT_MS,
-);
+  gate.release();
 
-test('a create that impd stopping cuts short is recorded as an error', async () => {
-  const ctx = await setupRunningImp();
+  await Promise.all([enforcing, stopping]);
+
+  const imps = await ctx.imps.listImps();
+
+  expect(imps.map((imp) => imp.state)).toStrictEqual(['sleeping', 'sleeping']);
+});
+
+test('it refuses a create that impd stopping cuts short, and records it as an error', async () => {
+  const ctx = await setupTest();
 
   await ctx.imps.sleepAllImps();
 
-  const rejection = await ctx.imps.createImp({ name: 'late' }).catch((error: unknown) => error);
+  expect(ctx.imps.createImp({ name: 'late' })).rejects.toMatchObject({
+    code: 'SERVICE_UNAVAILABLE',
+  });
+
   const late = await findImpByName(ctx.db, 'late');
 
-  expect(rejection).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
   expect(late).toMatchObject({ state: 'error', error: 'impd is stopping' });
 });
 
-test('a destroy issued while the create boots waits for it, then removes the imp', async () => {
-  const ctx = await setupImpTest();
-
-  await ctx.createTestImage('ubuntu');
+test('it removes the imp once a create under way when its destroy was issued has booted', async () => {
+  const ctx = await setupTest();
 
   const gate = ctx.fake.hold('boot');
   const creating = ctx.imps.createImp({ name: 'dev' });
 
   await gate.reached;
 
+  const found = await findImpByName(ctx.db, 'dev');
+
+  invariant(found);
+
   const destroying = ctx.imps.destroyImp('dev');
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(ctx.imps.countLockQueue(found.id)).toBe(2);
+  });
 
   gate.release();
 
@@ -376,218 +421,340 @@ test('a destroy issued while the create boots waits for it, then removes the imp
   expect(ctx.fake.alive.size).toBe(0);
 });
 
-test('a session exec on an agent from before sessions fails before it connects', async () => {
-  const ctx = await setupRunningImp();
+test('it refuses a session exec on an agent from before sessions before it connects', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const rejection = await ctx.imps
-    .openExec('dev', { argv: ['sh'], tty: true, session: 'main' })
-    .catch((error: unknown) => error);
+  expect(
+    ctx.imps.openExec('dev', { argv: ['sh'], tty: true, session: 'main' }),
+  ).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
 
-  expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED' });
-  expect(ctx.imps.tracker.count(ctx.impId)).toBe(0);
+  expect(ctx.imps.tracker.count(imp.id)).toBe(0);
 });
 
-test('a unix socket dial on an agent from before 0.6.0 fails as AGENT_OUTDATED, a tcp one does not', async () => {
-  const ctx = await setupRunningImp();
+test('it refuses a unix socket dial on an agent from before 0.6.0', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const paths = buildImpPaths(ctx.dataDir, ctx.impId);
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
   const identity = readVmIdentity(paths);
 
-  if (identity === null) {
-    throw new Error('no vm identity');
-  }
-
+  invariant(identity);
   writeVmIdentity(paths, { ...identity, agentVersion: '0.5.0' });
 
-  const unixDial = await ctx.imps
-    .openDial('dev', { network: 'unix', address: '/run/docker.sock' }, 'ssh')
-    .catch((error: unknown) => error);
-
-  const tcpDial = await ctx.imps
-    .openDial('dev', { network: 'tcp', address: '127.0.0.1:80' }, 'ssh')
-    .catch((error: unknown) => error);
-
-  expect(unixDial).toMatchObject({ code: 'AGENT_OUTDATED' });
-  expect(tcpDial).not.toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(
+    ctx.imps.openDial('dev', { network: 'unix', address: '/run/docker.sock' }, 'ssh'),
+  ).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
 });
 
-test('an outer exec to an older agent is refused before it is sent', async () => {
-  const ctx = await setupRunningImp();
+test('it sends a tcp dial to an agent from before 0.6.0', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  const paths = buildImpPaths(ctx.dataDir, ctx.impId);
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
   const identity = readVmIdentity(paths);
 
-  if (identity === null) {
-    throw new Error('no vm identity');
-  }
+  invariant(identity);
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.5.0' });
 
-  const agent = await startStubAgent(paths.vsockSocket, (socket) => {
-    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
-  });
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+    },
+    { stack: ctx.stack },
+  );
 
-  ctx.stack.defer(() => {
-    agent.close();
-  });
+  const stream = await ctx.imps.openDial('dev', { network: 'tcp', address: '127.0.0.1:80' }, 'ssh');
 
-  const openOuter = () =>
-    ctx.imps.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec');
+  stream.close();
+
+  expect(agent.received.map((frame) => decodeJsonPayload(frame))).toStrictEqual([
+    { op: 'dial', network: 'tcp', address: '127.0.0.1:80' },
+  ]);
+});
+
+test('it refuses an outer exec to an imp with no agent version on record', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    },
+    { stack: ctx.stack },
+  );
 
   // an imp booted before impd recorded versions has no identity file
   rmSync(paths.vmIdentity);
 
-  const missing = await openOuter().catch((error: unknown) => error);
+  const opening = ctx.imps.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec');
 
-  writeVmIdentity(paths, { ...identity, agentVersion: 'dev' });
+  expect(opening).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(opening).rejects.toThrow("impd has no record of the imp's agent version");
+  expect(agent.received).toBeEmpty();
+});
 
-  const unparsed = await openOuter().catch((error: unknown) => error);
+test.each([
+  ['a version that does not parse', 'dev'],
+  ['a version from before outer exec', '0.15.0'],
+])('it refuses an outer exec to an agent with %s', async (_label, agentVersion) => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  writeVmIdentity(paths, { ...identity, agentVersion: '0.15.0' });
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
 
-  const older = await openOuter().catch((error: unknown) => error);
+  invariant(identity);
+  writeVmIdentity(paths, { ...identity, agentVersion });
 
-  expect(String(missing)).toContain('no record of the imp');
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    },
+    { stack: ctx.stack },
+  );
 
-  expect([missing, unparsed, older]).toEqual([
-    expect.objectContaining({ code: 'AGENT_OUTDATED' }),
-    expect.objectContaining({ code: 'AGENT_OUTDATED' }),
-    expect.objectContaining({ code: 'AGENT_OUTDATED' }),
-  ]);
+  expect(
+    ctx.imps.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
 
-  expect(agent.received).toEqual([]);
+  expect(agent.received).toBeEmpty();
+});
 
+test('it sends an outer exec to an agent from 0.16.0', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
+
+  invariant(identity);
   writeVmIdentity(paths, { ...identity, agentVersion: '0.16.0' });
 
-  const stream = await openOuter();
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    },
+    { stack: ctx.stack },
+  );
+
+  const stream = await ctx.imps.openExec(
+    'dev',
+    { argv: ['sh'], tty: true, outer: true },
+    'outer-exec',
+  );
 
   stream.close();
-  agent.close();
 
-  expect(agent.received.map((frame) => decodeJsonPayload(frame))).toEqual([
+  expect(agent.received.map((frame) => decodeJsonPayload(frame))).toStrictEqual([
     { op: 'exec.outer', argv: ['sh'], tty: true },
   ]);
 });
 
-test('neither the idle loop nor the governor sleeps an image builder', async () => {
-  const ctx = await setupRunningImp();
+test('it never idle-sleeps an image builder', async () => {
+  const ctx = await setupTest();
   const builder = await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
 
-  const byIdle = await ctx.imps.trySleepImp(builder.id, 'idle', {
+  const outcome = await ctx.imps.trySleepImp(builder.id, 'idle', {
     by: 'idle',
-    seenActiveAt: Date.now() + 60_000,
+    seenActiveAt: ctx.now() + 60_000,
   });
 
-  const byGovernor = await ctx.imps.trySleepImp(builder.id, 'budget', { by: 'governor' });
-
-  expect([byIdle, byGovernor]).toEqual(['skipped', 'skipped']);
+  expect(outcome).toBe('skipped');
 });
 
-test('an imp destroyed and made again under its id, as on a move home, logs again', async () => {
-  // one stack: each agent closes before the harness
-  const stack = new AsyncDisposableStack();
+test('it never sleeps an image builder for the governor', async () => {
+  const ctx = await setupTest();
+  const builder = await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
+  const outcome = await ctx.imps.trySleepImp(builder.id, 'budget', { by: 'governor' });
 
-  onTestFinished(() => stack.disposeAsync());
+  expect(outcome).toBe('skipped');
+});
 
-  const ctx = await createImpTest(stack);
+test('it refuses a dial into an image builder', async () => {
+  const ctx = await setupTest();
 
-  await ctx.createTestImage('ubuntu');
+  await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
 
-  const created = await ctx.imps.createImp({ name: 'dev' });
+  expect(
+    ctx.imps.openDial('imp-build-x', { network: 'tcp', address: '127.0.0.1:80' }, 'ssh'),
+  ).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message: 'imp-build-x is an image builder that impd made for one build; only rm reaches it',
+  });
+});
 
-  const id = created.id;
+test('it refuses an attach without a wake to an image builder', async () => {
+  const ctx = await setupTest();
 
-  const output = {
-    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-    execution_generation: 'c'.repeat(32),
-    buffer_start: 0,
-    end: 0,
-    offset: 0,
-    prelude: 0,
-    log: true,
-  };
+  await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
 
-  // a start creates the logged session; a tap gets STARTED and stays open
-  const startAgent = async () => {
-    const paths = buildImpPaths(ctx.dataDir, id);
-    const identity = readVmIdentity(paths);
+  expect(
+    ctx.imps.openAttach('imp-build-x', { session: 'main', wake: false }),
+  ).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message: 'imp-build-x is an image builder that impd made for one build; only rm reaches it',
+  });
+});
 
-    if (identity === null) {
-      throw new Error('no vm identity');
-    }
+test('it refuses to find the agent of an image builder', async () => {
+  const ctx = await setupTest();
 
-    writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
+  await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
 
-    const agent = await startStubAgent(
-      buildImpPaths(ctx.dataDir, id).vsockSocket,
-      (socket, request, frames) => {
-        if (frames.length === 1) {
-          const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
+  expect(ctx.imps.findAgent('imp-build-x')).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message: 'imp-build-x is an image builder that impd made for one build; only rm reaches it',
+  });
+});
 
-          socket.write(
-            encodeJsonFrame(FRAME_TYPES.started, {
-              pid: 9,
-              session: 'main',
-              created: !isTap,
-              output,
-            }),
-          );
-        }
-      },
-    );
+test("it removes an imp's session logs when the imp is destroyed", async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-    stack.defer(() => {
-      agent.close();
-    });
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
 
-    return agent;
-  };
+  invariant(identity);
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
-  const sessionLogsDir = buildImpPaths(ctx.dataDir, id).sessionLogsDir;
-  const generationDir = `${sessionLogsDir}/${output.execution_generation}`;
+  // the start creates the logged session; the tap impd opens gets the same
+  // STARTED and stays open
+  await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, {
+          pid: 9,
+          session: 'main',
+          created: true,
+          output: {
+            boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+            execution_generation: 'c'.repeat(32),
+            buffer_start: 0,
+            end: 0,
+            offset: 0,
+            prelude: 0,
+            log: true,
+          },
+        }),
+      );
+    },
+    { stack: ctx.stack },
+  );
 
-  const startLogged = async () => {
-    const stream = await ctx.imps.openExec(
-      'dev',
-      { argv: ['sh'], tty: true, session: 'main', log: true },
-      'session-log',
-    );
+  const stream = await ctx.imps.openExec(
+    'dev',
+    { argv: ['sh'], tty: true, session: 'main', log: true },
+    'session-log',
+  );
 
-    await waitForPath(`${generationDir}/meta.json`);
+  await waitFor(() => {
+    expect(existsSync(`${paths.sessionLogsDir}/${'c'.repeat(32)}/meta.json`)).toBeTrue();
+  });
 
-    stream.close();
-  };
-
-  const first = await startAgent();
-
-  await startLogged();
-
-  first.close();
+  stream.close();
 
   await ctx.imps.destroyImp('dev');
 
-  expect(existsSync(sessionLogsDir)).toBe(false);
-
-  // the move home: the same id, made again
-  await ctx.imps.createImp({ name: 'dev', id });
-
-  const second = await startAgent();
-
-  await startLogged();
-
-  second.close();
-
-  expect(existsSync(`${generationDir}/meta.json`)).toBe(true);
-
-  await ctx.imps.destroyImp('dev');
+  expect(existsSync(paths.sessionLogsDir)).toBeFalse();
 });
 
-async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 2000;
+test('it logs again for an imp made again under the id of one destroyed, as on a move home', async () => {
+  const ctx = await setupTest();
+  const first = await ctx.imps.createImp({ name: 'dev' });
 
-  while (!existsSync(path)) {
-    if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for ${path}`);
-    }
+  const paths = buildImpPaths(ctx.dataDir, first.id);
+  const firstIdentity = readVmIdentity(paths);
 
-    await Bun.sleep(5);
-  }
-}
+  invariant(firstIdentity);
+  writeVmIdentity(paths, { ...firstIdentity, agentVersion: '0.18.0' });
+
+  // the start creates the logged session; the tap impd opens gets the same
+  // STARTED and stays open
+  const firstAgent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, {
+          pid: 9,
+          session: 'main',
+          created: true,
+          output: {
+            boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+            execution_generation: 'c'.repeat(32),
+            buffer_start: 0,
+            end: 0,
+            offset: 0,
+            prelude: 0,
+            log: true,
+          },
+        }),
+      );
+    },
+    { stack: ctx.stack },
+  );
+
+  const firstStream = await ctx.imps.openExec(
+    'dev',
+    { argv: ['sh'], tty: true, session: 'main', log: true },
+    'session-log',
+  );
+
+  await waitFor(() => {
+    expect(existsSync(`${paths.sessionLogsDir}/${'c'.repeat(32)}/meta.json`)).toBeTrue();
+  });
+
+  firstStream.close();
+  firstAgent.close();
+
+  await ctx.imps.destroyImp('dev');
+  await ctx.imps.createImp({ name: 'dev', id: first.id });
+
+  const secondIdentity = readVmIdentity(paths);
+
+  invariant(secondIdentity);
+  writeVmIdentity(paths, { ...secondIdentity, agentVersion: '0.18.0' });
+
+  // the agent of the imp made again answers as the first did
+  await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(
+        encodeJsonFrame(FRAME_TYPES.started, {
+          pid: 9,
+          session: 'main',
+          created: true,
+          output: {
+            boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+            execution_generation: 'c'.repeat(32),
+            buffer_start: 0,
+            end: 0,
+            offset: 0,
+            prelude: 0,
+            log: true,
+          },
+        }),
+      );
+    },
+    { stack: ctx.stack },
+  );
+
+  const stream = await ctx.imps.openExec(
+    'dev',
+    { argv: ['sh'], tty: true, session: 'main', log: true },
+    'session-log',
+  );
+
+  onTestFinished(stream.close);
+
+  await waitFor(() => {
+    expect(existsSync(`${paths.sessionLogsDir}/${'c'.repeat(32)}/meta.json`)).toBeTrue();
+  });
+});

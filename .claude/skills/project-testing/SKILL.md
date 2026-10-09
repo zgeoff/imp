@@ -83,8 +83,9 @@ On Bun 1.4.2, `onTestFinished` callbacks run in the order they were registered, 
 the ones after it are skipped. A util that registers its own cleanup is therefore released before
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier; given `{ stack }`, it defers the close there instead),
-`startStubExecAgent` (through `startStubAgent`), `startStubDnsUpstream`, `createTestDatabase`,
-`buildQueryGate` (it releases a held select), `setupImpTest`, `setupMcpTest` and `setupMoveHosts`.
+`startStubExecAgent`, `startStubSessionAgent` and `startStubAttachAgent` (through `startStubAgent`,
+so each also takes `{ stack }`), `startStubDnsUpstream`, `createTestDatabase`, `buildQueryGate` (it
+releases a held select), `setupImpTest`, `setupMcpTest` and `setupMoveHosts`.
 
 `setupImpTest`, `setupMcpTest` and `createTestDatabase` still carry a transitional
 `[Symbol.asyncDispose]`, for area branches that hold them with `await using`; a later GEO-135 PR
@@ -370,6 +371,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | cgroups and `/proc`          | Temp dirs as `root` and `procRoot` (5)                                                             | The cgroup tree and `/proc`                                                        |
 | cgroups for impd             | `test-utils/build-stub-cpu-cgroups.ts`                                                             | `CpuCgroups`: an in-memory tree that records each change                           |
 | Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
+| Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                 | An agent that runs, takes over and resumes sessions, and answers `activity`        |
+| Attach agent                 | `test-utils/start-stub-attach-agent.ts` (`startStubAttachAgent`)                                   | A 0.15.0 agent: a ping with a boot id, then scripted session replies               |
+| Disk clone and grow          | `test-utils/build-stub-disk-tools.ts` (`buildStubDiskTools`)                                       | `createImpTest`'s `cloneDisk` and `growFilesystem`: fail, land empty, or hold      |
 | Imp exec agent               | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                       | An imp's agent on its vsock socket, driving `buildStubExecGuest`                   |
 | tailscale CLI                | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                        | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                |
 | MCP upstream                 | `test-utils/build-stub-mcp-transport.ts`                                                           | The `HttpTransport` to an imp's MCP server: calls held open until ended            |

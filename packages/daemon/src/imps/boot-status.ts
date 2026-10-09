@@ -14,7 +14,7 @@ export interface BootStatus {
 // loads boots cold, and why; an awake one, or one whose snapshot still loads,
 // runs parts of the host it predates until its next cold boot.
 export function readBootStatus(
-  imp: Readonly<ImpRecord>,
+  imp: Readonly<Pick<ImpRecord, 'state'>>,
   paths: Readonly<ImpPaths>,
   host: Readonly<HostIdentity>,
 ): BootStatus {

@@ -1,244 +1,371 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { statSync, truncateSync } from 'node:fs';
-import { findImpByName } from '../db/imps';
+import { createImp, findImpByName } from '../db/imps';
 import { runChecked } from '../process/run-command';
 import { buildImpPaths } from '../storage/data-layout';
-import { buildTestApp, setupImpTest } from './test-imps';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
+import { buildTestApp, createImpTest } from './test-imps';
 
-const GIB_MIB = 1024;
+// impd over the stub VMM, and a client of its API
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// a sparse copy: grown disks stay holes on the test's tmpfs
-async function createSparseClone(source: string, target: string): Promise<void> {
-  await runChecked(['cp', '--sparse=always', source, target]);
-}
+  onTestFinished(() => stack.disposeAsync());
 
-async function setupDiskTest() {
-  const harness = await setupImpTest({ cloneDisk: createSparseClone });
+  const harness = await createImpTest(stack, {
+    // a sparse copy, so the grown disks stay holes on the test's tmpfs
+    cloneDisk: async (source, target) => {
+      await runChecked(['cp', '--sparse=always', source, target]);
+    },
+  });
 
+  // every create boots an image row; the default image is ubuntu
   await harness.createTestImage('ubuntu');
 
   const app = buildTestApp(harness, harness);
 
-  const findDisk = async (name: string) => {
-    const imp = await findImpByName(harness.db, name);
-
-    return buildImpPaths(harness.dataDir, imp?.id ?? '').disk;
-  };
-
-  const readDisk = async (name: string) => {
-    const imp = await findImpByName(harness.db, name);
-
-    const disk = buildImpPaths(harness.dataDir, imp?.id ?? '').disk;
-
-    return { fileBytes: statSync(disk).size, isGrowPending: imp?.isDiskGrowPending };
-  };
-
-  return { ...harness, client: app.client, findDisk, readDisk };
+  return { ...harness, client: app.client };
 }
 
-test('a new disk takes the size asked for, and never less than its image', async () => {
-  const ctx = await setupDiskTest();
-  const sized = await ctx.client.imps.create({ name: 'sized', diskMib: 2 * GIB_MIB });
+test('it makes a new disk the size asked for', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'sized', diskMib: 2048 });
+  const imp = await findImpByName(ctx.db, 'sized');
 
-  expect(sized.diskMib).toBe(2 * GIB_MIB);
+  expect(created.diskMib).toBe(2048);
+  expect(statSync(buildImpPaths(ctx.dataDir, created.id).disk).size).toBe(2 * 1024 ** 3);
+  expect(imp?.isDiskGrowPending).toBeFalse();
+});
 
-  const disk1 = await ctx.readDisk('sized');
+test('it grows the filesystem of a new disk on the host before the first boot', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'sized', diskMib: 2048 });
 
-  expect(disk1).toEqual({ fileBytes: 2 * 1024 ** 3, isGrowPending: false });
+  expect(ctx.filesystemGrows).toStrictEqual([buildImpPaths(ctx.dataDir, created.id).disk]);
+});
 
-  // the host grew the filesystem before the first boot
-  const sizedDisk = await ctx.findDisk('sized');
-
-  expect(ctx.filesystemGrows).toEqual([sizedDisk]);
+test('it refuses a disk smaller than its image filesystem', async () => {
+  const ctx = await setupTest();
 
   // an image whose filesystem is 3 GiB
   await ctx.createTestImage('big');
 
   truncateSync(`${ctx.dataDir}/images/big/rootfs.ext4`, 3 * 1024 ** 3);
 
-  const small = await ctx.client.imps
-    .create({ name: 'small', image: 'big', diskMib: 2 * GIB_MIB })
-    .catch((error: unknown) => error);
+  expect(
+    ctx.client.imps.create({ name: 'small', image: 'big', diskMib: 2048 }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: "a disk of 2048 MiB is smaller than the image's filesystem (3072 MiB)",
+  });
+});
 
-  expect(String(small)).toContain("image's filesystem (3072 MiB)");
+test('it sizes a disk asked for no size to its image filesystem, with no grow', async () => {
+  const ctx = await setupTest();
+
+  // an image whose filesystem is 3 GiB
+  await ctx.createTestImage('big');
+
+  truncateSync(`${ctx.dataDir}/images/big/rootfs.ext4`, 3 * 1024 ** 3);
 
   const fitted = await ctx.client.imps.create({ name: 'fitted', image: 'big' });
 
-  expect(fitted.diskMib).toBe(3 * GIB_MIB);
-  expect(ctx.filesystemGrows).toEqual([sizedDisk]);
+  expect(fitted.diskMib).toBe(3072);
+  expect(ctx.filesystemGrows).toBeEmpty();
 });
 
-test('a resize grows a stopped disk for its next boot, and never shrinks one', async () => {
-  const ctx = await setupDiskTest();
+test('it grows a stopped disk and its filesystem on the host at a resize', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
 
-  await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
   await ctx.client.imps.stop({ name: 'dev' });
 
-  const grown = await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4 * GIB_MIB });
-  const devDisk = await ctx.findDisk('dev');
+  const grown = await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4096 });
+
+  const disk = buildImpPaths(ctx.dataDir, created.id).disk;
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(grown.diskMib).toBe(4096);
+  expect(statSync(disk).size).toBe(4 * 1024 ** 3);
+  expect(imp?.isDiskGrowPending).toBeFalse();
 
   // the host grows a stopped disk's filesystem: on create, then on the resize
-  expect(ctx.filesystemGrows).toEqual([devDisk, devDisk]);
-  expect(grown.diskMib).toBe(4 * GIB_MIB);
-
-  const disk2 = await ctx.readDisk('dev');
-
-  expect(disk2).toEqual({ fileBytes: 4 * 1024 ** 3, isGrowPending: false });
-  expect(ctx.fake.grows).toHaveLength(0);
-
-  const shrink = await ctx.client.imps
-    .resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB })
-    .catch((error: unknown) => error);
-
-  expect(String(shrink)).toContain('a disk only grows');
+  expect(ctx.filesystemGrows).toStrictEqual([disk, disk]);
+  expect(ctx.fake.grows).toBeEmpty();
 });
 
-test('a running guest grows at once; a failed grow is retried at the next wake', async () => {
-  const ctx = await setupDiskTest();
-  const imp = await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
+test('it refuses to shrink a disk', async () => {
+  const ctx = await setupTest();
 
-  const disk = buildImpPaths(ctx.dataDir, imp.id).disk;
+  await ctx.client.imps.create({ name: 'dev', diskMib: 4096 });
+  await ctx.client.imps.stop({ name: 'dev' });
 
-  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB });
+  expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 })).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'a disk of 3072 MiB is smaller than the disk now; a disk only grows (4096 MiB)',
+  });
+});
 
-  expect(ctx.fake.grows).toEqual([{ disk, diskBytes: 3 * 1024 ** 3 }]);
+test('it refuses to resize the disk of an imp still being created', async () => {
+  const ctx = await setupTest();
+  const image = await ctx.createTestImage('base');
+
+  await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
+
+  expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4096 })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+  });
+});
+
+test('it grows the filesystem of a running guest at once', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 });
+
+  const disk = buildImpPaths(ctx.dataDir, created.id).disk;
+
+  expect(ctx.fake.grows).toStrictEqual([{ disk, diskBytes: 3 * 1024 ** 3 }]);
 
   // a VM has the disk open: only the create's grow ran on the host
-  expect(ctx.filesystemGrows).toEqual([disk]);
+  expect(ctx.filesystemGrows).toStrictEqual([disk]);
+});
+
+test('it marks the grow pending when a running guest fails to grow', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
 
   ctx.fake.queue('grow', 'fail');
 
-  const failed = await ctx.client.imps
-    .resizeDisk({ name: 'dev', diskMib: 4 * GIB_MIB })
-    .catch((error: unknown) => error);
+  const resizing = ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4096 });
 
-  expect(String(failed)).toContain('its next wake or boot does');
+  expect(resizing).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
 
-  const disk3 = await ctx.readDisk('dev');
+  expect(resizing).rejects.toThrow(
+    'the disk grew, but the guest did not grow its filesystem (its next wake or boot does)',
+  );
 
-  expect(disk3).toEqual({ fileBytes: 4 * 1024 ** 3, isGrowPending: true });
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(statSync(buildImpPaths(ctx.dataDir, created.id).disk).size).toBe(4 * 1024 ** 3);
+  expect(imp?.isDiskGrowPending).toBeTrue();
+});
+
+test('it retries a failed guest grow at the next wake', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+
+  ctx.fake.queue('grow', 'fail');
+
+  expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4096 })).rejects.toMatchObject({
+    code: 'INTERNAL_SERVER_ERROR',
+  });
 
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
 
-  expect(ctx.fake.grows.at(-1)).toEqual({ disk, diskBytes: 4 * 1024 ** 3 });
+  const imp = await findImpByName(ctx.db, 'dev');
 
-  const disk6 = await ctx.readDisk('dev');
+  expect(ctx.fake.grows.at(-1)).toStrictEqual({
+    disk: buildImpPaths(ctx.dataDir, created.id).disk,
+    diskBytes: 4 * 1024 ** 3,
+  });
 
-  expect(disk6.isGrowPending).toBeFalse();
+  expect(imp?.isDiskGrowPending).toBeFalse();
+});
 
-  // an agent from before grow: the next boot grows the filesystem
+test('it leaves the grow to the next boot for an agent from before grow', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+
   ctx.fake.queue('grow', 'die');
 
-  const outdated = await ctx.client.imps
-    .resizeDisk({ name: 'dev', diskMib: 5 * GIB_MIB })
-    .catch((error: unknown) => error);
-
-  expect(outdated).toMatchObject({ code: 'AGENT_OUTDATED' });
-  expect(String(outdated)).toContain('its next boot does');
+  expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 5120 })).rejects.toMatchObject({
+    code: 'AGENT_OUTDATED',
+    message:
+      "the disk grew, but the imp's agent is too old to grow its filesystem while it runs; its next boot does (stop and start the imp)",
+  });
 });
 
-test('a sleeping guest grows when it wakes, and a cold boot needs no grow call', async () => {
-  const ctx = await setupDiskTest();
+test('it marks the grow of a sleeping guest pending, with no grow call', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
 
-  await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
   await ctx.client.imps.sleep({ name: 'dev' });
-  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB });
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 });
 
-  const disk4 = await ctx.readDisk('dev');
+  const imp = await findImpByName(ctx.db, 'dev');
 
-  expect(disk4).toEqual({ fileBytes: 3 * 1024 ** 3, isGrowPending: true });
-  expect(ctx.fake.grows).toHaveLength(0);
+  expect(statSync(buildImpPaths(ctx.dataDir, created.id).disk).size).toBe(3 * 1024 ** 3);
+  expect(imp?.isDiskGrowPending).toBeTrue();
+  expect(ctx.fake.grows).toBeEmpty();
+});
 
+test('it grows a sleeping guest when it wakes', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 });
   await ctx.client.imps.wake({ name: 'dev' });
 
-  expect(ctx.fake.grows.map((grow) => grow.diskBytes)).toEqual([3 * 1024 ** 3]);
+  const imp = await findImpByName(ctx.db, 'dev');
 
-  const disk7 = await ctx.readDisk('dev');
-
-  expect(disk7.isGrowPending).toBeFalse();
-
-  // the agent grows a cold boot's filesystem: a pending grow clears
-  await ctx.client.imps.sleep({ name: 'dev' });
-  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4 * GIB_MIB });
-  await ctx.client.imps.stop({ name: 'dev' });
-  await ctx.client.imps.start({ name: 'dev' });
-
-  expect(ctx.fake.grows).toHaveLength(1);
-
-  const disk8 = await ctx.readDisk('dev');
-
-  expect(disk8.isGrowPending).toBeFalse();
+  expect(ctx.fake.grows.map((grow) => grow.diskBytes)).toStrictEqual([3 * 1024 ** 3]);
+  expect(imp?.isDiskGrowPending).toBeFalse();
 });
 
-test('a checkpoint keeps its disk size, and a restore or a fork takes it', async () => {
-  const ctx = await setupDiskTest();
+test('it clears a pending grow at a cold boot, with no grow call', async () => {
+  const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB });
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 });
+  await ctx.client.imps.stop({ name: 'dev' });
+
+  // the agent grows a cold boot's filesystem
+  await ctx.client.imps.start({ name: 'dev' });
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(ctx.fake.grows).toBeEmpty();
+  expect(imp?.isDiskGrowPending).toBeFalse();
+});
+
+test('it keeps the disk size in a checkpoint', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
 
   const checkpoint = await ctx.client.checkpoints.create({ name: 'dev', label: 'small' });
 
-  expect(checkpoint.diskMib).toBe(2 * GIB_MIB);
+  expect(checkpoint.diskMib).toBe(2048);
+});
 
-  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 5 * GIB_MIB });
+test('it gives a fork from a checkpoint the disk size of the checkpoint', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+  await ctx.client.checkpoints.create({ name: 'dev', label: 'small' });
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 5120 });
 
   const fork = await ctx.client.imps.fork({ source: 'dev', name: 'copy', checkpoint: 'small' });
 
-  expect(fork.diskMib).toBe(2 * GIB_MIB);
+  expect(fork.diskMib).toBe(2048);
+});
+
+test('it gives a live fork the disk size of its source now', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+  await ctx.client.checkpoints.create({ name: 'dev', label: 'small' });
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 5120 });
 
   const live = await ctx.client.imps.fork({ source: 'dev', name: 'live' });
 
-  expect(live.diskMib).toBe(5 * GIB_MIB);
-
-  const restored = await ctx.client.checkpoints.restore({ name: 'dev', checkpoint: 'small' });
-
-  expect(restored.diskMib).toBe(2 * GIB_MIB);
-
-  const disk5 = await ctx.readDisk('dev');
-
-  expect(disk5).toEqual({ fileBytes: 2 * 1024 ** 3, isGrowPending: false });
+  expect(live.diskMib).toBe(5120);
 });
 
-test('past the reserve, creates and resizes are refused, a sleep keeps its VM, a wake goes on', async () => {
-  const ctx = await setupDiskTest();
+test('it gives a restored imp the disk size of the checkpoint', async () => {
+  const ctx = await setupTest();
+  const created = await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
 
-  await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB, memoryMib: 1024 });
-  await ctx.client.imps.create({ name: 'idle', diskMib: 2 * GIB_MIB });
-  await ctx.client.imps.sleep({ name: 'idle' });
+  await ctx.client.checkpoints.create({ name: 'dev', label: 'small' });
+  await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 5120 });
 
-  // 100 GiB with 6 GiB free: room for the 5 GiB reserve, not for a 1 GiB memory file too
-  ctx.diskUsage.usedBytes = 94 * 1024 ** 3;
+  const restored = await ctx.client.checkpoints.restore({ name: 'dev', checkpoint: 'small' });
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(restored.diskMib).toBe(2048);
+  expect(statSync(buildImpPaths(ctx.dataDir, created.id).disk).size).toBe(2 * 1024 ** 3);
+  expect(imp?.isDiskGrowPending).toBeFalse();
+});
+
+test('it refuses a sleep the disk has no room for, and keeps the VM running', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048, memoryMib: 1024 });
+
+  // 100 GiB with 5.5 GiB free: room for the 5 GiB reserve, not for a 1 GiB memory file too
+  ctx.diskUsage.usedBytes = 94.5 * 1024 ** 3;
   ctx.diskUsage.availableBytes = 5.5 * 1024 ** 3;
 
-  const sleep = await ctx.client.imps.sleep({ name: 'dev' }).catch((error: unknown) => error);
-
-  expect(sleep).toMatchObject({ code: 'DISK_FULL' });
+  expect(ctx.client.imps.sleep({ name: 'dev' })).rejects.toMatchObject({ code: 'DISK_FULL' });
 
   const dev = await ctx.client.imps.get({ name: 'dev' });
 
   expect(dev.state).toBe('running');
+});
 
+test('it refuses a create past the disk reserve', async () => {
+  const ctx = await setupTest();
+
+  // 100 GiB with 4 GiB free: inside the 5 GiB reserve
+  ctx.diskUsage.usedBytes = 96 * 1024 ** 3;
   ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
 
-  const refusals = await Promise.all([
-    ctx.client.imps.create({ name: 'more' }).catch((error: unknown) => error),
-    ctx.client.imps
-      .resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB })
-      .catch((error: unknown) => error),
-    ctx.client.checkpoints.create({ name: 'dev' }).catch((error: unknown) => error),
-  ]);
+  expect(ctx.client.imps.create({ name: 'more' })).rejects.toMatchObject({ code: 'DISK_FULL' });
+});
 
-  for (const refusal of refusals) {
-    expect(refusal).toMatchObject({ code: 'DISK_FULL' });
-  }
+test('it refuses a resize past the disk reserve', async () => {
+  const ctx = await setupTest();
 
-  // its disk and memory exist already: a full disk must not strand its work
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+
+  // 100 GiB with 4 GiB free: inside the 5 GiB reserve
+  ctx.diskUsage.usedBytes = 96 * 1024 ** 3;
+  ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
+
+  expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 })).rejects.toMatchObject({
+    code: 'DISK_FULL',
+  });
+});
+
+test('it refuses a checkpoint past the disk reserve', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+
+  // 100 GiB with 4 GiB free: inside the 5 GiB reserve
+  ctx.diskUsage.usedBytes = 96 * 1024 ** 3;
+  ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
+
+  expect(ctx.client.checkpoints.create({ name: 'dev' })).rejects.toMatchObject({
+    code: 'DISK_FULL',
+  });
+});
+
+test('it wakes a sleeping imp past the disk reserve', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'idle', diskMib: 2048 });
+  await ctx.client.imps.sleep({ name: 'idle' });
+
+  // 100 GiB with 4 GiB free: inside the 5 GiB reserve; its disk and memory
+  // exist already, so a full disk must not strand its work
+  ctx.diskUsage.usedBytes = 96 * 1024 ** 3;
+  ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
+
   const woken = await ctx.client.imps.wake({ name: 'idle' });
 
   expect(woken.state).toBe('running');
+});
+
+test('it reports the reserve, the low disk and the imp disks in system info', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2048 });
+  await ctx.client.imps.create({ name: 'idle', diskMib: 2048 });
+
+  // 100 GiB with 4 GiB free: inside the 5 GiB reserve
+  ctx.diskUsage.usedBytes = 96 * 1024 ** 3;
+  ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
 
   const info = await ctx.client.system.info();
 
-  expect(info.storage).toMatchObject({ reserveBytes: 5 * 1024 ** 3, isLow: true });
+  expect(info.storage.reserveBytes).toBe(5 * 1024 ** 3);
+  expect(info.storage.isLow).toBeTrue();
   expect(info.storage.impDiskBytes).toBe(4 * 1024 ** 3);
 });

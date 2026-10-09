@@ -1,69 +1,91 @@
-import { expect, test } from 'bun:test';
-import { readRejection } from '../read-rejection';
-import type { CpuCgroups } from '../vmm/cpu-cgroups';
-import { OOM_KILL_TRIGGER } from './oom-kill';
-import { setupImpTest } from './test-imps';
+import { expect, onTestFinished, test } from 'bun:test';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
+import { createImpTest } from './test-imps';
+import type { ImpTestOptions } from './test-imps';
 
-interface OomKillCount {
-  count: number;
+async function setupTest(options: ImpTestOptions = {}) {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, options);
+
+  // the image every imp boots from
+  await harness.createTestImage('ubuntu');
+
+  return harness;
 }
 
-// cgroups whose memory.events counts `kills.count` OOM kills
-function buildOomCgroups(kills: Readonly<OomKillCount>): CpuCgroups {
-  return {
-    isEnforced: true,
-    isMemoryEnforced: true,
-    readOomKills: () => kills.count,
-    hasOomKillSinceStart: () => false,
-    setup: () => null,
-    apply: () => {},
-    adopt: () => {},
-    remove: () => Promise.resolve(),
-    setGuestMib: () => {},
-    kill: () => {},
-    removeOrphans: () => [],
-    readCpuStat: () => null,
-  };
-}
+test('#startOomWatch sees an OOM kill counted after it started', () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
 
-test('a sleep the memory limit cut short says so', async () => {
-  const kills: OomKillCount = { count: 3 };
+  stub.cgroups.setup('a', { limit: null, weight: 100 }, 512);
+  stub.oomKills.set('a', 2);
 
-  const ctx = await setupImpTest({ cgroups: buildOomCgroups(kills) });
+  const hasOomKill = startOomWatch(stub.cgroups, 'a');
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  stub.oomKills.set('a', 3);
 
+  expect(hasOomKill()).toBeTrue();
+});
+
+test('#startOomWatch ignores an OOM kill counted before it started', () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
+
+  stub.cgroups.setup('a', { limit: null, weight: 100 }, 512);
+  stub.oomKills.set('a', 2);
+
+  const hasOomKill = startOomWatch(stub.cgroups, 'a');
+
+  expect(hasOomKill()).toBeFalse();
+});
+
+test('#startOomWatch sees no OOM kill for an imp without a cgroup', () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
+  const hasOomKill = startOomWatch(stub.cgroups, 'a');
+
+  stub.oomKills.set('a', 1);
+
+  expect(hasOomKill()).toBeFalse();
+});
+
+test('#sleepImp says a sleep the memory limit cut short failed for that reason', async () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
+
+  const ctx = await setupTest({ cgroups: stub.cgroups });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  // kills from before the sleep, which do not count
+  stub.oomKills.set(imp.id, 3);
   ctx.fake.queue('sleep', 'die');
 
   const held = ctx.fake.hold('sleep');
-  const sleeping = readRejection(ctx.imps.sleepImp('dev'));
+  const sleeping = ctx.imps.sleepImp('dev');
 
   await held.reached;
 
-  kills.count += 1;
-
+  stub.oomKills.set(imp.id, 4);
   held.release();
 
-  const error = await sleeping;
+  expect(sleeping).rejects.toThrowWithMessage(Error, `sleep failed: ${OOM_KILL_TRIGGER}`);
+
   const found = await ctx.imps.getImp('dev');
 
-  expect(error).toMatchObject({ message: `sleep failed: ${OOM_KILL_TRIGGER}` });
   expect(found.state).toBe('stopped');
   expect(found.error).toBe(OOM_KILL_TRIGGER);
 
-  expect(ctx.logs.join('\n')).toContain(
-    `sleep failed after firecracker stopped: ${OOM_KILL_TRIGGER}`,
+  expect(ctx.logs).toSatisfyAny((line: string) =>
+    line.includes(`sleep failed after firecracker stopped: ${OOM_KILL_TRIGGER}`),
   );
 });
 
-test('a wake the memory limit cut short says so, then boots cold', async () => {
-  const kills: OomKillCount = { count: 0 };
+test('#wakeImp boots cold after a wake the memory limit cut short, and says why', async () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
 
-  const ctx = await setupImpTest({ cgroups: buildOomCgroups(kills) });
+  const ctx = await setupTest({ cgroups: stub.cgroups });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
   await ctx.imps.sleepImp('dev');
 
   ctx.fake.queue('wake', 'fail');
@@ -73,33 +95,52 @@ test('a wake the memory limit cut short says so, then boots cold', async () => {
 
   await held.reached;
 
-  kills.count += 1;
-
+  stub.oomKills.set(imp.id, 1);
   held.release();
 
   const woken = await waking;
 
   expect(woken.state).toBe('running');
-  expect(ctx.logs.join('\n')).toContain(`wake failed: ${OOM_KILL_TRIGGER}; booting cold`);
+
+  expect(ctx.logs).toSatisfyAny((line: string) =>
+    line.includes(`wake failed: ${OOM_KILL_TRIGGER}; booting cold`),
+  );
 });
 
-test('an OOM kill from before the sleep or the wake is not this failure', async () => {
-  const ctx = await setupImpTest({ cgroups: buildOomCgroups({ count: 1 }) });
+test('#wakeImp does not blame a failed wake on an OOM kill from before it', async () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  const ctx = await setupTest({ cgroups: stub.cgroups });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
   await ctx.imps.sleepImp('dev');
 
+  // a kill from before the wake
+  stub.oomKills.set(imp.id, 1);
   ctx.fake.queue('wake', 'fail');
 
-  await ctx.imps.wakeImp('dev');
+  const woken = await ctx.imps.wakeImp('dev');
 
+  expect(woken.state).toBe('running');
+  expect(ctx.logs).toSatisfyAll((line: string) => !line.includes(OOM_KILL_TRIGGER));
+});
+
+test('#sleepImp does not blame a lost sleep on an OOM kill from before it', async () => {
+  const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
+
+  const ctx = await setupTest({ cgroups: stub.cgroups });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  // a kill from before the sleep
+  stub.oomKills.set(imp.id, 1);
   ctx.fake.queue('sleep', 'die');
 
-  const error = await readRejection(ctx.imps.sleepImp('dev'));
+  const sleeping = ctx.imps.sleepImp('dev');
+
+  expect(sleeping).rejects.toThrowWithMessage(Error, 'snapshot files lost after the kill');
+
   const found = await ctx.imps.getImp('dev');
 
-  expect(error).toMatchObject({ message: 'snapshot files lost after the kill' });
   expect(found.error).toBeUndefined();
-  expect(ctx.logs.join('\n')).not.toContain(OOM_KILL_TRIGGER);
+  expect(ctx.logs).toSatisfyAll((line: string) => !line.includes(OOM_KILL_TRIGGER));
 });
