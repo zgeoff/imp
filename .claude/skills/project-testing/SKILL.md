@@ -83,12 +83,13 @@ On Bun 1.4.2, `onTestFinished` callbacks run in the order they were registered, 
 the ones after it are skipped. A util that registers its own cleanup is therefore released before
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier; given `{ stack }`, it defers the close there instead),
-`startStubExecAgent`, `startStubSessionAgent` and `startStubAttachAgent` (through `startStubAgent`,
-so each also takes `{ stack }`), `startStubDnsUpstream`, `createTestDatabase`,
-`createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely closes a driver only
-after a query started it), `buildQueryGate` (it releases a held select), `setupImpTest`,
-`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
-`startStubFirecracker`.
+`startStubExecAgent`, `startStubSessionAgent`, `startStubAttachAgent` and `startStubServiceAgent`
+(through `startStubAgent`, so each also takes `{ stack }`), `startStubDnsUpstream`,
+`createTestDatabase`, `createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely
+closes a driver only after a query started it), `buildQueryGate` (it releases a held select),
+`findFreePorts` (it releases its port claims), `startInMemoryMetrics` and `startInMemoryTracing`
+(each unregisters its global provider), `setupImpTest`, `setupMoveHosts`,
+`startStubFirecrackerApi`, `startStubFirecrackerProcess` and `startStubFirecracker`.
 
 `setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
 branches that hold them with `await using`; a later GEO-135 PR removes it once those branches land.
@@ -408,6 +409,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Attach agent                 | `test-utils/start-stub-attach-agent.ts` (`startStubAttachAgent`)                                   | A 0.15.0 agent: a ping with a boot id, then scripted session replies               |
 | Disk clone and grow          | `test-utils/build-stub-disk-tools.ts` (`buildStubDiskTools`)                                       | `createImpTest`'s `cloneDisk` and `growFilesystem`: fail, land empty, or hold      |
 | Imp exec agent               | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                       | An imp's agent on its vsock socket, driving `buildStubExecGuest`                   |
+| Imp service agent            | `test-utils/start-stub-service-agent.ts` (`startStubServiceAgent`)                                 | An imp's agent's services API: definitions, states and log files                   |
+| Agent exec stream            | `test-utils/build-stub-agent-exec-stream.ts`, `build-stub-tap-stream.ts`                           | The `ExecStream` an exec, attach or session tap opens, fed by the test             |
+| Exec socket and backend      | `test-utils/build-stub-exec-socket.ts`, `build-stub-exec-backend.ts`                               | The client's `/exec` WebSocket, and the imp service an `/exec` session opens on    |
 | tailscale CLI                | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                        | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                |
 | MCP upstream                 | `test-utils/build-stub-mcp-transport.ts`                                                           | The `HttpTransport` to an imp's MCP server: calls held open until ended            |
 | tailscale whois              | A `whois` function passed to `createTailnetIdentities`                                             | `tailscale whois --json` (`runWhois`)                                              |
@@ -579,8 +583,12 @@ wires them without the start steps into a caller's stack; `setupImpTest` wraps i
 stack, and the client smoke's `run-stub-impd.ts` runs it outside a test.
 `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
 `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
-`test-utils/find-free-ports.ts`. Egress's `repeat` dep runs its sweep (`startInterval` by default),
-so a test fires a sweep by calling the function it was handed. A `createImpd` test whose storage
+`test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's ephemeral
+range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands out with
+an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in parallel
+processes never hand out the same port. A process that binds a port without a claim can still take
+one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by default), so a
+test fires a sweep by calling the function it was handed. A `createImpd` test whose storage
 clones with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
 checkpoint's copy takes minutes.
 
