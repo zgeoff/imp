@@ -60,7 +60,10 @@ function setupTest() {
 
   stack.defer(() => peerBackend.waitForReclaim());
 
+  // a tree or move source the test opens closes into this stack, before the
+  // reclaims it starts are awaited
   return {
+    stack,
     dataDir,
     fake,
     log,
@@ -1575,7 +1578,7 @@ test('#openBackupTree mounts read-only clones of the copy, checkpoints and image
     imageDigests: ['sha256:9f2c'],
   });
 
-  onTestFinished(() => tree.close());
+  ctx.stack.defer(() => tree.close());
 
   expect([...tree.impIds]).toStrictEqual(['a']);
   expect([...tree.checkpointIds]).toStrictEqual(['cp-1']);
@@ -1691,7 +1694,7 @@ test('#openBackupTree leaves out storage removed since the database copy', async
     imageDigests: ['sha256:9f2c'],
   });
 
-  onTestFinished(() => tree.close());
+  ctx.stack.defer(() => tree.close());
 
   expect([...tree.impIds]).toStrictEqual(['a']);
   expect([...tree.checkpointIds]).toStrictEqual([]);
@@ -1873,7 +1876,7 @@ test('#openMoveSource plans each checkpoint incremental from the one before, the
 
   const source = await ctx.backend.openMoveSource('a', ['cp-one', 'cp-two'], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -1906,7 +1909,7 @@ test('#receiveMoveSnapshots lands each checkpoint and the disk a ZFS move sends'
   // the test closes the source itself; the fallback closes it only once
   const closing = { done: null as Promise<void> | null };
 
-  onTestFinished(() => (closing.done ??= source.close()));
+  ctx.stack.defer(() => (closing.done ??= source.close()));
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -1958,7 +1961,7 @@ test('#openMoveSource plans a restored imp as its retired checkpoints and a clon
 
   const source = await ctx.backend.openMoveSource('a', ['cp-one', 'cp-two', 'cp-three'], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -1991,7 +1994,7 @@ test('#receiveMoveSnapshots lands a restored imp as a clone of its retired check
 
   const source = await ctx.backend.openMoveSource('a', ['cp-one', 'cp-two', 'cp-three'], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -2038,7 +2041,7 @@ test('#receiveMoveSnapshots keeps the received disk snapshot through a GC before
 
   const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -2105,7 +2108,7 @@ test('#openMoveSource starts a forked disk with a full stream that carries nothi
 
   const source = await ctx.backend.openMoveSource('b', [], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -2132,7 +2135,7 @@ test('#receiveMoveSnapshots leaves nothing in staging and no disk when a stream 
 
   const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -2183,7 +2186,7 @@ test('#receiveMoveSnapshots leaves nothing in the way of a retry when a first st
 
   const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'zfs');
 
-  onTestFinished(() => source.close());
+  ctx.stack.defer(() => source.close());
 
   if (source.kind !== 'zfs') {
     throw new Error('expected a ZFS move source');
@@ -2375,7 +2378,7 @@ test('#openMoveSource reads a move to XFS from read-only clones that a GC leaves
   // the test closes the source itself; the fallback closes it only once
   const closing = { done: null as Promise<void> | null };
 
-  onTestFinished(() => (closing.done ??= source.close()));
+  ctx.stack.defer(() => (closing.done ??= source.close()));
 
   if (source.kind !== 'files') {
     throw new Error('expected a files move source');

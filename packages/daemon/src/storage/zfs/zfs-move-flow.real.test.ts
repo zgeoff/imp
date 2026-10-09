@@ -11,6 +11,7 @@ import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
 import { readZfsTestPool } from '../../test-utils/read-zfs-test-pool';
 import { writeSyncedFile } from '../../test-utils/write-synced-file';
 import { createZfsBackend } from './zfs-backend';
+import type { ZfsBackend } from './zfs-backend';
 
 // Whole moves, as `imp move` runs them, between two impds on one real pool,
 // as root: scripts/test-zfs.sh sets the pool, in the `zfs` CI job and on a
@@ -19,7 +20,6 @@ import { createZfsBackend } from './zfs-backend';
 // zfs commands on a shared CI runner take seconds each: each test gets 180 s
 // and each move 120 s
 async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
-  // one stack: both impds stop, and their reclaims end, before their datasets go
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -31,6 +31,14 @@ async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
   const sourceSet = await createZfsTestDataset(stack, pool);
   const targetSet = await createZfsTestDataset(stack, pool);
 
+  // the stack runs in reverse: both impds stop, then their reclaims end, then
+  // their datasets go
+  const backends: ZfsBackend[] = [];
+
+  stack.defer(async () => {
+    await Promise.all(backends.map((backend) => backend.waitForReclaim()));
+  });
+
   const hosts = await createMoveHosts(stack, {
     isShared: options.isShared === true,
     source: {
@@ -38,7 +46,7 @@ async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
       createStorage: (dir) => {
         const backend = createZfsBackend({ dataDir: dir, root: sourceSet.root, log: () => {} });
 
-        stack.defer(() => backend.waitForReclaim());
+        backends.push(backend);
 
         return backend;
       },
@@ -48,7 +56,7 @@ async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
       createStorage: (dir) => {
         const backend = createZfsBackend({ dataDir: dir, root: targetSet.root, log: () => {} });
 
-        stack.defer(() => backend.waitForReclaim());
+        backends.push(backend);
 
         return backend;
       },
