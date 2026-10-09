@@ -86,6 +86,31 @@ test('it reports a grown filesystem and records the disk', async () => {
   expect(tools.grows).toStrictEqual(['/imps/a/disk.ext4']);
 });
 
+test('it reports an unclean filesystem as not grown while grows are set to find one', async () => {
+  const tools = buildStubDiskTools();
+
+  tools.setUnclean(true);
+
+  const isGrown = await tools.growFilesystem('/imps/a/disk.ext4');
+
+  expect(isGrown).toBeFalse();
+});
+
+test('it lets a held grow finish once the test that held it ends', async () => {
+  const tools = buildStubDiskTools();
+  const held = tools.holdGrow();
+  const growing = tools.growFilesystem('/imps/a/disk.ext4');
+
+  await held.reached;
+
+  // registered after the hold, so it runs after the hold's own release
+  onTestFinished(async () => {
+    await growing;
+
+    expect(tools.grows).toStrictEqual(['/imps/a/disk.ext4']);
+  });
+});
+
 test('it holds a clone until the test releases it', async () => {
   const ctx = setupTest();
   const tools = buildStubDiskTools();

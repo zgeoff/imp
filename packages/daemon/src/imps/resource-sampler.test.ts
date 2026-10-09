@@ -4,6 +4,8 @@ import { createResourceSampler } from './resource-sampler';
 
 // a sampler over counters the test sets, on a clock it moves
 function setupTest() {
+  // each reader needs a value to answer before a test sets its own: the
+  // clock at 0, counters a new VM starts from, and no memory figure yet
   const state = {
     now: 0,
     cpu: { usageUsec: 0, throttledUsec: 0 } as CpuStat | null,
@@ -208,6 +210,9 @@ test('#startCounting counts the traffic after the baseline only', () => {
   const ctx = setupTest();
   const vm = { impId: 'a', pid: 10, apiSocket: '/api', tap: 'imp0' };
 
+  // a VM that used no CPU, and whose memory impd could not read
+  ctx.state.cpu = { usageUsec: 4_000_000, throttledUsec: 0 };
+  ctx.state.memory = { ramMib: null, rssMib: null };
   ctx.state.net = { rxBytes: 9100, txBytes: 910 };
   ctx.state.now = 7000;
 

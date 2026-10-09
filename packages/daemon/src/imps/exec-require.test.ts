@@ -102,9 +102,12 @@ test('it tries the CA bundle step again at the next exec after one failed', asyn
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
   await ctx.broker.addGrant('dev', 'gh');
 
-  expect(
-    ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] }),
-  ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  const failed = await ctx.imps
+    .openExec('dev', { argv: ['true'], tty: false, require: ['broker'] })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
   install.fail = false;
 
@@ -116,6 +119,15 @@ test('it tries the CA bundle step again at the next exec after one failed', asyn
 
   stream.close();
 
+  expect(failed).toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: {
+      reason: 'broker_not_ready',
+      detail: 'the broker CA bundle is not in this boot of the guest: no /bin/sh',
+    },
+  });
+
+  expect(agent.readExecs()).toHaveLength(1);
   expect(agent.readExecs()[0]?.env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
 });
 
@@ -146,12 +158,25 @@ test('it never sends the requirement to the agent', async () => {
 });
 
 test('it runs the CA bundle step before the first exec of a boot, with the broker variables', async () => {
-  const ctx = await setupTest();
+  // how many execs the agent had got at each CA bundle step
+  const sentAtInstall: number[] = [];
+  const agentRef: { readExecs: () => readonly unknown[] } = { readExecs: () => [] };
+
+  const ctx = await setupTest({
+    installBundle: () => {
+      sentAtInstall.push(agentRef.readExecs().length);
+
+      return Promise.resolve();
+    },
+  });
+
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
     stack: ctx.stack,
   });
+
+  agentRef.readExecs = agent.readExecs;
 
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
   await ctx.broker.addGrant('dev', 'gh');
@@ -166,7 +191,8 @@ test('it runs the CA bundle step before the first exec of a boot, with the broke
 
   const env = agent.readExecs()[0]?.env;
 
-  expect(ctx.bundleInstalls).toHaveLength(1);
+  expect(sentAtInstall).toStrictEqual([0]);
+  expect(agent.readExecs()).toHaveLength(1);
   expect(env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
   expect(env).toContain('SSL_CERT_FILE=/etc/imp/broker-ca.pem');
 });
@@ -343,7 +369,16 @@ test('it runs no lifecycle operation between the CA bundle step and the start', 
 });
 
 test('it boots the imp again and checks again when a stop takes the lock before the exec', async () => {
-  const ctx = await setupTest();
+  const order: string[] = [];
+
+  const ctx = await setupTest({
+    installBundle: () => {
+      order.push('bundle');
+
+      return Promise.resolve();
+    },
+  });
+
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
@@ -353,17 +388,31 @@ test('it boots the imp again and checks again when a stop takes the lock before 
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
   await ctx.broker.addGrant('dev', 'gh');
 
-  const order: string[] = [];
+  // the stop holds the lock until the exec queues behind it, so the exec
+  // found the imp running and its bundle step waits for the stop
+  const stopGate = Promise.withResolvers<void>();
 
-  // the exec finds the imp running, then the stop takes the lock before the
-  // exec's bundle step does
-  const opening = ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] });
+  onTestFinished(() => {
+    stopGate.resolve();
+  });
 
   const stopping = ctx.imps.lockImp('dev', async (locked) => {
+    await stopGate.promise;
+
     await ctx.imps.haltImp(locked, false);
 
     order.push('stopped');
   });
+
+  const opening = ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] });
+
+  await waitFor(() => {
+    expect(ctx.imps.countLockQueue(imp.id)).toBe(2);
+  });
+
+  const bootsBefore = ctx.fake.boots.length;
+
+  stopGate.resolve();
 
   const stream = await opening;
 
@@ -371,8 +420,8 @@ test('it boots the imp again and checks again when a stop takes the lock before 
 
   await stopping;
 
-  expect(order).toStrictEqual(['stopped']);
-  expect(ctx.bundleInstalls).toHaveLength(1);
+  expect(order).toStrictEqual(['stopped', 'bundle']);
+  expect(ctx.fake.boots).toHaveLength(bootsBefore + 1);
   expect(agent.readExecs()[0]?.env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
 });
 
@@ -659,8 +708,12 @@ test('it keeps the record of an exited run while it is listed, so a resume of it
 
   invariant(run);
 
+  await waitFor(() => {
+    expect(agent.readRun('main')?.isAttached).toBeFalse();
+  });
+
   // main exits while detached; another required session starts after it
-  agent.exitRun('main');
+  agent.exitRun('main', { code: 0, signal: 0 });
 
   const other = await ctx.imps.openExec('dev', {
     argv: ['sh'],
@@ -711,7 +764,11 @@ test('it refuses a resume of an exited run started without the requirement befor
 
   invariant(run);
 
-  agent.exitRun('job');
+  await waitFor(() => {
+    expect(agent.readRun('job')?.isAttached).toBeFalse();
+  });
+
+  agent.exitRun('job', { code: 0, signal: 0 });
 
   expect(
     ctx.imps.openExec('dev', {

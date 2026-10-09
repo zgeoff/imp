@@ -18,7 +18,7 @@ test('it runs no more than its limit of tasks at once', async () => {
       state.active -= 1;
     });
 
-  const tasks = Promise.all(Array.from({ length: 3 }, runTask));
+  const tasks = Promise.all(Array.from({ length: 6 }, runTask));
 
   await waitFor(() => {
     expect(state.started).toBe(2);
@@ -29,7 +29,8 @@ test('it runs no more than its limit of tasks at once', async () => {
   await tasks;
 
   expect(state.peak).toBe(2);
-  expect(state.started).toBe(3);
+  expect(state.started).toBe(6);
+  expect(state.active).toBe(0);
 });
 
 test('it starts a waiting task once a running one is done', async () => {

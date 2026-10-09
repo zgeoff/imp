@@ -61,6 +61,21 @@ test('it stops counting a connection once it closes', () => {
   expect(tracker.count('a')).toBe(1);
 });
 
+test('it counts no connections once every connection closes', () => {
+  const tracker = createActivityTracker();
+  const closeExec = tracker.open('a', 'exec');
+  const closeProxy = tracker.open('a', 'proxy');
+  const closeSsh = tracker.open('a', 'ssh');
+  const closeTunnel = tracker.open('a', 'tunnel');
+
+  closeExec();
+  closeProxy();
+  closeSsh();
+  closeTunnel();
+
+  expect(tracker.count('a')).toBe(0);
+});
+
 test('it ignores a second close of the same connection', () => {
   const tracker = createActivityTracker();
   const closeExec = tracker.open('a', 'exec');

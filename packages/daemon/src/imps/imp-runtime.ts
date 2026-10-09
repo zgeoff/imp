@@ -145,8 +145,9 @@ export interface ImpRuntime {
   // the lifecycle operations that run or wait on the imp's lock
   readonly countLockQueue: (id: string) => number;
 
-  // true while a background sleep of the imp waits for its young guest to
-  // grow old enough (IMP_SLEEP_MIN_GUEST_UPTIME_MS)
+  // true from a background sleep's first check that it is still wanted (made
+  // once its guest proved young) until that sleep returns, so it also covers
+  // the pause and the snapshot after the young-guest wait
   readonly isWaitingForYoungGuest: (id: string) => boolean;
 
   // for the memory controller: runs `action` under the imp's lock when the

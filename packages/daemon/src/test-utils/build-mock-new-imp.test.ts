@@ -7,8 +7,8 @@ test('it builds a default new imp', () => {
     imageId: expect.toBeString(),
     vcpus: expect.toBeWithin(1, 5),
     memoryMib: expect.toBeOneOf([256, 512, 1024, 2048]),
-    slot: expect.toBeWithin(0, 251),
-    ip: expect.toSatisfy((ip: string) => /^\d+\.\d+\.\d+\.\d+$/u.test(ip)),
+    slot: 0,
+    ip: '10.66.0.2',
   });
 });
 
@@ -19,7 +19,7 @@ test('it applies overrides on top of the defaults', () => {
     vcpus: 2,
     memoryMib: 768,
     slot: 20,
-    ip: '10.66.0.40',
+    ip: '10.66.0.82',
     kind: 'builder',
   });
 
@@ -29,7 +29,7 @@ test('it applies overrides on top of the defaults', () => {
     vcpus: 2,
     memoryMib: 768,
     slot: 20,
-    ip: '10.66.0.40',
+    ip: '10.66.0.82',
     kind: 'builder',
   });
 });

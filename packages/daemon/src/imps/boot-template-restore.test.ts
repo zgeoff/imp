@@ -3,6 +3,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { ORPCError } from '@orpc/client';
 import { findImpByName } from '../db/imps';
 import { buildTemplateKey } from '../templates/boot-templates';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
@@ -102,6 +103,9 @@ test('it leaves no broken record behind once a restored imp settles', async () =
 
   const broken = await findBrokenInvariants(ctx, false);
 
+  // a fallback to the kernel would leave no restore and a third boot
+  expect(ctx.fake.restores.map((restore) => restore.hostname)).toStrictEqual(['second']);
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toStrictEqual(['once', 'first']);
   expect(broken).toBeEmpty();
 });
 
@@ -182,21 +186,29 @@ test('it keeps the template through more failed clones than turn a key off', asy
 
   ctx.disk.setCloneFailing(true);
 
-  // more than the restore failures that would turn the key off
-  const second = await ctx.client.imps.create({ name: 'second', vcpus: 1, memoryMib: 256 }).then(
-    () => 'created',
-    () => 'failed',
+  // more than the restore failures that would turn the key off, one at a time;
+  // the API hides a host failure behind a 500
+  expect(
+    ctx.client.imps.create({ name: 'second', vcpus: 1, memoryMib: 256 }),
+  ).rejects.toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
   );
 
-  const third = await ctx.client.imps.create({ name: 'third', vcpus: 1, memoryMib: 256 }).then(
-    () => 'created',
-    () => 'failed',
+  expect(ctx.client.imps.create({ name: 'third', vcpus: 1, memoryMib: 256 })).rejects.toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
   );
 
-  const fourth = await ctx.client.imps.create({ name: 'fourth', vcpus: 1, memoryMib: 256 }).then(
-    () => 'created',
-    () => 'failed',
+  expect(
+    ctx.client.imps.create({ name: 'fourth', vcpus: 1, memoryMib: 256 }),
+  ).rejects.toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
   );
+
+  const second = await findImpByName(ctx.db, 'second');
+  const third = await findImpByName(ctx.db, 'third');
+  const fourth = await findImpByName(ctx.db, 'fourth');
+
+  const plansAfterFailures = [...ctx.fake.restorePlans];
 
   ctx.disk.setCloneFailing(false);
 
@@ -204,9 +216,13 @@ test('it keeps the template through more failed clones than turn a key off', asy
 
   const key = buildTemplateKey(ctx.readIdentity(), { vcpus: 1, memoryMib: 256 });
 
-  expect([second, third, fourth]).toStrictEqual(['failed', 'failed', 'failed']);
+  expect(second?.error).toBe('clone failed: no space');
+  expect(third?.error).toBe('clone failed: no space');
+  expect(fourth?.error).toBe('clone failed: no space');
 
-  // no VM started for them, none booted the kernel, and the template stays
+  // no restore and no VM started for them, none booted the kernel, and the
+  // template stays
+  expect(plansAfterFailures).toBeEmpty();
   expect(ctx.fake.alive.size).toBe(aliveBefore + 1);
   expect(ctx.fake.boots.map((boot) => boot.hostname)).toStrictEqual(['first']);
   expect(readdirSync(join(ctx.dataDir, 'templates'))).toContain(key);
@@ -225,21 +241,27 @@ test('it ends the restored VM when the grow after the clone fails, and keeps the
   ctx.disk.setCloneEmpty(true);
 
   // more than the restore failures that would turn the key off, one at a
-  // time, as each takes the template's claim
-  const second = await ctx.client.imps.create({ name: 'second', vcpus: 1, memoryMib: 256 }).then(
-    () => 'created',
-    () => 'failed',
+  // time, as each takes the template's claim; the API hides a host failure
+  // behind a 500
+  expect(
+    ctx.client.imps.create({ name: 'second', vcpus: 1, memoryMib: 256 }),
+  ).rejects.toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
   );
 
-  const third = await ctx.client.imps.create({ name: 'third', vcpus: 1, memoryMib: 256 }).then(
-    () => 'created',
-    () => 'failed',
+  expect(ctx.client.imps.create({ name: 'third', vcpus: 1, memoryMib: 256 })).rejects.toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
   );
 
-  const fourth = await ctx.client.imps.create({ name: 'fourth', vcpus: 1, memoryMib: 256 }).then(
-    () => 'created',
-    () => 'failed',
+  expect(
+    ctx.client.imps.create({ name: 'fourth', vcpus: 1, memoryMib: 256 }),
+  ).rejects.toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
   );
+
+  const second = await findImpByName(ctx.db, 'second');
+  const third = await findImpByName(ctx.db, 'third');
+  const fourth = await findImpByName(ctx.db, 'fourth');
 
   ctx.disk.setCloneEmpty(false);
 
@@ -247,7 +269,22 @@ test('it ends the restored VM when the grow after the clone fails, and keeps the
 
   const key = buildTemplateKey(ctx.readIdentity(), { vcpus: 1, memoryMib: 256 });
 
-  expect([second, third, fourth]).toStrictEqual(['failed', 'failed', 'failed']);
+  invariant(second);
+  invariant(third);
+  invariant(fourth);
+
+  // the size step after the clone finds no disk
+  expect(second.error).toBe(
+    `ENOENT: no such file or directory, stat '${join(ctx.dataDir, 'imps', second.id, 'disk.ext4')}'`,
+  );
+
+  expect(third.error).toBe(
+    `ENOENT: no such file or directory, stat '${join(ctx.dataDir, 'imps', third.id, 'disk.ext4')}'`,
+  );
+
+  expect(fourth.error).toBe(
+    `ENOENT: no such file or directory, stat '${join(ctx.dataDir, 'imps', fourth.id, 'disk.ext4')}'`,
+  );
 
   // each restore started, its VM ended, none booted the kernel, and the
   // template stays
@@ -365,10 +402,6 @@ test('it overlaps a jailed restore with the grow of its disk', async () => {
   await ctx.templates.buildTemplate({ vcpus: 1, memoryMib: 256 });
 
   const grow = ctx.disk.holdGrow();
-
-  onTestFinished(() => {
-    grow.release();
-  });
 
   // a disk past the image's filesystem, which the host grows
   const creating = ctx.client.imps.create({

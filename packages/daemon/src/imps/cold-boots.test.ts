@@ -5,6 +5,7 @@ import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { listColdBoots } from '../db/cold-boots';
 import { findImpByName } from '../db/imps';
 import { buildImpPaths } from '../storage/data-layout';
+import { buildStubBootId } from '../test-utils/build-stub-vmm';
 import { startStubAttachAgent } from '../test-utils/start-stub-attach-agent';
 import { buildTestApp, createImpTest } from './test-imps';
 
@@ -63,8 +64,12 @@ test('it records a wake that falls back to a cold boot as wake_fallback, with a 
   await ctx.client.imps.wake({ name: 'dev' });
 
   const boots = await listColdBoots(ctx.db, created.id);
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  invariant(imp?.pid);
 
   expect(boots.map((boot) => boot.cause)).toStrictEqual(['wake_fallback', 'start']);
+  expect(boots[0]?.bootId).toBe(buildStubBootId(imp.pid));
   expect(new Set(boots.map((boot) => boot.bootId)).size).toBe(2);
 });
 
@@ -263,8 +268,12 @@ test('it names the cold boots in a session’s started output', async () => {
     stream.close();
   });
 
-  // the cold boot's id and time are the stub VMM's and the clock's
-  expect(stream.output).toMatchObject({
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  invariant(imp?.pid);
+
+  // the cold boot's id is the stub guest's for the VM's pid, and its time the clock's
+  expect(stream.output).toStrictEqual({
     continuity: 'offsets',
     bootId: '22222222-2222-4222-8222-222222222222',
     executionGeneration: 'c'.repeat(32),
@@ -272,7 +281,13 @@ test('it names the cold boots in a session’s started output', async () => {
     end: 5,
     offset: 2,
     prelude: 0,
-    coldBoots: [{ cause: 'start' }],
+    coldBoots: [
+      {
+        bootId: buildStubBootId(imp.pid),
+        cause: 'start',
+        at: expect.toSatisfy((at: string) => !Number.isNaN(Date.parse(at))),
+      },
+    ],
     resume: { kind: 'exact' },
   });
 });

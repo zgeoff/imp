@@ -79,8 +79,18 @@ test('it drops meta.json on a good wake, so a VM that dies later does not count 
 
   await ctx.client.imps.wake({ name: 'dev' });
 
+  const woken = await findImpByName(ctx.db, 'dev');
+
+  invariant(woken?.pid);
+
+  // the guest dies with impd watching nothing
+  ctx.fake.alive.delete(woken.pid);
+
+  const read = await ctx.client.imps.get({ name: 'dev' });
+
   expect(asleep).toBeTrue();
   expect(existsSync(paths.snapshotMeta)).toBeFalse();
+  expect(read.state).toBe('stopped');
 });
 
 test('it resumes a VM a cut sleep left paused, and removes the half-written files', async () => {
@@ -476,7 +486,7 @@ test('it kills a VM in the cgroup of an imp with no record', async () => {
   expect(ctx.fake.alive.has(jailed)).toBeFalse();
 });
 
-test('it stops an imp whose recycled pid another jail forged, never re-adopting it into the cgroup', async () => {
+test('it stops an imp whose recycled pid another jail forged, and leaves that process alone', async () => {
   const ctx = await setupTest();
   const evil = await ctx.client.imps.create({ name: 'evil' });
 
@@ -498,6 +508,7 @@ test('it stops an imp whose recycled pid another jail forged, never re-adopting 
   const imp = await findImpByName(ctx.db, 'dev');
 
   expect(imp).toMatchObject({ state: 'stopped', pid: null });
+  expect(ctx.fake.alive.has(running.pid)).toBeTrue();
 });
 
 test('it removes the orphan jails before the orphan cgroups, so a cut-short build leaves its cgroup empty', async () => {

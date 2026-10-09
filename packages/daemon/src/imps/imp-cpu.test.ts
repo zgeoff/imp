@@ -271,7 +271,8 @@ test('it shows RAM but no CPU share from the first sampler pass', async () => {
 
   invariant(first.resources?.sample);
 
-  expect(first.ramMib).toBeNumber();
+  // createImpTest's VMs each own 300 MiB while alive, as the governor reads them
+  expect(first.ramMib).toBe(300);
   expect(first.resources.sample.cpuPercent).toBeUndefined();
 });
 
@@ -304,8 +305,10 @@ test('it refuses to start a jailed VM without its cgroup, and says why', async (
   // the default cgroups: no controller is delegated
   const ctx = await setupTest({ env: { IMP_JAILER: 'true' } });
 
-  expect(ctx.imps.createImp({ name: 'dev' })).rejects.toThrow(
-    'a jailed VM starts only in its own cgroup',
+  expect(ctx.imps.createImp({ name: 'dev' })).rejects.toStrictEqual(
+    new Error(
+      'a jailed VM starts only in its own cgroup, and it has none: the cpu controller is not delegated to /sys/fs/cgroup/imps, or the setup of imps/<id> failed (see the log); set IMP_JAILER=false on a host without cgroup delegation',
+    ),
   );
 
   const imp = await findImpByName(ctx.db, 'dev');
@@ -341,7 +344,11 @@ test('it leaves a jailed imp asleep, with its memory, when its cgroup cannot be 
   rmSync(groupDir, { recursive: true, force: true });
   writeFileSync(groupDir, '');
 
-  expect(ctx.imps.wakeImp('dev')).rejects.toThrow('a jailed VM starts only in its own cgroup');
+  expect(ctx.imps.wakeImp('dev')).rejects.toStrictEqual(
+    new Error(
+      'a jailed VM starts only in its own cgroup, and it has none: the cpu controller is not delegated to /sys/fs/cgroup/imps, or the setup of imps/<id> failed (see the log); set IMP_JAILER=false on a host without cgroup delegation',
+    ),
+  );
 
   const imp = await findImpByName(ctx.db, 'dev');
 
@@ -375,11 +382,18 @@ test('it wakes a jailed imp once its cgroup can be made again', async () => {
   rmSync(groupDir, { recursive: true, force: true });
   writeFileSync(groupDir, '');
 
-  expect(ctx.imps.wakeImp('dev')).rejects.toThrow('a jailed VM starts only in its own cgroup');
+  const [refused] = await Promise.allSettled([ctx.imps.wakeImp('dev')]);
 
   rmSync(groupDir);
 
   const woken = await ctx.imps.wakeImp('dev');
+
+  expect(refused).toStrictEqual({
+    status: 'rejected',
+    reason: new Error(
+      'a jailed VM starts only in its own cgroup, and it has none: the cpu controller is not delegated to /sys/fs/cgroup/imps, or the setup of imps/<id> failed (see the log); set IMP_JAILER=false on a host without cgroup delegation',
+    ),
+  });
 
   expect(woken.state).toBe('running');
   expect(ctx.fake.wakes).toHaveLength(1);

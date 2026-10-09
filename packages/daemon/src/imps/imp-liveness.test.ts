@@ -74,6 +74,20 @@ test('it finds a dead VM with a snapshot from before its last activity stopped',
   expect(found.state).toBe('stopped');
 });
 
+test('it finds a dead VM stopped after a real sleep and wake left the snapshot behind it', async () => {
+  const ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.sleepImp('dev');
+  await ctx.imps.wakeImp('dev');
+
+  ctx.fake.alive.clear();
+
+  const found = await ctx.imps.getImp('dev');
+
+  expect(found.state).toBe('stopped');
+});
+
 test('it finds a VM that its memory limit killed stopped, and says so', async () => {
   const stub = buildStubCpuCgroups({ isMemoryEnforced: true });
 

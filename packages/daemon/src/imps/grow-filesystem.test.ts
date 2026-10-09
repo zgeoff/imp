@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runChecked } from '../process/run-command';
@@ -51,7 +51,21 @@ test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
 
     truncateSync(ctx.disk, 256 * 1024 * 1024);
 
-    await growFilesystem(ctx.disk);
+    const allocatedBefore = statSync(ctx.disk).blocks * 512;
+
+    const isGrown = await growFilesystem(ctx.disk);
+
+    const allocatedAfter = statSync(ctx.disk).blocks * 512;
+
+    const header = await runChecked(['dumpe2fs', '-h', ctx.disk]);
+
+    expect(isGrown).toBeTrue();
+
+    // 256 MiB of 4096-byte blocks
+    expect(header).toMatch(/^Block count:\s+65536$/m);
+
+    // six new groups' zeroed inode tables would take several MiB
+    expect(allocatedAfter - allocatedBefore).toBeLessThan(1024 * 1024);
 
     await expect(runChecked(['e2fsck', '-fn', ctx.disk])).toResolve();
   },

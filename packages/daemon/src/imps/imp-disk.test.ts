@@ -4,10 +4,16 @@ import { createImp, findImpByName } from '../db/imps';
 import { runChecked } from '../process/run-command';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
+import { buildStubDiskTools } from '../test-utils/build-stub-disk-tools';
 import { buildTestApp, createImpTest } from './test-imps';
 
 // impd over the stub VMM, and a client of its API
-async function setupTest() {
+async function setupTest(
+  config: Readonly<{
+    // the host's grow of a filesystem; reported grown by default
+    growFilesystem?: (disk: string) => Promise<boolean>;
+  }> = {},
+) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -17,6 +23,7 @@ async function setupTest() {
     cloneDisk: async (source, target) => {
       await runChecked(['cp', '--sparse=always', source, target]);
     },
+    ...(config.growFilesystem !== undefined && { growFilesystem: config.growFilesystem }),
   });
 
   // every create boots an image row; the default image is ubuntu
@@ -42,6 +49,22 @@ test('it grows the filesystem of a new disk on the host before the first boot', 
   const created = await ctx.client.imps.create({ name: 'sized', diskMib: 2048 });
 
   expect(ctx.filesystemGrows).toStrictEqual([buildImpPaths(ctx.dataDir, created.id).disk]);
+});
+
+test('it leaves an unclean filesystem of a new disk for its boot to grow, and says so', async () => {
+  const disk = buildStubDiskTools();
+
+  disk.setUnclean(true);
+
+  const ctx = await setupTest({ growFilesystem: disk.growFilesystem });
+  const created = await ctx.client.imps.create({ name: 'sized', diskMib: 2048 });
+
+  expect(created.state).toBe('running');
+  expect(disk.grows).toStrictEqual([buildImpPaths(ctx.dataDir, created.id).disk]);
+
+  expect(ctx.logs).toContain(
+    'impd: sized: the filesystem was not unmounted cleanly; its boot grows it',
+  );
 });
 
 test('it refuses a disk smaller than its image filesystem', async () => {
