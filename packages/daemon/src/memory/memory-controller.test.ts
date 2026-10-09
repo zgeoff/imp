@@ -1,127 +1,31 @@
-import { expect, test } from 'bun:test';
-import { buildImpPaths } from '../storage/data-layout';
-import type { ImpPaths } from '../storage/data-layout';
-import type { GuestMemory } from '../vmm/vm-runner';
+import { expect, mock, test } from 'bun:test';
+import { buildMockElasticImp } from '../test-utils/build-mock-elastic-imp';
+import { buildStubGuestMemory } from '../test-utils/build-stub-guest-memory';
 import { createMemoryController } from './memory-controller';
-import type { ElasticImp } from './memory-controller';
+import type { ElasticImp, MemoryControllerDeps } from './memory-controller';
 
-interface FakeGuest {
-  baseMib: number;
-  pluggedMib: number;
-  requestedMib: number;
-  usedMib: number;
-
-  // an unplug stops here, as a guest stops at memory it cannot migrate
-  unplugFloorMib: number;
-
-  // true: a request is taken, but the guest has not moved yet
-  isSlow: boolean;
-}
-
-interface ControllerTestOptions {
-  readonly memoryMib?: number;
-  readonly maxMemoryMib?: number;
-  readonly agentVersion?: string | undefined;
-  readonly admits?: boolean;
-  readonly busy?: readonly string[];
-  readonly locked?: readonly string[];
-
-  // imps a sleep takes between the tick's look and its plug
-  readonly asleep?: readonly string[];
-}
-
-// One elastic imp `dev` (512 MiB, max 1536 by default) on a fake guest, a
-// clock the test moves, and a record of every call the controller made.
-function setupControllerTest(options: Readonly<ControllerTestOptions> = {}) {
+// The controller's deps on stand-in guests, a clock the test moves, and a
+// record of every call it made: it admits each grow, finds no imp busy or
+// locked, and runs each plug.
+function setupTest() {
   const clock = { now: 0 };
-
-  const guests = new Map<string, FakeGuest>();
-
+  const guests = buildStubGuestMemory();
+  const imps: ElasticImp[] = [];
   const limits: string[] = [];
   const grows: { id: string; mib: number }[] = [];
   const releases: string[] = [];
-  const requests: number[] = [];
   const logs: string[] = [];
 
   const plugged = new Map<string, number>();
 
   const ram = { mib: 400 };
 
-  const buildImp = (id: string): ElasticImp => ({
-    id,
-    name: id,
-    pid: 1,
-    memoryMib: options.memoryMib ?? 512,
-    maxMemoryMib: options.maxMemoryMib ?? 1536,
-    paths: buildImpPaths('/data', id),
-    agentVersion: 'agentVersion' in options ? options.agentVersion : '0.17.0',
-  });
-
-  const imps = [buildImp('dev')];
-
-  const setupGuest = (id: string, guest: Partial<FakeGuest> = {}): FakeGuest => {
-    const created: FakeGuest = {
-      baseMib: 512,
-      pluggedMib: 0,
-      requestedMib: 0,
-      usedMib: 300,
-      unplugFloorMib: 0,
-      isSlow: false,
-      ...guest,
-    };
-
-    guests.set(buildImpPaths('/data', id).dir, created);
-
-    return created;
-  };
-
-  const readGuest = (paths: ImpPaths): FakeGuest => {
-    const guest = guests.get(paths.dir);
-
-    if (guest === undefined) {
-      throw new Error('no such VM');
-    }
-
-    return guest;
-  };
-
-  const controller = createMemoryController({
+  const deps: MemoryControllerDeps = {
     listElastic: () => Promise.resolve(imps),
-    vms: {
-      readGuestMemory: (paths): Promise<GuestMemory> => {
-        const guest = readGuest(paths);
-
-        if (!guest.isSlow) {
-          guest.pluggedMib = Math.max(
-            guest.requestedMib,
-            Math.min(guest.pluggedMib, guest.unplugFloorMib),
-          );
-        }
-
-        const totalMib = guest.baseMib + guest.pluggedMib;
-
-        return Promise.resolve({
-          pluggedMib: guest.pluggedMib,
-          requestedMib: guest.requestedMib,
-          totalMib,
-          availableMib: totalMib - guest.usedMib,
-        });
-      },
-      requestPluggedMib: (paths, mib) => {
-        readGuest(paths).requestedMib = mib;
-
-        requests.push(mib);
-
-        return Promise.resolve();
-      },
-    },
-    isLocked: (id) => options.locked?.includes(id) ?? false,
-    isBusy: (id) => options.busy?.includes(id) ?? false,
-    tryWhileRunning: async (id, action) => {
-      if (options.locked?.includes(id) === true || options.asleep?.includes(id) === true) {
-        return false;
-      }
-
+    vms: guests.vms,
+    isLocked: () => false,
+    isBusy: () => false,
+    tryWhileRunning: async (_id, action) => {
       await action();
 
       return true;
@@ -129,7 +33,7 @@ function setupControllerTest(options: Readonly<ControllerTestOptions> = {}) {
     admitGrow: (request) => {
       grows.push({ id: request.id, mib: request.mib });
 
-      return Promise.resolve(options.admits ?? true);
+      return Promise.resolve(true);
     },
     releaseGrow: (id) => {
       releases.push(id);
@@ -152,141 +56,295 @@ function setupControllerTest(options: Readonly<ControllerTestOptions> = {}) {
     },
     now: () => clock.now,
     sleep: () => Promise.resolve(),
-  });
+  };
 
   return {
-    clock,
+    deps,
+    guests,
     imps,
     limits,
     grows,
     releases,
-    requests,
     logs,
     plugged,
     ram,
-    setupGuest,
-    buildImp,
-    controller,
     advance: (ms: number) => {
       clock.now += ms;
     },
   };
 }
 
-test('a guest low on memory grows a step, its limit raised before the plug', async () => {
-  const ctx = setupControllerTest();
-  const guest = ctx.setupGuest('dev', { usedMib: 490 });
+test('it grows a guest low on memory by a step, its limit raised before the plug', async () => {
+  const ctx = setupTest();
 
-  await ctx.controller.runTick();
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 490 });
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
 
   // 256 MiB and its 4 MiB of struct pages
-  expect(ctx.grows).toEqual([{ id: 'dev', mib: 260 }]);
-  expect(ctx.limits).toEqual(['dev 512', 'dev 768']);
-  expect(ctx.requests).toEqual([256]);
+  expect(ctx.grows).toStrictEqual([{ id: 'dev', mib: 260 }]);
+  expect(ctx.limits).toStrictEqual(['dev 512', 'dev 768']);
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
 
-  // the next tick sees the plug done, and enough free
-  await ctx.controller.runTick();
+test('it records what a grown guest holds without growing it again', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 490 });
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+  await controller.runTick();
 
   expect(guest.pluggedMib).toBe(256);
   expect(ctx.plugged.get('dev')).toBe(256);
   expect(ctx.grows).toHaveLength(1);
 });
 
-test('a guest grows step by step to its max and no further', async () => {
-  const ctx = setupControllerTest({ maxMemoryMib: 1000 });
-  const guest = ctx.setupGuest('dev', { usedMib: 2000 });
+test('it grows a guest step by step to its max and no further', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1000,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 2000 });
+  const controller = createMemoryController(ctx.deps);
 
   for (let tick = 0; tick < 5; tick += 1) {
-    await ctx.controller.runTick();
+    await controller.runTick();
   }
 
   // the region is whole slots (512), but the max (1000) caps it: 256 + 232
-  expect(ctx.requests).toEqual([256, 488]);
+  expect(ctx.guests.requests).toStrictEqual([256, 488]);
   expect(guest.pluggedMib).toBe(488);
 });
 
-test('a refused grow leaves the guest at its size, logged once', async () => {
-  const ctx = setupControllerTest({ admits: false });
+test('it leaves a guest whose grow is refused at its size, and logs it once', async () => {
+  const ctx = setupTest();
 
-  ctx.setupGuest('dev', { usedMib: 500 });
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
 
-  await ctx.controller.runTick();
-  await ctx.controller.runTick();
+  const admitGrow = mock(() => Promise.resolve(false));
 
-  expect(ctx.requests).toEqual([]);
-  expect(ctx.grows).toHaveLength(2);
-  expect(ctx.limits).toEqual(['dev 512']);
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500 });
+
+  const controller = createMemoryController({ ...ctx.deps, admitGrow });
+
+  await controller.runTick();
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([]);
+  expect(admitGrow).toHaveBeenCalledTimes(2);
+  expect(ctx.limits).toStrictEqual(['dev 512']);
   expect(ctx.logs.filter((line) => line.includes('no room to grow'))).toHaveLength(1);
 });
 
-test('an agent from before elastic memory gets no grow, logged once, and one with no record neither', async () => {
-  for (const agentVersion of ['0.16.0', undefined]) {
-    const ctx = setupControllerTest({ agentVersion });
+test.each([
+  ['predates elastic memory', '0.16.0'],
+  ['impd has no record of', undefined],
+])('it never grows a guest whose agent %s, and logs why once', async (_label, agentVersion) => {
+  const ctx = setupTest();
+  const imp = buildMockElasticImp({ id: 'dev', memoryMib: 512, maxMemoryMib: 1536, agentVersion });
 
-    ctx.setupGuest('dev', { usedMib: 490 });
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 490 });
 
-    await ctx.controller.runTick();
-    await ctx.controller.runTick();
+  const controller = createMemoryController(ctx.deps);
 
-    expect(ctx.grows).toEqual([]);
-    expect(ctx.requests).toEqual([]);
+  await controller.runTick();
+  await controller.runTick();
 
-    const refusals = ctx.logs.filter((line) => line.includes('not grown'));
+  expect(ctx.grows).toStrictEqual([]);
+  expect(ctx.guests.requests).toStrictEqual([]);
 
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0]).toContain('stop and start the imp');
-  }
+  const refusals = ctx.logs.filter((line) => line.includes('not grown'));
+
+  expect(refusals).toHaveLength(1);
+  expect(refusals[0]).toContain('stop and start the imp');
 });
 
-test('a plug under way is waited for, never asked twice', async () => {
-  const ctx = setupControllerTest();
+test('it waits for a plug under way and never asks twice', async () => {
+  const ctx = setupTest();
 
-  ctx.setupGuest('dev', { usedMib: 500, isSlow: true });
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
 
-  await ctx.controller.runTick();
-  await ctx.controller.runTick();
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
 
-  expect(ctx.requests).toEqual([256]);
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
 });
 
-test('a guest that could give back a step for a minute shrinks', async () => {
-  const ctx = setupControllerTest();
-  const guest = ctx.setupGuest('dev', { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+test('it keeps a guest that could give back a step for less than a minute', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
 
   ctx.ram.mib = 1400;
 
-  await ctx.controller.runTick();
+  const controller = createMemoryController(ctx.deps);
 
-  ctx.advance(59_000);
+  await controller.runTick();
 
-  await ctx.controller.runTick();
+  ctx.advance(59_999);
 
-  expect(ctx.requests).toEqual([]);
+  await controller.runTick();
 
-  ctx.advance(1000);
+  expect(ctx.guests.requests).toStrictEqual([]);
+});
 
-  await ctx.controller.runTick();
+test('it shrinks a guest that could give back a step for a minute', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+
+  ctx.ram.mib = 1400;
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
 
   // 600 used, so 1008 in all leaves a step past the grow mark; 512 is base
-  expect(ctx.requests).toEqual([496]);
+  expect(ctx.guests.requests).toStrictEqual([496]);
+});
 
-  // the guest got there, but the RSS has not fallen yet: the limit stays
-  await ctx.controller.runTick();
+test('it keeps the limit of a shrunk guest until its RSS falls', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    usedMib: 600,
+  });
+
+  ctx.ram.mib = 1400;
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+  await controller.runTick();
 
   expect(guest.pluggedMib).toBe(496);
-  expect(ctx.limits).toEqual(['dev 1536']);
+  expect(ctx.limits).toStrictEqual(['dev 1536']);
+});
+
+test('it lowers the limit of a shrunk guest once its RSS falls', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+
+  ctx.ram.mib = 1400;
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+  await controller.runTick();
 
   ctx.ram.mib = 800;
 
-  await ctx.controller.runTick();
+  await controller.runTick();
 
-  expect(ctx.limits).toEqual(['dev 1536', 'dev 1008']);
+  expect(ctx.limits).toStrictEqual(['dev 1536', 'dev 1008']);
 });
 
-test('an unplug that stops partway keeps what the guest holds, and backs off', async () => {
-  const ctx = setupControllerTest();
+test('it counts what the guest holds once an unplug stops partway', async () => {
+  const ctx = setupTest();
 
-  const guest = ctx.setupGuest('dev', {
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
     pluggedMib: 1024,
     requestedMib: 1024,
     usedMib: 600,
@@ -295,166 +353,463 @@ test('an unplug that stops partway keeps what the guest holds, and backs off', a
 
   ctx.ram.mib = 100;
 
-  await ctx.controller.runTick();
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
 
   ctx.advance(60_000);
 
-  await ctx.controller.runTick();
-
-  expect(ctx.requests).toEqual([496]);
-
-  // the guest stops at 768: plugged, not requested, is what counts
-  await ctx.controller.runTick();
+  await controller.runTick();
+  await controller.runTick();
 
   expect(ctx.plugged.get('dev')).toBe(768);
+});
+
+test('it asks an unplug that stops partway back to what the guest holds, and logs it', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    usedMib: 600,
+    unplugFloorMib: 768,
+  });
+
+  ctx.ram.mib = 100;
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+  await controller.runTick();
 
   ctx.advance(2000);
 
-  await ctx.controller.runTick();
+  await controller.runTick();
 
-  expect(ctx.requests).toEqual([496, 768]);
+  expect(ctx.guests.requests).toStrictEqual([496, 768]);
   expect(guest.requestedMib).toBe(768);
   expect(ctx.logs.at(-1)).toContain('could not unplug below 1280 MiB');
+});
 
-  // the limit follows what the guest still holds
-  await ctx.controller.runTick();
+test('it sets the limit to what the guest holds after an unplug stops partway', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    usedMib: 600,
+    unplugFloorMib: 768,
+  });
+
+  ctx.ram.mib = 100;
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+  await controller.runTick();
 
   expect(ctx.limits.at(-1)).toBe('dev 1280');
+});
 
-  // no new shrink before the back-off ends
+test('it starts no new shrink before the back-off of a stopped unplug ends', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    usedMib: 600,
+    unplugFloorMib: 768,
+  });
+
+  ctx.ram.mib = 100;
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+  await controller.runTick();
+
   ctx.advance(59_000);
 
-  await ctx.controller.runTick();
-  await ctx.controller.runTick();
+  await controller.runTick();
+  await controller.runTick();
 
-  expect(ctx.requests).toEqual([496, 768]);
+  expect(ctx.guests.requests).toStrictEqual([496, 768]);
 });
 
-test('a locked imp is left alone, and a VM impd adopts gets a limit for what it holds', async () => {
-  const locked = setupControllerTest({ locked: ['dev'] });
+test('it leaves a locked imp alone', async () => {
+  const ctx = setupTest();
 
-  locked.setupGuest('dev', { usedMib: 500 });
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
 
-  await locked.controller.runTick();
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500 });
 
-  expect(locked.requests).toEqual([]);
-  expect(locked.limits).toEqual([]);
+  const controller = createMemoryController({
+    ...ctx.deps,
+    isLocked: () => true,
+    tryWhileRunning: () => Promise.resolve(false),
+  });
 
-  const adopted = setupControllerTest();
+  await controller.runTick();
 
-  adopted.setupGuest('dev', { pluggedMib: 512, requestedMib: 512, usedMib: 600 });
-
-  await adopted.controller.runTick();
-
-  expect(adopted.limits).toEqual(['dev 1024']);
-  expect(adopted.plugged.get('dev')).toBe(512);
-
-  // the imp went to sleep: what the controller knew goes with it
-  adopted.imps.length = 0;
-
-  await adopted.controller.runTick();
-
-  expect(adopted.plugged.has('dev')).toBe(false);
+  expect(ctx.guests.requests).toStrictEqual([]);
+  expect(ctx.limits).toStrictEqual([]);
 });
 
-test('a reclaim unplugs idle guests only, and counts what they gave back', async () => {
-  const ctx = setupControllerTest({ busy: ['busy'] });
+test('it sets the limit of an adopted VM to what its guest holds', async () => {
+  const ctx = setupTest();
 
-  ctx.imps.push(ctx.buildImp('busy'), ctx.buildImp('asker'));
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
 
-  const idle = ctx.setupGuest('dev', { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { pluggedMib: 512, requestedMib: 512, usedMib: 600 });
 
-  ctx.setupGuest('busy', { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
-  ctx.setupGuest('asker', { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+  const controller = createMemoryController(ctx.deps);
 
-  const freed = await ctx.controller.reclaimIdle('asker');
+  await controller.runTick();
+
+  expect(ctx.limits).toStrictEqual(['dev 1024']);
+  expect(ctx.plugged.get('dev')).toBe(512);
+});
+
+test('it forgets what an imp held once the imp no longer runs', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { pluggedMib: 512, requestedMib: 512, usedMib: 600 });
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.imps.length = 0;
+
+  await controller.runTick();
+
+  expect(ctx.plugged.has('dev')).toBeFalse();
+});
+
+test('it reclaims from idle guests only, and counts what they gave back', async () => {
+  const ctx = setupTest();
+
+  const idle = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  const busy = buildMockElasticImp({
+    id: 'busy',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  const asker = buildMockElasticImp({
+    id: 'asker',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(idle, busy, asker);
+
+  const idleGuest = ctx.guests.addGuest(idle.paths, {
+    pluggedMib: 1024,
+    requestedMib: 1024,
+    usedMib: 600,
+  });
+
+  ctx.guests.addGuest(busy.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+  ctx.guests.addGuest(asker.paths, { pluggedMib: 1024, requestedMib: 1024, usedMib: 600 });
+
+  const controller = createMemoryController({ ...ctx.deps, isBusy: (id) => id === 'busy' });
+
+  const freed = await controller.reclaimIdle('asker');
 
   expect(freed).toBe(1024 - 496);
-  expect(idle.pluggedMib).toBe(496);
-  expect(ctx.requests).toEqual([496]);
+  expect(idleGuest.pluggedMib).toBe(496);
+  expect(ctx.guests.requests).toStrictEqual([496]);
   expect(ctx.plugged.get('dev')).toBe(496);
 });
 
-test('a large guest that shrinks is not grown back by the next tick', async () => {
-  // 15 % of a guest past 1.7 GiB is more than a step: the grow mark rises
-  const ctx = setupControllerTest({ memoryMib: 1024, maxMemoryMib: 4096 });
+test('it shrinks a large guest to leave 15 % of it free', async () => {
+  const ctx = setupTest();
 
-  const guest = ctx.setupGuest('dev', {
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 1024,
+    maxMemoryMib: 4096,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
     baseMib: 1024,
     pluggedMib: 2048,
     requestedMib: 2048,
     usedMib: 2000,
   });
 
-  await ctx.controller.runTick();
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
 
   ctx.advance(60_000);
 
-  await ctx.controller.runTick();
+  await controller.runTick();
 
   // 2656 in all: 656 available, a step past its grow mark of 398
-  expect(ctx.requests).toEqual([1632]);
+  expect(ctx.guests.requests).toStrictEqual([1632]);
+});
+
+test('it never grows a large guest back on the ticks after it shrinks', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 1024,
+    maxMemoryMib: 4096,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    baseMib: 1024,
+    pluggedMib: 2048,
+    requestedMib: 2048,
+    usedMib: 2000,
+  });
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
 
   for (let tick = 0; tick < 5; tick += 1) {
     ctx.advance(500);
 
-    await ctx.controller.runTick();
+    await controller.runTick();
   }
 
   expect(guest.pluggedMib).toBe(1632);
-  expect(ctx.grows).toEqual([]);
-  expect(ctx.requests).toEqual([1632]);
+  expect(ctx.grows).toStrictEqual([]);
+  expect(ctx.guests.requests).toStrictEqual([1632]);
 });
 
-test('a plug that never finishes is asked back, logged once, and backs off', async () => {
-  const ctx = setupControllerTest();
-  const guest = ctx.setupGuest('dev', { usedMib: 500, isSlow: true });
+test('it asks a plug that never finishes back, and logs it', async () => {
+  const ctx = setupTest();
 
-  await ctx.controller.runTick();
-  await ctx.controller.runTick();
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+  await controller.runTick();
 
   ctx.advance(2000);
 
-  await ctx.controller.runTick();
+  await controller.runTick();
 
-  // the guest keeps what it reached, and the limit comes back down
-  expect(ctx.requests).toEqual([256, 0]);
+  expect(ctx.guests.requests).toStrictEqual([256, 0]);
   expect(guest.requestedMib).toBe(0);
   expect(ctx.logs.at(-1)).toContain('could not plug past 512 MiB');
+});
 
-  await ctx.controller.runTick();
+test('it lowers the limit again after a plug that never finishes', async () => {
+  const ctx = setupTest();
 
-  expect(ctx.limits).toEqual(['dev 512', 'dev 768', 'dev 512']);
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
 
-  // no grow before the back-off ends; the next stall is not logged again
-  ctx.advance(59_000);
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
 
-  await ctx.controller.runTick();
+  const controller = createMemoryController(ctx.deps);
 
-  expect(ctx.grows).toHaveLength(1);
-
-  ctx.advance(1000);
-
-  await ctx.controller.runTick();
-  await ctx.controller.runTick();
+  await controller.runTick();
+  await controller.runTick();
 
   ctx.advance(2000);
 
-  await ctx.controller.runTick();
+  await controller.runTick();
+  await controller.runTick();
 
-  expect(ctx.requests).toEqual([256, 0, 256, 0]);
+  expect(ctx.limits).toStrictEqual(['dev 512', 'dev 768', 'dev 512']);
+});
+
+test('it asks for no grow before the back-off of a plug that never finished ends', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(59_000);
+
+  await controller.runTick();
+
+  expect(ctx.grows).toHaveLength(1);
+});
+
+test('it logs a second plug that never finishes no more', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
+
+  const controller = createMemoryController(ctx.deps);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 0, 256, 0]);
   expect(ctx.logs.filter((line) => line.includes('could not plug'))).toHaveLength(1);
 });
 
-test('a grow that a sleep overtakes plugs nothing and gives its reservation back', async () => {
-  const ctx = setupControllerTest({ asleep: ['dev'] });
+test('it plugs nothing for a grow that a sleep overtakes, and gives its reservation back', async () => {
+  const ctx = setupTest();
 
-  ctx.setupGuest('dev', { usedMib: 500 });
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
 
-  await ctx.controller.runTick();
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 500 });
+
+  const controller = createMemoryController({
+    ...ctx.deps,
+    tryWhileRunning: () => Promise.resolve(false),
+  });
+
+  await controller.runTick();
 
   expect(ctx.grows).toHaveLength(1);
-  expect(ctx.releases).toEqual(['dev']);
-  expect(ctx.requests).toEqual([]);
-  expect(ctx.limits).toEqual(['dev 512']);
+  expect(ctx.releases).toStrictEqual(['dev']);
+  expect(ctx.guests.requests).toStrictEqual([]);
+  expect(ctx.limits).toStrictEqual(['dev 512']);
 });
