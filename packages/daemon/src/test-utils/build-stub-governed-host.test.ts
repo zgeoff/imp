@@ -88,6 +88,36 @@ test('it fails the sleep of an imp whose snapshot fails and keeps it awake', asy
   expect(host.findImp('a').awake).toBeTrue();
 });
 
+test.each(['skipped', 'failed', 'diskFull'] as const)(
+  'it turns out a sleep it was told to refuse as %s and keeps the imp awake',
+  async (outcome) => {
+    const host = buildStubGovernedHost({
+      budgetMib: 1000,
+      ids: ['a'],
+      awake: [{ id: 'a', rssMib: 100 }],
+    });
+
+    host.refuseSleep('a', outcome);
+
+    const slept = await host.deps.trySleepImp('a', 'test', { by: 'governor' });
+
+    expect(slept).toBe(outcome);
+    expect(host.findImp('a').awake).toBeTrue();
+  },
+);
+
+test('it counts no imp whose sleep it refuses among those the governor may still sleep', () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 100,
+    ids: ['a'],
+    awake: [{ id: 'a', rssMib: 300 }],
+  });
+
+  host.refuseSleep('a', 'skipped');
+
+  expect(host.findRoomLeft()).toStrictEqual({ overMib: 200, eligibleAwake: 0 });
+});
+
 test('it reclaims what idle awake guests can spare, except the one asking', async () => {
   const host = buildStubGovernedHost({
     budgetMib: 1000,

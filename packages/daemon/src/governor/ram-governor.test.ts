@@ -1,401 +1,399 @@
 import { expect, test } from 'bun:test';
+import type { ImpEvent } from '@imp/api';
 import { createEventBus } from '../events/event-bus';
-import { createKeyedMutex } from '../imps/keyed-mutex';
-import { createLockFreeSleep } from '../imps/lock-free-sleep';
-import type { SleepOutcome } from '../imps/lock-free-sleep';
+import { buildStubGovernedHost } from '../test-utils/build-stub-governed-host';
 import { ENFORCE_INTERVAL_MS, createRamGovernor } from './ram-governor';
 
-// a fake sleep behind a real try-lock, as the governor's type demands
-function buildFakeSleep(sleep: (id: string) => Promise<SleepOutcome>) {
-  const mutex = createKeyedMutex();
-
-  return createLockFreeSleep<string>(
-    (id, action) => mutex.tryRunExclusive(id, () => action(id)),
-    (id) => sleep(id),
-  );
-}
-
-// docs/architecture/sleep-and-wake.md says every 5 s, and the scale
-// e2e suite allows use over the budget for that long
-test('enforce runs every 5 s, as the docs say', () => {
+// docs/architecture/sleep-and-wake.md says every 5 s, and the scale e2e suite
+// allows use over the budget for that long
+test('it enforces the budget every 5 s, as the docs say', () => {
   expect(ENFORCE_INTERVAL_MS).toBe(5000);
 });
 
-test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
-  const awake = new Map([
-    ['old', { pid: 1, lastActiveAt: 100 }],
-    ['pinned', { pid: 2, lastActiveAt: 50 }],
-    ['new', { pid: 3, lastActiveAt: 300 }],
-  ]);
-
-  const slept: string[] = [];
-  const events = createEventBus();
-  const decisions: string[] = [];
-
-  events.subscribe((event) => {
-    if (event.ev === 'GovernorDecision') {
-      decisions.push(`${event.decision} ${event.name} ${event.trigger} ${String(event.usedMib)}`);
-    }
-  });
-
-  const governor = createRamGovernor({
+test('it sleeps the least recently active imp that is not busy to make room', async () => {
+  const host = buildStubGovernedHost({
     budgetMib: 1000,
-    events,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp]) => ({
-          id,
-          name: id,
-          pid: imp.pid,
-          apiSocket: '',
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: null,
-        })),
-      ),
-    readRamMib: () => 300,
-    isBusy: (id) => id === 'pinned',
-    trySleepImp: buildFakeSleep((id) => {
-      slept.push(id);
-      awake.delete(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
+    ids: ['pinned', 'old', 'new'],
+    awake: [
+      { id: 'pinned', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
   });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  host.applyChange({ kind: 'busy', id: 'pinned', on: true }, governor);
 
   await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 600 });
 
-  expect(slept).toEqual(['old']);
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old']);
+});
 
-  const rejection = await governor
-    .admit({ id: 'y', name: 'y', reserveMib: 900, memoryMib: 900 })
-    .catch((error: unknown) => error);
+test('it publishes the sleep it made room with and the admission', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['pinned', 'old', 'new'],
+    awake: [
+      { id: 'pinned', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
 
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  const events = createEventBus();
+  const published: ImpEvent[] = [];
 
-  // sleeping `new` alone could not make room, so it stays awake
-  expect(slept).toEqual(['old']);
+  events.subscribe((event) => {
+    published.push(event);
+  });
 
-  expect(decisions).toEqual([
-    'slept old to make room for x 900',
-    'admitted x admission 600',
-    'refused y admission 900',
+  const governor = createRamGovernor({ ...host.deps, events, log: () => {} });
+
+  host.applyChange({ kind: 'busy', id: 'pinned', on: true }, governor);
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 600 });
+
+  expect(published).toMatchObject([
+    {
+      ev: 'GovernorDecision',
+      decision: 'slept',
+      name: 'old',
+      trigger: 'to make room for x',
+      usedMib: 900,
+    },
+    { ev: 'GovernorDecision', decision: 'admitted', name: 'x', trigger: 'admission', usedMib: 600 },
   ]);
 });
 
-test('it never admits an imp whose memory is larger than the whole budget', async () => {
-  const slept: string[] = [];
-
-  const governor = createRamGovernor({
+test('it refuses an admit that sleeping the other idle imps cannot make room for, and sleeps none', async () => {
+  const host = buildStubGovernedHost({
     budgetMib: 1000,
-    listAwake: () =>
-      Promise.resolve([
-        { id: 'idle', name: 'idle', pid: 1, apiSocket: '', lastActiveAt: 0, holdUntil: null },
-      ]),
-    readRamMib: () => 300,
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      slept.push(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
+    ids: ['pinned', 'old', 'new'],
+    awake: [
+      { id: 'pinned', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
   });
 
-  const rejection = await governor
-    .admit({ id: 'huge', name: 'huge', reserveMib: 100, memoryMib: 1001 })
-    .catch((error: unknown) => error);
+  const events = createEventBus();
+  const published: ImpEvent[] = [];
 
-  expect(rejection).toMatchObject({
+  events.subscribe((event) => {
+    published.push(event);
+  });
+
+  const governor = createRamGovernor({ ...host.deps, events, log: () => {} });
+
+  host.applyChange({ kind: 'busy', id: 'pinned', on: true }, governor);
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 600 });
+
+  expect(
+    governor.admit({ id: 'y', name: 'y', reserveMib: 900, memoryMib: 900 }),
+  ).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+
+  // sleeping `new` alone could not make room, so it stays awake
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old']);
+
+  expect(published.at(-1)).toMatchObject({
+    decision: 'refused',
+    name: 'y',
+    trigger: 'admission',
+    usedMib: 900,
+  });
+});
+
+test('it never admits an imp whose memory is larger than the whole budget', () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['idle', 'huge'],
+    awake: [{ id: 'idle', rssMib: 300 }],
+  });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  expect(
+    governor.admit({ id: 'huge', name: 'huge', reserveMib: 100, memoryMib: 1001 }),
+  ).rejects.toMatchObject({
     code: 'RAM_BUDGET_EXCEEDED',
     data: { budgetMib: 1000, usedMib: 300, requestedMib: 1001 },
   });
 
-  expect(slept).toEqual([]);
+  expect(host.sleepCalls).toStrictEqual([]);
 });
 
-test('it picks again without a victim that was skipped, and fails once none is left', async () => {
-  const awake = new Map([
-    ['old', { pid: 1, lastActiveAt: 100 }],
-    ['mid', { pid: 2, lastActiveAt: 200 }],
-    ['new', { pid: 3, lastActiveAt: 300 }],
-  ]);
-
-  // `old` turns out locked when its turn comes; `mid` sleeps
-  const tried: string[] = [];
-
-  const governor = createRamGovernor({
+test('it picks the next victim when the one it picked is skipped', async () => {
+  const host = buildStubGovernedHost({
     budgetMib: 1000,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp]) => ({
-          id,
-          name: id,
-          pid: imp.pid,
-          apiSocket: '',
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: null,
-        })),
-      ),
-    readRamMib: () => 300,
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      tried.push(id);
-
-      if (id === 'old') {
-        return Promise.resolve('skipped');
-      }
-
-      awake.delete(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
+    ids: ['old', 'mid', 'new'],
+    awake: [
+      { id: 'old', rssMib: 300 },
+      { id: 'mid', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
   });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  host.refuseSleep('old', 'skipped');
 
   await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 300 });
 
-  expect(tried).toEqual(['old', 'mid']);
-
-  // 300 awake in `old` + 300 reserved for x: 700 more needs `old` again,
-  // which is skipped every time
-  const rejection = await governor
-    .admit({ id: 'y', name: 'y', reserveMib: 700, memoryMib: 700 })
-    .catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old', 'mid']);
 });
 
-test('a rejected admit sleeps no more imps once a victim is skipped', async () => {
-  const awake = new Map([
-    ['old', { pid: 1, lastActiveAt: 100 }],
-    ['mid', { pid: 2, lastActiveAt: 200 }],
-    ['new', { pid: 3, lastActiveAt: 300 }],
-  ]);
-
-  // `mid` turns out locked when its turn comes
-  const tried: string[] = [];
-
-  const governor = createRamGovernor({
+test('it refuses an admit once only victims that are skipped are left', async () => {
+  const host = buildStubGovernedHost({
     budgetMib: 1000,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp]) => ({
-          id,
-          name: id,
-          pid: imp.pid,
-          apiSocket: '',
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: null,
-        })),
-      ),
-    readRamMib: () => 300,
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      tried.push(id);
-
-      if (id === 'mid') {
-        return Promise.resolve('skipped');
-      }
-
-      awake.delete(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
+    ids: ['old', 'mid', 'new'],
+    awake: [
+      { id: 'old', rssMib: 300 },
+      { id: 'mid', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
   });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  host.refuseSleep('old', 'skipped');
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 300 });
+
+  // 300 awake in `old` and 300 reserved for x: 700 more needs `old` again
+  expect(
+    governor.admit({ id: 'y', name: 'y', reserveMib: 700, memoryMib: 700 }),
+  ).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+});
+
+test('it sleeps no more imps for a rejected admit once a victim is skipped', () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['old', 'mid', 'new'],
+    awake: [
+      { id: 'old', rssMib: 300 },
+      { id: 'mid', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  host.refuseSleep('mid', 'skipped');
 
   // 800 missing picks all three; once `mid` is skipped, `new` alone cannot
   // free the 500 still missing, so it stays awake
-  const rejection = await governor
-    .admit({ id: 'x', name: 'x', reserveMib: 900, memoryMib: 900 })
-    .catch((error: unknown) => error);
+  expect(
+    governor.admit({ id: 'x', name: 'x', reserveMib: 900, memoryMib: 900 }),
+  ).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
-  expect(tried).toEqual(['old', 'mid']);
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old', 'mid']);
 });
 
-test('a reservation counts until its 20 s run out, and not a moment longer', async () => {
-  const clock = { now: 1000 };
+test('it refuses an admit with the disk error when a victim had no room for its snapshot', () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['old', 'new'],
+    awake: [
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
 
   const governor = createRamGovernor({
-    budgetMib: 1000,
-    listAwake: () => Promise.resolve([]),
-    readRamMib: () => null,
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep(() => Promise.resolve('skipped')),
-    log: () => {
-      // quiet
-    },
-    now: () => clock.now,
+    ...host.deps,
+    readDiskFullError: () => new Error('the disk has no room for a snapshot'),
+    log: () => {},
   });
+
+  host.refuseSleep('old', 'diskFull');
+
+  // 500 missing: with `old` kept awake, `new` alone cannot free it
+  expect(
+    governor.admit({ id: 'x', name: 'x', reserveMib: 900, memoryMib: 900 }),
+  ).rejects.toThrowWithMessage(Error, 'the disk has no room for a snapshot');
+});
+
+test('it counts a reservation until its 20 s run out, and not a moment longer', async () => {
+  const host = buildStubGovernedHost({ budgetMib: 1000, ids: ['x'], awake: [] });
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
   await governor.admit({ id: 'x', name: 'x', reserveMib: 400, memoryMib: 800 });
 
-  clock.now += 20_000;
+  host.applyChange({ kind: 'tick', ms: 20_000 }, governor);
 
   const atDeadline = await governor.readUsage();
 
-  clock.now += 1;
+  host.applyChange({ kind: 'tick', ms: 1 }, governor);
 
   const after = await governor.readUsage();
 
-  expect([atDeadline.reservedMib, after.reservedMib]).toEqual([400, 0]);
+  expect(atDeadline.reservedMib).toBe(400);
+  expect(after.reservedMib).toBe(0);
 });
 
-// Over a 1000 MiB budget by 1300: `big` is held, and the three idle imps
-// free only 300 between them.
-function setupShortOfBudget(outcomes: Readonly<Record<string, SleepOutcome>> = {}) {
-  const awake = new Map([
-    ['big', { ramMib: 2000, lastActiveAt: 50, holdUntil: Number.MAX_SAFE_INTEGER }],
-    ['new', { ramMib: 100, lastActiveAt: 300, holdUntil: null }],
-    ['old', { ramMib: 100, lastActiveAt: 100, holdUntil: null }],
-    ['mid', { ramMib: 100, lastActiveAt: 200, holdUntil: null }],
-  ]);
+test('it sleeps every idle imp, oldest first, when together they cannot reach the budget', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['big', 'old', 'mid', 'new'],
+    awake: [
+      { id: 'big', rssMib: 2000 },
+      { id: 'old', rssMib: 100 },
+      { id: 'mid', rssMib: 100 },
+      { id: 'new', rssMib: 100 },
+    ],
+  });
 
-  const tried: string[] = [];
   const logs: string[] = [];
 
   const governor = createRamGovernor({
-    budgetMib: 1000,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp], index) => ({
-          id,
-          name: id,
-          pid: index + 1,
-          apiSocket: id,
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: imp.holdUntil,
-        })),
-      ),
-
-    // apiSocket carries the id
-    readRamMib: (_pid, id) => awake.get(id)?.ramMib ?? null,
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      tried.push(id);
-
-      const outcome = outcomes[id] ?? 'slept';
-
-      if (outcome === 'slept') {
-        awake.delete(id);
-      }
-
-      return Promise.resolve(outcome);
-    }),
+    ...host.deps,
     log: (message) => {
       logs.push(message);
     },
   });
 
-  return { awake, tried, logs, governor };
-}
+  host.applyChange({ kind: 'hold', id: 'big', on: true }, governor);
 
-test('enforce sleeps every idle imp, oldest first, when together they cannot reach the budget', async () => {
-  const host = setupShortOfBudget();
+  await governor.enforce();
 
-  await host.governor.enforce();
-
-  expect(host.tried).toEqual(['old', 'mid', 'new']);
-  expect([...host.awake.keys()]).toEqual(['big']);
-  expect(host.logs).toEqual(['impd: governor: slept 3, RAM still over budget by 1000 MiB']);
-
-  // nothing is left to sleep: the passes after it ask no imp and stay quiet
-  await host.governor.enforce();
-  await host.governor.enforce();
-  await host.governor.enforce();
-
-  expect(host.tried).toEqual(['old', 'mid', 'new']);
-  expect(host.logs).toHaveLength(1);
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old', 'mid', 'new']);
+  expect(logs).toStrictEqual(['impd: governor: slept 3, RAM still over budget by 1000 MiB']);
 });
 
-test('enforce still sleeps the other idle imps when one is skipped, then stops', async () => {
-  const host = setupShortOfBudget({ mid: 'skipped' });
+test('it asks no imp and stays quiet on the passes after nothing is left to sleep', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['big', 'old', 'mid', 'new'],
+    awake: [
+      { id: 'big', rssMib: 2000 },
+      { id: 'old', rssMib: 100 },
+      { id: 'mid', rssMib: 100 },
+      { id: 'new', rssMib: 100 },
+    ],
+  });
 
-  await host.governor.enforce();
+  const logs: string[] = [];
 
-  expect(host.tried).toEqual(['old', 'mid', 'new']);
-  expect([...host.awake.keys()]).toEqual(['big', 'mid']);
+  const governor = createRamGovernor({
+    ...host.deps,
+    log: (message) => {
+      logs.push(message);
+    },
+  });
+
+  host.applyChange({ kind: 'hold', id: 'big', on: true }, governor);
+
+  await governor.enforce();
+  await governor.enforce();
+  await governor.enforce();
+  await governor.enforce();
+
+  expect(host.sleepCalls).toHaveLength(3);
+  expect(logs).toHaveLength(1);
 });
 
-test('admit sleeps no imp when the idle imps together cannot make room', async () => {
-  const host = setupShortOfBudget();
+test('it still sleeps the other idle imps when one is skipped', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['big', 'old', 'mid', 'new'],
+    awake: [
+      { id: 'big', rssMib: 2000 },
+      { id: 'old', rssMib: 100 },
+      { id: 'mid', rssMib: 100 },
+      { id: 'new', rssMib: 100 },
+    ],
+  });
 
-  const rejection = await host.governor
-    .admit({ id: 'x', name: 'x', reserveMib: 100, memoryMib: 100 })
-    .catch((error: unknown) => error);
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
-  expect(host.tried).toEqual([]);
+  host.applyChange({ kind: 'hold', id: 'big', on: true }, governor);
+  host.refuseSleep('mid', 'skipped');
+
+  await governor.enforce();
+
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old', 'mid', 'new']);
+
+  expect(['big', 'old', 'mid', 'new'].filter((id) => host.findImp(id).awake)).toStrictEqual([
+    'big',
+    'mid',
+  ]);
 });
 
-test('enforce says once that nothing is left to sleep, until usage is under the budget again', async () => {
-  const host = setupShortOfBudget();
+test('it sleeps no imp for an admit when the idle imps together cannot make room', () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['big', 'old', 'mid', 'new'],
+    awake: [
+      { id: 'big', rssMib: 2000 },
+      { id: 'old', rssMib: 100 },
+      { id: 'mid', rssMib: 100 },
+      { id: 'new', rssMib: 100 },
+    ],
+  });
 
-  for (const id of ['old', 'mid', 'new']) {
-    host.awake.delete(id);
-  }
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-  await host.governor.enforce();
-  await host.governor.enforce();
+  host.applyChange({ kind: 'hold', id: 'big', on: true }, governor);
 
-  const big = host.awake.get('big');
+  expect(
+    governor.admit({ id: 'x', name: 'x', reserveMib: 100, memoryMib: 100 }),
+  ).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 
-  if (big === undefined) {
-    throw new Error('no imp big');
-  }
+  expect(host.sleepCalls).toStrictEqual([]);
+});
 
-  big.ramMib = 500;
+test('it says once that nothing is left to sleep, until usage is under the budget again', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['big'],
+    awake: [{ id: 'big', rssMib: 2000 }],
+  });
 
-  await host.governor.enforce();
+  const logs: string[] = [];
 
-  big.ramMib = 1500;
+  const governor = createRamGovernor({
+    ...host.deps,
+    log: (message) => {
+      logs.push(message);
+    },
+  });
 
-  await host.governor.enforce();
+  host.applyChange({ kind: 'hold', id: 'big', on: true }, governor);
 
-  expect(host.logs).toEqual([
+  await governor.enforce();
+  await governor.enforce();
+
+  host.applyChange({ kind: 'rss', id: 'big', mib: 500 }, governor);
+
+  await governor.enforce();
+
+  host.applyChange({ kind: 'rss', id: 'big', mib: 1500 }, governor);
+
+  await governor.enforce();
+
+  expect(logs).toStrictEqual([
     'impd: governor: RAM over budget by 1000 MiB and no idle imp left to sleep',
     'impd: governor: RAM over budget by 500 MiB and no idle imp left to sleep',
   ]);
 });
 
-// a boot template's build: no event, since a GovernorDecision names an imp
-test('an admission that may not sleep imps takes free room only, and one with no name publishes nothing', async () => {
-  const slept: string[] = [];
+test('it admits an admission that may not sleep imps into free room, and publishes nothing without a name', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['idle', 't1'],
+    awake: [{ id: 'idle', rssMib: 600 }],
+  });
+
   const events = createEventBus();
-  const published: string[] = [];
+  const published: ImpEvent[] = [];
 
   events.subscribe((event) => {
-    published.push(event.ev);
+    published.push(event);
   });
 
-  const governor = createRamGovernor({
-    budgetMib: 1000,
-    events,
-    listAwake: () =>
-      Promise.resolve([
-        { id: 'idle', name: 'idle', pid: 1, apiSocket: '', lastActiveAt: 0, holdUntil: null },
-      ]),
-    readRamMib: () => 600,
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      slept.push(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
-  });
+  const governor = createRamGovernor({ ...host.deps, events, log: () => {} });
 
   await governor.admit({
     id: 't1',
@@ -405,241 +403,313 @@ test('an admission that may not sleep imps takes free room only, and one with no
     maySleepImps: false,
   });
 
-  const rejection = await governor
-    .admit({ id: 't2', name: null, reserveMib: 300, memoryMib: 600, maySleepImps: false })
-    .catch((error: unknown) => error);
+  const usage = await governor.readUsage();
 
-  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
-  expect(slept).toEqual([]);
-  expect(published).toEqual([]);
+  expect(usage.reservedMib).toBe(300);
+  expect(published).toStrictEqual([]);
 });
 
-test('the KSM headroom counts against the budget, so a merged page that splits still fits', async () => {
-  const awake = new Map([
-    ['a', { pid: 1, lastActiveAt: 100 }],
-    ['b', { pid: 2, lastActiveAt: 200 }],
-  ]);
-
-  const slept: string[] = [];
-  const headroom = { mib: 0 };
-
-  const governor = createRamGovernor({
+test('it refuses an admission that may not sleep imps once the free room is gone, and sleeps none', async () => {
+  const host = buildStubGovernedHost({
     budgetMib: 1000,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp]) => ({
-          id,
-          name: id,
-          pid: imp.pid,
-          apiSocket: '',
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: null,
-        })),
-      ),
-
-    // two guests whose Pss KSM halved: 300 MiB each, 300 MiB merged away
-    readRamMib: () => 300,
-    readHeadroomMib: () => Promise.resolve(headroom.mib),
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      slept.push(id);
-      awake.delete(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
+    ids: ['idle', 't1', 't2'],
+    awake: [{ id: 'idle', rssMib: 600 }],
   });
 
-  const before = await governor.readUsage();
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-  expect(before).toEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
+  await governor.admit({
+    id: 't1',
+    name: null,
+    reserveMib: 300,
+    memoryMib: 600,
+    maySleepImps: false,
+  });
 
-  headroom.mib = 300;
+  expect(
+    governor.admit({ id: 't2', name: null, reserveMib: 300, memoryMib: 600, maySleepImps: false }),
+  ).rejects.toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+
+  expect(host.sleepCalls).toStrictEqual([]);
+});
+
+test('it reports the KSM headroom in the usage', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['a', 'b'],
+    awake: [
+      { id: 'a', rssMib: 300 },
+      { id: 'b', rssMib: 300 },
+    ],
+  });
+
+  const governor = createRamGovernor({
+    ...host.deps,
+    readHeadroomMib: () => Promise.resolve(300),
+    log: () => {},
+  });
 
   const usage = await governor.readUsage();
 
-  expect(usage).toEqual({ usedMib: 600, reservedMib: 0, headroomMib: 300 });
+  expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 0, headroomMib: 300 });
+});
+
+test('it counts the KSM headroom against the budget, so a merged page that splits still fits', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['a', 'b', 'c'],
+    awake: [
+      { id: 'a', rssMib: 300 },
+      { id: 'b', rssMib: 300 },
+    ],
+  });
+
+  const governor = createRamGovernor({
+    ...host.deps,
+    readHeadroomMib: () => Promise.resolve(300),
+    log: () => {},
+  });
 
   // 600 used and 300 headroom leave 100: a 200 MiB wake sleeps the oldest
   await governor.admit({ id: 'c', name: 'c', reserveMib: 200, memoryMib: 512 });
 
-  expect(slept).toEqual(['a']);
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['a']);
 });
 
-// Three awake imps of 300 MiB each under a 1000 MiB budget; `ram` sets what
-// one measures, and `reclaim` what the step before any sleep gives back.
-function setupGrowTest(options: Readonly<{ busy?: readonly string[]; reclaimMib?: number }> = {}) {
-  const awake = new Map([
-    ['old', { pid: 1, lastActiveAt: 100 }],
-    ['grower', { pid: 2, lastActiveAt: 50 }],
-    ['new', { pid: 3, lastActiveAt: 300 }],
-  ]);
-
-  const ram = new Map<string, number>();
-
-  const slept: string[] = [];
-  const reclaims: (string | null)[] = [];
-  const events = createEventBus();
-  const decisions: unknown[] = [];
-
-  events.subscribe((event) => {
-    decisions.push(event);
+test('it sleeps the least recently active idle imp for a grow, never the grower', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
   });
 
-  const governor = createRamGovernor({
-    budgetMib: 1000,
-    events,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp]) => ({
-          id,
-          name: id,
-          pid: imp.pid,
-          apiSocket: id,
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: null,
-        })),
-      ),
-    readRamMib: (_pid, id) => ram.get(id) ?? 300,
-    isBusy: (id) => options.busy?.includes(id) ?? false,
-    trySleepImp: buildFakeSleep((id) => {
-      slept.push(id);
-      awake.delete(id);
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-      return Promise.resolve('slept');
-    }),
+  const admitted = await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  expect(admitted).toBeTrue();
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old']);
+});
+
+test('it asks the idle guests other than the grower to give back memory before a grow sleeps one', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
+
+  const reclaims: (string | null)[] = [];
+
+  const governor = createRamGovernor({
+    ...host.deps,
     reclaim: (excludeId) => {
       reclaims.push(excludeId);
 
-      const freed = options.reclaimMib ?? 0;
-
-      ram.set('new', 300 - freed);
-
-      return Promise.resolve(freed);
+      return host.deps.reclaim(excludeId);
     },
-    log: () => {
-      // quiet
-    },
+    log: () => {},
   });
 
-  return { governor, awake, ram, slept, reclaims, decisions };
-}
+  await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
 
-test('a grow sleeps the least recently active idle imp, never the grower', async () => {
-  const ctx = setupGrowTest();
-
-  const admitted = await ctx.governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
-
-  expect(admitted).toBe(true);
-  expect(ctx.reclaims).toEqual(['grower']);
-  expect(ctx.slept).toEqual(['old']);
-
-  // the grow counts until the grower's RSS shows it: 560 + 300
-  const usage = await ctx.governor.readUsage();
-
-  expect(usage).toEqual({ usedMib: 600, reservedMib: 260, headroomMib: 0 });
+  expect(reclaims).toStrictEqual(['grower']);
 });
 
-test('a grow is refused when only busy imps could make room', async () => {
-  const ctx = setupGrowTest({ busy: ['old', 'new'] });
+test('it counts a grow as reserved until the grower measures it', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
 
-  const admitted = await ctx.governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
 
-  expect(admitted).toBe(false);
-  expect(ctx.slept).toEqual([]);
+  await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  const usage = await governor.readUsage();
+
+  expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 260, headroomMib: 0 });
+});
+
+test('it refuses a grow when only busy imps could make room, and publishes why', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
+
+  const events = createEventBus();
+  const published: ImpEvent[] = [];
+
+  events.subscribe((event) => {
+    published.push(event);
+  });
+
+  const governor = createRamGovernor({ ...host.deps, events, log: () => {} });
+
+  host.applyChange({ kind: 'busy', id: 'old', on: true }, governor);
+  host.applyChange({ kind: 'busy', id: 'new', on: true }, governor);
+
+  const admitted = await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  expect(admitted).toBeFalse();
+  expect(host.sleepCalls).toStrictEqual([]);
 
   // the two busy imps were in the way; the grower itself is not counted
-  expect(ctx.decisions).toEqual([
-    expect.objectContaining({
+  expect(published).toMatchObject([
+    {
       decision: 'refused',
       name: 'grower',
       trigger: 'grow',
       neededMib: 160,
       protectedCount: 2,
-    }),
+    },
   ]);
 });
 
-test('a grow for an imp that is no longer awake makes no room and reserves nothing', async () => {
-  const ctx = setupGrowTest();
+test('it makes no room and reserves nothing for a grow of an imp that is no longer awake', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
 
-  ctx.awake.delete('grower');
+  const reclaims: (string | null)[] = [];
 
-  const admitted = await ctx.governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+  const governor = createRamGovernor({
+    ...host.deps,
+    reclaim: (excludeId) => {
+      reclaims.push(excludeId);
 
-  expect(admitted).toBe(false);
-  expect(ctx.reclaims).toEqual([]);
-  expect(ctx.slept).toEqual([]);
+      return host.deps.reclaim(excludeId);
+    },
+    log: () => {},
+  });
 
-  const usage = await ctx.governor.readUsage();
+  host.applyChange({ kind: 'stop', id: 'grower' }, governor);
 
-  expect(usage).toEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
+  const admitted = await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+  const usage = await governor.readUsage();
+
+  expect(admitted).toBeFalse();
+  expect(reclaims).toStrictEqual([]);
+  expect(host.sleepCalls).toStrictEqual([]);
+  expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
 });
 
 // with IMP_KSM a split of every merged page must still fit after the grow
-test('a grow counts the KSM headroom, as a boot or a wake does', async () => {
-  const awake = new Map([
-    ['old', { pid: 1, lastActiveAt: 100 }],
-    ['grower', { pid: 2, lastActiveAt: 200 }],
-  ]);
-
-  const slept: string[] = [];
+test('it counts the KSM headroom for a grow, as for a boot or a wake', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['old', 'grower'],
+    awake: [
+      { id: 'old', rssMib: 300 },
+      { id: 'grower', rssMib: 300 },
+    ],
+  });
 
   const governor = createRamGovernor({
-    budgetMib: 1000,
-    listAwake: () =>
-      Promise.resolve(
-        [...awake].map(([id, imp]) => ({
-          id,
-          name: id,
-          pid: imp.pid,
-          apiSocket: '',
-          lastActiveAt: imp.lastActiveAt,
-          holdUntil: null,
-        })),
-      ),
-    readRamMib: () => 300,
+    ...host.deps,
 
     // KSM saves 300 MiB while both run, nothing in one alone
-    readHeadroomMib: () => {
-      const headroomMib = awake.size > 1 ? 300 : 0;
+    readHeadroomMib: (pids) => {
+      const headroomMib = pids.length > 1 ? 300 : 0;
 
       return Promise.resolve(headroomMib);
     },
-    isBusy: () => false,
-    trySleepImp: buildFakeSleep((id) => {
-      slept.push(id);
-      awake.delete(id);
-
-      return Promise.resolve('slept');
-    }),
-    log: () => {
-      // quiet
-    },
+    log: () => {},
   });
 
   // 600 used and 300 headroom leave 100: a 200 MiB grow sleeps the other imp
   const admitted = await governor.admitGrow({ id: 'grower', name: 'grower', mib: 200 });
 
-  expect(admitted).toBe(true);
-  expect(slept).toEqual(['old']);
+  expect(admitted).toBeTrue();
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['old']);
 });
 
-test('idle guests unplug before any imp sleeps, for a boot and for enforcement', async () => {
-  const ctx = setupGrowTest({ reclaimMib: 200 });
+test('it lets idle guests unplug instead of sleeping an imp for a boot', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new', 'x'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
 
-  await ctx.governor.admit({ id: 'x', name: 'x', reserveMib: 250, memoryMib: 512 });
+  const reclaims: (string | null)[] = [];
 
-  expect(ctx.reclaims).toEqual(['x']);
-  expect(ctx.slept).toEqual([]);
+  const governor = createRamGovernor({
+    ...host.deps,
+    reclaim: (excludeId) => {
+      reclaims.push(excludeId);
 
-  ctx.ram.set('old', 900);
+      return host.deps.reclaim(excludeId);
+    },
+    log: () => {},
+  });
 
-  await ctx.governor.enforce();
+  host.applyChange({ kind: 'spare', id: 'new', mib: 200 }, governor);
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 250, memoryMib: 512 });
+
+  expect(reclaims).toStrictEqual(['x']);
+  expect(host.sleepCalls).toStrictEqual([]);
+});
+
+test('it lets idle guests unplug before enforcement sleeps an imp', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['grower', 'old', 'new', 'x'],
+    awake: [
+      { id: 'grower', rssMib: 300 },
+      { id: 'old', rssMib: 300 },
+      { id: 'new', rssMib: 300 },
+    ],
+  });
+
+  const reclaims: (string | null)[] = [];
+
+  const governor = createRamGovernor({
+    ...host.deps,
+    reclaim: (excludeId) => {
+      reclaims.push(excludeId);
+
+      return host.deps.reclaim(excludeId);
+    },
+    log: () => {},
+  });
+
+  host.applyChange({ kind: 'spare', id: 'new', mib: 200 }, governor);
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 250, memoryMib: 512 });
+
+  host.applyChange({ kind: 'rss', id: 'old', mib: 900 }, governor);
+
+  await governor.enforce();
 
   // the reclaim gave back nothing more, so the least recently active sleeps
-  expect(ctx.reclaims).toEqual(['x', null]);
-  expect(ctx.slept).toEqual(['grower']);
+  expect(reclaims).toStrictEqual(['x', null]);
+  expect(host.sleepCalls.map((call) => call.id)).toStrictEqual(['grower']);
 });

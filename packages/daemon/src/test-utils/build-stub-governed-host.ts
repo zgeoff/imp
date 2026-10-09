@@ -90,6 +90,10 @@ export function buildStubGovernedHost(options: Readonly<StubGovernedHostOptions>
     readonly outcome: SleepOutcome;
   }[] = [];
 
+  // imps whose sleep turns out other than the governor can know: a lock
+  // taken by an operation it does not see, or a disk too full for a snapshot
+  const refusals = new Map<string, Exclude<SleepOutcome, 'slept'>>();
+
   const mutex = createKeyedMutex();
 
   const findImp = (id: string): HostImp => {
@@ -110,7 +114,7 @@ export function buildStubGovernedHost(options: Readonly<StubGovernedHostOptions>
       const imp = findImp(id);
       const eligible = imp.awake && !imp.held && !imp.busy;
       const failedOutcome = imp.failsSleep ? 'failed' : 'slept';
-      const outcome: SleepOutcome = eligible ? failedOutcome : 'skipped';
+      const outcome: SleepOutcome = eligible ? (refusals.get(id) ?? failedOutcome) : 'skipped';
 
       sleepCalls.push({ id, eligible, outcome });
 
@@ -200,13 +204,19 @@ export function buildStubGovernedHost(options: Readonly<StubGovernedHostOptions>
     },
 
     findRoomLeft: (): RoomLeft => {
-      const awake = [...imps.values()].filter((imp) => imp.awake);
-      const usedMib = awake.reduce((sum, imp) => sum + imp.rssMib, 0);
+      const awake = [...imps].filter(([, imp]) => imp.awake);
+      const usedMib = awake.reduce((sum, [, imp]) => sum + imp.rssMib, 0);
 
-      return {
-        overMib: usedMib - options.budgetMib,
-        eligibleAwake: awake.filter((imp) => !imp.held && !imp.busy && !imp.failsSleep).length,
-      };
+      const eligible = awake.filter(
+        ([id, imp]) => !imp.held && !imp.busy && !imp.failsSleep && !refusals.has(id),
+      );
+
+      return { overMib: usedMib - options.budgetMib, eligibleAwake: eligible.length };
+    },
+
+    // from now on a sleep of the imp turns out `outcome`
+    refuseSleep: (id: string, outcome: Exclude<SleepOutcome, 'slept'>): void => {
+      refusals.set(id, outcome);
     },
 
     // a stop also tells the governor, as the lifecycle does
