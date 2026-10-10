@@ -94,8 +94,8 @@ the SQLite handle itself, since Kysely closes a driver only after a query starte
 `buildQueryGate` (it releases a held select), `findFreePorts` (it releases its port claims),
 `startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
 `startStubSshAgent`, `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
-`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
-`startStubFirecracker`.
+`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`
+and `startStubGithubReleases`.
 
 Utils that take a caller's stack and register nothing themselves:
 
