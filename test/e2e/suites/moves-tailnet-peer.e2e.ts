@@ -10,10 +10,10 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitForTailnetIp } from '../lib/tailnet';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
-// A move between two tag:imp nodes on this machine, with neither
+// A move between two tag:imp-e2e nodes on this machine, with neither
 // IMP_MOVE_TEST_CIDR nor IMP_PEER_URL: the real peer check, to the peer URL
 // each impd builds from its tailnet IP (docs/architecture/moves.md#scope).
 
@@ -28,21 +28,22 @@ async function setupTest() {
   return { prefix: readSuitePrefix('moves-tailnet'), stack, client };
 }
 
-const NOT_READY = 'moves-tailnet needs TAILSCALE_AUTHKEY (env, 1Password or .env)';
+const NOT_READY =
+  'moves-tailnet needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth)';
 
-const authKey = await readTailscaleAuthKey();
+const hasKey = hasTailscaleE2EKey();
 
-if (authKey === null && !config.acceptance) {
+if (!hasKey && !config.acceptance) {
   console.log(`    ${NOT_READY}; skipped`);
 }
 
 // the definition of done needs the tailnet; any other run skips without it
-test.skipIf(authKey === null && !config.acceptance)(
+test.skipIf(!hasKey && !config.acceptance)(
   'it moves an imp between two tailnet nodes, past the peer check on their tailnet addresses',
   async () => {
     const ctx = await setupTest();
 
-    invariant(authKey, NOT_READY);
+    invariant(hasKey, NOT_READY);
 
     const plain = `${ctx.prefix}a`;
 
@@ -57,8 +58,8 @@ test.skipIf(authKey === null && !config.acceptance)(
     expect(ipB).toStartWith('100.');
     expect(ipB).not.toBe(ipA);
 
-    // tag:imp nodes see each other only with the policy's tag:imp to
-    // tag:imp:7070 rule (docs/guides/hosts.md#moves)
+    // tag:imp-e2e nodes see each other only with the policy's tag:imp-e2e
+    // to tag:imp-e2e:7070 grant
     await waitFor(
       "A among B's tailnet peers",
       async () => {
@@ -66,7 +67,7 @@ test.skipIf(authKey === null && !config.acceptance)(
 
         if (!status.stdout.includes(`"${ipA}"`)) {
           throw new Error(
-            `B does not see A (${ipA}): add { "action": "accept", "src": ["tag:imp"], "dst": ["tag:imp:7070"] } to the tailnet policy`,
+            `B does not see A (${ipA}): add { "src": ["tag:imp-e2e"], "dst": ["tag:imp-e2e"], "ip": ["tcp:7070"] } to the tailnet policy`,
           );
         }
       },

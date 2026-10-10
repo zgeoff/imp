@@ -37,7 +37,7 @@ import {
   listJourneys,
   readSuiteSettings,
 } from './lib/suites';
-import { readTailscaleAuthKey } from './lib/tailscale-key';
+import { readTailscaleE2EAuthKey } from './lib/tailscale-key';
 import { resolveWipeTarget } from './lib/wipe-target';
 import type { WipeTarget } from './lib/wipe-target';
 import { ZFS_OWNER_FILE, resetZfsRoot } from './lib/zfs-owner';
@@ -487,16 +487,20 @@ async function main(): Promise<number> {
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
   process.env['IMP_IDLE_TIMEOUT_S'] = String(config.idleTimeoutS);
 
-  // one 1Password read per run, and only when a suite needs the tailnet:
-  // dev.sh and the tailscale suite take the key from the env
-  if (args.suites.includes('tailscale') || args.suites.includes('moves-tailnet')) {
-    process.env['IMP_TAILSCALE_OP'] = '1';
-  }
+  // e2e nodes join only as tag:imp-e2e, which reaches no live impd, never
+  // with dev's tag:imp key; one 1Password read, only for the tailnet suites
+  delete process.env['TAILSCALE_AUTHKEY'];
 
-  const authKey = await readTailscaleAuthKey();
+  const tailnet =
+    args.suites.includes('tailscale') || args.suites.includes('moves-tailnet')
+      ? await readTailscaleE2EAuthKey()
+      : null;
 
-  if (authKey !== null) {
-    process.env['TAILSCALE_AUTHKEY'] = authKey;
+  if (tailnet === null) {
+    process.env['IMP_DEV_TAILNET'] = '0';
+  } else {
+    process.env['TAILSCALE_AUTHKEY'] = tailnet.key;
+    process.env['IMP_TAILSCALE_TAGS'] = tailnet.tags;
   }
 
   // stop the running suite, run no more, and clean up

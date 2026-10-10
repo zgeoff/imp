@@ -24,7 +24,7 @@ import {
   requireTailnetReady,
   waitForTailnetIp,
 } from '../lib/tailnet';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
 // An imp on impd's tailnet node (docs/guides/tailscale.md), reached from this
@@ -42,9 +42,9 @@ async function setupTest() {
 }
 
 const localStatus = await readLocalTailscaleStatus();
-const authKey = await readTailscaleAuthKey();
 
-const ready = isTailnetReady(localStatus?.BackendState ?? null, authKey);
+const hasKey = hasTailscaleE2EKey();
+const ready = isTailnetReady(localStatus?.BackendState ?? null, hasKey);
 
 if (!ready && !config.acceptance) {
   console.log(`    ${TAILNET_NOT_READY}; skipped`);
@@ -56,7 +56,7 @@ test.skipIf(!ready && !config.acceptance)(
   async () => {
     const ctx = await setupTest();
 
-    requireTailnetReady(localStatus?.BackendState ?? null, authKey);
+    requireTailnetReady(localStatus?.BackendState ?? null, hasKey);
 
     const name = `${ctx.prefix}a`;
 
@@ -76,6 +76,9 @@ test.skipIf(!ready && !config.acceptance)(
     expect(dns.exitCode).toBe(0);
 
     invariant(node);
+
+    // the e2e tag, which the tailnet policy keeps away from tag:imp's live impd
+    expect(node.tags).toStrictEqual(['tag:imp-e2e']);
 
     console.log(`    tailnet host ${String(info.tailscale.hostname)} at ${ip}`);
 

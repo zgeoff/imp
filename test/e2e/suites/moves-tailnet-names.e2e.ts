@@ -20,10 +20,10 @@ import {
   readLocalTailscaleStatus,
   readTailnetBody,
 } from '../lib/tailnet';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
-// A per-imp tailnet name across a move between two tag:imp nodes
+// A per-imp tailnet name across a move between two tag:imp-e2e nodes
 // (docs/guides/tailscale.md#per-imp-names).
 
 // one stack for every release, so B's imps go before B
@@ -41,10 +41,11 @@ const NAMES_BLOCKED =
   'the tailnet name handover waits for the Tailscale Services OAuth client of #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it exists';
 
 const localStatus = await readLocalTailscaleStatus();
-const authKey = await readTailscaleAuthKey();
+
+const hasKey = hasTailscaleE2EKey();
 
 const namesReady =
-  isTailnetReady(localStatus?.BackendState ?? null, authKey) &&
+  isTailnetReady(localStatus?.BackendState ?? null, hasKey) &&
   process.env['IMP_E2E_TAILNET_NAMES'] === '1';
 
 if (!namesReady) {

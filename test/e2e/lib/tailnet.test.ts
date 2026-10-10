@@ -23,33 +23,33 @@ test('#findServiceUrl gives null before the imp has a tailnet name', () => {
 });
 
 test('#isTailnetReady is ready with a key and this machine Running', () => {
-  expect(isTailnetReady('Running', 'tskey-auth-e2e')).toBeTrue();
+  expect(isTailnetReady('Running', true)).toBeTrue();
 });
 
 test('#isTailnetReady is not ready without a key', () => {
-  expect(isTailnetReady('Running', null)).toBeFalse();
+  expect(isTailnetReady('Running', false)).toBeFalse();
 });
 
 test('#isTailnetReady is not ready while this machine is logged out', () => {
-  expect(isTailnetReady('NeedsLogin', 'tskey-auth-e2e')).toBeFalse();
+  expect(isTailnetReady('NeedsLogin', true)).toBeFalse();
 });
 
 test('#isTailnetReady is not ready without a tailscale status', () => {
-  expect(isTailnetReady(null, 'tskey-auth-e2e')).toBeFalse();
+  expect(isTailnetReady(null, true)).toBeFalse();
 });
 
 test('#requireTailnetReady passes with a key and this machine Running', () => {
   expect(() => {
-    requireTailnetReady('Running', 'tskey-auth-e2e');
+    requireTailnetReady('Running', true);
   }).not.toThrow();
 });
 
 test('#requireTailnetReady fails with what the suite lacks while this machine is logged out', () => {
   expect(() => {
-    requireTailnetReady('NeedsLogin', 'tskey-auth-e2e');
+    requireTailnetReady('NeedsLogin', true);
   }).toThrowWithMessage(
     Error,
-    'tailscale needs TAILSCALE_AUTHKEY (env, 1Password or .env) and this machine on the tailnet',
+    'tailscale needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth) and this machine on the tailnet',
   );
 });
 
@@ -58,14 +58,24 @@ test('#parseTailscaleStatus reads the backend state and the peers', () => {
     BackendState: 'Running',
     Version: '1.102.3',
     Peer: {
-      'nodekey:a': { DNSName: 'imp.tail1234.ts.net.', TailscaleIPs: ['100.64.0.7'], Online: true },
+      'nodekey:a': {
+        DNSName: 'imp.tail1234.ts.net.',
+        TailscaleIPs: ['100.64.0.7'],
+        Online: true,
+        Tags: ['tag:imp-e2e'],
+      },
     },
   });
 
   expect(parseTailscaleStatus(stdout)).toStrictEqual({
     BackendState: 'Running',
     Peer: {
-      'nodekey:a': { DNSName: 'imp.tail1234.ts.net.', TailscaleIPs: ['100.64.0.7'], Online: true },
+      'nodekey:a': {
+        DNSName: 'imp.tail1234.ts.net.',
+        TailscaleIPs: ['100.64.0.7'],
+        Online: true,
+        Tags: ['tag:imp-e2e'],
+      },
     },
   });
 });
@@ -98,6 +108,24 @@ test('#findTailnetNode names the online peer that holds the IP', () => {
   expect(findTailnetNode(peers, '100.64.0.7')).toStrictEqual({
     fqdn: 'imp-1.tail1234.ts.net',
     short: 'imp-1',
+    tags: [],
+  });
+});
+
+test('#findTailnetNode gives the tags the node joined with', () => {
+  const peers = [
+    {
+      DNSName: 'imp.tail1234.ts.net.',
+      TailscaleIPs: ['100.64.0.7'],
+      Online: true,
+      Tags: ['tag:imp-e2e'],
+    },
+  ];
+
+  expect(findTailnetNode(peers, '100.64.0.7')).toStrictEqual({
+    fqdn: 'imp.tail1234.ts.net',
+    short: 'imp',
+    tags: ['tag:imp-e2e'],
   });
 });
 

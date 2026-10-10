@@ -8,6 +8,7 @@ const PeerSchema = z.object({
   DNSName: z.string().default(''),
   TailscaleIPs: z.array(z.string()).default([]),
   Online: z.boolean().default(false),
+  Tags: z.array(z.string()).default([]),
 });
 
 const TailscaleStatusSchema = z.object({
@@ -22,6 +23,7 @@ export interface TailnetPeer {
   readonly DNSName: string;
   readonly TailscaleIPs: readonly string[];
   readonly Online: boolean;
+  readonly Tags?: readonly string[];
 }
 
 export interface TailnetNode {
@@ -30,21 +32,24 @@ export interface TailnetNode {
 
   // its first label, which MagicDNS also answers
   readonly short: string;
+
+  // the tags the node joined with
+  readonly tags: readonly string[];
 }
 
 export const TAILNET_NOT_READY =
-  'tailscale needs TAILSCALE_AUTHKEY (env, 1Password or .env) and this machine on the tailnet';
+  'tailscale needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth) and this machine on the tailnet';
 
-// a tailnet suite runs only with a key for impd's node and this machine on
-// the tailnet to reach it from
-export function isTailnetReady(backendState: string | null, authKey: string | null): boolean {
-  return authKey !== null && backendState === 'Running';
+// a tailnet suite runs only with the tag:imp-e2e key for impd's node and this
+// machine on the tailnet to reach it from
+export function isTailnetReady(backendState: string | null, hasKey: boolean): boolean {
+  return hasKey && backendState === 'Running';
 }
 
 // fails a tailnet suite that must run, such as under acceptance, with what
 // it lacks
-export function requireTailnetReady(backendState: string | null, authKey: string | null): void {
-  if (!isTailnetReady(backendState, authKey)) {
+export function requireTailnetReady(backendState: string | null, hasKey: boolean): void {
+  if (!isTailnetReady(backendState, hasKey)) {
     throw new Error(TAILNET_NOT_READY);
   }
 }
@@ -76,7 +81,7 @@ export function findTailnetNode(peers: readonly TailnetPeer[], ip: string): Tail
   const fqdn = peer.DNSName.replace(/\.$/v, '');
   const [short = ''] = fqdn.split('.');
 
-  return { fqdn, short };
+  return { fqdn, short, tags: peer.Tags ?? [] };
 }
 
 // this machine's tailscale status, or null without the CLI or its JSON
