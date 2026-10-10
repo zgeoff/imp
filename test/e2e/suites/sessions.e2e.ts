@@ -1,146 +1,160 @@
-import { expect, test } from 'bun:test';
-import * as z from 'zod';
+import { expect, onTestFinished, test } from 'bun:test';
+import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { assertState, readState, requireImp, runImp } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import { assertState, createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
+import { countMatches } from '../lib/imp-proxy';
+import { waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { listSessions, requireSession } from '../lib/sessions';
+import { readSuitePrefix } from '../lib/suites';
 import { openTerminal } from '../lib/terminal';
 import { waitFor } from '../lib/wait-for';
 
-const prefix = setupSuite('sessions');
-const BARE = resolveImageName('e2e-bare');
-const name = `${prefix}a`;
+// Sessions (docs/guides/sessions.md) through `imp console` and `imp attach`
+// on a pseudo-terminal, as a user at a terminal. Ctrl-] (\u001D) detaches.
 
-// the idle timeout plus a sweep of the idle loop
-const ASLEEP_WITHIN_MS = (config.idleTimeoutS + 15) * 1000;
+// one stack for every release, so each terminal closes before its imp goes
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// long enough that only activity keeps an imp awake
-const PAST_IDLE_MS = (config.idleTimeoutS + 6) * 1000;
-const DETACH_KEY = '\u001D';
+  onTestFinished(() => stack.disposeAsync());
 
-// the CLI's exit code once another terminal took the session over
-const TAKEN_OVER_CODE = 254;
+  const client = await createInstanceClient();
 
-// prints the terminal size on SIGWINCH, on the main screen
-const DRAW_PROGRAM = String.raw`sh -c 'trap "echo size=\$(stty size)" WINCH; echo drawn; while :; do sleep 0.2; done'`;
-
-const SessionRowSchema = z.object({
-  name: z.string(),
-  pid: z.number(),
-  state: z.string(),
-  attached: z.boolean(),
-  cols: z.number(),
-  rows: z.number(),
-});
-
-async function listSessions(imp: string) {
-  const stdout = await runImp('sessions', imp, '--json');
-
-  return z.array(SessionRowSchema).parse(JSON.parse(stdout));
+  return { prefix: readSuitePrefix('sessions'), stack, client };
 }
 
-async function requireSession(imp: string, session: string) {
-  const sessions = await listSessions(imp);
+test('it keeps a detached console session through an idle sleep, and redraws it at the new size on attach', async () => {
+  const ctx = await setupTest();
 
-  const found = sessions.find((row) => row.name === session);
+  const name = `${ctx.prefix}idle`;
 
-  if (found === undefined) {
-    throw new Error(`no session ${session} in ${imp}: ${JSON.stringify(sessions)}`);
-  }
+  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
 
-  return found;
-}
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-function countText(output: string, text: string): number {
-  return output.split(text).length - 1;
-}
+  await waitForExec(name);
 
-function waitAsleep(imp: string): Promise<void> {
-  return waitFor(`${imp} to sleep`, () => assertState(imp, 'sleeping'), {
-    timeoutMs: ASLEEP_WITHIN_MS,
+  // imp console starts a session that a detach key leaves running
+  const entry = await openTerminal(['console', name]);
+
+  ctx.stack.defer(() => entry.close());
+
+  await entry.waitForText('# ');
+
+  entry.type('echo marker-$((6*7))\n');
+
+  await entry.waitForText('marker-42');
+
+  entry.type('\u001D');
+
+  const consoleCode = await entry.exited;
+  const started = await requireSession(name, 'main');
+
+  expect(consoleCode).toBe(0);
+  expect(entry.readOutput()).toContain(`detached from session main (imp attach ${name} main)`);
+  expect(started).toMatchObject({ state: 'running', attached: false, cols: 80, rows: 24 });
+
+  // the detached idle session lets the imp sleep, and a list does not wake it
+  await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'), {
+    timeoutMs: (config.idleTimeoutS + 15) * 1000,
   });
-}
 
-const state = { pid: 0 };
-
-test('imp console starts a session that a detach key leaves running', async () => {
-  await createImp(name, '--image', BARE, '--memory', '256');
-
-  const terminal = await openTerminal(['console', name]);
-
-  await terminal.waitForText('# ');
-
-  terminal.type('echo marker-$((6*7))\n');
-
-  await terminal.waitForText('marker-42');
-
-  terminal.type(DETACH_KEY);
-
-  const exitCode = await terminal.exited;
-  const session = await requireSession(name, 'main');
-
-  state.pid = session.pid;
-
-  expect(exitCode).toBe(0);
-  expect(terminal.readOutput()).toContain(`detached from session main (imp attach ${name} main)`);
-  expect(session).toMatchObject({ state: 'running', attached: false, cols: 80, rows: 24 });
-});
-
-test('a detached idle session lets the imp sleep, and a list does not wake it', async () => {
-  await waitAsleep(name);
-
-  const session = await requireSession(name, 'main');
+  const asleep = await requireSession(name, 'main');
   const imp = await requireImp(name);
 
-  expect(session.pid).toBe(state.pid);
+  expect(asleep.pid).toBe(started.pid);
   expect(imp.state).toBe('sleeping');
   expect(imp.sessions).toBe(1);
-});
 
-test('imp attach wakes the imp and shows the session, which redraws at the new size', async () => {
-  const terminal = await openTerminal(['attach', name], { cols: 100, rows: 30 });
+  // imp attach wakes the imp and shows the session, which redraws at the
+  // new size
+  const attached = await openTerminal(['attach', name], { cols: 100, rows: 30 });
 
-  await terminal.waitForText('marker-42');
+  ctx.stack.defer(() => attached.close());
 
-  const replayed = terminal.readOutput().length;
+  await attached.waitForText('marker-42');
 
-  // a program that draws for the terminal's size, on the main screen; the
-  // shell runs it as the foreground job, which is what SIGWINCH reaches
-  terminal.type(`${DRAW_PROGRAM}\n`);
+  const replayed = attached.readOutput().length;
 
-  await terminal.waitForText('drawn', replayed);
+  // a program that prints the terminal size on SIGWINCH, on the main
+  // screen; the shell runs it as the foreground job, which SIGWINCH reaches
+  attached.type(
+    String.raw`sh -c 'trap "echo size=\$(stty size)" WINCH; echo drawn; while :; do sleep 0.2; done'`,
+  );
 
-  terminal.type(DETACH_KEY);
+  attached.type('\n');
 
-  const exitCode = await terminal.exited;
+  await attached.waitForText('drawn', replayed);
+
+  attached.type('\u001D');
+
+  const attachedCode = await attached.exited;
   const wide = await openTerminal(['attach', name], { cols: 120, rows: 40 });
+
+  ctx.stack.defer(() => wide.close());
 
   await wide.waitForText('size=40 120');
 
-  const session = await requireSession(name, 'main');
+  const redrawn = await requireSession(name, 'main');
 
-  wide.type(DETACH_KEY);
+  wide.type('\u001D');
 
   await wide.exited;
 
-  expect(exitCode).toBe(0);
-  expect(session).toMatchObject({ pid: state.pid, attached: true, cols: 120, rows: 40 });
+  expect(attachedCode).toBe(0);
+  expect(redrawn).toMatchObject({ pid: started.pid, attached: true, cols: 120, rows: 40 });
 });
 
-test('a second attach takes the session over', async () => {
+test('it hands a session over to a second attach, and ends the first', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}take`;
+
+  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  // a session running a program that prints the terminal size on SIGWINCH
+  const entry = await openTerminal(['console', name]);
+
+  ctx.stack.defer(() => entry.close());
+
+  await entry.waitForText('# ');
+
+  entry.type(
+    String.raw`sh -c 'trap "echo size=\$(stty size)" WINCH; echo drawn; while :; do sleep 0.2; done'`,
+  );
+
+  entry.type('\n');
+
+  await entry.waitForText('drawn');
+
+  entry.type('\u001D');
+
+  await entry.exited;
+
   const first = await openTerminal(['attach', name]);
+
+  ctx.stack.defer(() => first.close());
 
   await first.waitForText('size=24 80');
 
   const second = await openTerminal(['attach', name]);
+
+  ctx.stack.defer(() => second.close());
+
   const firstCode = await first.exited;
 
   // the replay holds the sizes the first terminal saw; the redraw adds one
-  const seen = countText(first.readOutput(), 'size=24 80');
+  const seen = countMatches(first.readOutput(), 'size=24 80');
 
   await waitFor('the second terminal to redraw', () => {
-    if (countText(second.readOutput(), 'size=24 80') <= seen) {
+    if (countMatches(second.readOutput(), 'size=24 80') <= seen) {
       throw new Error('no redraw yet');
     }
   });
@@ -152,21 +166,37 @@ test('a second attach takes the session over', async () => {
 
   await second.waitForText('second-5', typed);
 
-  second.type(DETACH_KEY);
+  second.type('\u001D');
 
   await second.exited;
 
-  expect(firstCode).toBe(TAKEN_OVER_CODE);
+  // the CLI's exit code once another terminal took the session over
+  expect(firstCode).toBe(254);
   expect(first.readOutput()).toContain('another client attached to session main');
 });
 
-test('an attached terminal survives imp sleep by attaching again', async () => {
-  const terminal = await openTerminal(['attach', name]);
+test('it keeps an attached terminal through an imp sleep by attaching again', async () => {
+  const ctx = await setupTest();
 
-  // the replay has a prompt already; new output shows the attach is live
+  const name = `${ctx.prefix}sleep`;
+
+  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  const terminal = await openTerminal(['console', name]);
+
+  ctx.stack.defer(() => terminal.close());
+
+  await terminal.waitForText('# ');
+
   terminal.type('echo live-$((3+4))\n');
 
   await terminal.waitForText('live-7');
+
+  const before = await requireSession(name, 'main');
 
   await runImp('sleep', name);
 
@@ -180,41 +210,64 @@ test('an attached terminal survives imp sleep by attaching again', async () => {
   await terminal.waitForText('attached again', after);
   await terminal.waitForText('back-42', after);
 
-  terminal.type(DETACH_KEY);
+  terminal.type('\u001D');
 
   const exitCode = await terminal.exited;
   const session = await requireSession(name, 'main');
 
   expect(exitCode).toBe(0);
-  expect(session.pid).toBe(state.pid);
+  expect(session.pid).toBe(before.pid);
 });
 
-test('a busy detached session keeps the imp awake until it is killed', async () => {
-  const terminal = await openTerminal(['console', name, '--session', 'busy']);
+test('it keeps the imp awake while a detached session is busy, and lets it sleep once that session is killed', async () => {
+  const ctx = await setupTest();
 
-  await terminal.waitForText('# ');
+  const name = `${ctx.prefix}busy`;
 
-  const typed = terminal.readOutput().length;
+  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
 
-  terminal.type('echo spin-$((1+1)); while :; do :; done\n');
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  // an idle session beside the busy one, which the kill must leave
+  const idle = await openTerminal(['console', name]);
+
+  ctx.stack.defer(() => idle.close());
+
+  await idle.waitForText('# ');
+
+  idle.type('\u001D');
+
+  await idle.exited;
+
+  const busy = await openTerminal(['console', name, '--session', 'busy']);
+
+  ctx.stack.defer(() => busy.close());
+
+  await busy.waitForText('# ');
+
+  const typed = busy.readOutput().length;
+
+  busy.type('echo spin-$((1+1)); while :; do :; done\n');
 
   // the loop runs once the marker shows
-  await terminal.waitForText('spin-2', typed);
+  await busy.waitForText('spin-2', typed);
 
-  terminal.type(DETACH_KEY);
+  busy.type('\u001D');
 
-  await terminal.exited;
+  await busy.exited;
 
-  await Bun.sleep(PAST_IDLE_MS);
+  const detached = Date.now();
 
-  const awake = await readState(name);
-
+  await waitAwakePastIdle(name, detached);
   await runImp('sessions', 'kill', name, 'busy');
 
   const sessions = await listSessions(name);
 
-  expect(awake).toBe('running');
-  expect(sessions.map((session) => session.name)).toEqual(['main']);
+  expect(sessions.map((session) => session.name)).toStrictEqual(['main']);
 
-  await waitAsleep(name);
+  await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'), {
+    timeoutMs: (config.idleTimeoutS + 15) * 1000,
+  });
 });

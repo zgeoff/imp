@@ -1,81 +1,82 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { assertState } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import { assertState, createInstanceClient, readState, runImp } from '../lib/imp-cli';
+import { waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
 import { SSH_HOST, SSH_HOST_OTHER_KEY, runSsh, setupSshClient, startSsh } from '../lib/ssh';
-import type { SshClient } from '../lib/ssh';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// The SSH gateway and sleep: each case waits out the idle timeout, so these
-// run in the acceptance set, not in `fast` with the ssh suite.
+// The SSH gateway and sleep: the journey waits out the idle timeout, so it
+// runs in the acceptance set, not in `fast` with the ssh suite.
 
-const prefix = setupSuite('ssh-wake');
-const name = `${prefix}a`;
+// one stack for every release, so ssh stops before the imp goes
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// the idle timeout plus a sweep of the idle loop
-const ASLEEP_WITHIN_MS = (config.idleTimeoutS + 15) * 1000;
+  onTestFinished(() => stack.disposeAsync());
 
-// long enough that only activity keeps an imp awake
-const PAST_IDLE_MS = (config.idleTimeoutS + 6) * 1000;
-let client: SshClient;
+  const client = await createInstanceClient();
+  const ssh = await setupSshClient();
 
-beforeAll(async () => {
-  client = await setupSshClient();
+  stack.defer(() => ssh.cleanup());
 
-  await createImp(name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
-}, 120_000);
-
-afterAll(async () => {
-  await client.cleanup();
-});
-
-function waitAsleep(): Promise<void> {
-  return waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'), {
-    timeoutMs: ASLEEP_WITHIN_MS,
-  });
+  return { prefix: readSuitePrefix('ssh-wake'), stack, client, ssh };
 }
 
-test('a refused login does not wake a sleeping imp', async () => {
-  await waitAsleep();
+test('it wakes a sleeping imp on ssh but not on a refused login, and keeps it awake while a connection is open', async () => {
+  const ctx = await setupTest();
 
-  const unknownUser = await runSsh(client, 'nobody', ['true']);
-  const unknownKey = await runSsh(client, name, ['true'], { host: SSH_HOST_OTHER_KEY });
+  const name = `${ctx.prefix}a`;
 
-  for (const result of [unknownUser, unknownKey]) {
-    expect(result.exitCode).toBe(255);
-    expect(result.stderr).toContain('Permission denied (publickey)');
-  }
+  await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  await assertState(name, 'sleeping');
-});
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-test('ssh wakes a sleeping imp', async () => {
-  await assertState(name, 'sleeping');
+  await waitForExec(name);
+  await runImp('sleep', name);
 
+  // a refused login does not wake it
+  const unknownUser = await runSsh(ctx.ssh, 'nobody', ['true']);
+  const unknownKey = await runSsh(ctx.ssh, name, ['true'], { host: SSH_HOST_OTHER_KEY });
+  const afterRefusals = await readState(name);
+
+  expect(unknownUser.exitCode).toBe(255);
+  expect(unknownUser.stderr).toContain('Permission denied (publickey)');
+  expect(unknownKey.exitCode).toBe(255);
+  expect(unknownKey.stderr).toContain('Permission denied (publickey)');
+  expect(afterRefusals).toBe('sleeping');
+
+  // a login wakes it
   const started = Date.now();
 
-  const result = await runSsh(client, name, ['echo awake']);
+  const woken = await runSsh(ctx.ssh, name, ['echo awake']);
 
   writeMetric('sshWakeExecMs', Date.now() - started);
 
-  expect(result.stdout).toBe('awake\n');
+  const afterLogin = await readState(name);
 
-  await assertState(name, 'running');
-});
+  expect(woken.stdout).toBe('awake\n');
+  expect(afterLogin).toBe('running');
 
-test('an open connection keeps the imp awake, and it sleeps once the connection ends', async () => {
-  const held = startSsh(client, ['-N', `${name}@${SSH_HOST}`]);
+  // an open connection keeps it awake past the idle timeout, and it sleeps
+  // once the connection ends
+  const held = startSsh(ctx.ssh, ['-N', `${name}@${SSH_HOST}`]);
 
-  try {
-    await Bun.sleep(PAST_IDLE_MS);
+  ctx.stack.defer(() => held.stop());
 
-    await assertState(name, 'running');
-  } finally {
-    await held.stop();
-  }
+  const holding = Date.now();
 
-  await waitAsleep();
+  await waitAwakePastIdle(name, holding);
+
+  await held.stop();
+
+  // the idle timeout plus a sweep of the idle loop
+  await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'), {
+    timeoutMs: (config.idleTimeoutS + 15) * 1000,
+  });
 });

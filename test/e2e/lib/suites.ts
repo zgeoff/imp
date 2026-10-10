@@ -34,7 +34,12 @@ export const SUITES: readonly Suite[] = [
   { name: 'registry', prefix: 'e2e-reg-', images: [] },
   { name: 'checkpoints', prefix: 'e2e-cp-', images: ['e2e-tiny'] },
   { name: 'disks', prefix: 'e2e-disk-', images: ['e2e-tiny'] },
-  { name: 'sleep', prefix: 'e2e-slp-', images: ['e2e-bare', 'e2e-ws'] },
+  {
+    name: 'sleep',
+    prefix: 'e2e-slp-',
+    images: ['e2e-bare', 'e2e-ws'],
+    journeys: ['sleep-memory', 'sleep-websocket'],
+  },
   { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
   { name: 'tailscale', prefix: 'e2e-ts-', images: ['e2e-tiny'] },
