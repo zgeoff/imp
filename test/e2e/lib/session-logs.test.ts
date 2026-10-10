@@ -62,5 +62,20 @@ test('#parseSessionLogs rejects a state it does not know', () => {
     },
   ]);
 
-  expect(() => parseSessionLogs(stdout)).toThrow();
+  expect(() => parseSessionLogs(stdout)).toThrowErrorMatchingInlineSnapshot(`
+    "[
+      {
+        "code": "invalid_value",
+        "values": [
+          "live",
+          "ended"
+        ],
+        "path": [
+          0,
+          "state"
+        ],
+        "message": "Invalid option: expected one of \\"live\\"|\\"ended\\""
+      }
+    ]"
+  `);
 });

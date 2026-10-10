@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test';
-import { findServiceUrl, findTailnetNode, isTailnetReady, parseTailscaleStatus } from './tailnet';
+import {
+  findServiceUrl,
+  findTailnetNode,
+  isTailnetReady,
+  parseTailscaleStatus,
+  requireTailnetReady,
+} from './tailnet';
 
 test('#findServiceUrl picks the per-imp tailnet name among the URL lines', () => {
   const stdout = [
@@ -30,6 +36,21 @@ test('#isTailnetReady is not ready while this machine is logged out', () => {
 
 test('#isTailnetReady is not ready without a tailscale status', () => {
   expect(isTailnetReady(null, 'tskey-auth-e2e')).toBeFalse();
+});
+
+test('#requireTailnetReady passes with a key and this machine Running', () => {
+  expect(() => {
+    requireTailnetReady('Running', 'tskey-auth-e2e');
+  }).not.toThrow();
+});
+
+test('#requireTailnetReady fails with what the suite lacks while this machine is logged out', () => {
+  expect(() => {
+    requireTailnetReady('NeedsLogin', 'tskey-auth-e2e');
+  }).toThrowWithMessage(
+    Error,
+    'tailscale needs TAILSCALE_AUTHKEY (env, 1Password or .env) and this machine on the tailnet',
+  );
 });
 
 test('#parseTailscaleStatus reads the backend state and the peers', () => {

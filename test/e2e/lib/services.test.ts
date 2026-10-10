@@ -51,5 +51,18 @@ test('#parseServices rejects a pid that is not a whole number', () => {
     { name: 'web', state: 'running', pid: 2.5, argv: [], envKeys: [], source: 'api', root: true },
   ]);
 
-  expect(() => parseServices(stdout)).toThrow();
+  expect(() => parseServices(stdout)).toThrowErrorMatchingInlineSnapshot(`
+    "[
+      {
+        "expected": "int",
+        "format": "safeint",
+        "code": "invalid_type",
+        "path": [
+          0,
+          "pid"
+        ],
+        "message": "Invalid input: expected int, received number"
+      }
+    ]"
+  `);
 });

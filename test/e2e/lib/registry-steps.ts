@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
 import { runImp } from './imp-cli';
-import { runChecked, runCommand } from './instance';
+import { instance, runChecked, runCommand } from './instance';
 
 // A registry a registry journey owns, on the host's loopback under a name,
 // since the proxy refuses an IP or localhost; CI puts the name in /etc/hosts.
@@ -88,13 +88,25 @@ export async function checkRegistryReady(name: string): Promise<boolean> {
   return false;
 }
 
-// Starts registry:2 with a certificate of its own under dir, as `container`;
-// the caller removes the container.
+// the label each registry container carries: the instance whose journey made
+// it, so a sweep takes only this harness's own
+const REGISTRY_OWNER_LABEL = 'imp-e2e-instance';
+
+// Starts registry:2 with a certificate of its own under dir, as `container`,
+// and defers its removal into `stack` once it runs. A container already
+// under that name is refused untouched.
 export async function startRegistry(
+  stack: Readonly<Pick<AsyncDisposableStack, 'defer'>>,
   name: string,
   container: string,
   dir: string,
 ): Promise<Registry> {
+  const taken = await runCommand(['docker', 'container', 'inspect', container]);
+
+  if (taken.exitCode === 0) {
+    throw new Error(`a container named ${container} is already there`);
+  }
+
   const certs = join(dir, 'certs');
 
   mkdirSync(certs, { recursive: true });
@@ -124,6 +136,8 @@ export async function startRegistry(
     '--detach',
     '--name',
     container,
+    '--label',
+    `${REGISTRY_OWNER_LABEL}=${instance.container}`,
     '--publish',
     '127.0.0.1::5000',
     '--volume',
@@ -135,6 +149,10 @@ export async function startRegistry(
     'registry:2',
   ]);
 
+  stack.defer(async () => {
+    await runCommand(['docker', 'rm', '--force', '--volumes', container]);
+  });
+
   const published = await runChecked(['docker', 'port', container, '5000/tcp']);
 
   return {
@@ -144,20 +162,51 @@ export async function startRegistry(
   };
 }
 
-// a registry a killed journey left: its stack never ran
-export async function removeStaleRegistries(prefix: string): Promise<void> {
-  const stale = await runChecked([
+export interface StaleRegistries {
+  // the names of the containers it removed
+  readonly removed: readonly string[];
+
+  // under the registry name pattern, but not labelled with this instance
+  readonly left: readonly string[];
+}
+
+async function listRegistryContainers(filters: readonly string[]): Promise<string[]> {
+  const listed = await runChecked([
     'docker',
     'ps',
     '--all',
-    '--quiet',
-    '--filter',
-    `name=^${prefix}registry-`,
+    '--format',
+    '{{.Names}}',
+    ...filters.flatMap((filter) => ['--filter', filter]),
   ]);
 
-  for (const id of stale.split('\n').filter((line) => line !== '')) {
-    await runCommand(['docker', 'rm', '--force', '--volumes', id]);
+  return listed.split('\n').filter((line) => line !== '');
+}
+
+// Registries a killed journey left, since its stack never ran: only those
+// this instance's journeys labelled. A foreign or unlabelled one under the
+// name pattern stays, and is logged.
+export async function removeStaleRegistries(prefix: string): Promise<StaleRegistries> {
+  const named = `name=^${prefix}registry-`;
+
+  const all = await listRegistryContainers([named]);
+
+  const own = await listRegistryContainers([
+    named,
+    `label=${REGISTRY_OWNER_LABEL}=${instance.container}`,
+  ]);
+
+  for (const container of own) {
+    await runCommand(['docker', 'rm', '--force', '--volumes', container]);
   }
+
+  const left = all.filter((container) => !own.includes(container));
+
+  if (left.length > 0) {
+    console.log(`    left registry containers this instance did not label: ${left.join(', ')}`);
+  }
+
+  return { removed: own, left };
 }
 
 // a context directory with this Dockerfile and a file v holding value
@@ -234,8 +283,10 @@ export async function readHostArch(): Promise<string> {
 }
 
 // A tag the host has on old content, which the registry moved to new: the
-// pin must keep the build on the old. The caller removes tag and kept.
+// pin must keep the build on the old. Each tag's removal goes into `stack`
+// as soon as the tag exists.
 export async function createMovedTag(
+  stack: Readonly<Pick<AsyncDisposableStack, 'defer'>>,
   registry: Readonly<Registry>,
   dir: string,
   repository: string,
@@ -247,10 +298,18 @@ export async function createMovedTag(
 
   await buildPushedImage(writeContext(dir, `${repository}-old`, from, 'old'), tag);
 
+  stack.defer(async () => {
+    await runCommand(['docker', 'rmi', tag]);
+  });
+
   // the containerd store drops an image whose last tag moves
   const kept = `${registry.address}/${repository}:kept`;
 
   await runChecked(['docker', 'tag', tag, kept]);
+
+  stack.defer(async () => {
+    await runCommand(['docker', 'rmi', kept]);
+  });
 
   const repoDigests = await runChecked([
     'docker',

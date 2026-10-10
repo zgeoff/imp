@@ -8,7 +8,9 @@ import {
 import { readInfo, requireImp } from './imp-cli';
 import { runInContainer } from './instance';
 import { startSleepWatch } from './sleep-events';
+import type { SleepWatch } from './sleep-events';
 import { waitFor } from './wait-for';
+import type { WaitForOptions } from './wait-for';
 
 // The sampler's rate: how often the monitor reads impd's RAM figure and
 // Firecracker's memory, which sets how finely an overshoot is timed.
@@ -123,32 +125,65 @@ async function readBudgetSample(): Promise<BudgetSample | null> {
   };
 }
 
+export interface BudgetMonitorDeps {
+  // one sample of impd and the VMs, null when impd was too busy to answer
+  readonly readSample: () => Promise<BudgetSample | null>;
+  readonly startWatch: () => Promise<SleepWatch>;
+
+  // the pause between samples
+  readonly wait: (ms: number) => Promise<void>;
+}
+
+const MONITOR_DEPS: BudgetMonitorDeps = {
+  readSample: readBudgetSample,
+  startWatch: startSleepWatch,
+  wait: (ms) => Bun.sleep(ms),
+};
+
 // Samples the budget every BUDGET_SAMPLE_MS and follows the sleeps that end
 // an overshoot. A failed read stops the sampler, and stop() rethrows it.
-export async function startBudgetMonitor(): Promise<BudgetMonitor> {
-  const watch = await startSleepWatch();
+export async function startBudgetMonitor(
+  deps: Readonly<BudgetMonitorDeps> = MONITOR_DEPS,
+): Promise<BudgetMonitor> {
+  const watch = await deps.startWatch();
 
   const samples: BudgetSample[] = [];
-  const state = { isRunning: true, stopped: null as Promise<void> | null };
+
+  const state = {
+    isRunning: true,
+    stopped: null as Promise<void> | null,
+
+    // kept for stop() to rethrow, so it is never an unhandled rejection
+    failure: null as Error | null,
+  };
 
   const loop = (async () => {
-    while (state.isRunning) {
-      const sample = await readBudgetSample();
+    try {
+      while (state.isRunning) {
+        const sample = await deps.readSample();
 
-      if (sample !== null) {
-        samples.push(sample);
+        if (sample !== null) {
+          samples.push(sample);
+        }
+
+        await deps.wait(BUDGET_SAMPLE_MS);
       }
-
-      await Bun.sleep(BUDGET_SAMPLE_MS);
+    } catch (error) {
+      state.failure = error instanceof Error ? error : new Error(String(error));
     }
   })();
 
+  // the event stream stops even when the sampler failed
   const stop = async () => {
     state.isRunning = false;
 
     await loop;
 
     await watch.stop();
+
+    if (state.failure !== null) {
+      throw state.failure;
+    }
   };
 
   return {
@@ -168,14 +203,19 @@ export async function waitForSampleAfter(
   monitor: BudgetMonitor,
   since: number,
   afterMs: number,
+  clock: Readonly<Pick<WaitForOptions, 'now' | 'wait'>> = {},
 ): Promise<void> {
-  await waitFor(`a budget sample ${String(afterMs)} ms after ${String(since)}`, () => {
-    const last = monitor.samples.at(-1);
+  await waitFor(
+    `a budget sample ${String(afterMs)} ms after ${String(since)}`,
+    () => {
+      const last = monitor.samples.at(-1);
 
-    if (last === undefined || last.at < since + afterMs) {
-      throw new Error(`last sample at ${String(last?.at)}`);
-    }
-  });
+      if (last === undefined || last.at < since + afterMs) {
+        throw new Error(`last sample at ${String(last?.at)}`);
+      }
+    },
+    clock,
+  );
 }
 
 // Samples on until neither figure is over the budget, for at most as long as
@@ -184,6 +224,7 @@ export async function waitForSampleAfter(
 export async function waitForUnderBudget(
   monitor: BudgetMonitor,
   limits: OvershootLimits,
+  clock: Readonly<Pick<WaitForOptions, 'now' | 'wait'>> = {},
 ): Promise<void> {
   await waitFor(
     'both budget figures under the budget',
@@ -198,7 +239,7 @@ export async function waitForUnderBudget(
         throw new Error(`last sample ${JSON.stringify(last)}`);
       }
     },
-    { timeoutMs: readMaxOpenMs(limits) },
+    { ...clock, timeoutMs: readMaxOpenMs(limits) },
   ).catch(() => {});
 }
 

@@ -173,12 +173,14 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    reboots onto them (`scripts/dev.sh reboot` with that environment) before the first journey and
    again after any fresh instance; the reboot after a failed journey goes onto them too. After the
    last journey, a failure or an interrupt it reboots back onto the run's settings, under `--keep`
-   and for `scale` too. A read that throws fails the suite with no reboot and no journey; a reboot
-   onto the settings that fails runs no more of its journeys, fails the suite and still reboots
-   back; a reboot back that fails fails the suite and makes the instance anew, unless the run was
-   interrupted, and the run stops if that fails. A suite without `settings` never reboots a passing
-   run, so a `--reuse` instance keeps its own settings until a suite with `settings` or a failure
-   reboots it onto the run's.
+   too. A passing `scale` with `restart` after it is the exception: the instance stays on scale's
+   settings, so `restart` re-adopts the fleet still running under scale's 600 s idle timeout (a
+   reboot would sleep every VM), and the reboot back comes after `restart`'s last journey. A read
+   that throws fails the suite with no reboot and no journey; a reboot onto the settings that fails
+   runs no more of its journeys, fails the suite and still reboots back; a reboot back that fails
+   fails the suite and makes the instance anew, unless the run was interrupted, and the run stops if
+   that fails. A suite without `settings` never reboots a passing run, so a `--reuse` instance keeps
+   its own settings until a suite with `settings` or a failure reboots it onto the run's.
 
    A suite's `fixtures` name what runs beside the instance for all its journeys: `host-b`, the moves
    suites' second instance on a Docker network, or `host-b-tailnet`, the same on the tailnet under
@@ -191,7 +193,11 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    up anew and fails the suite, and since B's stop takes A off its network, the next journey first
    reboots onto the suite's settings again; one that cannot come back runs no more of the suite's
    journeys; one that will not stop fails the suite. An interrupt skips the fixture's reset and
-   still stops it, and `--keep` skips the reset only.
+   still stops it, and `--keep` skips the reset only. A `receiving` imp on B, which `moves.abort`
+   does not end and impd will not remove (`MOVING`), fails B's reset, so B falls back to being made
+   anew; B keeps its data dir, and its impd drops at start only a staged imp whose stream was cut
+   short, so one that already holds a receipt fails the reset again and the suite runs no more
+   journeys.
 
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
@@ -254,7 +260,7 @@ some that the agent's dial completed but the server never accepted; the guest ke
 `templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent`,
 `reverse`, `services`, `sessions`, `session-logs`, `ssh-wake`, `proxy-wake`, the two `sleep-*`
 files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files, the three
-`registry-*` files, the seven `moves-*` files and the two `moves-tailnet-*` files work this way.
+`registry-*` files, the eight `moves-*` files and the two `moves-tailnet-*` files work this way.
 `registry`, `scale`, `tailscale` and the two moves suites take their impd settings from the suite's
 `settings`, and the moves journeys read their host B from the harness's fixture with `readMoveHosts`
 (step 5); each makes and removes its own imps on both hosts. A journey that reboots the instance
@@ -273,8 +279,9 @@ keeps its ssh control and forward sockets, and `ssh` its forward sockets, in a `
 own there, which its dispose removes. A journey that checks something keeps an imp awake past the
 idle timeout waits with `waitAwakePastIdle` (`test/e2e/lib/awake-past-idle.ts`): the idle loop moves
 an imp's `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
-`lastActiveAt` reaches the idle timeout past the release has stayed awake that long. The wait polls
-`imp ls`, which records no activity, so the journey must not exec in the imp during it.
+`lastActiveAt` reaches the idle timeout past the release has stayed awake that long; its wake count
+and `sleptAt` must stay as the wait first read them, so a sleep and a wake in between fail it. The
+wait polls `imp ls`, which records no activity, so the journey must not exec in the imp during it.
 
 A journey file also runs alone against an instance that is up:
 `bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep-memory.e2e.ts`. Nothing then resets
@@ -843,5 +850,10 @@ file leaves every host on its real origin.
   recorded one (the process is gone, or its pid now names another). A directory with no owner file,
   one that does not parse, one that records no start time, and one whose owner still runs all stay,
   and `mkdir` then refuses the last three if they hold the same port. Each `registry-*` journey
-  starts its own registry and trusts its own certificate (`test/e2e/lib/registry-steps.ts`), and
-  first removes stale registry containers by the name pattern `e2e-reg-registry-`.
+  starts its own registry and trusts its own certificate (`test/e2e/lib/registry-steps.ts`).
+  `startRegistry` refuses a container name already taken before it makes anything, labels the
+  container `imp-e2e-instance=<IMP_DEV_NAME>`, and defers its removal into the journey's stack once
+  `docker run` succeeds; `createMovedTag` defers each tag's removal as soon as the tag exists. Each
+  journey first runs `removeStaleRegistries`, which removes only the containers named
+  `e2e-reg-registry-*` that carry this instance's label, and logs and leaves the rest.
+  `registry-steps.test.ts` runs these against a stub `docker` on `PATH`.

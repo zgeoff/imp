@@ -1,4 +1,4 @@
-interface WaitForOptions {
+export interface WaitForOptions {
   // milliseconds between retries
   readonly intervalMs?: number;
 

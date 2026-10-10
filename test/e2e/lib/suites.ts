@@ -132,6 +132,7 @@ export const SUITES: readonly Suite[] = [
       'moves-list',
       'moves-warm-open',
       'moves-warm-box',
+      'moves-warm-pair',
     ],
     fixtures: ['host-b'],
     settings: (target) => buildMoveSettings(readMoveOptions('host-b'), target.portOffset),

@@ -208,10 +208,25 @@ test("it carries a unix socket forward to the image user's sockets, not root's",
     join(ctx.sockets, 'open.sock'),
   );
 
-  expect(own.listed).toContain('The agent has no identities.');
-  expect(rootOnly.listed).not.toContain('The agent has no identities.');
+  expect(own.listed).toStrictEqual({
+    exitCode: 1,
+    stdout: 'The agent has no identities.\n',
+    stderr: '',
+  });
+
+  expect(rootOnly.listed).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'error fetching identities: communication with agent failed\n',
+  });
+
   expect(rootOnly.forwardLog).toContain('open failed: connect failed');
-  expect(rootAgent.listed).not.toContain('The agent has no identities.');
+
+  expect(rootAgent.listed).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'error fetching identities: communication with agent failed\n',
+  });
 });
 
 // OpenSSH asks for forwarding only when it has an agent, so the connection

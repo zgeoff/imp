@@ -46,11 +46,7 @@ async function setupTest() {
 
   const container = `${prefix}registry-${String(process.pid)}`;
 
-  stack.defer(async () => {
-    await runCommand(['docker', 'rm', '--force', '--volumes', container]);
-  });
-
-  const registry = await startRegistry(REGISTRY_NAME, container, dir);
+  const registry = await startRegistry(stack, REGISTRY_NAME, container, dir);
 
   // the engine reads certs.d on each request: no restart
   const trust = await createRegistryTrust({

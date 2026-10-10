@@ -24,5 +24,17 @@ test('#parseSessions rejects a row without a pid', () => {
     { name: 'main', state: 'running', attached: false, cols: 80, rows: 24 },
   ]);
 
-  expect(() => parseSessions(stdout)).toThrow();
+  expect(() => parseSessions(stdout)).toThrowErrorMatchingInlineSnapshot(`
+    "[
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          0,
+          "pid"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      }
+    ]"
+  `);
 });

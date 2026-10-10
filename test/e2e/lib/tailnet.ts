@@ -41,6 +41,14 @@ export function isTailnetReady(backendState: string | null, authKey: string | nu
   return authKey !== null && backendState === 'Running';
 }
 
+// fails a tailnet suite that must run, such as under acceptance, with what
+// it lacks
+export function requireTailnetReady(backendState: string | null, authKey: string | null): void {
+  if (!isTailnetReady(backendState, authKey)) {
+    throw new Error(TAILNET_NOT_READY);
+  }
+}
+
 // `tailscale status --json`, or null when it is not that
 export function parseTailscaleStatus(stdout: string): TailscaleStatus | null {
   let json: unknown;

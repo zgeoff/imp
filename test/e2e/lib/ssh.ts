@@ -178,8 +178,8 @@ export function startSsh(
 }
 
 export interface ForwardedList {
-  // what ssh-add printed, stdout then stderr
-  readonly listed: string;
+  // ssh-add's exit code, stdout and stderr
+  readonly listed: CommandResult;
 
   // what the forwarding ssh logged
   readonly forwardLog: string;
@@ -217,7 +217,7 @@ export async function listAgentThroughUnixForward(
 
     const forwardLog = await new Response(forward.proc.stderr).text();
 
-    return { listed: `${result.stdout}${result.stderr}`, forwardLog };
+    return { listed: result, forwardLog };
   } finally {
     await forward.stop();
 

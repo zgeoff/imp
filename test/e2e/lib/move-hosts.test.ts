@@ -1,9 +1,63 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { BlockList } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { REPO_ROOT, instance } from './instance';
-import { buildMoveNetwork, buildMoveSettings, readMoveHosts, readMoveOptions } from './move-hosts';
+import type { HostBFixtureDeps } from './move-hosts';
+import {
+  buildHostBFixture,
+  buildMoveNetwork,
+  buildMoveSettings,
+  readMoveHosts,
+  readMoveOptions,
+} from './move-hosts';
+
+// a temp dir for the fixture's CLI config, and deps that record each step
+// in order
+async function setupTest() {
+  const dir = await mkdtemp(join(tmpdir(), 'move-hosts-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const cliDir = join(dir, 'cli');
+  const steps: string[] = [];
+
+  const deps: HostBFixtureDeps = {
+    cliDir,
+    removeLeftovers: () => {
+      steps.push('leftovers');
+
+      return Promise.resolve();
+    },
+    createNetwork: (name, network) => {
+      steps.push(`network ${name} ${network.subnet} ${network.gateway}`);
+
+      return Promise.resolve();
+    },
+    startHost: (host) => {
+      steps.push(`up ${host.container} ${host.env['IMP_DEV_IP'] ?? ''}`);
+
+      return Promise.resolve();
+    },
+    login: (host, env) => {
+      const isStale = existsSync(join(cliDir, 'stale'));
+
+      steps.push(`login ${host.apiUrl} ${env['XDG_CONFIG_HOME'] ?? ''} stale=${String(isStale)}`);
+
+      return Promise.resolve();
+    },
+    resetHost: (host, prefix) => {
+      steps.push(`reset ${host.container} ${prefix}`);
+
+      return Promise.resolve();
+    },
+  };
+
+  return { cliDir, steps, deps };
+}
 
 test.each([
   [0, '10.100.0.0/24'],
@@ -122,4 +176,41 @@ test('#readMoveOptions runs host-b-tailnet with per-imp names under the test pre
 
 test('#readMoveHosts counts A as rebooted for a move over the tailnet with settings of its own', () => {
   expect(readMoveHosts({ tailnet: true, env: { IMP_TAILNET_NAMES: '1' } }).isARebooted).toBeTrue();
+});
+
+test('#buildHostBFixture starts B on the move network once leftovers are gone, saves it in a fresh CLI config, then resets it', async () => {
+  const ctx = await setupTest();
+
+  updateEnv('IMP_DEV_PORT_OFFSET', '1400');
+
+  // a config an earlier run left
+  await mkdir(ctx.cliDir);
+  await writeFile(join(ctx.cliDir, 'stale'), '');
+  await buildHostBFixture({ tailnet: false }, 'e2e-mv-', ctx.deps).start();
+
+  expect(ctx.steps).toStrictEqual([
+    'leftovers',
+    `network ${instance.container}-mv 10.105.120.0/24 10.105.120.1`,
+    `up ${instance.container}-mv-b 10.105.120.11`,
+    `login http://10.105.120.11:7070 ${ctx.cliDir} stale=false`,
+    `reset ${instance.container}-mv-b e2e-mv-`,
+  ]);
+});
+
+test('#buildHostBFixture resets B for the suite’s prefix', async () => {
+  const ctx = await setupTest();
+
+  await buildHostBFixture({ tailnet: false }, 'e2e-mv-', ctx.deps).reset();
+
+  expect(ctx.steps).toStrictEqual([`reset ${instance.container}-mv-b e2e-mv-`]);
+});
+
+test('#buildHostBFixture stops B and removes its CLI config', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(ctx.cliDir);
+  await buildHostBFixture({ tailnet: false }, 'e2e-mv-', ctx.deps).stop();
+
+  expect(ctx.steps).toStrictEqual(['leftovers']);
+  expect(existsSync(ctx.cliDir)).toBeFalse();
 });

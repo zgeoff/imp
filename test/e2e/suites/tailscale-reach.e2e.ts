@@ -21,6 +21,7 @@ import {
   isTailnetReady,
   readLocalTailscaleStatus,
   readTailnetBody,
+  requireTailnetReady,
   waitForTailnetIp,
 } from '../lib/tailnet';
 import { readTailscaleAuthKey } from '../lib/tailscale-key';
@@ -55,9 +56,7 @@ test.skipIf(!ready && !config.acceptance)(
   async () => {
     const ctx = await setupTest();
 
-    if (!ready) {
-      throw new Error(TAILNET_NOT_READY);
-    }
+    requireTailnetReady(localStatus?.BackendState ?? null, authKey);
 
     const name = `${ctx.prefix}a`;
 

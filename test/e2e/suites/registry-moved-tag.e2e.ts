@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { config } from '../lib/config';
 import { createRegistryTrust } from '../lib/create-registry-trust';
 import { createInstanceClient } from '../lib/imp-cli';
-import { REPO_ROOT, runCommand } from '../lib/instance';
+import { REPO_ROOT } from '../lib/instance';
 import { registerRemoval } from '../lib/register-removal';
 import {
   buildAndListRequests,
@@ -42,11 +42,7 @@ async function setupTest() {
 
   const container = `${prefix}registry-${String(process.pid)}`;
 
-  stack.defer(async () => {
-    await runCommand(['docker', 'rm', '--force', '--volumes', container]);
-  });
-
-  const registry = await startRegistry(REGISTRY_NAME, container, dir);
+  const registry = await startRegistry(stack, REGISTRY_NAME, container, dir);
 
   // the engine reads certs.d on each request: no restart
   const trust = await createRegistryTrust({
@@ -67,11 +63,7 @@ test.skipIf(!isReady)(
     const mutable = `${ctx.prefix}mutable`;
     const repository = 'e2e/mutable';
 
-    const moved = await createMovedTag(ctx.registry, ctx.dir, repository);
-
-    ctx.stack.defer(async () => {
-      await runCommand(['docker', 'rmi', moved.tag, moved.kept]);
-    });
+    const moved = await createMovedTag(ctx.stack, ctx.registry, ctx.dir, repository);
 
     registerRemoval(ctx.stack, config.keep, () => removeImageIfPresent(ctx.client, mutable));
 

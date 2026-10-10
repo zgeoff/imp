@@ -10,6 +10,7 @@ import {
   TAILNET_NOT_READY,
   isTailnetReady,
   readLocalTailscaleStatus,
+  requireTailnetReady,
   sendTailnetRpc,
   waitForTailnetIp,
 } from '../lib/tailnet';
@@ -45,9 +46,7 @@ test.skipIf(!ready && !config.acceptance)(
   async () => {
     const ctx = await setupTest();
 
-    if (!ready) {
-      throw new Error(TAILNET_NOT_READY);
-    }
+    requireTailnetReady(localStatus?.BackendState ?? null, authKey);
 
     const name = `${ctx.prefix}rule`;
 

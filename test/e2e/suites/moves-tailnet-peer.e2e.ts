@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, findImp, runImp, runImpWith } from '../lib/imp-cli';
@@ -41,9 +42,7 @@ test.skipIf(authKey === null && !config.acceptance)(
   async () => {
     const ctx = await setupTest();
 
-    if (authKey === null) {
-      throw new Error(NOT_READY);
-    }
+    invariant(authKey, NOT_READY);
 
     const plain = `${ctx.prefix}a`;
 

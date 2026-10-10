@@ -72,6 +72,10 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
   const results: SuiteResult[] = [];
   let carried: readonly string[] = [];
 
+  // a kept scale leaves the instance on its settings, so restart re-adopts
+  // the fleet running as scale left it, and reboots back after its last
+  let isCarriedOffRunSettings = false;
+
   for (const name of deps.names) {
     if (deps.isInterrupted()) {
       return { results, stoppedBecause: 'interrupted' };
@@ -98,7 +102,7 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
     // whether the instance may be off the run's settings, and needs the
     // reboot back
-    let isOffRunSettings = false;
+    let isOffRunSettings: boolean = isCarriedOffRunSettings;
 
     // whether it runs on the suite's settings now
     let isOnSettings = false;
@@ -182,8 +186,9 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
     }
 
     carried = isKept ? [prefix] : [];
+    isCarriedOffRunSettings = isKept && isOffRunSettings && stoppedBecause === null;
 
-    if (isOffRunSettings && stoppedBecause === null) {
+    if (isOffRunSettings && stoppedBecause === null && !isCarriedOffRunSettings) {
       const restored = await resetRunSettings(deps, name);
 
       isPassed &&= restored.isRestored;

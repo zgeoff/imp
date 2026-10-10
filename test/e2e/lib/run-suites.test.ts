@@ -359,7 +359,7 @@ test('#runSuites resets scale after its checks fail when restart runs next', asy
   ]);
 });
 
-test('#runSuites keeps a passing scale’s imps on its own settings for restart, and reboots back onto the run’s', async () => {
+test('#runSuites keeps a passing scale’s imps and its settings for restart, and reboots back onto the run’s after restart', async () => {
   const ctx = setupTest();
 
   await runSuites({
@@ -382,9 +382,9 @@ test('#runSuites keeps a passing scale’s imps on its own settings for restart,
   expect(ctx.steps).toStrictEqual([
     'reboot onto {"IMP_IDLE_TIMEOUT_S":"600"}',
     'run scale',
-    'reboot',
     'run restart',
     'reset e2e-restart-,e2e-scale-',
+    'reboot',
   ]);
 });
 
@@ -1178,10 +1178,10 @@ test('#runSuites makes the instance anew and reboots onto the suite’s settings
   ]);
 });
 
-test('#runSuites reboots back off the settings of scale kept for restart, and resets nothing after it', async () => {
+test('#runSuites reboots back off the settings of scale kept for restart after restart fails, and fails restart', async () => {
   const ctx = setupTest();
 
-  await runSuites({
+  const result = await runSuites({
     ...ctx.recorders,
     names: ['scale', 'restart'],
     prefixOf: (name) => `e2e-${name}-`,
@@ -1194,16 +1194,25 @@ test('#runSuites reboots back off the settings of scale kept for restart, and re
     runJourney: (journey) => {
       ctx.steps.push(`run ${journey}`);
 
-      return Promise.resolve(0);
+      // restart fails
+      const exitCode = journey === 'restart' ? 1 : 0;
+
+      return Promise.resolve(exitCode);
     },
   });
 
   expect(ctx.steps).toStrictEqual([
     'reboot onto {"IMP_RAM_BUDGET_MIB":"8192"}',
     'run scale',
-    'reboot',
     'run restart',
+    'reboot',
     'reset e2e-restart-,e2e-scale-',
+    'reboot',
+  ]);
+
+  expect(result.results).toStrictEqual([
+    { name: 'scale', passed: true, ms: 0 },
+    { name: 'restart', passed: false, ms: 0 },
   ]);
 });
 

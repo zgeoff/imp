@@ -211,25 +211,31 @@ export interface HostBFixture {
   readonly stop: () => Promise<void>;
 }
 
-export function buildHostBFixture(
-  options: Readonly<MoveHostsOptions>,
-  prefix: string,
-): HostBFixture {
-  const names = buildNames();
-  const b = buildHostB(options);
+// what the fixture does to the hosts, Docker and the CLI config
+export interface HostBFixtureDeps {
+  // the CLI config dir that saves B, made anew on each start
+  readonly cliDir: string;
+  readonly removeLeftovers: () => Promise<void>;
+  readonly createNetwork: (name: string, network: Readonly<MoveNetwork>) => Promise<void>;
 
-  const reset = async () => {
-    const client = await createInstanceClient(b);
+  // B up, and its container's privileges checked against deploy/
+  readonly startHost: (host: Readonly<DevInstance>) => Promise<void>;
 
-    await resetBaseline({ client, prefixes: [prefix], dataDir: b.dataDir });
-  };
+  // saves B as HOST_B in the CLI config `env` points at
+  readonly login: (
+    host: Readonly<DevInstance>,
+    env: Readonly<Record<string, string>>,
+  ) => Promise<void>;
 
+  // the baseline reset on B for the prefix
+  readonly resetHost: (host: Readonly<DevInstance>, prefix: string) => Promise<void>;
+}
+
+function buildHostBFixtureDeps(): HostBFixtureDeps {
   return {
-    start: async () => {
-      const network = buildMoveNetwork(readOffset());
-
-      await removeMoveLeftovers();
-
+    cliDir: buildNames().cliDir,
+    removeLeftovers: removeMoveLeftovers,
+    createNetwork: async (name, network) => {
       await runChecked([
         'docker',
         'network',
@@ -238,29 +244,54 @@ export function buildHostBFixture(
         network.subnet,
         '--gateway',
         network.gateway,
-        names.network,
+        name,
       ]);
+    },
+    startHost: async (host) => {
+      await runDevScript('up', host);
+      await checkPrivileges(host.container);
+    },
+    login: async (host, env) => {
+      const token = await readToken(host);
 
-      await runDevScript('up', b);
-      await checkPrivileges(b.container);
+      await runImpWith({ stdin: `${token}\n`, env }, 'login', host.apiUrl, '--name', HOST_B);
+    },
+    resetHost: async (host, prefix) => {
+      const client = await createInstanceClient(host);
 
-      rmSync(names.cliDir, { recursive: true, force: true });
-      mkdirSync(names.cliDir, { recursive: true });
+      await resetBaseline({ client, prefixes: [prefix], dataDir: host.dataDir });
+    },
+  };
+}
 
-      const token = await readToken(b);
+export function buildHostBFixture(
+  options: Readonly<MoveHostsOptions>,
+  prefix: string,
+  deps: Readonly<HostBFixtureDeps> = buildHostBFixtureDeps(),
+): HostBFixture {
+  const names = buildNames();
+  const b = buildHostB(options);
+  const reset = () => deps.resetHost(b, prefix);
 
-      const cliEnv = { XDG_CONFIG_HOME: names.cliDir };
+  return {
+    start: async () => {
+      await deps.removeLeftovers();
+      await deps.createNetwork(names.network, buildMoveNetwork(readOffset()));
+      await deps.startHost(b);
 
-      await runImpWith({ stdin: `${token}\n`, env: cliEnv }, 'login', b.apiUrl, '--name', HOST_B);
+      rmSync(deps.cliDir, { recursive: true, force: true });
+      mkdirSync(deps.cliDir, { recursive: true });
+
+      await deps.login(b, { XDG_CONFIG_HOME: deps.cliDir });
 
       // what an earlier, killed run left on B
       await reset();
     },
     reset,
     stop: async () => {
-      await removeMoveLeftovers();
+      await deps.removeLeftovers();
 
-      rmSync(names.cliDir, { recursive: true, force: true });
+      rmSync(deps.cliDir, { recursive: true, force: true });
     },
   };
 }
