@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import {
   createInstanceClient,
@@ -14,6 +15,7 @@ import {
   waitForExec,
   writeGuestFile,
 } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
 import { removeImageIfPresent, removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
@@ -42,7 +44,7 @@ test('it copies a running imp into a template whose copies each get their own id
 
   await runImp('new', source, '--image', resolveImageName('e2e-git'), '--memory', '512');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, source));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
 
   await waitForExec(source);
   await holdImp(source);
@@ -62,7 +64,7 @@ test('it copies a running imp into a template whose copies each get their own id
   // the source is running: impd freezes it around the clone
   await runImp('template', 'create', source, template);
 
-  ctx.stack.defer(() => removeImageIfPresent(ctx.client, template));
+  registerRemoval(ctx.stack, config.keep, () => removeImageIfPresent(ctx.client, template));
 
   const templates = await runImp('template', 'ls');
 
@@ -71,11 +73,11 @@ test('it copies a running imp into a template whose copies each get their own id
 
   await runImp('new', first, '--image', template, '--memory', '512');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, first));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
   await runImp('new', second, '--image', template, '--memory', '512');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, second));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
 
   await waitForExec(first);
   await waitForExec(second);

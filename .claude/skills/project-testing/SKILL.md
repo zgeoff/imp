@@ -206,12 +206,21 @@ container or SSH key a suite file made.
 A journey file releases what it makes itself, in the order the scenario needs: its `setupTest()`
 creates one `AsyncDisposableStack`, registers `onTestFinished(() => stack.disposeAsync())`, and
 returns it with the run's client (`createInstanceClient`) and the suite's prefix (`readSuitePrefix`
-in `suites.ts`). The test defers each release into the stack on the line after the act that made the
-thing: `removeImpIfPresent(client, name)` after `imp new`, before the exec wait, and
+in `suites.ts`). The test registers each removal on the line after the act that made the thing, with
+`registerRemoval(stack, config.keep, remove)` (`register-removal.ts`):
+`removeImpIfPresent(client, name)` after `imp new`, before the exec wait, and
 `removeImageIfPresent(client, name)` after `imp template create` (both in `reset-baseline.ts`), so
 an imp goes before the template it boots. Each passes over a name the journey already removed and
-throws on any other refusal; `reset-baseline.test.ts` checks both against the in-process impd. That
-release runs with `--keep` too; `--keep` skips only the harness's resets and end-of-run cleanup.
+throws on any other refusal; `reset-baseline.test.ts` checks both against the in-process impd. Under
+`--keep` (`E2E_KEEP=1`) `registerRemoval` defers nothing, so the journey's imps and images stay, as
+the harness's resets and end-of-run cleanup also skip; other releases, such as a proxy process or a
+held socket, still run.
+
+A burst of connections past a guest server's accept backlog (busybox `httpd` on `e2e-tiny`) leaves
+some that the agent's dial completed but the server never accepted; the guest kernel logs
+`Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
+`the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
+`nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
 `templates`, `offsets` and the four `proxy-*` files work this way. The other suite files still read
 their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
 rely on the harness's reset after them.

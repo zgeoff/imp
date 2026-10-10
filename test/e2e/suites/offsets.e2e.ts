@@ -1,10 +1,12 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
+import { config } from '../lib/config';
 import { openSessionSocket, requireOutput, requireSessionError } from '../lib/exec-socket';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
 import { stopFirecrackerHard } from '../lib/instance';
+import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
@@ -44,7 +46,7 @@ test('it resumes session output from the offset a client saw, and names the gap,
 
   await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, name));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
 

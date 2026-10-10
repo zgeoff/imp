@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import * as z from 'zod';
 import { config } from './config';
+import { buildFirecrackerPgrepArgv, readFirecrackerPids } from './firecracker-pids';
 
 // the harness drives scripts/dev.sh and scripts/imp from this checkout
 export const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
@@ -250,7 +251,7 @@ export async function readImpdLoggedMs(text: string): Promise<number | null> {
 
 // Firecracker's argv holds the imp's directory (imps/<id>/run/api.sock)
 export async function checkFirecrackerRunning(id: string): Promise<boolean> {
-  const result = await runInContainer(['pgrep', '-f', `firecracker.*imps/${id}/`]);
+  const result = await runInContainer(buildFirecrackerPgrepArgv(id));
 
   return result.exitCode === 0;
 }
@@ -258,13 +259,9 @@ export async function checkFirecrackerRunning(id: string): Promise<boolean> {
 // SIGKILL to the imp's Firecracker, as a crash would end it; throws when
 // none runs
 export async function stopFirecrackerHard(id: string): Promise<void> {
-  const found = await runInContainer(['pgrep', '-f', `firecracker.*imps/${id}/`]);
+  const found = await runInContainer(buildFirecrackerPgrepArgv(id));
 
-  const pids = found.stdout.split('\n').filter((pid) => pid !== '');
-
-  if (pids.length === 0) {
-    throw new Error(`no firecracker for imp ${id}`);
-  }
+  const pids = readFirecrackerPids(id, found.stdout);
 
   await runChecked(['docker', 'exec', instance.container, 'kill', '-9', ...pids]);
 }

@@ -1,9 +1,11 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
 import { GUEST_SERVERS, PAGE, readPage, sendRequest, startProxy } from '../lib/imp-proxy';
 import { waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
@@ -29,7 +31,7 @@ test('it forwards a local port on both loopbacks to the http service in the imp'
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, name));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
 
@@ -57,7 +59,7 @@ test('it forwards to a server that listens on the guest’s loopback only', asyn
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, name));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
   await runShellInImp(name, GUEST_SERVERS);
@@ -80,7 +82,7 @@ test('it delivers the reply to a client that half-closes', async () => {
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, name));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
   await runShellInImp(name, GUEST_SERVERS);
@@ -107,7 +109,7 @@ test('it exits 0 when interrupted', async () => {
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, name));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
 

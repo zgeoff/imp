@@ -47,6 +47,17 @@ test('#readSuitePrefix rejects a name that no suite has', () => {
   expect(() => readSuitePrefix('nope')).toThrowWithMessage(Error, 'no suite named nope');
 });
 
+test('#SUITES gives every suite at least one journey', () => {
+  expect(SUITES).toSatisfyAll((suite: Readonly<Suite>) => listJourneys(suite).length > 0);
+});
+
+test('#SUITE_SETS runs scale before restart in the acceptance set', () => {
+  const acceptance = SUITE_SETS['acceptance'] ?? [];
+
+  expect(acceptance.indexOf('scale')).toBeGreaterThanOrEqual(0);
+  expect(acceptance.indexOf('restart')).toBe(acceptance.indexOf('scale') + 1);
+});
+
 test('#SUITES runs every journey file under test/e2e/suites exactly once', () => {
   const suitesDir = join(import.meta.dir, '..', 'suites');
 

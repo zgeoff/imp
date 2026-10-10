@@ -1,10 +1,12 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
 import { openHeldSocket, startProxy } from '../lib/imp-proxy';
 import { waitForExec } from '../lib/imps';
 import { instance, runChecked } from '../lib/instance';
+import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
@@ -30,7 +32,7 @@ test('it reports AGENT_OUTDATED and closes the connection when the imp’s agent
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  ctx.stack.defer(() => removeImpIfPresent(ctx.client, name));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
 

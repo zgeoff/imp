@@ -113,6 +113,28 @@ export async function openHeldSocket(port: number): Promise<HeldSocket> {
   return { socket, closed: closed.promise };
 }
 
+// writes `text` on a held socket and resolves with the first reply the far
+// end sends; rejects when the socket closes first
+export function sendOverHeldSocket(held: Readonly<HeldSocket>, text: string): Promise<string> {
+  const reply = Promise.withResolvers<string>();
+
+  if (held.socket.destroyed) {
+    return Promise.reject(new Error('the held socket closed before a reply'));
+  }
+
+  held.socket.once('data', (chunk: Buffer) => {
+    reply.resolve(chunk.toString());
+  });
+
+  held.socket.once('close', () => {
+    reply.reject(new Error('the held socket closed before a reply'));
+  });
+
+  held.socket.write(text);
+
+  return reply.promise;
+}
+
 export async function readPage(url: string): Promise<string> {
   const response = await fetch(url);
 
