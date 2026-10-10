@@ -103,7 +103,12 @@ test('it finds a key that the file lists', async () => {
 
   const keys = createAuthorizedKeys(ctx.keysPath, () => {});
 
-  expect(keys.findKey(blob)).toMatchObject({ type: 'ssh-ed25519', comment: 'me' });
+  expect(keys.findKey(blob)).toStrictEqual({
+    type: 'ssh-ed25519',
+    blob,
+    comment: 'me',
+    verify: expect.toBeFunction(),
+  });
 });
 
 test('it finds no key that the file does not list', async () => {
@@ -209,7 +214,12 @@ test('it reads the file again once it changes', async () => {
   writeFileSync(ctx.keysPath, `${key}\n`, { mode: 0o600 });
   utimesSync(ctx.keysPath, later, later);
 
-  expect(keys.findKey(blob)).not.toBeNull();
+  expect(keys.findKey(blob)).toStrictEqual({
+    type: 'ssh-ed25519',
+    blob,
+    comment: '',
+    verify: expect.toBeFunction(),
+  });
 });
 
 test('it reads the file once while it does not change', async () => {

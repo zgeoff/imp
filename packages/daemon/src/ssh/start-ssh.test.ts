@@ -4,13 +4,17 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { Client } from 'ssh2';
 import { createApiAudit } from '../audit/api-audit';
 import { createRevocations } from '../auth/revocations';
+import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
+import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
 import { buildStubSshBackend } from '../test-utils/build-stub-ssh-backend';
 import { createTestDatabase } from '../test-utils/create-test-database';
+import { openSshChannel } from '../test-utils/open-ssh-channel';
 import { openSshClient } from '../test-utils/open-ssh-client';
 import { createAuthorizedKeys } from './authorized-keys';
 import { createEd25519Key, readFingerprint } from './host-key';
@@ -28,6 +32,7 @@ async function setupTest() {
   const database = await createTestDatabase();
 
   const logs: string[] = [];
+  const ssh = buildStubSshBackend();
 
   mkdirSync(sshDir, { mode: 0o700 });
 
@@ -36,13 +41,14 @@ async function setupTest() {
     sshDir,
     db: database.db,
     logs,
+    ssh,
     deps: {
       audit: createApiAudit({ db: database.db, now: Date.now, log: () => {} }),
       db: database.db,
       authorizedKeys: createAuthorizedKeys(join(sshDir, 'authorized_keys'), () => {}),
       tokens: { findSshKey: () => null },
       revocations: createRevocations(),
-      imps: buildStubSshBackend().backend,
+      imps: ssh.backend,
       log: (message: string) => {
         logs.push(message);
       },
@@ -159,6 +165,81 @@ test('it logs a key from authorized_keys in to an imp in the database', async ()
   const client = await login;
 
   expect(client).toBeInstanceOf(Client);
+});
+
+test('it audits a command an ssh login opens as the key that logged in', async () => {
+  const ctx = await setupTest();
+
+  const key = createEd25519Key();
+
+  // the image the imp row refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  await createImp(ctx.db, {
+    name: 'dev',
+    imageId: image.id,
+    vcpus: 2,
+    memoryMib: 2048,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
+
+  // the running imp the stub agent answers for
+  ctx.ssh.putImp(buildMockImpRecord({ name: 'dev' }));
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  writeFileSync(join(ctx.sshDir, 'authorized_keys'), `${key.public} me@laptop\n`, {
+    mode: 0o600,
+  });
+
+  const gateway = await startSsh({
+    ...ctx.deps,
+    config: { dataDir: ctx.dataDir, sshPort: 0, sshAuthorizedKeys: true },
+  });
+
+  invariant(gateway);
+  onTestFinished(() => gateway.stop());
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: gateway.port,
+    username: 'dev',
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  await opened.result;
+
+  const calls = await waitFor(async () => {
+    const listed = await listApiCalls(ctx.db, 'dev', 10, null);
+
+    expect(listed).toHaveLength(1);
+
+    return listed;
+  });
+
+  expect(calls).toStrictEqual([
+    {
+      at: expect.toBeValidDate(),
+      procedure: 'ssh',
+      actor: 'ssh',
+      actorName: 'key me@laptop',
+      imp: 'dev',
+      outcome: 'ok',
+      durationMs: expect.toBeNumber(),
+    },
+  ]);
 });
 
 test('it refuses a key from authorized_keys when IMP_SSH_AUTHORIZED_KEYS is false', async () => {

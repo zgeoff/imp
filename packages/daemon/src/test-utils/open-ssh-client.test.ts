@@ -1,6 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { Client, Server } from 'ssh2';
+import { z } from 'zod';
 import { createEd25519Key } from '../ssh/host-key';
 import { openSshClient } from './open-ssh-client';
 
@@ -36,11 +37,8 @@ async function setupTest() {
     server.close();
   });
 
-  const address = server.address();
-
-  if (typeof address !== 'object' || address === null) {
-    throw new TypeError('the server has no TCP address');
-  }
+  // a server listening on a TCP port reports an object with its port
+  const address = z.object({ port: z.number() }).parse(server.address());
 
   return { port: address.port, closes };
 }

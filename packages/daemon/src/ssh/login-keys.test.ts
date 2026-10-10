@@ -43,9 +43,21 @@ test('it shows a file key with no comment by its type', () => {
     file: { findKey: () => key, isListed: () => true },
   });
 
-  expect(keys.findKey(key.blob)?.caller).toMatchObject({
-    name: 'key ssh-ed25519',
-    display: 'ssh-ed25519',
+  expect(keys.findKey(key.blob)).toStrictEqual({
+    key,
+    keyId: null,
+    caller: {
+      kind: 'ssh',
+      name: 'key ssh-ed25519',
+      scope: 'manage',
+      imps: null,
+      grantable: [],
+      tokenId: null,
+      grantId: null,
+      expiresAt: null,
+      principal: `key:${formatKeyFingerprint(key.blob)}`,
+      display: 'ssh-ed25519',
+    },
   });
 });
 

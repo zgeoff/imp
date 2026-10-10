@@ -33,7 +33,7 @@ export interface SshGatewayLimits {
 
 // OpenSSH's MaxAuthTries is 6; the keepalive drops a silent client after
 // about 45 s
-const DEFAULT_LIMITS: SshGatewayLimits = {
+export const DEFAULT_LIMITS: SshGatewayLimits = {
   authTimeoutMs: 30_000,
   maxUnauthenticated: 32,
   maxAuthFailures: 6,
