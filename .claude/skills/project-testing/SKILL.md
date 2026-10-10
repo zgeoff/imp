@@ -22,6 +22,8 @@ the rules for writing tests live in the testing skill.
 | Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; root-only tests skip                                            |
 | End to end              | `scripts/test-e2e.sh`                                                  | KVM, Docker; some suites need more (below)                                              |
 | Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host`      | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
+| NixOS module evaluation | `nix build -L --no-link .#checks.x86_64-linux.eval`                    | Nix with flakes                                                                         |
+| NixOS VMs               | `nix build -L --no-link .#checks.x86_64-linux.vm`                      | Nix with `system-features = kvm nixos-test`, KVM with nesting                           |
 | ZFS on a real pool      | `sudo env "PATH=$PATH" scripts/test-zfs.sh`                            | Root, the zfs module, `zpool`                                                           |
 | ZFS on a host, with VMs | `scripts/zfs-host-test.sh`                                             | sudo, Docker, KVM, the zfs module                                                       |
 | Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`        | A small filesystem mounted at `<dir>`                                                   |
@@ -333,6 +335,35 @@ this checkout whatever its `-C` says.
   parents, the pool, file, symlink, data dir and container collisions, a failed `zpool create`, a
   failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
   spaces, and SIGTERM during the create and during the e2e run.
+
+## NixOS
+
+The flake's two checks test `deploy/nixos/module.nix`:
+
+- **`checks.x86_64-linux.eval`** comes from `deploy/nixos/tests/eval.nix`, which returns `cases`
+  (the flake's `tests` output) and `check`. The cases are nix-unit cases, each named `"test …"`,
+  since nix-unit runs only attributes whose names start with `test` and recurses into every other
+  attribute set; each holds the observed value as `expr` and the literal as `expected`. A refusal
+  case expects the module's exact failed assertion messages. The hosts that several cases read sit
+  in the file's `let`; a host that one case reads is written in that case. `check` runs
+  `nix-unit --flake ${self}#tests` inside its build, against a store of its own in the build
+  directory, with `--override-input nixpkgs` pointing at the pinned nixpkgs in the store, as
+  nix-unit's flake-parts module does; nix-unit is the pinned nixpkgs' `pkgs.nix-unit` (2.34.2, built
+  on that nixpkgs' Nix 2.34). Then it builds the generated files (the env writer, the staging
+  scripts, the proxy's run script, bootstrap.sh's ruleset) and greps them under `set -x`; a negative
+  check passes only on grep's exit 1, not on an unreadable file.
+- **`checks.x86_64-linux.vm`** is `deploy/nixos/tests/vm.nix`, one `runNixOSTest` with two nodes,
+  `host` and `own`, and named subtests in the Python driver. The script runs own's scenario first,
+  on its fresh node; then the host's first start; then the checks of that started host, where each
+  scenario that changes the host (the forward rule, the listeners, the proxy stop, IPv6 off and on)
+  restores it and checks the restore; then the rest of the Tailscale join journey, whose steps
+  depend on each other. A dropped connection is `timeout 5`'s exit 124, since every firewall there
+  drops without a reject. The driver's `fail` is kept for a refusal whose cause the subtest checks
+  another way, such as the journal.
+
+`.github/workflows/nix.yml` checks the format with `nix fmt -- --check` and builds each check in its
+own job; the `vm` job opens `/dev/kvm` to the builders. The local `nixfmt` must be the pinned
+nixpkgs' version (1.5.0) for its output to match.
 
 ## CI
 

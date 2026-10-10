@@ -277,15 +277,19 @@ docker exec imp-host imp rm check
 
 `nix flake check` runs two checks:
 
-- `eval` builds the module for ZFS and XFS hosts and checks the units, the kernel settings, the env
-  file's keys and the refusals. It needs no KVM.
+- `eval` evaluates the module for ZFS and XFS hosts and checks the units, the kernel settings and
+  the refusals as named [nix-unit](https://nix-community.github.io/nix-unit/) cases (the flake's
+  `tests` output; nix-unit comes from the pinned nixpkgs). Then it builds the generated files and
+  checks the env file's keys and the scripts in them. It needs no KVM. `nix-unit --flake .#tests`
+  runs the cases alone.
 - `vm` boots two NixOS VMs with the module, as `scripts/test-bootstrap.sh --stub` does for
   `bootstrap.sh`. One has a ZFS pool on a second disk and a stand-in image that runs the real
   `tailscale-up.sh` against a fake `tailscale`. It checks the env file, the kernel settings, that
   the host has no imp firewall rules, and the three ways the node comes up: a first join with the
   key, a restart from good state with no key, and a join again when the saved node needs a login.
   The other has `hostFirewall = "own"`: SSH connects through the imp table, and another port does
-  not. It needs KVM, with nesting, and boots no imp.
+  not. It needs KVM, with nesting, and boots no imp. Its script waits on conditions, never a fixed
+  delay, and each scenario that changes the running host restores it and checks the restore.
 
 Without Nix on the machine, run them in a container, with `/dev/kvm` and no `--privileged`; the
 store stays in a Docker volume:
