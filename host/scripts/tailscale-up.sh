@@ -1,16 +1,21 @@
 #!/bin/bash
-# Join the tailnet as tag:imp (docs/guides/tailscale.md). Idempotent.
+# Join the tailnet as tag:imp, or IMP_TAILSCALE_TAGS (docs/guides/tailscale.md). Idempotent.
 # Runs inside the host container. With saved node state it starts tailscaled
 # from that state first, so a joined node stays on the tailnet without a key
 # (deploy/bootstrap.sh blanks it). Only when the saved node does not reach
 # Running (logged out, or deleted by the control plane after a long time
 # offline: NeedsLogin) does it join again, with the key if there is one.
-# With neither state nor key it does nothing.
+# With neither state nor key it does nothing. Every path that ends with a
+# Running node checks its tags against IMP_TAILSCALE_TAGS: a node with other
+# tags joins again with the key, or goes down and fails without one, so an
+# e2e node never stays on a saved tag:imp identity.
 #
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)
 #      IMP_TAILSCALE_AUTHKEY_FILE  a file that holds the key instead (the NixOS module
 #                                mounts one); read by tailscale itself, never by this script
 #      IMP_TAILSCALE_HOSTNAME    tailnet hostname (default imp)
+#      IMP_TAILSCALE_TAGS        tags to advertise, comma-separated (default tag:imp); the
+#                                e2e harness sets tag:imp-e2e
 #      IMP_TAILSCALE_STATE_DIR   node state (default /var/lib/imp/tailscale); "mem" keeps it in memory
 #      IMP_DNS                   resolvers used if resolv.conf points into the tailnet,
 #                                comma-separated as impd reads it (default "1.1.1.1,8.8.8.8")
@@ -19,6 +24,8 @@ set -euo pipefail
 hostname=${IMP_TAILSCALE_HOSTNAME:-imp}
 state_dir=${IMP_TAILSCALE_STATE_DIR:-/var/lib/imp/tailscale}
 sock=/var/run/tailscale/tailscaled.sock
+# a test points this at its own file
+resolv_conf=${IMP_RESOLV_CONF:-/etc/resolv.conf}
 
 key_file=${IMP_TAILSCALE_AUTHKEY_FILE:-}
 # A missing bind-mount source makes docker create an empty directory there.
@@ -30,17 +37,45 @@ has_key=
 [ -n "${TAILSCALE_AUTHKEY:-}" ] || [ -n "$key_file" ] && has_key=1
 has_state=
 [ "$state_dir" != mem ] && [ -s "$state_dir/tailscaled.state" ] && has_state=1
-if [ -z "$has_key" ] && [ -z "$has_state" ]; then
-  echo "tailscale-up: no auth key and no saved node state, skipping"
-  exit 0
-fi
-
 ts() { timeout 90 tailscale --socket="$sock" "$@"; }
 # alive: tailscaled runs. A zombie does not count: PID 1 may not reap it.
 # pgrep matches zombies too, so read the process state from ps instead.
 # shellcheck disable=SC2009
 alive() { ps -C tailscaled -o stat= | grep -qv '^Z'; }
 backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq -r '.BackendState // empty'; }
+
+# tags_differ: IMP_TAILSCALE_TAGS names tags, and the running node holds
+# others; sets node_tags and wanted_tags
+tags_differ() {
+  [ -n "${IMP_TAILSCALE_TAGS:-}" ] || return 1
+  node_tags=$(ts status --json | jq -r '(.Self.Tags // []) | sort | join(",")')
+  wanted_tags=$(tr ',' '\n' <<<"$IMP_TAILSCALE_TAGS" | sed '/^$/d' | LC_ALL=C sort | paste -sd, -)
+  [ "$node_tags" != "$wanted_tags" ]
+}
+
+# refuse: take the node off the tailnet and say why. A failed run does not
+# stop tailscaled (the entrypoint goes on without the tailnet), so a node
+# with the wrong tags must not stay connected.
+refuse() {
+  echo "tailscale-up: $1" >&2
+  ts down >/dev/null 2>&1 || true
+}
+
+if [ -z "$has_key" ] && [ -z "$has_state" ]; then
+  # a tailscaled that is up already, with its state in memory, is checked
+  # too; one that is not Running yet cannot be, so it goes down
+  if [ -n "${IMP_TAILSCALE_TAGS:-}" ] && alive; then
+    if [ "$(backend)" != Running ]; then
+      refuse "the node in memory is not Running, so its tags are unchecked; taking it down"
+      exit 1
+    elif tags_differ; then
+      refuse "the node holds ${node_tags:-no tags}, not $wanted_tags; give an auth key to join again"
+      exit 1
+    fi
+  fi
+  echo "tailscale-up: no auth key and no saved node state, skipping"
+  exit 0
+fi
 
 # Docker copies the host's resolv.conf. If the host runs Tailscale with
 # MagicDNS, that is 100.100.100.100, which our own tailscaled captures; with
@@ -49,11 +84,11 @@ backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq 
 # Docker's embedded DNS, 127.0.0.11, which forwards from the host's network
 # namespace ("ExtServers: [host(...)]"), so our tailscaled never sees those
 # lookups and nothing needs changing.
-if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' /etc/resolv.conf; then
+if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' "$resolv_conf"; then
   dns=${IMP_DNS:-1.1.1.1,8.8.8.8}
   # Commas are the impd form; spaces still work.
   read -ra resolvers <<<"${dns//,/ }"
-  printf 'nameserver %s\n' "${resolvers[@]}" >/etc/resolv.conf
+  printf 'nameserver %s\n' "${resolvers[@]}" >"$resolv_conf"
   echo "tailscale-up: resolv.conf pointed into the tailnet; now ${resolvers[*]}"
 fi
 
@@ -86,6 +121,7 @@ done
 
 # join: log in with the key. The key goes through a file so it never shows
 # in argv (ps, /proc).
+reauth=()
 join() {
   local auth=$key_file rc=0
   if [ -z "$auth" ]; then
@@ -93,12 +129,33 @@ join() {
     chmod 0600 "$auth"
     printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
   fi
-  ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
-    --advertise-tags=tag:imp --accept-dns=false --timeout=60s || rc=$?
+  ts up --reset "${reauth[@]}" --auth-key="file:$auth" --hostname="$hostname" \
+    --advertise-tags="${IMP_TAILSCALE_TAGS:-tag:imp}" --accept-dns=false --timeout=60s || rc=$?
   [ -n "$key_file" ] || rm -f "$auth"
   if [ "$rc" != 0 ]; then
     echo "tailscale-up: tailscale up failed with the key. A single-use key that was used already, an" \
       "expired or revoked key, or no route to the control plane; give a new key to join" >&2
+    return 1
+  fi
+}
+
+# ensure_tags: the Running node holds the tags asked for. Otherwise join
+# again with the key, which tailscale needs a new login for, or refuse
+# without one.
+ensure_tags() {
+  tags_differ || return 0
+  if [ -z "$has_key" ]; then
+    refuse "the node holds ${node_tags:-no tags}, not $wanted_tags; give an auth key to join again"
+    return 1
+  fi
+  echo "tailscale-up: the node holds ${node_tags:-no tags}, not $wanted_tags; joining again with the key"
+  reauth=(--force-reauth)
+  if ! join; then
+    refuse "the node did not join again as $wanted_tags"
+    return 1
+  fi
+  if tags_differ; then
+    refuse "the node holds ${node_tags:-no tags} after joining again, not $wanted_tags"
     return 1
   fi
 }
@@ -108,18 +165,20 @@ needs_login() { case $1 in NeedsLogin | NeedsMachineAuth | Stopped) return 0 ;; 
 
 # wait_later: the saved node is still coming up, as on a boot with no
 # network yet. tailscaled keeps trying by itself; this only joins with the
-# key if the node turns out to need a login. Every 5 s, for 30 min.
+# key if the node turns out to need a login, and checks the tags once it is
+# Running. Every 5 s, for 30 min.
 wait_later() {
   local state
   for _ in $(seq 360); do
     state=$(backend)
     if [ "$state" = Running ]; then
       echo "tailscale-up: the saved node is Running"
-      return 0
+      ensure_tags
+      return
     elif needs_login "$state"; then
       if [ -n "$has_key" ]; then
         echo "tailscale-up: the saved node is $state; joining again with the key"
-        join
+        join && ensure_tags
         return
       fi
       echo "tailscale-up: the saved node is $state; give an auth key to join again" >&2
@@ -127,6 +186,11 @@ wait_later() {
     fi
     sleep 5
   done
+  # a node that is never checked must not come up later with other tags
+  if [ -n "${IMP_TAILSCALE_TAGS:-}" ]; then
+    refuse "the saved node is still ${state:-unknown} after 30 min; taking it down, since its tags are unchecked"
+    return 1
+  fi
   echo "tailscale-up: the saved node is still ${state:-unknown} after 30 min; tailscaled keeps trying" >&2
 }
 
@@ -173,8 +237,15 @@ fi
 
 for _ in $(seq 100); do [ "$(backend)" = Running ] && break; sleep 0.1; done
 if [ "$(backend)" != Running ]; then
-  echo "tailscale-up: backend state $(backend), not Running" >&2
+  state=$(backend)
+  # it may come up later, with its tags unchecked
+  if [ -n "${IMP_TAILSCALE_TAGS:-}" ]; then
+    refuse "backend state ${state:-unknown}, not Running; taking it down, since its tags are unchecked"
+    exit 1
+  fi
+  echo "tailscale-up: backend state ${state:-unknown}, not Running" >&2
   exit 1
 fi
+ensure_tags || exit 1
 
 ts status --json | jq -r '.Self | "tailscale-up: \(.TailscaleIPs[0]) \(.DNSName | rtrimstr("."))"'

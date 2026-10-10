@@ -14,7 +14,7 @@ import {
   sendTailnetRpc,
   waitForTailnetIp,
 } from '../lib/tailnet';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 
 // Tailnet identity rules (docs/guides/tailscale.md): a member that a rule
 // names reaches impd's API with no token, at the rule's scope. The suite's
@@ -32,9 +32,9 @@ async function setupTest() {
 }
 
 const localStatus = await readLocalTailscaleStatus();
-const authKey = await readTailscaleAuthKey();
 
-const ready = isTailnetReady(localStatus?.BackendState ?? null, authKey);
+const hasKey = hasTailscaleE2EKey();
+const ready = isTailnetReady(localStatus?.BackendState ?? null, hasKey);
 
 if (!ready && !config.acceptance) {
   console.log(`    ${TAILNET_NOT_READY}; skipped`);
@@ -46,7 +46,7 @@ test.skipIf(!ready && !config.acceptance)(
   async () => {
     const ctx = await setupTest();
 
-    requireTailnetReady(localStatus?.BackendState ?? null, authKey);
+    requireTailnetReady(localStatus?.BackendState ?? null, hasKey);
 
     const name = `${ctx.prefix}rule`;
 

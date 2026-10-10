@@ -13,7 +13,7 @@ import {
   readTailnetBody,
   waitForTailnetIp,
 } from '../lib/tailnet';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
 // Per-imp tailnet names need an OAuth client with the services scope and the
@@ -35,10 +35,11 @@ const NAMES_BLOCKED =
   'per-imp names need the Tailscale Services OAuth client and tailnet policy; set IMP_E2E_TAILNET_NAMES=1 once they exist';
 
 const localStatus = await readLocalTailscaleStatus();
-const authKey = await readTailscaleAuthKey();
+
+const hasKey = hasTailscaleE2EKey();
 
 const namesReady =
-  isTailnetReady(localStatus?.BackendState ?? null, authKey) &&
+  isTailnetReady(localStatus?.BackendState ?? null, hasKey) &&
   process.env['IMP_E2E_TAILNET_NAMES'] === '1';
 
 if (!namesReady) {
