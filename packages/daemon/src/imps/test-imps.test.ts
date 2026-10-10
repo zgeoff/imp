@@ -173,12 +173,29 @@ test('#buildTestApp serves the API over the harness', async () => {
   expect(imps.map((imp) => imp.name)).toStrictEqual(['dev']);
 });
 
-test('#setupImpTest moves a frozen clock only when the test advances it', async () => {
+test('#setupImpTest moves a frozen clock when the test advances it', async () => {
   const ctx = await setupImpTest({ frozenClockMs: 1_000_000 });
 
   ctx.advance(500);
 
   expect(ctx.now()).toBe(1_000_500);
+});
+
+test('#setupImpTest moves a frozen clock by the pauses of a young guest wait', async () => {
+  const ctx = await setupImpTest({
+    env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' },
+    frozenClockMs: 1_000_000,
+  });
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.imps.createImp({ name: 'dev' });
+
+  // 100 ms old against a 300 ms minimum
+  ctx.fake.setGuestUptime(100);
+
+  await ctx.imps.sleepImp('dev');
+
+  expect(ctx.now()).toBe(1_000_200);
 });
 
 test('#findBrokenInvariants finds nothing wrong with a running imp and its VM', async () => {

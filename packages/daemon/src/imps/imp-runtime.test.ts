@@ -10,14 +10,15 @@ import { buildImpPaths } from '../storage/data-layout';
 import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { createImpTest, waitForOutcome } from './test-imps';
+import type { ImpTestOptions } from './test-imps';
 
-async function setupTest(options: Readonly<{ env?: Readonly<Record<string, string>> }> = {}) {
+async function setupTest(options: Pick<ImpTestOptions, 'env' | 'frozenClockMs'> = {}) {
   // one stack: an agent a test starts closes before the harness
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const harness = await createImpTest(stack, { env: options.env ?? {} });
+  const harness = await createImpTest(stack, options);
 
   // every imp boots from an image row
   await harness.createTestImage('ubuntu');
@@ -124,11 +125,15 @@ test('it skips a background sleep of an imp whose lock is taken', async () => {
 });
 
 test('it waits for a young guest to reach the minimum uptime before it sleeps it', async () => {
-  const ctx = await setupTest({ env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' } });
+  // a frozen clock: only the wait's own pauses move it
+  const ctx = await setupTest({
+    env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' },
+    frozenClockMs: Date.parse('2026-10-09T12:00:00Z'),
+  });
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  // 100 ms old against a 300 ms minimum: the wait lasts at least 200 ms
+  // 100 ms old against a 300 ms minimum: the wait lasts 200 ms
   ctx.fake.setGuestUptime(100);
 
   const asleep = await ctx.imps.sleepImp('dev');
@@ -138,7 +143,7 @@ test('it waits for a young guest to reach the minimum uptime before it sleeps it
     .find((ms) => ms !== undefined);
 
   expect(asleep.state).toBe('sleeping');
-  expect(Number(waitedMs)).toBeGreaterThanOrEqual(200);
+  expect(waitedMs).toBe('200');
 });
 
 // the guest needs ten minutes more, so only a give-way ends the wait within
