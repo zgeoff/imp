@@ -239,7 +239,11 @@ test('it reports a malformed binary frame instead of throwing', async () => {
 
   session.handleMessage(new Uint8Array([]));
 
-  expect(socket.sent.at(-1)).toMatchObject({ type: 'error' });
+  expect(socket.sent.at(-1)).toStrictEqual({
+    type: 'error',
+    message: 'exec frame has an unknown channel byte: undefined',
+  });
+
   expect(socket.closes).toStrictEqual([1011]);
 });
 
@@ -513,10 +517,10 @@ test("it acks none of a tool's stdin before the stream has it on its way", async
     expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
   });
 
-  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(3)));
-  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(2)));
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('abc')));
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('de')));
 
-  expect(fake.input).toHaveLength(2);
+  expect(fake.input).toStrictEqual(['stdin:abc', 'stdin:de']);
   expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
 });
 
@@ -577,14 +581,24 @@ test("it takes a tool's stdin up to the window and a frame past it", async () =>
     expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
   });
 
+  // each frame repeats its own letter, so the input shows every frame in order
   for (let index = 0; index < frames; index++) {
     session.handleMessage(
-      encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES)),
+      encodeExecFrame(
+        EXEC_CHANNELS.stdin,
+        new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES).fill(0x61 + index),
+      ),
     );
   }
 
   expect(socket.closes).toStrictEqual([]);
-  expect(fake.input).toHaveLength(frames);
+
+  expect(fake.input).toStrictEqual(
+    Array.from(
+      'abcdefghijklmnopq',
+      (letter) => `stdin:${letter.repeat(EXEC_MAX_STDIN_FRAME_BYTES)}`,
+    ),
+  );
 });
 
 test('it cuts off a tool client that sends stdin past the window', async () => {
@@ -611,17 +625,28 @@ test('it cuts off a tool client that sends stdin past the window', async () => {
     expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
   });
 
+  // each frame repeats its own letter, so the input shows every frame in order
   for (let index = 0; index < frames; index++) {
     session.handleMessage(
-      encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES)),
+      encodeExecFrame(
+        EXEC_CHANNELS.stdin,
+        new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES).fill(0x61 + index),
+      ),
     );
   }
 
-  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(1)));
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('z')));
 
   expect(socket.sent.at(-1)).toStrictEqual({ type: 'error', message: 'stdin past the window' });
   expect(socket.closes).toStrictEqual([1011]);
-  expect(fake.input.filter((entry) => entry.startsWith('stdin:'))).toHaveLength(frames);
+
+  expect(fake.input).toStrictEqual([
+    ...Array.from(
+      'abcdefghijklmnopq',
+      (letter) => `stdin:${letter.repeat(EXEC_MAX_STDIN_FRAME_BYTES)}`,
+    ),
+    'close',
+  ]);
 });
 
 test("it neither acks nor windows a plain exec's stdin", async () => {

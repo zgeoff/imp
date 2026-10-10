@@ -40,3 +40,9 @@ test('it applies overrides on top of the defaults', () => {
     log: { enabled: true },
   });
 });
+
+test('it starts the offset at an overridden end', () => {
+  const output = buildMockSessionOutput({ end: 100 });
+
+  expect(output.offset).toBe(100);
+});

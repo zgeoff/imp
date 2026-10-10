@@ -72,6 +72,39 @@ test('it ends without an exit when the connection drops', async () => {
   expect(events).toStrictEqual([{ type: 'stdout', data: new TextEncoder().encode('partial') }]);
 });
 
+test('it ends a pending read once impd closes the stream', async () => {
+  const fake = buildStubAgentExecStream();
+  const reading = Array.fromAsync(fake.stream.events());
+
+  fake.stream.close();
+
+  const events = await reading;
+
+  expect(events).toStrictEqual([]);
+});
+
+test('it hands over the events fed before a close, then ends', async () => {
+  const fake = buildStubAgentExecStream();
+
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('before') });
+  fake.stream.close();
+
+  const events = await Array.fromAsync(fake.stream.events());
+
+  expect(events).toStrictEqual([{ type: 'stdout', data: new TextEncoder().encode('before') }]);
+});
+
+test('it drops an event fed after the connection ended', async () => {
+  const fake = buildStubAgentExecStream();
+
+  fake.drop();
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('late') });
+
+  const events = await Array.fromAsync(fake.stream.events());
+
+  expect(events).toStrictEqual([]);
+});
+
 test('it records each call made on the stream in order', () => {
   const fake = buildStubAgentExecStream();
 

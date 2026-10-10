@@ -1,5 +1,7 @@
+import { ORPCError } from '@orpc/server';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import { buildInvalidStateError } from '../api-errors';
 import type { ExecBackend } from '../exec/exec-session';
 
 type StubOpen =
@@ -19,9 +21,9 @@ interface StubExecBackendOptions {
   readonly attach?: ExecStream | Error;
 }
 
-// The imp service behind an `/exec` socket: `opens` records each open, which
-// answers with the given stream or error, or rejects as a stopped imp does.
-// `activity` records each imp a session reports once its stream ends.
+// The imp service behind an `/exec` socket: `opens` records each open, and
+// `activity` each imp a session reports once its stream ends. An open given
+// no outcome is refused as a stopped imp's unwoken attach (see openOutcome).
 export function buildStubExecBackend(options: StubExecBackendOptions = {}) {
   const opens: StubOpen[] = [];
   const activity: string[] = [];
@@ -30,12 +32,12 @@ export function buildStubExecBackend(options: StubExecBackendOptions = {}) {
     openExec: (name, request, feature) => {
       opens.push({ kind: 'exec', name, request, feature });
 
-      return openOutcome(options.exec, name);
+      return openOutcome(options.exec);
     },
     openAttach: (name, request) => {
       opens.push({ kind: 'attach', name, request });
 
-      return openOutcome(options.attach, name);
+      return openOutcome(options.attach);
     },
     recordActivity: (name) => {
       activity.push(name);
@@ -47,9 +49,19 @@ export function buildStubExecBackend(options: StubExecBackendOptions = {}) {
   return { backend, opens, activity };
 }
 
-function openOutcome(outcome: ExecStream | Error | undefined, name: string): Promise<ExecStream> {
+function openOutcome(outcome: ExecStream | Error | undefined): Promise<ExecStream> {
+  // imp-runtime's buildNotAwakeError, with no cold boots on record; the real
+  // service boots a stopped imp for an exec, so there it is any typed refusal
   if (outcome === undefined) {
-    return Promise.reject(new Error(`no stream for imp ${name}`));
+    const refused = buildInvalidStateError('stopped', ['running'], 'attach without a wake to');
+
+    return Promise.reject(
+      new ORPCError('INVALID_STATE', {
+        status: refused.status,
+        message: refused.message,
+        data: { ...refused.data, coldBoots: [] },
+      }),
+    );
   }
 
   return outcome instanceof Error ? Promise.reject(outcome) : Promise.resolve(outcome);

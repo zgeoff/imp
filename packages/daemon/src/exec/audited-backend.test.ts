@@ -73,7 +73,12 @@ test('it audits the tar tool as cp', async () => {
   await audited.openExec('dev', { argv: ['imp-agent', 'tar'], tty: false }, 'cp');
 
   expect(record).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ procedure: 'cp' }),
+    {
+      procedure: 'cp',
+      actor: { kind: 'dashboard', name: 'laptop' },
+      impName: 'dev',
+      startedAt: 5,
+    },
     null,
   );
 });
@@ -120,7 +125,12 @@ test('it audits an exec in the agent as exec-agent', async () => {
   await audited.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec');
 
   expect(record).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ procedure: 'exec-agent' }),
+    {
+      procedure: 'exec-agent',
+      actor: { kind: 'token', name: 'admin' },
+      impName: 'dev',
+      startedAt: 5,
+    },
     null,
   );
 });

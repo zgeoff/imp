@@ -3,155 +3,150 @@ import { createRevocations } from '../auth/revocations';
 import { buildMockCaller } from '../test-utils/build-mock-caller';
 import { createExecTickets, isCallerLive } from './exec-tickets';
 
-function setupTest() {
-  const clock = { at: 1_000_000 };
-
-  const removedTokenIds = new Set<string>();
-
-  const tickets = createExecTickets({
-    now: () => clock.at,
-    isLive: (caller) => caller.tokenId === null || !removedTokenIds.has(caller.tokenId),
-  });
-
-  return { clock, removedTokenIds, tickets };
-}
-
 test('#issue keeps the caller that asked for the ticket', () => {
-  const ctx = setupTest();
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
   const caller = buildMockCaller({ kind: 'dashboard' });
-  const issued = ctx.tickets.issue('dev', caller);
+  const issued = tickets.issue('dev', caller);
 
-  expect(ctx.tickets.redeem(issued.ticket)).toStrictEqual({ name: 'dev', caller });
+  expect(tickets.redeem(issued.ticket)).toStrictEqual({ name: 'dev', caller });
 });
 
 test('#issue sets the ticket to expire 30 seconds after it is issued', () => {
-  const ctx = setupTest();
-  const issued = ctx.tickets.issue('dev', buildMockCaller());
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
+  const issued = tickets.issue('dev', buildMockCaller());
 
   expect(issued.expiresAt).toStrictEqual(new Date(1_030_000));
 });
 
 test('#redeem opens a ticket only once', () => {
-  const ctx = setupTest();
-  const issued = ctx.tickets.issue('dev', buildMockCaller());
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
+  const issued = tickets.issue('dev', buildMockCaller());
 
-  ctx.tickets.redeem(issued.ticket);
+  tickets.redeem(issued.ticket);
 
-  expect(ctx.tickets.redeem(issued.ticket)).toBeNull();
+  expect(tickets.redeem(issued.ticket)).toBeNull();
 });
 
 test('#redeem refuses a ticket 30 seconds after it was issued', () => {
-  const ctx = setupTest();
-  const issued = ctx.tickets.issue('dev', buildMockCaller());
+  const clock = { at: 1_000_000 };
+  const tickets = createExecTickets({ now: () => clock.at, isLive: () => true });
+  const issued = tickets.issue('dev', buildMockCaller());
 
-  ctx.clock.at += 30_000;
+  clock.at = 1_030_000;
 
-  expect(ctx.tickets.redeem(issued.ticket)).toBeNull();
+  expect(tickets.redeem(issued.ticket)).toBeNull();
 });
 
 test('#redeem opens a ticket just before it expires', () => {
-  const ctx = setupTest();
+  const clock = { at: 1_000_000 };
+  const tickets = createExecTickets({ now: () => clock.at, isLive: () => true });
   const caller = buildMockCaller();
-  const issued = ctx.tickets.issue('dev', caller);
+  const issued = tickets.issue('dev', caller);
 
-  ctx.clock.at += 29_999;
+  clock.at = 1_029_999;
 
-  expect(ctx.tickets.redeem(issued.ticket)).toStrictEqual({ name: 'dev', caller });
+  expect(tickets.redeem(issued.ticket)).toStrictEqual({ name: 'dev', caller });
 });
 
 test('#redeem refuses a ticket with the right id and the wrong secret', () => {
-  const ctx = setupTest();
-  const issued = ctx.tickets.issue('dev', buildMockCaller());
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
+  const issued = tickets.issue('dev', buildMockCaller());
   const id = issued.ticket.slice(0, issued.ticket.indexOf('.'));
 
-  expect(ctx.tickets.redeem(`${id}.${Buffer.alloc(32).toString('base64url')}`)).toBeNull();
+  expect(tickets.redeem(`${id}.${Buffer.alloc(32).toString('base64url')}`)).toBeNull();
 });
 
 test('#redeem refuses a ticket with no secret part', () => {
-  const ctx = setupTest();
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
 
-  ctx.tickets.issue('dev', buildMockCaller());
+  tickets.issue('dev', buildMockCaller());
 
-  expect(ctx.tickets.redeem('garbage')).toBeNull();
+  expect(tickets.redeem('garbage')).toBeNull();
 });
 
 test('#redeem refuses a ticket with an extra part', () => {
-  const ctx = setupTest();
-  const issued = ctx.tickets.issue('dev', buildMockCaller());
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
+  const issued = tickets.issue('dev', buildMockCaller());
 
-  expect(ctx.tickets.redeem(`${issued.ticket}.extra`)).toBeNull();
+  expect(tickets.redeem(`${issued.ticket}.extra`)).toBeNull();
 });
 
 test('#redeem leaves the real ticket usable after a wrong guess', () => {
-  const ctx = setupTest();
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
   const caller = buildMockCaller();
-  const issued = ctx.tickets.issue('dev', caller);
+  const issued = tickets.issue('dev', caller);
   const id = issued.ticket.slice(0, issued.ticket.indexOf('.'));
 
-  ctx.tickets.redeem(`${id}.${Buffer.alloc(32).toString('base64url')}`);
+  tickets.redeem(`${id}.${Buffer.alloc(32).toString('base64url')}`);
 
-  expect(ctx.tickets.redeem(issued.ticket)).toStrictEqual({ name: 'dev', caller });
+  expect(tickets.redeem(issued.ticket)).toStrictEqual({ name: 'dev', caller });
 });
 
 test("#issue evicts a caller's own oldest ticket at its cap of 32", () => {
-  const ctx = setupTest();
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
   const caller = buildMockCaller();
-  const first = ctx.tickets.issue('first', caller);
+  const first = tickets.issue('first', caller);
 
   for (let index = 0; index < 32; index++) {
-    ctx.tickets.issue(`imp-${String(index)}`, caller);
+    tickets.issue(`imp-${String(index)}`, caller);
   }
 
-  expect(ctx.tickets.redeem(first.ticket)).toBeNull();
+  expect(tickets.redeem(first.ticket)).toBeNull();
 });
 
 test("#issue keeps a caller's 32 newest tickets at its cap", () => {
-  const ctx = setupTest();
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
   const caller = buildMockCaller();
 
-  ctx.tickets.issue('first', caller);
+  tickets.issue('first', caller);
 
   const issued = Array.from({ length: 32 }, (_, index) =>
-    ctx.tickets.issue(`imp-${String(index)}`, caller),
+    tickets.issue(`imp-${String(index)}`, caller),
   );
 
-  expect(issued.map((ticket) => ctx.tickets.redeem(ticket.ticket)?.name)).toStrictEqual(
+  expect(issued.map((ticket) => tickets.redeem(ticket.ticket)?.name)).toStrictEqual(
     Array.from({ length: 32 }, (_, index) => `imp-${String(index)}`),
   );
 });
 
 test("#issue never evicts another caller's ticket when one caller reaches its cap", () => {
-  const ctx = setupTest();
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
   const other = buildMockCaller({ kind: 'dashboard' });
-  const kept = ctx.tickets.issue('other', other);
+  const kept = tickets.issue('other', other);
   const caller = buildMockCaller();
 
   for (let index = 0; index < 33; index++) {
-    ctx.tickets.issue(`imp-${String(index)}`, caller);
+    tickets.issue(`imp-${String(index)}`, caller);
   }
 
-  expect(ctx.tickets.redeem(kept.ticket)).toStrictEqual({ name: 'other', caller: other });
+  expect(tickets.redeem(kept.ticket)).toStrictEqual({ name: 'other', caller: other });
 });
 
 test('#issue evicts the oldest ticket of any caller past 1024 live tickets', () => {
-  const ctx = setupTest();
-  const first = ctx.tickets.issue('first', buildMockCaller());
+  const tickets = createExecTickets({ now: () => 1_000_000, isLive: () => true });
+  const first = tickets.issue('first', buildMockCaller());
 
   for (let index = 0; index < 1024; index++) {
-    ctx.tickets.issue(`imp-${String(index)}`, buildMockCaller());
+    tickets.issue(`imp-${String(index)}`, buildMockCaller());
   }
 
-  expect(ctx.tickets.redeem(first.ticket)).toBeNull();
+  expect(tickets.redeem(first.ticket)).toBeNull();
 });
 
 test('#redeem refuses a ticket whose token was removed', () => {
-  const ctx = setupTest();
-  const caller = buildMockCaller();
-  const issued = ctx.tickets.issue('dev', caller);
+  const removedTokenIds = new Set<string>();
 
-  ctx.removedTokenIds.add(caller.tokenId ?? '');
+  const tickets = createExecTickets({
+    now: () => 1_000_000,
+    isLive: (caller) => caller.tokenId === null || !removedTokenIds.has(caller.tokenId),
+  });
 
-  expect(ctx.tickets.redeem(issued.ticket)).toBeNull();
+  const caller = buildMockCaller({ tokenId: 'token-a' });
+  const issued = tickets.issue('dev', caller);
+
+  removedTokenIds.add('token-a');
+
+  expect(tickets.redeem(issued.ticket)).toBeNull();
 });
 
 test('#isCallerLive refuses an OAuth grant once it is revoked', () => {

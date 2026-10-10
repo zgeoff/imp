@@ -1,24 +1,42 @@
 import { expect, test } from 'bun:test';
-import type { ExecEvent } from '../agent-client/exec-stream';
 import { buildMockSessionOutput } from './build-mock-session-output';
 import { buildStubTapStream } from './build-stub-tap-stream';
 
-test('it hands the reader the events in the order they came, then ends at a drop', async () => {
+test('it hands the reader the events in the order they came, then ends at the exit', async () => {
   const tap = buildStubTapStream(buildMockSessionOutput());
-  const events: ExecEvent[] = [];
 
   tap.write('hi');
   tap.emitEvent({ type: 'exit', code: 3, signal: 0 });
-  tap.drop();
+  tap.write('after');
 
-  for await (const event of tap.stream.events()) {
-    events.push(event);
-  }
+  const events = await Array.fromAsync(tap.stream.events());
 
   expect(events).toStrictEqual([
     { type: 'stdout', data: new TextEncoder().encode('hi') },
     { type: 'exit', code: 3, signal: 0 },
   ]);
+});
+
+test('it ends the events at a detached', async () => {
+  const tap = buildStubTapStream(buildMockSessionOutput());
+
+  tap.emitEvent({ type: 'detached', reason: 'taken_over' });
+  tap.write('after');
+
+  const events = await Array.fromAsync(tap.stream.events());
+
+  expect(events).toStrictEqual([{ type: 'detached', reason: 'taken_over' }]);
+});
+
+test('it ends the events without an exit at a drop', async () => {
+  const tap = buildStubTapStream(buildMockSessionOutput());
+
+  tap.write('hi');
+  tap.drop();
+
+  const events = await Array.fromAsync(tap.stream.events());
+
+  expect(events).toStrictEqual([{ type: 'stdout', data: new TextEncoder().encode('hi') }]);
 });
 
 test('it waits for an event the test sends after the reader started', async () => {
@@ -38,14 +56,11 @@ test('it waits for an event the test sends after the reader started', async () =
 
 test('it ends the events and drops what is queued once impd closes it', async () => {
   const tap = buildStubTapStream(buildMockSessionOutput());
-  const events: ExecEvent[] = [];
 
   tap.write('unread');
   tap.stream.close();
 
-  for await (const event of tap.stream.events()) {
-    events.push(event);
-  }
+  const events = await Array.fromAsync(tap.stream.events());
 
   expect(events).toStrictEqual([]);
   expect(tap.state.closed).toBe(true);

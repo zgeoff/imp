@@ -5,23 +5,37 @@ type StreamFields = Pick<
   'pid' | 'session' | 'created' | 'groupKill' | 'output' | 'stdinDrained'
 >;
 
-// The agent's exec stream as an `/exec` session reads it: the test feeds its
-// events, which end after an exit or a detached, or early on `drop`, as a
-// lost agent connection does. `input` records each call made on it.
+// The agent's exec stream as an `/exec` session reads it, fed by the test.
+// `drop` is a lost agent connection; `close` destroys it as the real one
+// does. `input` records each call made on it.
 export function buildStubAgentExecStream(fields: Partial<StreamFields> = {}) {
-  const queue: (ExecEvent | null)[] = [];
+  const queue: ExecEvent[] = [];
   const input: string[] = [];
   const waiting: { wake: (() => void) | null } = { wake: null };
+  const connection = { ended: false };
 
-  const writeEvent = (entry: ExecEvent | null): void => {
-    queue.push(entry);
+  const wake = (): void => {
     waiting.wake?.();
+    waiting.wake = null;
+  };
+
+  // a pending read ends once it has read the events fed before
+  const stopConnection = (): void => {
+    connection.ended = true;
+
+    wake();
   };
 
   const readNext = async (): Promise<ExecEvent | null> => {
     for (;;) {
-      if (queue.length > 0) {
-        return queue.shift() ?? null;
+      const event = queue.shift();
+
+      if (event !== undefined) {
+        return event;
+      }
+
+      if (connection.ended) {
+        return null;
       }
 
       await new Promise<void>((resolve) => {
@@ -53,18 +67,24 @@ export function buildStubAgentExecStream(fields: Partial<StreamFields> = {}) {
     events: () => readEvents(readNext),
     close: () => {
       input.push('close');
+
+      stopConnection();
     },
   };
 
   return {
     stream,
     input,
+
+    // an event fed once the connection ended never arrives
     emitEvent: (event: ExecEvent): void => {
-      writeEvent(event);
+      if (!connection.ended) {
+        queue.push(event);
+
+        wake();
+      }
     },
-    drop: (): void => {
-      writeEvent(null);
-    },
+    drop: stopConnection,
   };
 }
 

@@ -13,8 +13,9 @@ interface TapSource {
   readonly waiting: { wake: (() => void) | null };
 }
 
-// the events `readNext` gives until it gives null; `setFinished` marks the
-// reader done with them, at the end or when the reader leaves its loop
+// the events `readNext` gives until it gives null, or up to an exit or a
+// detached, as the agent client's readExecEvents ends; `setFinished` marks
+// the reader done with them, at the end or when the reader leaves its loop
 async function* readTapEvents(
   readNext: () => Promise<ExecEvent | null>,
   setFinished: () => void,
@@ -28,6 +29,10 @@ async function* readTapEvents(
       }
 
       yield event;
+
+      if (event.type === 'exit' || event.type === 'detached') {
+        return;
+      }
     }
   } finally {
     setFinished();

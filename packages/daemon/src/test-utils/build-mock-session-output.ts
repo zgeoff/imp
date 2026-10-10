@@ -7,7 +7,8 @@ type OffsetsOutput = Extract<SessionOutput, { continuity: 'offsets' }>;
 // with no prelude, whose data starts at the end of what was written. Its
 // optional parts are absent until an override sets them.
 export function buildMockSessionOutput(overrides: Partial<OffsetsOutput> = {}): OffsetsOutput {
-  const end = faker.number.int({ min: 0, max: 1_000_000 });
+  // the offset follows an overridden end, unless an override sets it too
+  const end = overrides.end ?? faker.number.int({ min: 0, max: 1_000_000 });
 
   return {
     continuity: 'offsets',

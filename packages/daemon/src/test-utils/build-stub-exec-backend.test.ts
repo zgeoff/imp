@@ -24,13 +24,15 @@ test('it rejects an exec with the error it was given', () => {
   );
 });
 
-test('it rejects an exec it was given nothing for', () => {
+test('it rejects an exec it was given nothing for as INVALID_STATE for a stopped imp', () => {
   const stub = buildStubExecBackend();
 
-  expect(stub.backend.openExec('dev', { argv: ['sh'], tty: false })).rejects.toThrowWithMessage(
-    Error,
-    'no stream for imp dev',
-  );
+  expect(stub.backend.openExec('dev', { argv: ['sh'], tty: false })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    status: 409,
+    message: 'cannot attach without a wake to an imp that is stopped (allowed: running)',
+    data: { state: 'stopped', allowed: ['running'], coldBoots: [] },
+  });
 });
 
 test('it opens an attach to the stream it was given and records the open', async () => {
@@ -43,13 +45,15 @@ test('it opens an attach to the stream it was given and records the open', async
   expect(stub.opens).toStrictEqual([{ kind: 'attach', name: 'dev', request: { session: 'main' } }]);
 });
 
-test('it rejects an attach it was given nothing for', () => {
+test('it rejects an attach it was given nothing for as INVALID_STATE for a stopped imp', () => {
   const stub = buildStubExecBackend();
 
-  expect(stub.backend.openAttach('dev', { session: 'main' })).rejects.toThrowWithMessage(
-    Error,
-    'no stream for imp dev',
-  );
+  expect(stub.backend.openAttach('dev', { session: 'main' })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    status: 409,
+    message: 'cannot attach without a wake to an imp that is stopped (allowed: running)',
+    data: { state: 'stopped', allowed: ['running'], coldBoots: [] },
+  });
 });
 
 test('it records each imp whose activity was recorded', async () => {

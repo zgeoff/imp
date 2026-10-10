@@ -9,12 +9,19 @@ interface StubExecSocketOptions {
 
 // The client's `/exec` WebSocket as impd's session writes to it. `sent`
 // holds each text message parsed as JSON and each binary frame as
-// `[channel, text]`, in order; `closes` holds each close code.
+// `[channel, text]`, in order; `closes` and `closeReasons` each close.
 export function buildStubExecSocket(options: StubExecSocketOptions = {}) {
   const keeps = options.keeps ?? Infinity;
   const sent: unknown[] = [];
   const closes: number[] = [];
+
+  // undefined for a close that gives no reason
+  const closeReasons: (string | undefined)[] = [];
   const binary = { count: 0 };
+
+  // the bytes queued for the client; a test that lowers them then calls the
+  // session's handleDrain, as Bun's drain does
+  const buffered = { bytes: 0 };
 
   const peer: ExecPeer = {
     sendText: (text) => {
@@ -33,11 +40,12 @@ export function buildStubExecSocket(options: StubExecSocketOptions = {}) {
 
       return true;
     },
-    close: (code = 1000) => {
-      closes.push(code);
+    close: (code, reason) => {
+      closes.push(code ?? 1000);
+      closeReasons.push(reason);
     },
-    readBufferedAmount: () => 0,
+    readBufferedAmount: () => buffered.bytes,
   };
 
-  return { peer, sent, closes };
+  return { peer, sent, closes, closeReasons, buffered };
 }

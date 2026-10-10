@@ -38,11 +38,42 @@ test('it records a close without a code as 1000', () => {
   const socket = buildStubExecSocket();
 
   socket.peer.close();
-  socket.peer.close(1011, 'exec failed');
 
-  expect(socket.closes).toStrictEqual([1000, 1011]);
+  expect(socket.closes).toStrictEqual([1000]);
 });
 
-test('it reports nothing queued for the client', () => {
+test('it records no reason for a close given none', () => {
+  const socket = buildStubExecSocket();
+
+  socket.peer.close();
+
+  expect(socket.closeReasons).toStrictEqual([undefined]);
+});
+
+test('it records the code a close gives', () => {
+  const socket = buildStubExecSocket();
+
+  socket.peer.close(1011, 'exec failed');
+
+  expect(socket.closes).toStrictEqual([1011]);
+});
+
+test('it records the reason a close gives', () => {
+  const socket = buildStubExecSocket();
+
+  socket.peer.close(1011, 'exec failed');
+
+  expect(socket.closeReasons).toStrictEqual(['exec failed']);
+});
+
+test('it reports nothing queued for the client by default', () => {
   expect(buildStubExecSocket().peer.readBufferedAmount()).toBe(0);
+});
+
+test('it reports the bytes the test queued for the client', () => {
+  const socket = buildStubExecSocket();
+
+  socket.buffered.bytes = 2_000_000;
+
+  expect(socket.peer.readBufferedAmount()).toBe(2_000_000);
 });
