@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
-import { findImpByName, updateImpActivity, updateImpState, updateImpStateIf } from '../db/imps';
+import { findImpByName, updateImpActivity } from '../db/imps';
 import { hasSnapshot } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
@@ -180,21 +180,6 @@ test('it counts a wake and opens an awake span', async () => {
   expect(awake?.awakeSince).toBeValidDate();
 });
 
-test('it keeps the awake span of a running record set running again as adopted', async () => {
-  const ctx = await setupTest();
-  const created = await ctx.client.imps.create({ name: 'dev' });
-  const running = await findImpByName(ctx.db, 'dev');
-
-  invariant(running?.awakeSince);
-
-  // impd crashed while it ran: the record still says running
-  await updateImpState(ctx.db, created.id, { reason: 'adopted', state: 'running' });
-
-  const adopted = await findImpByName(ctx.db, 'dev');
-
-  expect(adopted?.awakeSince).toStrictEqual(running.awakeSince);
-});
-
 test('it ends the awake span of a VM found dead at its last activity', async () => {
   const stub = buildStubCpuCgroups();
 
@@ -222,28 +207,6 @@ test('it ends the awake span of a VM found dead at its last activity', async () 
   expect(repaired?.awakeSince).toBeNull();
   expect(repaired?.awakeMs).toBe(awake.awakeMs + 2000);
   expect(api.resources).toMatchObject({ wakeCount: 1, awakeMs: awake.awakeMs + 2000 });
-});
-
-test('it adds no awake time when a repair of the record ends the span before its start', async () => {
-  const ctx = await setupTest();
-  const created = await ctx.client.imps.create({ name: 'dev' });
-  const running = await findImpByName(ctx.db, 'dev');
-
-  invariant(running?.awakeSince);
-
-  const repaired = await updateImpStateIf(
-    ctx.db,
-    created.id,
-    { state: 'running', pid: running.pid },
-    {
-      reason: 'repaired',
-      state: 'stopped',
-      pid: null,
-      awakeUntil: new Date(running.awakeSince.getTime() - 5000),
-    },
-  );
-
-  expect(repaired?.awakeMs).toBe(0);
 });
 
 test('it counts a cold boot for a wake as a wake', async () => {

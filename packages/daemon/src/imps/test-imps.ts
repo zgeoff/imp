@@ -163,8 +163,8 @@ export interface ImpTestOptions {
   // each imp's tailnet name as a URL; none by default
   readonly readServiceUrl?: (name: string) => string | null;
 
-  // the clock's start; it moves only with `advance` then, for a test that
-  // divides by elapsed time
+  // the clock's start, also a sleep's timing clock; it moves only with
+  // `advance` and a young guest wait's pauses, which take no real time
   readonly frozenClockMs?: number;
 
   // the storage backend over the data dir; XFS on plain files by default
@@ -377,6 +377,16 @@ export async function createImpTest(
         },
       },
       hostCpus: options.hostCpus ?? 8,
+      ...(frozenAt !== undefined && {
+        sleepTiming: {
+          now: readClock,
+          sleep: (ms: number) => {
+            clock.offsetMs += ms;
+
+            return Promise.resolve();
+          },
+        },
+      }),
       ...(options.readUnsharedRamMib !== undefined && {
         readUnsharedRamMib: options.readUnsharedRamMib,
       }),
@@ -438,7 +448,19 @@ export async function createImpTest(
   const startImpd = (identity: HostIdentity = host.identity) => {
     host.identity = identity;
 
-    return startGovernedImps(config, deps, governedParts, identity, fake.startGeneration());
+    const runner = fake.startGeneration();
+    const started = startGovernedImps(config, deps, governedParts, identity, runner);
+
+    // as main.ts stops them: a template build still running would write
+    // into the data dir after its removal. A hung build is released first;
+    // one a replacement parked never ends, and builds run one at a time.
+    stack.defer(async () => {
+      fake.releaseHangs();
+
+      await Promise.race([started.imps.bootTemplates?.stop(), fake.whenTemplateBuildParks(runner)]);
+    });
+
+    return started;
   };
 
   const governed = startImpd();

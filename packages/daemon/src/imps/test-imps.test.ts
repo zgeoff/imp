@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { runChildTests } from '@imp/test-utils/run-child-tests';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
@@ -160,6 +161,139 @@ test('#createImpTest has its data dir removed by the stack after a setup step th
   expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);
 });
 
+test('#createImpTest finishes a running template build before it removes its data dir', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const logs: string[] = [];
+
+  const harness = await createImpTest(stack, {
+    env: { IMP_BOOT_TEMPLATES: 'true' },
+    onLog: (message) => {
+      logs.push(message);
+    },
+  });
+
+  await harness.createTestImage('ubuntu');
+
+  const held = harness.fake.hold('template');
+
+  // the first release once the stack unwinds; the harness's own wait
+  // for the build comes after it
+  stack.defer(() => {
+    held.release();
+  });
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await held.reached;
+
+  await stack.disposeAsync();
+
+  const builtAt = logs.findIndex((line) => /^impd: boot template \w+ built in/u.test(line));
+
+  expect(builtAt).toBeGreaterThanOrEqual(0);
+  expect(builtAt).toBeLessThan(logs.indexOf('test harness: database closed'));
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
+test('#createImpTest releases a hung template build before it waits for the build', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, { env: { IMP_BOOT_TEMPLATES: 'true' } });
+
+  await harness.createTestImage('ubuntu');
+
+  harness.fake.queue('template', 'hang');
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await waitFor(() => {
+    expect(harness.fake.countHungCalls()).toBe(1);
+  });
+
+  await stack.disposeAsync();
+
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
+test('#createImpTest never waits for the template build of an impd that restartImpd replaced', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, { env: { IMP_BOOT_TEMPLATES: 'true' } });
+
+  await harness.createTestImage('ubuntu');
+
+  const held = harness.fake.hold('template');
+
+  stack.defer(() => {
+    held.release();
+  });
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await held.reached;
+
+  // the build's VM call comes back to a replaced impd, so it parks
+  harness.restartImpd();
+  held.release();
+
+  await waitFor(() => {
+    expect(harness.fake.countParkedCalls()).toBe(1);
+  });
+
+  await stack.disposeAsync();
+
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
+test('#createImpTest finishes the template build of a replaced impd that got past its VM call', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const logs: string[] = [];
+
+  const harness = await createImpTest(stack, {
+    env: { IMP_BOOT_TEMPLATES: 'true' },
+    onLog: (message) => {
+      logs.push(message);
+    },
+  });
+
+  await harness.createTestImage('ubuntu');
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await waitFor(() => {
+    expect(harness.fake.templateBuilds).toHaveLength(1);
+  });
+
+  // the build's VM call came back to a live impd, so the rest of it runs
+  harness.restartImpd();
+
+  await stack.disposeAsync();
+
+  const builtAt = logs.findIndex((line) => /^impd: boot template \w+ built in/u.test(line));
+
+  expect(builtAt).toBeGreaterThanOrEqual(0);
+  expect(builtAt).toBeLessThan(logs.indexOf('test harness: database closed'));
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
 test('#buildTestApp serves the API over the harness', async () => {
   const ctx = await setupImpTest();
 
@@ -173,12 +307,29 @@ test('#buildTestApp serves the API over the harness', async () => {
   expect(imps.map((imp) => imp.name)).toStrictEqual(['dev']);
 });
 
-test('#setupImpTest moves a frozen clock only when the test advances it', async () => {
+test('#setupImpTest moves a frozen clock when the test advances it', async () => {
   const ctx = await setupImpTest({ frozenClockMs: 1_000_000 });
 
   ctx.advance(500);
 
   expect(ctx.now()).toBe(1_000_500);
+});
+
+test('#setupImpTest moves a frozen clock by the pauses of a young guest wait', async () => {
+  const ctx = await setupImpTest({
+    env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' },
+    frozenClockMs: 1_000_000,
+  });
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.imps.createImp({ name: 'dev' });
+
+  // 100 ms old against a 300 ms minimum
+  ctx.fake.setGuestUptime(100);
+
+  await ctx.imps.sleepImp('dev');
+
+  expect(ctx.now()).toBe(1_000_200);
 });
 
 test('#findBrokenInvariants finds nothing wrong with a running imp and its VM', async () => {

@@ -173,6 +173,14 @@ test('it reads the OOM kill count and cpu.stat the test set for a cgroup', () =>
   expect(stub.cgroups.readCpuStat('imp-a')).toStrictEqual({ usageUsec: 10, throttledUsec: 1 });
 });
 
+test('it reads zero cpu.stat counters for a cgroup the test set none for', () => {
+  const stub = buildStubCpuCgroups();
+
+  stub.cgroups.setup('imp-a', { limit: null, weight: 100 }, 512);
+
+  expect(stub.cgroups.readCpuStat('imp-a')).toStrictEqual({ usageUsec: 0, throttledUsec: 0 });
+});
+
 test('it reports no OOM kill since start for kills from before the VM started', () => {
   const stub = buildStubCpuCgroups();
 

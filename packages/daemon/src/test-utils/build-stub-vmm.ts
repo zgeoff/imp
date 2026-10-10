@@ -139,6 +139,9 @@ export function buildStubVmm() {
   // settle: what a test waits for before it reads a call as pending
   const waiting = { hung: 0, parked: 0 };
 
+  // per runner, settled once one of its template builds parks for good
+  const parkedBuilds = new WeakMap<VmRunner, Promise<void>>();
+
   // runs between the steps of every call; a property test hands it to its
   // scheduler to order the steps of concurrent calls
   const pacer: { pace: (step: VmStep) => Promise<void> } = { pace: () => Promise.resolve() };
@@ -195,18 +198,21 @@ export function buildStubVmm() {
   };
 
   const buildRunner = (generation: number): VmRunner => {
+    const parkedBuild = Promise.withResolvers<void>();
+
     // a replaced impd: every later call waits forever
-    const waitForever = <T>(): Promise<T> => {
+    const waitForever = <T>(onPark?: () => void): Promise<T> => {
       waiting.parked += 1;
+      onPark?.();
 
       return new Promise<T>(() => {});
     };
 
     // an in-flight call whose impd was replaced parks whether it resolves or
     // rejects, so a dead impd makes no late write
-    const runInGeneration = async <T>(call: () => Promise<T>): Promise<T> => {
+    const runInGeneration = async <T>(call: () => Promise<T>, onPark?: () => void): Promise<T> => {
       if (generation !== counter.generation) {
-        return waitForever();
+        return waitForever(onPark);
       }
 
       const settled = await call().then(
@@ -215,7 +221,7 @@ export function buildStubVmm() {
       );
 
       if (generation !== counter.generation) {
-        return waitForever();
+        return waitForever(onPark);
       }
 
       if (!settled.isOk) {
@@ -256,7 +262,7 @@ export function buildStubVmm() {
       return { pid, firecrackerVersion: 'v1.17.0', agentVersion: agent.version, timings: {} };
     };
 
-    return {
+    const runner: VmRunner = {
       startVm: (plan) =>
         runInGeneration(async () => {
           boots.push({ hostname: plan.hostname, isIdentityReset: plan.isIdentityReset });
@@ -425,7 +431,7 @@ export function buildStubVmm() {
           writeFileSync(plan.memFile, 'mem');
 
           templateBuilds.push({ vcpus: plan.vcpus, memoryMib: plan.memoryMib });
-        }),
+        }, parkedBuild.resolve),
 
       // restore: as a boot, a failure in the template's own steps; claim:
       // fail is a failure once the imp's disk and values are in play
@@ -478,6 +484,10 @@ export function buildStubVmm() {
           return Promise.resolve();
         }),
     };
+
+    parkedBuilds.set(runner, parkedBuild.promise);
+
+    return runner;
   };
 
   return {
@@ -504,6 +514,11 @@ export function buildStubVmm() {
 
       return buildRunner(counter.generation);
     },
+
+    // settles once a template build of `runner` parks, since its impd was
+    // replaced; a build that got past its VM call never parks
+    whenTemplateBuildParks: (runner: VmRunner): Promise<void> =>
+      parkedBuilds.get(runner) ?? Promise.reject(new Error('not a runner of this fake')),
 
     // the next calls of `step` take these outcomes in order, then succeed
     queue: (step: VmStep, ...outcomes: readonly VmOutcome[]) => {

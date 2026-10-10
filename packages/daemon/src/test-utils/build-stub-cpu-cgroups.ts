@@ -110,7 +110,10 @@ export function buildStubCpuCgroups(options: StubCpuCgroupsOptions = {}) {
 
       return orphans;
     },
-    readCpuStat: (impId) => (groups.has(impId) ? (cpuStats.get(impId) ?? null) : null),
+
+    // a new cgroup's cpu.stat counts from zero, as the kernel's does
+    readCpuStat: (impId) =>
+      groups.has(impId) ? (cpuStats.get(impId) ?? { usageUsec: 0, throttledUsec: 0 }) : null,
     readOomKills: (impId) => (groups.has(impId) ? (oomKills.get(impId) ?? 0) : null),
     hasOomKillSinceStart: (impId) => {
       const group = groups.get(impId);
