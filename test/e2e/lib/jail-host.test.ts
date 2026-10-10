@@ -1,5 +1,23 @@
 import { expect, test } from 'bun:test';
-import { findJailViolations, readStatusField } from './jail-host';
+import { checkTemplateBuildEnded, findJailViolations, readStatusField } from './jail-host';
+
+test('#checkTemplateBuildEnded sees the end of the imp’s own template build', () => {
+  const log = 'impd: boot template 0e61ca281a1c build failed: no agent\n';
+
+  expect(checkTemplateBuildEnded(log, 'e2e-jail-rm', '0e61ca281a1c9f00')).toBeTrue();
+});
+
+test('#checkTemplateBuildEnded passes over the end of another key’s build', () => {
+  const log = 'impd: boot template 7a2b44c0d1e3 built in 900ms\n';
+
+  expect(checkTemplateBuildEnded(log, 'e2e-jail-rm', '0e61ca281a1c9f00')).toBeFalse();
+});
+
+test('#checkTemplateBuildEnded sees a restore, which starts no build', () => {
+  const log = 'impd: e2e-jail-rm: restored boot template 0e61ca281a1c as pid 9\n';
+
+  expect(checkTemplateBuildEnded(log, 'e2e-jail-rm', '0e61ca281a1c9f00')).toBeTrue();
+});
 
 test('#readStatusField reads a field of a process status', () => {
   const status =

@@ -68,9 +68,8 @@ test('it copies a directory into a root-owned path as root with its modes, and b
 
   await waitForExec(name);
 
-  const copiedIn = await tryImp(['cp', app, `${name}:/srv`]);
-
-  expect(copiedIn.exitCode, copiedIn.stderr).toBe(0);
+  // runImp throws on a failed copy, with its stderr
+  await runImp('cp', app, `${name}:/srv`);
 
   const listed = await runInImp(
     name,
@@ -101,10 +100,7 @@ test('it copies a directory into a root-owned path as root with its modes, and b
   const back = join(ctx.local, 'back');
 
   await mkdir(back);
-
-  const copiedOut = await tryImp(['cp', `${name}:/srv/app`, back]);
-
-  expect(copiedOut.exitCode, copiedOut.stderr).toBe(0);
+  await runImp('cp', `${name}:/srv/app`, back);
 
   const backBig = await readFile(join(back, 'app', 'big.bin'));
   const notesStat = await lstat(join(back, 'app', 'notes with spaces.txt'));
@@ -130,9 +126,8 @@ test('it gives a copy into the home to the image user', async () => {
 
   await waitForExec(name);
 
-  const result = await tryImp(['cp', notes, `${name}:/home/dev`]);
-
-  expect(result.exitCode, result.stderr).toBe(0);
+  // runImp throws on a failed copy, with its stderr
+  await runImp('cp', notes, `${name}:/home/dev`);
 
   const listed = await runInImp(name, 'stat', '-c', '%U %G', '/home/dev/notes with spaces.txt');
 
@@ -153,9 +148,8 @@ test('it gives a copy the --owner it names, and lands a relative path in the hom
 
   await waitForExec(name);
 
-  const result = await tryImp(['cp', '--owner', 'root', bin, `${name}:work`]);
-
-  expect(result.exitCode, result.stderr).toBe(0);
+  // runImp throws on a failed copy, with its stderr
+  await runImp('cp', '--owner', 'root', bin, `${name}:work`);
 
   const listed = await runShellInImp(
     name,

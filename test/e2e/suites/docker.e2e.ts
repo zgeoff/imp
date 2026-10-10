@@ -132,7 +132,16 @@ test('it serves a container port published on 8080 through the wake proxy, again
 
   await runInImp(name, 'docker', 'run', '-d', '--name', 'web', '-p', '8080:80', 'nginx:alpine');
 
-  const page = await waitFor(`nginx in ${name} through the proxy`, () => getThroughProxy(name));
+  // until nginx's own page comes through, not just any answer
+  const page = await waitFor(`nginx in ${name} through the proxy`, async () => {
+    const body = await getThroughProxy(name);
+
+    if (!body.includes('<title>Welcome to nginx!</title>')) {
+      throw new Error(`not nginx's page yet: ${body.slice(0, 80)}`);
+    }
+
+    return body;
+  });
 
   expect(page).toContain('<title>Welcome to nginx!</title>');
 
@@ -147,7 +156,15 @@ test('it serves a container port published on 8080 through the wake proxy, again
 
   await runInImp(name, 'docker', 'start', 'web');
 
-  const again = await waitFor(`nginx in ${name} after the cold boot`, () => getThroughProxy(name));
+  const again = await waitFor(`nginx in ${name} after the cold boot`, async () => {
+    const body = await getThroughProxy(name);
+
+    if (!body.includes('<title>Welcome to nginx!</title>')) {
+      throw new Error(`not nginx's page yet: ${body.slice(0, 80)}`);
+    }
+
+    return body;
+  });
 
   expect(again).toContain('<title>Welcome to nginx!</title>');
 });

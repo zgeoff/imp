@@ -3,6 +3,8 @@ import {
   readIsnSecret,
   readMac,
   readSessionOutput,
+  readShapeTemplateKeys,
+  removeShapeTemplates,
   waitForShapeTemplate,
 } from '../lib/boot-template-guest';
 import { findU32Span, parseLoggedSteps, pickPercentile } from '../lib/boot-template-timing';
@@ -17,8 +19,8 @@ import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
 // Boot templates (docs/architecture/boot-templates.md): every restored imp
-// is its own machine. Each test boots a shape no other suite boots twice, so
-// the second boot builds its template unless an earlier test left one.
+// is its own machine. Each test removes the templates of its shape after
+// its imps, so a later run never starts on one.
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -41,24 +43,34 @@ test('it makes the template of a shape on its second boot and restores it as imp
 
   const started = new Date();
 
-  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+  // 304 MiB, a shape only this test boots; its template goes after the imps,
+  // and one a killed earlier run left goes before the first boot
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(304));
+
+  await removeShapeTemplates(304);
+  await runImp('new', first, '--image', image, '--memory', '304', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
   await waitForExec(first);
-  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+
+  const afterFirst = await readShapeTemplateKeys(304);
+
+  await runImp('new', spare, '--image', image, '--memory', '304', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
 
   await waitForExec(spare);
   await runImp('rm', spare);
-  await waitForShapeTemplate(288);
-  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1', '--disk', '6g');
+
+  const key = await waitForShapeTemplate(304);
+
+  await runImp('new', second, '--image', image, '--memory', '304', '--cpus', '1', '--disk', '6g');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
 
   await waitForExec(second);
-  await runImp('new', third, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', third, '--image', image, '--memory', '304', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, third));
 
@@ -80,8 +92,11 @@ test('it makes the template of a shape on its second boot and restores it as imp
 
   const sizeKib = Number(df.trim().split('\n').at(-1)?.split(/\s+/v)[1]);
 
-  expect(log).toContain(`${second}: restored boot template`);
-  expect(log).toContain(`${third}: restored boot template`);
+  // no template after the first boot, and this test's own build after the second
+  expect(afterFirst).toStrictEqual([]);
+  expect(log).toContain(`impd: boot template ${key.slice(0, 12)} built in `);
+  expect(log).toContain(`${second}: restored boot template ${key.slice(0, 12)}`);
+  expect(log).toContain(`${third}: restored boot template ${key.slice(0, 12)}`);
 
   // the guest's own word that the claim reseeded its CRNG
   expect(consoleLog.stdout).toContain('boot: claim: crng reseeded from a 64-byte seed');
@@ -107,6 +122,9 @@ test('it keys TCP with its own secret in each restored imp', async () => {
   const spare = `${ctx.prefix}x`;
   const second = `${ctx.prefix}b`;
   const third = `${ctx.prefix}c`;
+
+  // the shape's template goes after the imps that boot it
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
 
@@ -153,6 +171,9 @@ test('it records each restored boot as its own cold boot, again after a restart 
   const spare = `${ctx.prefix}x`;
   const second = `${ctx.prefix}b`;
   const third = `${ctx.prefix}c`;
+
+  // the shape's template goes after the imps that boot it
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
 
@@ -210,6 +231,9 @@ test('it sleeps and wakes a restored imp like any other', async () => {
 
   const started = new Date();
 
+  // the shape's template goes after the imps that boot it
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
+
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
@@ -249,6 +273,9 @@ test('it times imp new from a template: the wall time and its spans', async () =
   const spare = `${ctx.prefix}x`;
   const walls: number[] = [];
   const spans: Record<string, number[]> = {};
+
+  // the shape's template goes after the imps that boot it
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
 

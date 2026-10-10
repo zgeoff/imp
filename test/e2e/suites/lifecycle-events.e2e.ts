@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import * as z from 'zod';
+import { pickNewCalls, readAuditCalls } from '../lib/audit-calls';
 import { config } from '../lib/config';
 import { collectEventLines } from '../lib/event-lines';
 import { createInstanceClient, runImp, startImp } from '../lib/imp-cli';
@@ -54,7 +54,7 @@ test('it streams a create, sleep, wake and rm as events with no reconnect, and l
     expect(seen).toContain(`${anchor} ImpAdded snapshot running`);
   });
 
-  const startedAt = new Date();
+  const earlierCalls = await readAuditCalls(name);
 
   await runImp('new', name, '--memory', '512');
 
@@ -88,13 +88,9 @@ test('it streams a create, sleep, wake and rm as events with no reconnect, and l
     `${name} ImpRemoved`,
   ]);
 
-  const audit = await runImp('audit', name, '--kind', 'api', '--json');
+  const allCalls = await readAuditCalls(name);
 
-  // a reused dev instance keeps the rows of earlier runs: only this run's count
-  const calls = z
-    .array(z.object({ at: z.coerce.date(), procedure: z.string(), actor: z.string() }))
-    .parse(JSON.parse(audit))
-    .filter((call) => call.at >= startedAt);
+  const calls = pickNewCalls(allCalls, earlierCalls);
 
   expect(calls.map((call) => call.procedure)).toStrictEqual([
     'imps.destroy',

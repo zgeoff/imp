@@ -1,3 +1,5 @@
+import { VmIdentitySchema } from '../../../packages/daemon/src/sleep/vm-identity';
+import { buildTemplateKey } from '../../../packages/daemon/src/templates/boot-templates';
 import { requireImp } from './imp-cli';
 import { runInContainer } from './instance';
 
@@ -52,6 +54,18 @@ export function findJailViolations(state: Readonly<JailState>): readonly string[
   return checks.filter(([isKept]) => !isKept).map(([, violation]) => violation);
 }
 
+// Whether impd's log shows the end of the imp's own template build (built,
+// refused or failed), or a restore of a template made earlier, which
+// starts none.
+export function checkTemplateBuildEnded(log: string, name: string, key: string): boolean {
+  const ended = new RegExp(
+    `impd: boot template ${key.slice(0, 12)} (?:built in|build refused|build failed)`,
+    'v',
+  );
+
+  return log.includes(`${name}: restored boot template`) || ended.test(log);
+}
+
 // Thin glue over the host container below.
 
 // a file in the host container, trimmed; throws when it cannot be read
@@ -87,6 +101,22 @@ export async function readVmProcess(name: string): Promise<VmProcess> {
   const status = await readContainerText(`/proc/${pid}/status`);
 
   return { pid, cmdline: cmdline.replaceAll('\0', ' '), status };
+}
+
+// the key of the boot template the imp's shape builds on this host
+export async function readTemplateKey(name: string): Promise<string> {
+  const row = await requireImp(name);
+  const result = await runInContainer(['cat', `/var/lib/imp/imps/${row.id}/vm.json`]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(`${name}'s vm.json: ${result.stderr.trim()}`);
+  }
+
+  const identity = VmIdentitySchema.required({ cpuModel: true, cpuFlags: true }).parse(
+    JSON.parse(result.stdout),
+  );
+
+  return buildTemplateKey(identity, { vcpus: row.vcpus, memoryMib: row.memoryMib });
 }
 
 export async function readJailState(name: string): Promise<JailState> {

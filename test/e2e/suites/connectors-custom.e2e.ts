@@ -102,7 +102,8 @@ test('it signs an oauth secret in, rotates its tokens on a forced refresh, refus
   expect(listed).not.toContain('e2e-refresh');
   expect(listed).not.toContain('e2e-access');
 
-  const refreshed = await tryImp(['secret', 'refresh', secret]);
+  // runImp throws on a failed refresh, with its stderr
+  await runImp('secret', 'refresh', secret);
 
   const rotated = await runShellInImp(
     name,
@@ -112,7 +113,6 @@ test('it signs an oauth secret in, rotates its tokens on a forced refresh, refus
   // the first refresh token is dead at the endpoint, and impd used each once
   const [first, second] = upstream.oauth.refreshTokens();
 
-  expect(refreshed.exitCode).toBe(0);
   expect(MeSchema.parse(JSON.parse(rotated))).toStrictEqual({ generation: 2, authorized: true });
   expect(upstream.oauth.exchange(first ?? '')).toBe(400);
   expect(upstream.oauth.refreshTokens()).toHaveLength(3);

@@ -68,16 +68,24 @@ export function parseRsAccepts(listing: string): number {
     .split('\n')
     .find((row) => row.includes('ACCEPT') && row.includes('imp+') && row.includes('icmptype 133'));
 
-  return Number(line?.trim().split(/\s+/v)[0] ?? Number.NaN);
+  if (line === undefined) {
+    throw new Error('no RS ACCEPT rule for the taps in INPUT');
+  }
+
+  return Number(line.trim().split(/\s+/v)[0]);
 }
 
-const RA_COUNTER_TABLE = 'e2e_ra';
+// The counter table, named with the run's prefix so a leftover is plainly
+// the e2e run's.
+export function buildRaCounterTable(prefix: string): string {
+  return `${prefix}ra`;
+}
 
 // A netdev table that counts the tap's router advertisements and
 // solicitations on ingress, before any inet hook can drop them.
-export function buildRaCounterRuleset(tap: string): string {
+export function buildRaCounterRuleset(table: string, tap: string): string {
   return [
-    `table netdev ${RA_COUNTER_TABLE} {`,
+    `table netdev ${table} {`,
     '  chain ingress {',
     `    type filter hook ingress device "${tap}" priority 0;`,
     '    icmpv6 type nd-router-advert counter',
@@ -92,12 +100,18 @@ export interface RaCounts {
   readonly solicits: number;
 }
 
-// the two counters of `nft list table netdev e2e_ra`
+// the two counters of `nft list table netdev <table>`
 export function parseRaCounts(listing: string): RaCounts {
   const readCount = (type: string) => {
     const match = new RegExp(String.raw`${type} counter packets (?<n>\d+)`, 'v').exec(listing);
 
-    return Number(match?.groups?.['n'] ?? Number.NaN);
+    const count = match?.groups?.['n'];
+
+    if (count === undefined) {
+      throw new Error(`no ${type} counter in ${JSON.stringify(listing)}`);
+    }
+
+    return Number(count);
   };
 
   return { adverts: readCount('nd-router-advert'), solicits: readCount('nd-router-solicit') };
@@ -286,10 +300,18 @@ export async function readImpTap(name: string): Promise<string> {
   return parseRouteDevice(route.stdout);
 }
 
-// the caller stops it with stopRaCounter
-export async function startRaCounter(tap: string): Promise<void> {
+// Refuses a table that is already there: the caller made the container
+// anew just before, so one there is not a leftover but something else's.
+// The caller stops it with stopRaCounter.
+export async function startRaCounter(table: string, tap: string): Promise<void> {
+  const listed = await runInContainer(['nft', 'list', 'table', 'netdev', table]);
+
+  if (listed.exitCode === 0) {
+    throw new Error(`nft table netdev ${table} is already there`);
+  }
+
   const result = await runCommand(['docker', 'exec', '-i', instance.container, 'nft', '-f', '-'], {
-    stdin: buildRaCounterRuleset(tap),
+    stdin: buildRaCounterRuleset(table, tap),
   });
 
   if (result.exitCode !== 0) {
@@ -297,12 +319,16 @@ export async function startRaCounter(tap: string): Promise<void> {
   }
 }
 
-export async function stopRaCounter(): Promise<void> {
-  await runInContainer(['nft', 'delete', 'table', 'netdev', RA_COUNTER_TABLE]);
+export async function stopRaCounter(table: string): Promise<void> {
+  await runInContainer(['nft', 'delete', 'table', 'netdev', table]);
 }
 
-export async function readRaCounts(): Promise<RaCounts> {
-  const result = await runInContainer(['nft', 'list', 'table', 'netdev', RA_COUNTER_TABLE]);
+export async function readRaCounts(table: string): Promise<RaCounts> {
+  const result = await runInContainer(['nft', 'list', 'table', 'netdev', table]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(`nft list table netdev ${table}: ${result.stderr.trim()}`);
+  }
 
   return parseRaCounts(result.stdout);
 }

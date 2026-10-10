@@ -57,7 +57,8 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
   const idle = `${ctx.prefix}idle`;
   const copy = `${ctx.prefix}copy`;
 
-  // impd reads its backup env at start; MinIO joins the new container
+  // in-test, not suite settings: impd sets up its repository at start, and
+  // each test brings its own; MinIO joins the new container
   await runDevScript('reboot', instance, buildBackupEnv(ctx.secrets, 60));
 
   ctx.stack.defer(() => runDevScript('reboot'));
@@ -183,6 +184,7 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
   ]);
 
   const states = await Promise.all((point?.imps ?? []).map((name) => readState(name)));
+  const restored = await listImps();
 
   expect(others).toStrictEqual([]);
 
@@ -192,8 +194,9 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
     stderr: expect.toInclude('stop the old impd'),
   });
 
+  // the restore brings back exactly the point's imps, onto an empty instance
   expect(point?.imps).toContain(idle);
-  expect(point?.imps).toContain(source);
+  expect(restored.map((row) => row.name).toSorted()).toStrictEqual(point?.imps.toSorted() ?? []);
   expect(states).toSatisfyAll((state: string) => state === 'stopped');
 
   await runImp('start', source);
@@ -210,6 +213,8 @@ test('it restores a point that survived the scheduled forget and prune, and find
   const idle = `${ctx.prefix}idle`;
   const survivor = `${ctx.prefix}idle2`;
 
+  // in-test, not suite settings: impd sets up its repository at start, and
+  // each test brings its own
   await runDevScript('reboot', instance, buildBackupEnv(ctx.secrets, 60));
 
   ctx.stack.defer(() => runDevScript('reboot'));
@@ -278,6 +283,8 @@ test('it restores past a stale lock in the repository, and fails the check loudl
   const idle = `${ctx.prefix}idle`;
   const unlocked = `${ctx.prefix}idle3`;
 
+  // in-test, not suite settings: impd sets up its repository at start, and
+  // each test brings its own
   await runDevScript('reboot', instance, buildBackupEnv(ctx.secrets, 60));
 
   ctx.stack.defer(() => runDevScript('reboot'));
@@ -348,7 +355,7 @@ test('it restores past a stale lock in the repository, and fails the check loudl
   const status = await readBackupStatus();
   const restored = await runS3(ctx.secrets, 'PUT', `/${key}`, '--data-binary', '@/tmp/e2e-pack');
 
-  expect(check.exitCode).toBe(1);
+  expect(check).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toStartWith('imp: ') });
   expect(status.lastCheck?.error).toBeString();
   expect(restored.exitCode).toBe(0);
 });

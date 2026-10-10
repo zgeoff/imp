@@ -9,7 +9,14 @@ import {
 } from '../lib/broker-upstreams';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { createInstanceClient, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import {
+  createInstanceClient,
+  requireImp,
+  runImp,
+  runImpWith,
+  runShellInImp,
+  tryImp,
+} from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import { readContainerGateway, runChecked, runInContainer } from '../lib/instance';
 import { registerRemoval } from '../lib/register-removal';
@@ -57,23 +64,28 @@ test('it takes a secret on stdin, never shows it back, gives a granted guest the
   await waitForExec(name);
   await holdImp(name);
 
-  const added = await tryImp(['secret', 'add', secret, '--kind', 'github'], {
-    stdin: `${token}\n`,
-  });
+  // runImpWith throws on a failed add, with its stderr
+  const added = await runImpWith(
+    { stdin: `${token}\n` },
+    'secret',
+    'add',
+    secret,
+    '--kind',
+    'github',
+  );
 
   registerRemoval(ctx.stack, config.keep, () => removeSecretIfPresent(ctx.client, secret));
 
   await runImp('grant', name, secret);
 
   const shown = [
-    added.stdout,
+    added,
     await runImp('secret', 'ls', '--json'),
     await runImp('grants', name, '--json'),
     await runImp('ls', '--json'),
     await runImp('info', '--json'),
   ].join('\n');
 
-  expect(added.exitCode).toBe(0);
   expect(shown).toContain(secret);
   expect(shown).not.toContain(token);
 

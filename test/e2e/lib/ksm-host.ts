@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { release as readKernelRelease } from 'node:os';
 import { requireImp } from './imp-cli';
 import { runInContainer } from './instance';
+import { parseWholeNumber } from './parse-whole-number';
 
 // What the ksm suite reads of KSM and of each VM's memory, in /proc on this
 // host and in the host container.
@@ -105,9 +106,12 @@ export function checkHostRunsKsm(): boolean {
 
 // ksmd's CPU time on this host, in ms
 export function readKsmdCpuMs(): number {
-  const pid = Bun.spawnSync(['pgrep', '-x', 'ksmd']).stdout.toString().trim();
+  const pid = parseWholeNumber(
+    Bun.spawnSync(['pgrep', '-x', 'ksmd']).stdout.toString(),
+    'ksmd pid',
+  );
 
-  return parseCpuMsFromStat(readHostFile(`/proc/${pid}/stat`));
+  return parseCpuMsFromStat(readHostFile(`/proc/${String(pid)}/stat`));
 }
 
 async function readContainerText(argv: readonly string[]): Promise<string> {

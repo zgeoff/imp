@@ -43,6 +43,8 @@ test('it wakes a jailed snapshot as root in an impd without the jailer, and that
 
   const proof = await startMemoryProof(name);
 
+  // in-test, not suite settings: the journey needs the jailer off, then on,
+  // and the jail suite's other files need it on
   await runDevScript('reboot', instance, { IMP_JAILER: 'false' });
   await runImp('wake', name);
   await waitForExec(name);

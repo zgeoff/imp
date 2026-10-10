@@ -4,7 +4,13 @@ import { resolveImageName } from '../lib/fixtures';
 import { assertState, createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
 import { readImpdLogSince, runInContainer } from '../lib/instance';
-import { findJailViolations, listJailMounts, readJailState } from '../lib/jail-host';
+import {
+  checkTemplateBuildEnded,
+  findJailViolations,
+  listJailMounts,
+  readJailState,
+  readTemplateKey,
+} from '../lib/jail-host';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
@@ -56,6 +62,8 @@ test('it starts, stops and removes a jailed VM cleanly, and the boot template bu
   await runImp('start', name);
   await waitForExec(name);
 
+  const key = await readTemplateKey(name);
+
   // a destroy kills the VM outright
   await runImp('rm', name);
 
@@ -67,16 +75,12 @@ test('it starts, stops and removes a jailed VM cleanly, and the boot template bu
   expect(cgroup.exitCode).not.toBe(0);
   expect(removedMounts).toStrictEqual([]);
 
-  // impd logs a build's end: built, refused or failed; a restore of an
-  // existing template starts none
-  await waitFor('the boot template build to end', async () => {
+  // the jailed build this imp's boots started ends before the mount check
+  await waitFor('the imp’s boot template build to end', async () => {
     const log = await readImpdLogSince(since);
 
-    if (
-      !log.includes(`${name}: restored boot template`) &&
-      !/impd: boot template [\da-f]{12} (?:built in|build refused|build failed)/v.test(log)
-    ) {
-      throw new Error('no build end logged yet');
+    if (!checkTemplateBuildEnded(log, name, key)) {
+      throw new Error(`no end of the ${key.slice(0, 12)} build logged yet`);
     }
   });
 

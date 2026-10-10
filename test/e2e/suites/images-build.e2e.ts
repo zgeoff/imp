@@ -85,7 +85,17 @@ test('it builds images/examples/hello from its pinned base in a builder, and the
   const row = await requireImp(name);
   const urls = await readImpUrls(name);
   const page = await readFile(join(helloDir, 'rootfs', 'srv', 'hello', 'index.html'), 'utf8');
-  const body = await waitFor(`${name} to serve its page`, () => getThroughProxy(name));
+
+  // until its own page comes through, not just any answer
+  const body = await waitFor(`${name} to serve its page`, async () => {
+    const served = await getThroughProxy(name);
+
+    if (served !== page.trim()) {
+      throw new Error(`not its page yet: ${served.slice(0, 80)}`);
+    }
+
+    return served;
+  });
 
   expect(urls.local).toBe(row.url);
   expect(body).toBe(page.trim());
@@ -240,8 +250,12 @@ test('it builds with the pinned frontend whatever a # syntax= line names', async
 
   const images = await listImageNames();
 
-  expect(built.exitCode, built.stderr).toBe(0);
-  expect(built.stderr).not.toContain('example.invalid');
+  expect(built).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toBeString(),
+    stderr: expect.toSatisfy((stderr: string) => !stderr.includes('example.invalid')),
+  });
+
   expect(images).toContain(name);
 });
 

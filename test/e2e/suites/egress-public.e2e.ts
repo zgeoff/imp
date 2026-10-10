@@ -82,7 +82,8 @@ test('it lets an open imp reach each private listener, before and after a public
 
   const acceptedBefore = listener.readAccepted();
 
-  expect([controlLan.isConnected, controlGateway.isConnected]).toStrictEqual([true, true]);
+  expect(controlLan.isConnected).toBeTrue();
+  expect(controlGateway.isConnected).toBeTrue();
   expect(beforeRefusals[LAN.private]).toBe((initial[LAN.private] ?? 0) + 1);
   expect(acceptedBefore).toBe(1);
 
@@ -110,7 +111,8 @@ test('it lets an open imp reach each private listener, before and after a public
   const againLan = await runTimedDial(open, LAN.private, LAN.port);
   const againGateway = await runTimedDial(open, ctx.gateway, listener.port);
 
-  expect([againLan.isConnected, againGateway.isConnected]).toStrictEqual([true, true]);
+  expect(againLan.isConnected).toBeTrue();
+  expect(againGateway.isConnected).toBeTrue();
 });
 
 test.skipIf(tailnetIp === null)('it refuses a public imp the host’s tailnet address', async () => {

@@ -1,5 +1,4 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import * as z from 'zod';
 import { createImpClient } from '../../../packages/client/src/index';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -78,8 +77,8 @@ test('it refuses a sleep or stop of a leased imp with LEASED, and imp sleep forc
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}leased`;
-  const ownerA = `${ctx.prefix}a`;
-  const ownerB = `${ctx.prefix}b`;
+  const ownerA = `${ctx.prefix}leased-a`;
+  const ownerB = `${ctx.prefix}leased-b`;
 
   const tokenA = await ctx.client.tokens.create({ name: ownerA, scope: 'exec' });
 
@@ -126,7 +125,7 @@ test('it wakes the imp on an acquire, ends the lease at its end, and lets the im
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}short`;
-  const owner = `${ctx.prefix}a`;
+  const owner = `${ctx.prefix}short-a`;
 
   const token = await ctx.client.tokens.create({ name: owner, scope: 'exec' });
 
@@ -184,7 +183,7 @@ test('it sleeps a held imp on a sleep without force, and the hold survives', asy
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}held`;
-  const owner = `${ctx.prefix}b`;
+  const owner = `${ctx.prefix}held-b`;
 
   const token = await ctx.client.tokens.create({ name: owner, scope: 'exec' });
 
@@ -213,7 +212,7 @@ test.skipIf(config.ramBudgetMib > 2048)(
 
     const budget = config.ramBudgetMib;
     const image = resolveImageName('e2e-tiny');
-    const owner = `${ctx.prefix}a`;
+    const owner = `${ctx.prefix}big-a`;
     const big = `${ctx.prefix}big`;
     const fillA = `${ctx.prefix}fill-a`;
     const fillB = `${ctx.prefix}fill-b`;
@@ -263,36 +262,29 @@ test.skipIf(config.ramBudgetMib > 2048)(
         `dd if=/dev/urandom of=/run/fill/blob bs=1M count=${String(fillMib)} 2>/dev/null`,
     );
 
-    const [settled] = await Promise.allSettled([
-      clientA.leases.acquire({ name: big, label: 'job', ttlSeconds: 60 }),
-    ]);
+    const acquired = clientA.leases.acquire({ name: big, label: 'job', ttlSeconds: 60 });
+
+    // the two leased fillers are the protected imps it names as leased
+    expect(acquired).rejects.toMatchObject({
+      code: 'RAM_BUDGET_EXCEEDED',
+      data: {
+        budgetMib: budget,
+        protectedHidden: 0,
+        neededMib: expect.toBePositive(),
+        protected: expect.toSatisfy(
+          (imps: readonly Readonly<{ name: string; leased: boolean }>[]) =>
+            JSON.stringify(
+              imps
+                .filter((imp) => imp.leased)
+                .map((imp) => imp.name)
+                .toSorted(),
+            ) === JSON.stringify([fillA, fillB].toSorted()),
+        ),
+      },
+    });
 
     const leases = await ctx.client.leases.list({ name: big });
 
-    // the acquire's rejection, read without a catch; a fulfilled one parses
-    // as no refusal and fails below
-    const reason: unknown = settled?.status === 'rejected' ? settled.reason : undefined;
-    const protectedImp = z.object({ name: z.string(), leased: z.boolean() });
-
-    const refusal = z
-      .object({
-        code: z.string(),
-        data: z.object({
-          budgetMib: z.int(),
-          protectedHidden: z.int(),
-          neededMib: z.int(),
-          protected: z.array(protectedImp),
-        }),
-      })
-      .parse(reason);
-
-    const leased = refusal.data.protected.filter((imp) => imp.leased).map((imp) => imp.name);
-
-    expect(refusal.code).toBe('RAM_BUDGET_EXCEEDED');
-    expect(refusal.data.budgetMib).toBe(budget);
-    expect(refusal.data.protectedHidden).toBe(0);
-    expect(refusal.data.neededMib).toBeGreaterThan(0);
-    expect(leased.toSorted()).toStrictEqual([fillA, fillB]);
     expect(leases).toStrictEqual([]);
   },
   180_000,

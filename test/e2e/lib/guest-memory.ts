@@ -1,4 +1,5 @@
 import { requireImp, runShellInImp } from './imp-cli';
+import { parseWholeNumber } from './parse-whole-number';
 
 // Thin glue over a live guest and impd, with nothing to test without one.
 
@@ -9,7 +10,7 @@ async function readMeminfoKib(name: string, field: string): Promise<number> {
     `grep '^${field}:' /proc/meminfo | tr -s ' ' | cut -d' ' -f2`,
   );
 
-  return Number(stdout.trim());
+  return parseWholeNumber(stdout, `${name}'s ${field}`);
 }
 
 // the guest's MemTotal in MiB

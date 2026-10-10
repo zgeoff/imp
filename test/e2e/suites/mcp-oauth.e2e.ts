@@ -85,7 +85,9 @@ test('it serves the route’s discovery documents and nothing private', async ()
 
   expect(unauthorized.status).toBe(401);
   expect(unauthorized.headers.get('www-authenticate')).toContain('resource_metadata=');
-  expect([rpc.status, health.status, ui.status]).toStrictEqual([404, 404, 404]);
+  expect(rpc.status).toBe(404);
+  expect(health.status).toBe(404);
+  expect(ui.status).toBe(404);
   expect(withRoot.status).toBe(401);
 });
 
@@ -212,8 +214,8 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
 test('it rotates a refresh, and ends the grant when a spent refresh token comes again', async () => {
   const ctx = await setupTest();
 
-  const clientName = `${ctx.prefix}conn`;
-  const approver = `${ctx.prefix}approver`;
+  const clientName = `${ctx.prefix}rot-conn`;
+  const approver = `${ctx.prefix}rot-approver`;
 
   const added = await ctx.client.oauth.clients.add({
     name: clientName,
@@ -265,9 +267,9 @@ test('it rotates a refresh, and ends the grant when a spent refresh token comes 
 test('it stops the command a grant runs when the approving token goes, then answers 401', async () => {
   const ctx = await setupTest();
 
-  const box = `${ctx.prefix}box`;
-  const clientName = `${ctx.prefix}conn`;
-  const approver = `${ctx.prefix}approver`;
+  const box = `${ctx.prefix}stop-box`;
+  const clientName = `${ctx.prefix}stop-conn`;
+  const approver = `${ctx.prefix}stop-approver`;
 
   await runImp('new', box, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
@@ -318,20 +320,18 @@ test('it stops the command a grant runs when the approving token goes, then answ
 
   await runImp('token', 'rm', approver);
 
-  const [settled] = await Promise.allSettled([call]);
+  // a stream that ended with no result, or none at all
+  const answered = await call.then(
+    (response) => JSON.stringify(response.body).includes('"result"'),
+    () => false,
+  );
 
   const elapsedMs = Date.now() - started;
-
-  // a stream that ended with no result, or none at all
-  const outcome =
-    settled?.status === 'fulfilled' && JSON.stringify(settled.value.body).includes('"result"')
-      ? 'answered'
-      : 'dropped';
 
   const after = await sendMcp(ctx.origin, tokens.access_token, session, 'ping');
   const processes = await runImp('exec', box, '--', 'ps');
 
-  expect(outcome).toBe('dropped');
+  expect(answered).toBeFalse();
 
   // the stream closed long before the command's 120 s
   expect(elapsedMs).toBeLessThan(30_000);
@@ -342,7 +342,7 @@ test('it stops the command a grant runs when the approving token goes, then answ
 test('it answers 429 to sign-ins past the burst', async () => {
   const ctx = await setupTest();
 
-  const clientName = `${ctx.prefix}conn`;
+  const clientName = `${ctx.prefix}burst-conn`;
 
   const added = await ctx.client.oauth.clients.add({
     name: clientName,

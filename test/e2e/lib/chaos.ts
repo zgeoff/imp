@@ -1,4 +1,3 @@
-import { expect } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { listImps, tryImp } from './imp-cli';
@@ -56,17 +55,85 @@ export function pickOne<T>(random: () => number, items: readonly T[]): T {
   return item;
 }
 
-// one to three operations on the imps, then a fault, impd's twice as likely,
-// within 3 s
+// An exec that outlasts the fault's offset, so some operation is always in
+// flight when it lands, then up to two more operations on the imps, then a
+// fault, impd's twice as likely, within 3 s.
 export function planChaosRound(random: () => number, names: readonly string[]): ChaosRound {
-  const steps = Array.from({ length: 1 + Math.floor(random() * 3) }, () => ({
+  const held: ChaosStep = { op: 'exec', name: pickOne(random, names) };
+
+  const others = Array.from({ length: Math.floor(random() * 3) }, () => ({
     op: pickOne<ChaosOp>(random, ['sleep', 'wake', 'exec', 'stop-start']),
     name: pickOne(random, names),
   }));
 
   const fault = pickOne<ChaosFault>(random, ['impd', 'impd', 'firecracker', 'container']);
 
-  return { steps, fault, delayMs: Math.floor(random() * 3000) };
+  return { steps: [held, ...others], fault, delayMs: Math.floor(random() * 3000) };
+}
+
+// how long an exec step runs in the guest: past the latest fault offset
+export const CHAOS_EXEC_S = 4;
+
+// The imp a Firecracker kill takes: one whose VM runs, or null when none
+// does.
+export function pickFaultVictim(
+  random: () => number,
+  names: readonly string[],
+  idsByName: ReadonlyMap<string, string>,
+  vms: ReadonlyMap<string, readonly number[]>,
+): string | null {
+  const running = names.filter((name) => vms.has(idsByName.get(name) ?? ''));
+
+  return running.length === 0 ? null : pickOne(random, running);
+}
+
+export interface ImpVmRow {
+  readonly id: string;
+  readonly name: string;
+  readonly state: string;
+}
+
+// each imp's state and the VMs it has, as a line a failure reads at once
+export function listImpVmCounts(
+  rows: readonly ImpVmRow[],
+  vms: ReadonlyMap<string, readonly number[]>,
+): string[] {
+  return rows.map((row) => `${row.name} ${row.state}: ${String(vms.get(row.id)?.length ?? 0)} VMs`);
+}
+
+// The VMs each imp should have: one while running, and one in `error`
+// where an adopt left a VM that outlived SIGKILL, with its pid on record.
+export function listExpectedImpVmCounts(
+  rows: readonly ImpVmRow[],
+  vms: ReadonlyMap<string, readonly number[]>,
+): string[] {
+  return rows.map((row) => {
+    const count = vms.get(row.id)?.length ?? 0;
+    const owned = row.state === 'running' || (row.state === 'error' && count > 0) ? 1 : 0;
+
+    return `${row.name} ${row.state}: ${String(owned)} VMs`;
+  });
+}
+
+// the VMs no imp owns
+export function findStrayVms(
+  rows: readonly ImpVmRow[],
+  vms: ReadonlyMap<string, readonly number[]>,
+): string[] {
+  const known = new Set(rows.map((row) => row.id));
+
+  return [...vms.keys()].filter((id) => !known.has(id));
+}
+
+const SETTLED_STATES = new Set(['running', 'sleeping', 'stopped', 'error']);
+
+// the imps of `names` not yet in a state a user can act on
+export function findUnsettledImps(rows: readonly ImpVmRow[], names: readonly string[]): string[] {
+  return names.filter((name) => {
+    const state = rows.find((row) => row.name === name)?.state ?? 'missing';
+
+    return !SETTLED_STATES.has(state);
+  });
 }
 
 // The imps a round may cost their memory: those the fault took, every stop
@@ -162,16 +229,17 @@ export async function runChaosStep(step: Readonly<ChaosStep>): Promise<void> {
     return;
   }
 
-  const args = step.op === 'exec' ? ['exec', step.name, '--', 'true'] : [step.op, step.name];
+  const args =
+    step.op === 'exec'
+      ? ['exec', step.name, '--', 'sleep', String(CHAOS_EXEC_S)]
+      : [step.op, step.name];
 
   await tryImp(args);
 }
 
 // kills the container, waits until none of its processes or its loop device
 // is left, and brings it back
-async function runContainerKill(): Promise<void> {
-  const containerId = await readContainerId();
-
+async function runContainerKill(containerId: string): Promise<void> {
   await runChecked(['docker', 'kill', instance.container]);
 
   await waitFor('the killed container to leave no process', () => {
@@ -198,78 +266,79 @@ async function runContainerKill(): Promise<void> {
   await runDevScript('up');
 }
 
-// the fault, and the imps it took their memory from
+export interface ChaosFaultResult {
+  // the imps whose memory it took
+  readonly taken: readonly string[];
+
+  // what it killed: impd's pid, a VM's pids, or the container's id
+  readonly killed: readonly string[];
+}
+
+async function runKillInContainer(pid: string): Promise<void> {
+  const result = await runInContainer(['kill', '-9', pid]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(`kill -9 ${pid} exited ${String(result.exitCode)}: ${result.stderr.trim()}`);
+  }
+}
+
+// The fault, which throws when it finds nothing to kill: a round whose
+// fault never happened proves nothing.
 export async function runChaosFault(
   fault: ChaosFault,
   names: readonly string[],
   idsByName: ReadonlyMap<string, string>,
   random: () => number,
-): Promise<readonly string[]> {
+): Promise<ChaosFaultResult> {
   if (fault === 'impd') {
     const pid = await findImpdPid();
 
-    if (pid !== null) {
-      await runInContainer(['kill', '-9', pid]);
+    if (pid === null) {
+      throw new Error('no impd to kill');
     }
 
-    return [];
+    await runKillInContainer(pid);
+
+    return { taken: [], killed: [pid] };
   }
 
   if (fault === 'firecracker') {
     const vms = await listContainerVms();
 
-    const running = names.filter((name) => vms.has(idsByName.get(name) ?? ''));
+    const name = pickFaultVictim(random, names, idsByName, vms);
 
-    if (running.length === 0) {
-      return [];
+    if (name === null) {
+      throw new Error('no Firecracker runs to kill');
     }
 
-    const name = pickOne(random, running);
+    const pids = (vms.get(idsByName.get(name) ?? '') ?? []).map(String);
 
-    for (const pid of vms.get(idsByName.get(name) ?? '') ?? []) {
-      await runInContainer(['kill', '-9', String(pid)]);
+    for (const pid of pids) {
+      await runKillInContainer(pid);
     }
 
-    return [name];
+    return { taken: [name], killed: pids };
   }
 
-  await runContainerKill();
+  const containerId = await readContainerId();
 
-  return names;
+  await runContainerKill(containerId);
+
+  return { taken: names, killed: [containerId] };
 }
 
-// Every imp settles in a state a user can act on, and each awake one has
-// exactly the one VM its record says; returns the imps in `error`, where an
-// adopt leaves one whose VM outlived SIGKILL, with the pid on its record.
-export async function checkChaosStates(names: readonly string[]): Promise<Set<string>> {
-  await waitFor('every imp to settle', async () => {
+// the rows of the imps, once every one of `names` is in a state a user can
+// act on
+export function readSettledImps(names: readonly string[]): Promise<readonly ImpVmRow[]> {
+  return waitFor('every imp to settle', async () => {
     const rows = await listImps();
 
-    const states = names.map((name) => rows.find((row) => row.name === name)?.state ?? 'missing');
+    const unsettled = findUnsettledImps(rows, names);
 
-    expect(states).toSatisfyAll((state: string) =>
-      ['running', 'sleeping', 'stopped', 'error'].includes(state),
-    );
+    if (unsettled.length > 0) {
+      throw new Error(`${unsettled.join(', ')} not settled`);
+    }
+
+    return rows;
   });
-
-  const rows = await listImps();
-  const vms = await listContainerVms();
-
-  const counts = rows.map(
-    (row) => `${row.name} ${row.state}: ${String(vms.get(row.id)?.length ?? 0)} VMs`,
-  );
-
-  const expected = rows.map((row) => {
-    const count = vms.get(row.id)?.length ?? 0;
-    const owned = row.state === 'running' || (row.state === 'error' && count > 0) ? 1 : 0;
-
-    return `${row.name} ${row.state}: ${String(owned)} VMs`;
-  });
-
-  const known = new Set(rows.map((row) => row.id));
-
-  expect(counts).toStrictEqual(expected);
-  expect([...vms.keys()].filter((id) => !known.has(id))).toStrictEqual([]);
-
-  return new Set(rows.filter((row) => row.state === 'error').map((row) => row.name));
 }

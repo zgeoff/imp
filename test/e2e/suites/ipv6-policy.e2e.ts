@@ -6,6 +6,7 @@ import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import { instance, runCommand, runDevScript } from '../lib/instance';
 import {
+  buildRaCounterTable,
   buildV6Names,
   buildV6Plan,
   readGuestIpv6,
@@ -95,30 +96,27 @@ test('it holds box and none imps to their policies over IPv6, isolates every imp
   await holdImp(none);
 
   // the open imp reaches each address and port, so a refusal is the policy's
-  const boxReached = [
-    await tryGetFromImp(box, `http://[${server}]/`),
-    await tryGetFromImp(box, `http://[${other}]/`),
-    await tryGetFromImp(box, `http://[${ctx.plan.routerNear}]/`),
-  ];
+  const boxToServer = await tryGetFromImp(box, `http://[${server}]/`);
+  const boxToOther = await tryGetFromImp(box, `http://[${other}]/`);
+  const boxToRouter = await tryGetFromImp(box, `http://[${ctx.plan.routerNear}]/`);
 
   // DNS goes to impd's resolver over IPv4 only; port 53 over IPv6 meets the
   // policy like any other port, so no query leaks out
-  const boxDns = [
-    await tryInImp(box, `nslookup example.com ${other}`),
-    await tryGetFromImp(box, `http://[${other}]:53/`),
-    await tryGetFromImp(box, `http://[${server}]:53/`),
-  ];
-
-  const openControls = [
-    await tryGetFromImp(open, `http://[${other}]/`),
-    await tryGetFromImp(open, `http://[${other}]:53/`),
-  ];
-
+  const boxLookup = await tryInImp(box, `nslookup example.com ${other}`);
+  const boxToOther53 = await tryGetFromImp(box, `http://[${other}]:53/`);
+  const boxToServer53 = await tryGetFromImp(box, `http://[${server}]:53/`);
+  const openToOther = await tryGetFromImp(open, `http://[${other}]/`);
+  const openToOther53 = await tryGetFromImp(open, `http://[${other}]:53/`);
   const noneReached = await tryGetFromImp(none, `http://[${server}]/`);
 
-  expect(boxReached).toStrictEqual([true, false, false]);
-  expect(boxDns).toStrictEqual([false, false, true]);
-  expect(openControls).toStrictEqual([true, true]);
+  expect(boxToServer).toBeTrue();
+  expect(boxToOther).toBeFalse();
+  expect(boxToRouter).toBeFalse();
+  expect(boxLookup).toBeFalse();
+  expect(boxToOther53).toBeFalse();
+  expect(boxToServer53).toBeTrue();
+  expect(openToOther).toBeTrue();
+  expect(openToOther53).toBeTrue();
   expect(noneReached).toBeFalse();
 
   const boxAddress = await readGuestIpv6(box);
@@ -153,18 +151,19 @@ test('it holds box and none imps to their policies over IPv6, isolates every imp
     return result.stdout.trim();
   });
 
-  const isolated = [
-    await tryGetFromImp(open, `http://[${boxAddress}]:8080/`),
-    await tryDialFromImp(open, hostAddress, 7099),
-    await tryDialFromImp(open, 'fe80::1%eth0', 7099),
-    await tryInImp(open, `ping -c 1 -W 2 ${ctx.plan.routerNear}`),
-  ];
+  const toBox = await tryGetFromImp(open, `http://[${boxAddress}]:8080/`);
+  const toHost = await tryDialFromImp(open, hostAddress, 7099);
+  const toLinkLocalHost = await tryDialFromImp(open, 'fe80::1%eth0', 7099);
+  const toRouterNear = await tryInImp(open, `ping -c 1 -W 2 ${ctx.plan.routerNear}`);
 
   // the router's far side is not on a network the host is on
   const farControl = await tryInImp(open, `ping -c 1 -W 2 ${ctx.plan.routerFar}`);
 
   expect(fromRouter).toBe('hi');
-  expect(isolated).toStrictEqual([false, false, false, false]);
+  expect(toBox).toBeFalse();
+  expect(toHost).toBeFalse();
+  expect(toLinkLocalHost).toBeFalse();
+  expect(toRouterNear).toBeFalse();
   expect(farControl).toBeTrue();
 
   // Spoofed from outside the prefix, and as another imp: the host's rpfilter
@@ -191,7 +190,8 @@ test('it holds box and none imps to their policies over IPv6, isolates every imp
 
   expect(spoofControl).toBeTrue();
   expect(fromOwn).toBeTrue();
-  expect([fromFar, fromBox]).toStrictEqual([false, false]);
+  expect(fromFar).toBeFalse();
+  expect(fromBox).toBeFalse();
 
   await runImp('new', rogue, '--image', resolveImageName('e2e-ra'), '--memory', '256');
 
@@ -199,20 +199,23 @@ test('it holds box and none imps to their policies over IPv6, isolates every imp
 
   await waitForExec(rogue);
 
-  // impd's nft input chain drops a guest's RA before ip6tables sees it, so
-  // the proof it arrived counts it on the tap's ingress, ahead of every hook
+  // impd's nft input drops a guest's RA before ip6tables, so a counter on the
+  // tap's ingress proves it arrived; the reboot onto the topology made the
+  // container anew, so no earlier run's table is there
   const tap = await readImpTap(rogue);
 
-  await startRaCounter(tap);
+  const table = buildRaCounterTable(ctx.prefix);
 
-  ctx.stack.defer(() => stopRaCounter());
+  await startRaCounter(table, tap);
+
+  ctx.stack.defer(() => stopRaCounter(table));
 
   const routingBefore = await readHostRouting();
 
   await runShellInImp(rogue, 'ra-send eth0 2001:db8:66::/64');
 
   const arrived = await waitFor('the advertisement to reach the tap', async () => {
-    const counts = await readRaCounts();
+    const counts = await readRaCounts(table);
 
     if (!(counts.adverts > 0)) {
       throw new Error(`${String(counts.adverts)} advertisements on ${tap}`);
@@ -233,7 +236,7 @@ test('it holds box and none imps to their policies over IPv6, isolates every imp
   );
 
   const solicited = await waitFor('a solicitation to reach the host', async () => {
-    const counts = await readRaCounts();
+    const counts = await readRaCounts(table);
     const accepts = await readRsAccepts();
 
     if (!(counts.solicits > arrived.solicits && accepts > acceptsBefore)) {

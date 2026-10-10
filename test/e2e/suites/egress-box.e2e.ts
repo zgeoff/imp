@@ -45,15 +45,14 @@ test('it lets an open imp reach the internet and the private gateway, and no imp
   await waitForExec(name);
   await holdImp(name);
 
-  const reached = [
-    await tryGetFromImp(name, 'http://example.com/'),
-    await tryGetFromImp(name, 'http://example.org/'),
-    await tryDialFromImp(name, ctx.gateway, listener.port),
-  ];
-
+  const exampleCom = await tryGetFromImp(name, 'http://example.com/');
+  const exampleOrg = await tryGetFromImp(name, 'http://example.org/');
+  const gateway = await tryDialFromImp(name, ctx.gateway, listener.port);
   const metadata = await tryDialFromImp(name, '169.254.169.254', 80);
 
-  expect(reached).toStrictEqual([true, true, true]);
+  expect(exampleCom).toBeTrue();
+  expect(exampleOrg).toBeTrue();
+  expect(gateway).toBeTrue();
   expect(metadata).toBeFalse();
 });
 
@@ -92,14 +91,14 @@ test('it lets a box imp reach its list, and nothing else', async () => {
   writeMetric('egressFirstFetchMs', Math.round(performance.now() - started));
 
   // 9.9.9.9: an address no list here names, and no answer adds
-  const denied = [
-    await tryGetFromImp(name, 'http://example.org/'),
-    await tryDialFromImp(name, '9.9.9.9', 443),
-    await tryDialFromImp(name, ctx.gateway, listener.port),
-  ];
+  const unlisted = await tryGetFromImp(name, 'http://example.org/');
+  const unnamed = await tryDialFromImp(name, '9.9.9.9', 443);
+  const gateway = await tryDialFromImp(name, ctx.gateway, listener.port);
 
   expect(allowed).toBeTrue();
-  expect(denied).toStrictEqual([false, false, false]);
+  expect(unlisted).toBeFalse();
+  expect(unnamed).toBeFalse();
+  expect(gateway).toBeFalse();
 });
 
 test('it answers a refused name with REFUSED and EDE 18, whichever resolver the guest asks', async () => {
@@ -177,7 +176,8 @@ test('it drops a guest that sends from another address of its /30', async () => 
   const fromGuest = await tryDialFromImp(name, ctx.gateway, listener.port);
   const fromOther = await tryDialFromImp(name, ctx.gateway, listener.port, other);
 
-  expect([fromGuest, fromOther]).toStrictEqual([true, false]);
+  expect(fromGuest).toBeTrue();
+  expect(fromOther).toBeFalse();
 });
 
 test('it opens a private address only by an explicit CIDR, and cuts its flow under a tighter policy', async () => {
@@ -355,15 +355,14 @@ test('it lets a none imp reach nothing, and open gives it all back', async () =>
   await holdImp(name);
   await runImp('policy', name, 'none');
 
-  const shut = [
-    await tryGetFromImp(name, 'http://example.com/'),
-    await tryDialFromImp(name, '9.9.9.9', 443),
-  ];
+  const shutFetch = await tryGetFromImp(name, 'http://example.com/');
+  const shutDial = await tryDialFromImp(name, '9.9.9.9', 443);
 
   await runImp('policy', name, 'open');
 
   const reopened = await tryGetFromImp(name, 'http://example.org/');
 
-  expect(shut).toStrictEqual([false, false]);
+  expect(shutFetch).toBeFalse();
+  expect(shutDial).toBeFalse();
   expect(reopened).toBeTrue();
 });

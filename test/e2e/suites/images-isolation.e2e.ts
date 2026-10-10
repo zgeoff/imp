@@ -252,7 +252,12 @@ test('it pulls an added image in a builder: the host engine gains no image, the 
   const inspected = await runCommand(['docker', 'image', 'inspect', 'busybox:1.36.1']);
 
   expect(after.split('\n').toSorted()).toStrictEqual(before.split('\n').toSorted());
-  expect(inspected.exitCode).toBe(1);
+
+  expect(inspected).toStrictEqual({
+    exitCode: 1,
+    stdout: '[]\n',
+    stderr: expect.toInclude('No such image: busybox:1.36.1'),
+  });
 
   // the audit row, written after the answer, names the bytes the pull took
   const add = await waitFor('the add in the audit log', async () => {

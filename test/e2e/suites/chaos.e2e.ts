@@ -1,14 +1,17 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
 import {
-  checkChaosStates,
   createParkMiller,
   findContainerProcesses,
   findLostImps,
+  findStrayVms,
   listContainerVms,
+  listExpectedImpVmCounts,
+  listImpVmCounts,
   planChaosRound,
   readContainerId,
   readLoopDevices,
+  readSettledImps,
   runChaosFault,
   runChaosStep,
   waitForImpd,
@@ -104,21 +107,45 @@ test('it keeps every imp valid, with its disk and the memory no kill could take,
       `    round ${String(round)}: ${steps}; ${plan.fault} after ${String(plan.delayMs)}ms`,
     );
 
-    const running = Promise.allSettled(plan.steps.map((step) => runChaosStep(step)));
+    let settledSteps = 0;
+
+    const running = Promise.allSettled(
+      plan.steps.map(async (step) => {
+        await runChaosStep(step);
+
+        settledSteps += 1;
+      }),
+    );
 
     // the fault lands among the operations, at the seeded offset
     await Bun.sleep(plan.delayMs);
 
-    const taken = await runChaosFault(plan.fault, names, idsByName, random);
+    const inFlight = plan.steps.length - settledSteps;
+
+    const fault = await runChaosFault(plan.fault, names, idsByName, random);
 
     await running;
     await waitForImpd();
 
-    const lost = findLostImps(plan, taken);
+    const lost = findLostImps(plan, fault.taken);
 
-    for (const name of await checkChaosStates(names)) {
-      console.log(`    ${name}: error after round ${String(round)}; left out from here`);
-      failed.add(name);
+    const settled = await readSettledImps(names);
+    const vms = await listContainerVms();
+
+    // the fault overlapped an operation, and killed something
+    expect(inFlight).toBeGreaterThan(0);
+    expect(fault.killed).not.toBeEmpty();
+
+    // each awake imp has exactly the one VM its record says
+    expect(listImpVmCounts(settled, vms)).toStrictEqual(listExpectedImpVmCounts(settled, vms));
+    expect(findStrayVms(settled, vms)).toStrictEqual([]);
+
+    const errored = settled.filter((row) => row.state === 'error' && names.includes(row.name));
+
+    // an adopt leaves an imp whose VM outlived SIGKILL in `error`
+    for (const row of errored) {
+      console.log(`    ${row.name}: error after round ${String(round)}; left out from here`);
+      failed.add(row.name);
     }
 
     for (const name of names.filter((candidate) => !failed.has(candidate))) {
@@ -166,6 +193,8 @@ test('it restarts a paused VM whose agent stops answering with the watchdog', as
 
   const name = `${ctx.prefix}dog`;
 
+  // in-test: the rounds would trip a watchdog this short, and DISK_FULL's
+  // reserve would refuse their sleeps
   await runDevScript('reboot', instance, {
     IMP_WATCHDOG_ACTION: 'restart',
     IMP_WATCHDOG_TIMEOUT_S: '10',
@@ -174,6 +203,12 @@ test('it restarts a paused VM whose agent stops answering with the watchdog', as
   ctx.stack.defer(() => runDevScript('reboot'));
 
   await waitForImpd();
+
+  // no VM or loop device outlives the reboot
+  const devices = await readLoopDevices();
+  const vms = await listContainerVms();
+  const rows = await listImps();
+
   await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '512');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
@@ -215,6 +250,8 @@ test('it restarts a paused VM whose agent stops answering with the watchdog', as
 
   const isKept = await checkMemoryKept(proof);
 
+  expect(devices.length).toBeLessThanOrEqual(1);
+  expect(findStrayVms(rows, vms)).toStrictEqual([]);
   expect(restarted.coldBootReason).toContain('watchdog');
   expect(isKept).toBeFalse();
 });
@@ -230,16 +267,27 @@ test('it keeps an imp awake with DISK_FULL when the disk cannot take its sleep',
 
   await waitForExec(name);
 
-  // a reserve past any test disk: a wake still goes through, a sleep not
+  // A reserve past any test disk: a wake still goes through, a sleep not.
+  // In-test, since the suite's other tests need their sleeps; the imp comes
+  // first, as no create fits the reserve.
   await runDevScript('reboot', instance, { IMP_DISK_RESERVE_GIB: '100000' });
 
   ctx.stack.defer(() => runDevScript('reboot'));
 
   await waitForImpd();
+
+  // no VM or loop device outlives the reboot
+  const devices = await readLoopDevices();
+  const vms = await listContainerVms();
+  const rows = await listImps();
+
   await runImp('wake', name);
 
   const result = await tryImp(['sleep', name]);
   const after = await requireImp(name);
+
+  expect(devices.length).toBeLessThanOrEqual(1);
+  expect(findStrayVms(rows, vms)).toStrictEqual([]);
 
   expect(result).toStrictEqual({
     exitCode: 1,

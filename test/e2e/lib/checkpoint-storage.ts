@@ -2,8 +2,18 @@ import { readInfo } from './imp-cli';
 import { readGuestFile, writeGuestFile } from './imps';
 import { runInContainer } from './instance';
 
-// Thin glue over the host container and live guests, with nothing to test
-// without them.
+// Whether `zfs list -H -t snapshot -o name,defer_destroy` shows the
+// checkpoint's snapshot not yet marked for destroy (one a fork still needs
+// stays, marked, until the fork goes).
+export function hasLiveSnapshot(listing: string, checkpointId: string): boolean {
+  return listing.split('\n').some((line) => {
+    const [name = '', deferDestroy = ''] = line.split('\t');
+
+    return name.endsWith(`@${checkpointId}`) && deferDestroy === 'off';
+  });
+}
+
+// Thin glue over the host container and live guests below.
 
 async function checkInContainer(...argv: readonly string[]): Promise<boolean> {
   const result = await runInContainer(argv);
@@ -16,8 +26,7 @@ export function hasImpDir(impId: string): Promise<boolean> {
   return checkInContainer('test', '-e', `/var/lib/imp/imps/${impId}`);
 }
 
-// A reflink file on XFS; on ZFS a snapshot not yet marked for destroy (one a
-// fork still needs stays, marked, until the fork goes).
+// a reflink file on XFS; on ZFS a live snapshot (hasLiveSnapshot)
 export async function hasCheckpointStorage(impId: string, checkpointId: string): Promise<boolean> {
   const info = await readInfo();
 
@@ -25,13 +34,21 @@ export async function hasCheckpointStorage(impId: string, checkpointId: string):
     return checkInContainer('test', '-e', `/var/lib/imp/imps/${impId}/checkpoints/${checkpointId}`);
   }
 
-  return checkInContainer(
-    'sh',
-    '-c',
-    `zfs list -H -t snapshot -o name,defer_destroy | awk -F '\t' -v id="@$1" 'substr($1, length($1) - length(id) + 1) == id && $2 == "off" { found = 1 } END { exit !found }'`,
-    'sh',
-    checkpointId,
-  );
+  const listed = await runInContainer([
+    'zfs',
+    'list',
+    '-H',
+    '-t',
+    'snapshot',
+    '-o',
+    'name,defer_destroy',
+  ]);
+
+  if (listed.exitCode !== 0) {
+    throw new Error(`zfs list exited ${String(listed.exitCode)}: ${listed.stderr.trim()}`);
+  }
+
+  return hasLiveSnapshot(listed.stdout, checkpointId);
 }
 
 export interface CrossWrites {

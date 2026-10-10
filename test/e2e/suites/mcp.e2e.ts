@@ -46,6 +46,9 @@ test('it boots an imp inside the prefix with imp_create, and refuses one outside
 
   const outside = await ctx.session.runTool('imp_create', { name: 'e2e-other' });
 
+  // an imp a regressed refusal would leave behind
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, 'e2e-other'));
+
   expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
   expect(outside.isError).toBeTrue();
 });
@@ -67,7 +70,8 @@ test.each([
     const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
 
     registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
-    readToolData(created);
+
+    expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
 
     const written = await ctx.session.runTool('imp_write_file', { name, path, content });
     const read = await ctx.session.runTool('imp_read_file', { name, path });
@@ -77,14 +81,17 @@ test.each([
       command: `ls -la '/root/-odd dir'; stat -c %a '${path}'`,
     });
 
-    const listing = String(readToolData(listed)['stdout']);
-
     expect(readToolData(written)).toStrictEqual({ path, bytes: Buffer.byteLength(content) });
     expect(readToolData(read)).toMatchObject({ content });
 
     // no temp file is left behind, and a new file gets 0666 less the umask
-    expect(listing).not.toContain('.imp-write.');
-    expect(listing.trim().split('\n').at(-1)).toBe('644');
+    expect(readToolData(listed)).toMatchObject({
+      exitCode: 0,
+      stdout: expect.toSatisfy(
+        (stdout: string) => !stdout.includes('.imp-write.') && stdout.trimEnd().endsWith('\n644'),
+      ),
+      stderr: '',
+    });
 
     await ctx.session.runTool('imp_exec', { name, command: `chmod 600 '${path}'` });
     await ctx.session.runTool('imp_write_file', { name, path, content: 'again\n' });
@@ -94,7 +101,7 @@ test.each([
       command: `stat -c %a '${path}'; cat '${path}'`,
     });
 
-    expect(readToolData(mode)['stdout']).toBe('600\nagain\n');
+    expect(readToolData(mode)).toMatchObject({ exitCode: 0, stdout: '600\nagain\n', stderr: '' });
   },
 );
 
@@ -109,11 +116,14 @@ test.each([
   const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
-  readToolData(created);
 
+  expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
+
+  // the link points at an odd path: a leading dash, a space and shell syntax
   await ctx.session.runTool('imp_exec', {
     name,
-    command: 'echo before > /root/target.txt && ln -sf /root/target.txt /root/link.txt',
+    command:
+      "mkdir -p '/root/-odd dir' && echo before > '/root/-odd dir/-target $(x).txt' && ln -sf '/root/-odd dir/-target $(x).txt' /root/link.txt",
   });
 
   const linked = await ctx.session.runTool('imp_write_file', {
@@ -124,7 +134,7 @@ test.each([
 
   const after = await ctx.session.runTool('imp_exec', {
     name,
-    command: '[ -L /root/link.txt ] && echo link; cat /root/target.txt',
+    command: "[ -L /root/link.txt ] && echo link; cat '/root/-odd dir/-target $(x).txt'",
   });
 
   const directory = await ctx.session.runTool('imp_write_file', {
@@ -134,7 +144,7 @@ test.each([
   });
 
   expect(linked.isError).toBeFalse();
-  expect(readToolData(after)['stdout']).toBe('link\nthrough\n');
+  expect(readToolData(after)).toMatchObject({ exitCode: 0, stdout: 'link\nthrough\n', stderr: '' });
   expect(directory.isError).toBeTrue();
   expect(directory.content[0]?.text).toContain('/root is a directory');
 });
@@ -300,6 +310,10 @@ test('it runs a 15 s command over HTTP for a token held to the prefix, and refus
   );
 
   const outside = await agent.runTool('imp_create', { name: 'e2e-other' });
+
+  // an imp a regressed refusal would leave behind
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, 'e2e-other'));
+
   const ended = await agent.close();
 
   expect(readToolData(long)).toMatchObject({ exitCode: 0, stdout: 'done\n', timedOut: false });

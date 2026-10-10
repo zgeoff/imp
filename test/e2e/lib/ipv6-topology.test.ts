@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import {
   buildGuestIpv6,
   buildRaCounterRuleset,
+  buildRaCounterTable,
   buildV6Names,
   buildV6Plan,
   parseGlobal128,
@@ -83,10 +84,14 @@ test('#parseRsAccepts reads the packets the taps’ RS ACCEPT rule counted', () 
   expect(parseRsAccepts(listing)).toBe(3);
 });
 
+test('#buildRaCounterTable names the table with the run’s prefix', () => {
+  expect(buildRaCounterTable('e2e-v6-')).toBe('e2e-v6-ra');
+});
+
 test('#buildRaCounterRuleset counts the tap’s advertisements and solicitations on ingress', () => {
-  expect(buildRaCounterRuleset('imp3')).toBe(
+  expect(buildRaCounterRuleset('e2e-v6-ra', 'imp3')).toBe(
     [
-      'table netdev e2e_ra {',
+      'table netdev e2e-v6-ra {',
       '  chain ingress {',
       '    type filter hook ingress device "imp3" priority 0;',
       '    icmpv6 type nd-router-advert counter',
@@ -99,7 +104,7 @@ test('#buildRaCounterRuleset counts the tap’s advertisements and solicitations
 
 test('#parseRaCounts reads both counters of the table nft lists', () => {
   const listing = [
-    'table netdev e2e_ra {',
+    'table netdev e2e-v6-ra {',
     '\tchain ingress {',
     '\t\ttype filter hook ingress device "imp3" priority filter; policy accept;',
     '\t\ticmpv6 type nd-router-advert counter packets 3 bytes 264',
@@ -109,6 +114,17 @@ test('#parseRaCounts reads both counters of the table nft lists', () => {
   ].join('\n');
 
   expect(parseRaCounts(listing)).toStrictEqual({ adverts: 3, solicits: 1 });
+});
+
+test('#parseRaCounts throws on a listing without the counters', () => {
+  expect(() => parseRaCounts('')).toThrowWithMessage(Error, 'no nd-router-advert counter in ""');
+});
+
+test('#parseRsAccepts throws when the RS rule is missing', () => {
+  expect(() => parseRsAccepts('Chain INPUT (policy ACCEPT 0 packets, 0 bytes)')).toThrowWithMessage(
+    Error,
+    'no RS ACCEPT rule for the taps in INPUT',
+  );
 });
 
 test('#parseRouteDevice reads the device of a route', () => {

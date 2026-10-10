@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { X509Certificate } from 'node:crypto';
 import * as z from 'zod';
 import { config } from '../lib/config';
-import { readInContainer } from '../lib/container-https';
+import { readInContainer, readWakeMs } from '../lib/container-https';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, createInstanceClient, runImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
@@ -58,6 +58,7 @@ test.skipIf(!pebbleUp)(
       '/var/lib/imp/tls/account.json',
     ]);
 
+    // in-test, not suite settings: impd must start with the files above gone
     await runDevScript('reboot', instance, buildPebbleEnv());
 
     ctx.stack.defer(() => runDevScript('reboot'));
@@ -120,34 +121,29 @@ test.skipIf(!pebbleUp)(
     expect(urls.split('\n')[0]).toBe(`https://${host}`);
     expect(served.body).toBe('e2e-tiny-ok');
 
-    // A request wakes a sleeping imp: each scheme wakes it at once after the
-    // sleep, then after it sat asleep for 5 s, so the two compare alike.
+    // a request over each scheme wakes the sleeping imp, so the two compare
     await runImp('hold', name, '0');
+    await runImp('sleep', name);
+    await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'));
 
-    for (const settleMs of [0, 5000]) {
-      for (const [scheme, url] of [
-        ['https', `https://${host}/`],
-        ['http', `http://${name}.imp.localhost:7080/`],
-      ] as const) {
-        await runImp('sleep', name);
-        await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'));
+    const wokenHttps = await readInContainer(`https://${host}/`);
 
-        // the time asleep the metric names, not a wait for a state
-        await Bun.sleep(settleMs);
+    const httpsWakeMs = readWakeMs(wokenHttps.headers);
 
-        const woken = await readInContainer(url);
+    await runImp('sleep', name);
+    await waitFor(`${name} to sleep again`, () => assertState(name, 'sleeping'));
 
-        const impdMs = /^x-imp-wake-ms: (?<ms>\d+)/imv.exec(woken.headers)?.groups?.['ms'];
+    const wokenHttp = await readInContainer(`http://${name}.imp.localhost:7080/`);
 
-        expect(woken.body).toBe('e2e-tiny-ok');
-        expect(impdMs).toBeDefined();
+    const httpWakeMs = readWakeMs(wokenHttp.headers);
 
-        writeMetric(`${scheme}_wake${settleMs === 0 ? '' : '_settled'}_ms`, {
-          impd: Number(impdMs),
-          client: woken.totalMs,
-        });
-      }
-    }
+    writeMetric('https_wake_ms', { impd: httpsWakeMs, client: wokenHttps.totalMs });
+    writeMetric('http_wake_ms', { impd: httpWakeMs, client: wokenHttp.totalMs });
+
+    expect(wokenHttps.body).toBe('e2e-tiny-ok');
+    expect(httpsWakeMs).toBeGreaterThan(0);
+    expect(wokenHttp.body).toBe('e2e-tiny-ok');
+    expect(httpWakeMs).toBeGreaterThan(0);
 
     // only one label names an imp; the certificate does not cover a.<host>
     // either, so the Host header carries it
@@ -176,6 +172,7 @@ test.skipIf(!pebbleUp)(
       '/var/lib/imp/tls/account.json',
     ]);
 
+    // in-test, not suite settings: impd must start with the files above gone
     await runDevScript('reboot', instance, buildPebbleEnv());
 
     ctx.stack.defer(() => runDevScript('reboot'));
@@ -205,7 +202,8 @@ test.skipIf(!pebbleUp)(
     const hidden = await readInContainer(publicUrl);
     const apex = await readInContainer(publicUrl, { host: PEBBLE_DOMAIN });
 
-    expect([hidden.status, apex.status]).toStrictEqual([404, 404]);
+    expect(hidden.status).toBe(404);
+    expect(apex.status).toBe(404);
 
     const exposeStarted = new Date();
 

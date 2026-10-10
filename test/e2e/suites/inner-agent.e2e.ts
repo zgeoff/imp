@@ -4,7 +4,7 @@ import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp, runInImp, startImp, tryImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import { registerRemoval } from '../lib/register-removal';
-import { removeImpIfPresent } from '../lib/reset-baseline';
+import { removeImpIfPresent, removeTokenIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { startTextCapture } from '../lib/text-capture';
 import { waitFor } from '../lib/wait-for';
@@ -81,9 +81,7 @@ test('it refuses exec --agent to an exec-scoped token', async () => {
 
   const secret = await runImp('token', 'new', token, '--scope', 'exec');
 
-  ctx.stack.defer(async () => {
-    await tryImp(['token', 'rm', token]);
-  });
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, token));
 
   const refused = await tryImp(['exec', '--agent', name, '--', 'true'], { token: secret.trim() });
 
@@ -108,9 +106,7 @@ test('it refuses exec --agent to a manage token scoped to the one imp', async ()
 
   const secret = await runImp('token', 'new', token, '--scope', 'manage', '--imps', name);
 
-  ctx.stack.defer(async () => {
-    await tryImp(['token', 'rm', token]);
-  });
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, token));
 
   const refused = await tryImp(['exec', '--agent', name, '--', 'true'], { token: secret.trim() });
 

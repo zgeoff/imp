@@ -240,5 +240,10 @@ test('it starts a container whose root was wiped again', async () => {
 
   expect(after).not.toBe(before);
   expect(listed.split('\n')).toIncludeAllMembers(['keep', 'proc', 'run']);
-  expect(broken.stderr).toContain('EXEC_FAILED');
+
+  expect(broken).toStrictEqual({
+    exitCode: 127,
+    stdout: '',
+    stderr: expect.toInclude('EXEC_FAILED'),
+  });
 });

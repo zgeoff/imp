@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildContainerCurlArgv, parseContainerCurl } from './container-https';
+import { buildContainerCurlArgv, parseContainerCurl, readWakeMs } from './container-https';
 
 test('#buildContainerCurlArgv resolves an https name to loopback on 443', () => {
   expect(buildContainerCurlArgv('https://a.imp.test/')).toStrictEqual([
@@ -51,7 +51,34 @@ test('#buildContainerCurlArgv keeps the port of the URL and adds the Host and Au
 });
 
 test('#buildContainerCurlArgv resolves a plain http name on 80', () => {
-  expect(buildContainerCurlArgv('http://a.imp.test/')).toContain('a.imp.test:80:127.0.0.1');
+  expect(buildContainerCurlArgv('http://a.imp.test/')).toStrictEqual([
+    'curl',
+    '-sS',
+    '--max-time',
+    '30',
+    '--cacert',
+    '/src/.cache/e2e/pebble-root.pem',
+    '--resolve',
+    'a.imp.test:80:127.0.0.1',
+    '-D',
+    '/dev/stderr',
+    '-o',
+    '/dev/stdout',
+    '-w',
+    '\nimp-e2e-time-total:%{time_total}',
+    'http://a.imp.test/',
+  ]);
+});
+
+test('#readWakeMs reads the wake time impd reports', () => {
+  expect(readWakeMs('HTTP/1.1 200 OK\r\nX-Imp-Wake-Ms: 41\r\n\r\n')).toBe(41);
+});
+
+test('#readWakeMs throws on a response that reports no wake', () => {
+  expect(() => readWakeMs('HTTP/1.1 200 OK\r\n\r\n')).toThrowWithMessage(
+    Error,
+    'the response reports no x-imp-wake-ms',
+  );
 });
 
 test('#parseContainerCurl reads the status, headers, body and total time', () => {
