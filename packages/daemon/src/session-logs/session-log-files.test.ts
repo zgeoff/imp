@@ -62,16 +62,29 @@ test.each([
 
 test.each([
   ['a slash', '/'],
+  ['a backslash', '\\'],
   ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
   ['the parent directory', '..'],
   ['the current directory', '.'],
   ['a relative escape', '../../../evil'],
+  ['a relative escape with backslashes', String.raw`..\..\evil`],
   ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
   ['a NUL', '\0'],
+  ['a name holding a NUL', 'a\0b'],
+  ['a 4096-character name', 'x'.repeat(4096)],
   ['an empty name', ''],
+  ['31 hex digits and a slash', `${'a'.repeat(31)}/`],
+  ['31 hex digits and a backslash', `${'a'.repeat(31)}\\`],
   ['hex digits that climb out and back', `${'a'.repeat(16)}/../${'a'.repeat(13)}`],
+  ['31 hex digits after a slash', `/${'a'.repeat(31)}`],
+  ['31 hex digits and a NUL', `${'a'.repeat(31)}\0`],
   ['31 hex digits', 'a'.repeat(31)],
+  ['33 hex digits', 'a'.repeat(33)],
   ['32 uppercase hex digits', 'A'.repeat(32)],
+  ['32 letters past f', 'g'.repeat(32)],
+  ['a boot id', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
 ])('#writeTombstone refuses %s and writes nothing', async (_label, generation) => {
   const ctx = await setupTest();
 
@@ -95,16 +108,29 @@ test.each([
 
 test.each([
   ['a slash', '/'],
+  ['a backslash', '\\'],
   ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
   ['the parent directory', '..'],
   ['the current directory', '.'],
   ['a relative escape', '../../../evil'],
+  ['a relative escape with backslashes', String.raw`..\..\evil`],
   ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
   ['a NUL', '\0'],
+  ['a name holding a NUL', 'a\0b'],
+  ['a 4096-character name', 'x'.repeat(4096)],
   ['an empty name', ''],
+  ['31 hex digits and a slash', `${'a'.repeat(31)}/`],
+  ['31 hex digits and a backslash', `${'a'.repeat(31)}\\`],
   ['hex digits that climb out and back', `${'a'.repeat(16)}/../${'a'.repeat(13)}`],
+  ['31 hex digits after a slash', `/${'a'.repeat(31)}`],
+  ['31 hex digits and a NUL', `${'a'.repeat(31)}\0`],
   ['31 hex digits', 'a'.repeat(31)],
+  ['33 hex digits', 'a'.repeat(33)],
   ['32 uppercase hex digits', 'A'.repeat(32)],
+  ['32 letters past f', 'g'.repeat(32)],
+  ['a boot id', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
 ])('#removeTombstone refuses %s and removes nothing', async (_label, generation) => {
   const ctx = await setupTest();
 
@@ -128,16 +154,29 @@ test.each([
 
 test.each([
   ['a slash', '/'],
+  ['a backslash', '\\'],
   ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
   ['the parent directory', '..'],
   ['the current directory', '.'],
   ['a relative escape', '../../../evil'],
+  ['a relative escape with backslashes', String.raw`..\..\evil`],
   ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
   ['a NUL', '\0'],
+  ['a name holding a NUL', 'a\0b'],
+  ['a 4096-character name', 'x'.repeat(4096)],
   ['an empty name', ''],
+  ['31 hex digits and a slash', `${'a'.repeat(31)}/`],
+  ['31 hex digits and a backslash', `${'a'.repeat(31)}\\`],
   ['hex digits that climb out and back', `${'a'.repeat(16)}/../${'a'.repeat(13)}`],
+  ['31 hex digits after a slash', `/${'a'.repeat(31)}`],
+  ['31 hex digits and a NUL', `${'a'.repeat(31)}\0`],
   ['31 hex digits', 'a'.repeat(31)],
+  ['33 hex digits', 'a'.repeat(33)],
   ['32 uppercase hex digits', 'A'.repeat(32)],
+  ['32 letters past f', 'g'.repeat(32)],
+  ['a boot id', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
 ])('#removeGenerationDir refuses %s and removes nothing', async (_label, generation) => {
   const ctx = await setupTest();
 
@@ -161,13 +200,29 @@ test.each([
 
 test.each([
   ['a slash', '/'],
+  ['a backslash', '\\'],
   ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
   ['the parent directory', '..'],
+  ['the current directory', '.'],
   ['a relative escape', '../../../evil'],
+  ['a relative escape with backslashes', String.raw`..\..\evil`],
   ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
   ['a NUL', '\0'],
+  ['a name holding a NUL', 'a\0b'],
+  ['a 4096-character name', 'x'.repeat(4096)],
   ['an empty name', ''],
+  ['31 hex digits and a slash', `${'a'.repeat(31)}/`],
+  ['31 hex digits and a backslash', `${'a'.repeat(31)}\\`],
+  ['hex digits that climb out and back', `${'a'.repeat(16)}/../${'a'.repeat(13)}`],
+  ['31 hex digits after a slash', `/${'a'.repeat(31)}`],
+  ['31 hex digits and a NUL', `${'a'.repeat(31)}\0`],
   ['31 hex digits', 'a'.repeat(31)],
+  ['33 hex digits', 'a'.repeat(33)],
+  ['32 uppercase hex digits', 'A'.repeat(32)],
+  ['32 letters past f', 'g'.repeat(32)],
+  ['a boot id', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
 ])('#hasTombstone answers false for %s', async (_label, generation) => {
   const ctx = await setupTest();
 

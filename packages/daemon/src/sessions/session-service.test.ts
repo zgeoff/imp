@@ -524,8 +524,6 @@ test('it keeps a session’s generation and when impd saw its end across a sleep
 
   invariant(seen?.endObservedAt);
 
-  const seenBefore = new Date(seen.endObservedAt.getTime() - 1);
-
   await ctx.client.imps.sleep({ name: 'dev' });
 
   const [slept] = await ctx.client.sessions.list({ name: 'dev' });
@@ -534,6 +532,6 @@ test('it keeps a session’s generation and when impd saw its end across a sleep
     continuity: 'offsets',
     executionGeneration: run.generation,
     end: 4096,
-    endObservedAt: expect.toBeAfter(seenBefore),
+    endObservedAt: seen.endObservedAt,
   });
 });

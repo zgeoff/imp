@@ -781,6 +781,14 @@ test('it ends the old log and logs the next generation from its first offset whe
     expect(ctx.looks.done).toBe(2);
   });
 
+  second.write('new');
+
+  await waitFor(() => {
+    expect(
+      logs.listLogs(imp).find((log) => log.executionGeneration === 'b'.repeat(32))?.logEnd,
+    ).toBe(8);
+  });
+
   const old = logs.listLogs(imp).find((log) => log.executionGeneration === 'a'.repeat(32));
   const next = logs.listLogs(imp).find((log) => log.executionGeneration === 'b'.repeat(32));
 
@@ -792,7 +800,7 @@ test('it ends the old log and logs the next generation from its first offset whe
   expect(old.exitCode).toBe(0);
   expect(next.state).toBe('live');
   expect(next.logStart).toBe(5);
-  expect(next.logEnd).toBe(5);
+  expect(next.logEnd).toBe(8);
 });
 
 test('it closes the tap and removes the log when a live log is deleted', async () => {
@@ -1256,96 +1264,154 @@ test('it never sweeps a live log, a young ended log, or the logs of an imp it wa
   expect(readdirSync(neighbour.sessionLogsDir)).toStrictEqual(['d'.repeat(32)]);
 });
 
-test('it removes the oldest ended log first once the imp passes its limit', async () => {
-  const ctx = await setupTest();
+// both orders of name, so a removal in directory order fails one of them
+test.each([
+  ['the later name', 'c'.repeat(32), 'a'.repeat(32)],
+  ['the earlier name', 'a'.repeat(32), 'c'.repeat(32)],
+])(
+  'it removes the oldest ended log first once the imp passes its limit, when that log has %s',
+  async (_label, olderGeneration, newerGeneration) => {
+    const ctx = await setupTest();
 
-  const imp: SessionLogImp = {
-    id: 'imp-1',
-    state: 'running',
-    vsockPath: '/nonexistent/vsock.sock',
-    sessionLogsDir: ctx.sessionLogsDir,
-  };
+    const imp: SessionLogImp = {
+      id: 'imp-1',
+      state: 'running',
+      vsockPath: '/nonexistent/vsock.sock',
+      sessionLogsDir: ctx.sessionLogsDir,
+    };
 
-  const logs = createSessionLogs({
-    limits: { generationMaxBytes: 1024, impMaxBytes: 1000, impMaxLive: 8, maxAgeMs: 1e9 },
-    requireRoom: () => Promise.resolve(),
-    now: () => 10_000,
-    log: () => {},
-    startTimer: ctx.timers.startTimer,
-    openTap: ctx.openTap,
-    onLookDone: ctx.onLookDone,
-  });
+    const clock = { now: 10_000 };
 
-  ctx.stack.defer(() => {
-    logs.forgetImp(imp.id);
-  });
+    const logs = createSessionLogs({
+      limits: { generationMaxBytes: 1024, impMaxBytes: 1000, impMaxLive: 8, maxAgeMs: 1e9 },
+      requireRoom: () => Promise.resolve(),
+      now: () => clock.now,
+      log: () => {},
+      startTimer: ctx.timers.startTimer,
+      openTap: ctx.openTap,
+      onLookDone: ctx.onLookDone,
+    });
 
-  const first = buildStubTapStream(
-    buildMockSessionOutput({
-      executionGeneration: 'a'.repeat(32),
-      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-      bufferStart: 0,
-      end: 0,
-      offset: 0,
-    }),
-  );
+    ctx.stack.defer(() => {
+      logs.forgetImp(imp.id);
+    });
 
-  ctx.answers.push(() => Promise.resolve(first.stream));
+    const older = buildStubTapStream(
+      buildMockSessionOutput({
+        executionGeneration: olderGeneration,
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        bufferStart: 0,
+        end: 0,
+        offset: 0,
+      }),
+    );
 
-  logs.observe(imp, [
-    buildMockAgentSession({
-      name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-      log: true,
-    }),
-  ]);
+    ctx.answers.push(() => Promise.resolve(older.stream));
 
-  await waitFor(() => {
-    expect(ctx.looks.done).toBe(1);
-  });
+    logs.observe(imp, [
+      buildMockAgentSession({
+        name: 'main',
+        execution_generation: olderGeneration,
+        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        log: true,
+      }),
+    ]);
 
-  first.write('a'.repeat(600));
-  first.emitEvent({ type: 'exit', code: 0, signal: 0 });
+    await waitFor(() => {
+      expect(ctx.looks.done).toBe(1);
+    });
 
-  await waitFor(() => {
-    expect(first.state.finished).toBe(true);
-  });
+    older.write('o'.repeat(300));
+    older.emitEvent({ type: 'exit', code: 0, signal: 0 });
 
-  const second = buildStubTapStream(
-    buildMockSessionOutput({
-      executionGeneration: 'b'.repeat(32),
-      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-      bufferStart: 0,
-      end: 0,
-      offset: 0,
-    }),
-  );
+    await waitFor(() => {
+      expect(
+        logs.listLogs(imp).find((log) => log.executionGeneration === olderGeneration)?.state,
+      ).toBe('ended');
+    });
 
-  ctx.answers.push(() => Promise.resolve(second.stream));
+    clock.now = 20_000;
 
-  logs.observe(imp, [
-    buildMockAgentSession({
-      name: 'main',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-      log: true,
-    }),
-  ]);
+    const newer = buildStubTapStream(
+      buildMockSessionOutput({
+        executionGeneration: newerGeneration,
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        bufferStart: 0,
+        end: 0,
+        offset: 0,
+      }),
+    );
 
-  // 600 + 512 is past 1000 once the second log opens its second segment
-  second.write('b'.repeat(600));
+    ctx.answers.push(() => Promise.resolve(newer.stream));
 
-  await waitFor(() => {
-    expect(logs.listLogs(imp)[0]?.logEnd).toBe(600);
-  });
+    logs.observe(imp, [
+      buildMockAgentSession({
+        name: 'main',
+        execution_generation: newerGeneration,
+        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        log: true,
+      }),
+    ]);
 
-  await waitFor(() => {
-    expect(logs.listLogs(imp).map((log) => log.executionGeneration)).toStrictEqual([
+    await waitFor(() => {
+      expect(ctx.looks.done).toBe(2);
+    });
+
+    newer.write('n'.repeat(300));
+    newer.emitEvent({ type: 'exit', code: 0, signal: 0 });
+
+    await waitFor(() => {
+      expect(
+        logs.listLogs(imp).find((log) => log.executionGeneration === newerGeneration)?.state,
+      ).toBe('ended');
+    });
+
+    clock.now = 30_000;
+
+    const second = buildStubTapStream(
+      buildMockSessionOutput({
+        executionGeneration: 'b'.repeat(32),
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        bufferStart: 0,
+        end: 0,
+        offset: 0,
+      }),
+    );
+
+    ctx.answers.push(() => Promise.resolve(second.stream));
+
+    logs.observe(imp, [
+      buildMockAgentSession({
+        name: 'main',
+        execution_generation: 'b'.repeat(32),
+        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        log: true,
+      }),
+    ]);
+
+    await waitFor(() => {
+      expect(ctx.looks.done).toBe(3);
+    });
+
+    // 300 + 300 + 600 is past 1000; without the older log it is 900
+    second.write('b'.repeat(600));
+
+    await waitFor(() => {
+      expect(
+        logs.listLogs(imp).find((log) => log.executionGeneration === olderGeneration),
+      ).toBeUndefined();
+    });
+
+    expect(logs.listLogs(imp).map((log) => log.executionGeneration)).toIncludeSameMembers([
+      newerGeneration,
       'b'.repeat(32),
     ]);
-  });
-});
+
+    expect(
+      logs.listLogs(imp).find((log) => log.executionGeneration === 'b'.repeat(32))?.logEnd,
+    ).toBe(600);
+  },
+);
 
 test('it stops the log for a full disk and closes its tap', async () => {
   const ctx = await setupTest();
@@ -1718,15 +1784,28 @@ test('it keeps the bytes from before an impd restart in the log it goes on with'
 
 test.each([
   ['a slash', '/'],
+  ['a backslash', '\\'],
   ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
   ['the parent directory', '..'],
+  ['the current directory', '.'],
   ['a relative escape', '../../../evil'],
+  ['a relative escape with backslashes', String.raw`..\..\evil`],
   ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
   ['a NUL', '\0'],
+  ['a name holding a NUL', 'a\0b'],
+  ['a 4096-character name', 'x'.repeat(4096)],
   ['an empty name', ''],
+  ['31 hex digits and a slash', `${'a'.repeat(31)}/`],
+  ['31 hex digits and a backslash', `${'a'.repeat(31)}\\`],
   ['hex digits that climb out and back', `${'a'.repeat(16)}/../${'a'.repeat(13)}`],
+  ['31 hex digits after a slash', `/${'a'.repeat(31)}`],
+  ['31 hex digits and a NUL', `${'a'.repeat(31)}\0`],
   ['31 hex digits', 'a'.repeat(31)],
+  ['33 hex digits', 'a'.repeat(33)],
   ['32 uppercase hex digits', 'A'.repeat(32)],
+  ['32 letters past f', 'g'.repeat(32)],
   ['a boot id', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
 ])('it refuses a read of %s as a generation it holds no log of', async (_label, generation) => {
   const ctx = await setupTest();
@@ -1869,15 +1948,21 @@ test('it touches neither the disk nor the agent for a session with a hostile boo
 
   const bootIds = [
     '/',
+    '\\',
     'a/b',
+    String.raw`a\b`,
     '..',
+    '.',
     '../../../evil',
+    String.raw`..\..\evil`,
     '/etc/passwd',
+    String.raw`C:\evil`,
     '\0',
+    'a\0b',
     'x'.repeat(4096),
     '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1/',
-    String.raw`4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1\\`,
-    '../0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1\\',
+    '../c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
     '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11\0',
     'f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
     '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d110',
@@ -1891,6 +1976,7 @@ test('it touches neither the disk nor the agent for a session with a hostile boo
     .flatMap((value) => [
       resolvePath(ctx.sessionLogsDir, value),
       resolvePath(ctx.sessionLogsDir, value, 'meta.json'),
+      resolvePath(ctx.sessionLogsDir, '.deleted', value),
     ]);
 
   const before = targets.filter((path) => existsSync(path));
@@ -1945,11 +2031,17 @@ test('it touches neither the disk nor the agent for a session with a hostile nam
 
   const names = [
     '/',
+    '\\',
     'a/b',
+    String.raw`a\b`,
     '..',
+    '.',
     '../../../evil',
+    String.raw`..\..\evil`,
     '/etc/passwd',
+    String.raw`C:\evil`,
     '\0',
+    'a\0b',
     'x'.repeat(4096),
     '',
     'main/..',
@@ -1966,6 +2058,7 @@ test('it touches neither the disk nor the agent for a session with a hostile nam
     .flatMap((value) => [
       resolvePath(ctx.sessionLogsDir, value),
       resolvePath(ctx.sessionLogsDir, value, 'meta.json'),
+      resolvePath(ctx.sessionLogsDir, '.deleted', value),
     ]);
 
   const before = targets.filter((path) => existsSync(path));
@@ -1995,19 +2088,92 @@ test('it touches neither the disk nor the agent for a session with a hostile nam
 });
 
 test.each([
-  ['a path with a slash', 'a/b', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
-  ['a relative escape', '../../../evil', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
-  ['an absolute path', '/etc/hostname', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
-  ['an empty name', '', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a slash as its generation', '/', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a backslash as its generation', '\\', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a path with a slash as its generation', 'a/b', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
   [
-    'hex digits that climb out and back',
+    'a path with a backslash as its generation',
+    String.raw`a\b`,
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  ['the parent directory as its generation', '..', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['the current directory as its generation', '.', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a relative escape as its generation', '../../../evil', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  [
+    'a relative escape with backslashes as its generation',
+    String.raw`..\..\evil`,
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  ['an absolute path as its generation', '/etc/hostname', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a drive path as its generation', String.raw`C:\evil`, '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a NUL as its generation', '\0', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a name holding a NUL as its generation', 'a\0b', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  [
+    'a 4096-character name as its generation',
+    'x'.repeat(4096),
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  ['an empty name as its generation', '', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  [
+    '31 hex digits and a slash as its generation',
+    `${'a'.repeat(31)}/`,
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  [
+    '31 hex digits and a backslash as its generation',
+    `${'a'.repeat(31)}\\`,
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  [
+    'hex digits that climb out and back as its generation',
     `${'a'.repeat(16)}/../${'a'.repeat(13)}`,
     '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
   ],
-  ['32 uppercase hex digits', 'A'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
-  ['a boot id with a slash', 'b'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1/'],
-  ['a boot id that climbs out', 'b'.repeat(32), '../0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  [
+    '31 hex digits after a slash as its generation',
+    `/${'a'.repeat(31)}`,
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  [
+    '31 hex digits and a NUL as its generation',
+    `${'a'.repeat(31)}\0`,
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  ['31 hex digits as its generation', 'a'.repeat(31), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['33 hex digits as its generation', 'a'.repeat(33), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  [
+    '32 uppercase hex digits as its generation',
+    'A'.repeat(32),
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  ['32 letters past f as its generation', 'g'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  [
+    'a boot id as its generation',
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+  ],
+  ['a slash as its boot id', 'b'.repeat(32), '/'],
+  ['a backslash as its boot id', 'b'.repeat(32), '\\'],
+  ['a path with a slash as its boot id', 'b'.repeat(32), 'a/b'],
+  ['a path with a backslash as its boot id', 'b'.repeat(32), String.raw`a\b`],
+  ['the parent directory as its boot id', 'b'.repeat(32), '..'],
+  ['the current directory as its boot id', 'b'.repeat(32), '.'],
+  ['a relative escape as its boot id', 'b'.repeat(32), '../../../evil'],
+  ['a relative escape with backslashes as its boot id', 'b'.repeat(32), String.raw`..\..\evil`],
+  ['an absolute path as its boot id', 'b'.repeat(32), '/etc/passwd'],
+  ['a drive path as its boot id', 'b'.repeat(32), String.raw`C:\evil`],
+  ['a NUL as its boot id', 'b'.repeat(32), '\0'],
+  ['a name holding a NUL as its boot id', 'b'.repeat(32), 'a\0b'],
+  ['a 4096-character name as its boot id', 'b'.repeat(32), 'x'.repeat(4096)],
+  ['a boot id ending in a slash', 'b'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1/'],
+  ['a boot id ending in a backslash', 'b'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1\\'],
+  ['a boot id that climbs out', 'b'.repeat(32), '../c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a boot id and a NUL', 'b'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11\0'],
+  ['a boot id one character short', 'b'.repeat(32), 'f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a boot id one character long', 'b'.repeat(32), '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d110'],
   ['an uppercase boot id', 'b'.repeat(32), '4F3C0F86-8F8B-4C45-A3B4-8E1C1E9B0D11'],
+  ['a boot id with a letter past f', 'b'.repeat(32), '4g3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a boot id without its dashes', 'b'.repeat(32), '4f3c0f868f8b4c45a3b48e1c1e9b0d11'],
 ])(
   'it closes a changed-generation tap that names %s and makes nothing',
   async (_label, generation, bootId) => {
@@ -2069,7 +2235,10 @@ test.each([
     const targets = [
       resolvePath(ctx.sessionLogsDir, generation),
       resolvePath(ctx.sessionLogsDir, generation, 'meta.json'),
+      resolvePath(ctx.sessionLogsDir, '.deleted', generation),
       resolvePath(ctx.sessionLogsDir, bootId),
+      resolvePath(ctx.sessionLogsDir, bootId, 'meta.json'),
+      resolvePath(ctx.sessionLogsDir, '.deleted', bootId),
     ];
 
     const before = targets.filter((path) => existsSync(path));
@@ -3081,6 +3250,12 @@ test('it opens no second tap when a tap from before a destroy fails once the imp
     expect(ctx.looks.done).toBe(3);
   });
 
+  current.write('new');
+
+  await waitFor(() => {
+    expect(logs.listLogs(imp)[0]?.logEnd).toBe(3);
+  });
+
   expect(ctx.calls).toHaveLength(2);
   expect(current.state.closed).toBe(false);
   expect(logs.listLogs(imp)[0]?.state).toBe('live');
@@ -3287,10 +3462,16 @@ test("it frees no slot of the imp's next life for a log made across a destroy an
 
   invariant(log);
 
+  const closedBeforeDestroy = current.state.closed;
+
+  // a destroy closes the tap only while the new life still holds its slot
+  logs.forgetImp(imp.id);
+
   expect(ctx.calls).toHaveLength(1);
-  expect(current.state.closed).toBe(false);
+  expect(closedBeforeDestroy).toBe(false);
   expect(log.state).toBe('live');
   expect(log.stopped).toBeUndefined();
+  expect(current.state.closed).toBe(true);
 });
 
 test("it stops no log of the imp's next life for a limit check held across a destroy and a move home", async () => {
@@ -3399,14 +3580,26 @@ test("it stops no log of the imp's next life for a limit check held across a des
     expect(ctx.looks.done).toBe(3);
   });
 
+  current.write('+more');
+
+  await waitFor(() => {
+    expect(logs.listLogs(imp)[0]?.logEnd).toBe(8);
+  });
+
   const [log] = logs.listLogs(imp);
 
   invariant(log);
 
+  const closedBeforeDestroy = current.state.closed;
+
+  // a destroy closes the tap only while the new life still holds its slot
+  logs.forgetImp(imp.id);
+
   expect(ctx.calls).toHaveLength(2);
-  expect(current.state.closed).toBe(false);
+  expect(closedBeforeDestroy).toBe(false);
   expect(log.state).toBe('live');
   expect(log.stopped).toBeUndefined();
+  expect(current.state.closed).toBe(true);
 });
 
 test("it removes none of the imp's next life's logs for a limit check from before a destroy", async () => {
