@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { sendAgentRequest } from '../agent-client/agent-requests';
 import {
   openServiceLogStream,
   sendServicesAdd,
@@ -67,7 +68,20 @@ test('it refuses an add of a name it has as SERVICE_EXISTS', async () => {
 
   expect(
     sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false),
-  ).rejects.toMatchObject({ code: 'SERVICE_EXISTS' });
+  ).rejects.toMatchObject({
+    code: 'SERVICE_EXISTS',
+    message: 'SERVICE_EXISTS: service web exists',
+  });
+});
+
+test('it refuses an op it does not know as UNKNOWN_OP', async () => {
+  const ctx = await setupTest();
+
+  await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  expect(sendAgentRequest(ctx.vsockPath, { op: 'services.bogus' })).rejects.toMatchObject({
+    code: 'UNKNOWN_OP',
+  });
 });
 
 test('it replaces a service it has when the add replaces', async () => {
@@ -98,16 +112,103 @@ test('it refuses a remove of a service it lacks as NO_SERVICE', async () => {
   expect(sendServicesRemove(ctx.vsockPath, 'web')).rejects.toMatchObject({ code: 'NO_SERVICE' });
 });
 
-test('it removes a service and restarts another', async () => {
+test('it removes the service a remove names', async () => {
   const ctx = await setupTest();
   const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
 
   await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
   await sendServicesAdd(ctx.vsockPath, { name: 'db', argv: ['postgres'] }, false);
   await sendServicesRemove(ctx.vsockPath, 'web');
-  await sendServicesRestart(ctx.vsockPath, 'db');
 
   expect(agent.services.map((service) => service.name)).toStrictEqual(['db']);
+});
+
+test('it refuses a remove of a service that left only its log as NO_SERVICE', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'db', argv: ['postgres'] }, false);
+
+  agent.writeLog('web', 'one\n');
+
+  expect(sendServicesRemove(ctx.vsockPath, 'web')).rejects.toMatchObject({
+    code: 'NO_SERVICE',
+    message: 'NO_SERVICE: no service web',
+  });
+});
+
+test('it keeps every service when it refuses a remove of a log alone', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'db', argv: ['postgres'] }, false);
+
+  agent.writeLog('web', 'one\n');
+
+  await expect(sendServicesRemove(ctx.vsockPath, 'web')).toReject();
+
+  expect(agent.services.map((service) => service.name)).toStrictEqual(['db']);
+});
+
+test('it restarts a service under a new pid', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
+  await sendServicesRestart(ctx.vsockPath, 'web');
+
+  expect(agent.services).toMatchObject([{ name: 'web', state: 'running', pid: 41 }]);
+});
+
+test('it restarts a service without the last exit of its old process', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.services.push({
+    name: 'web',
+    state: 'backoff',
+    pid: 0,
+    restarts: 2,
+    last_exit: { code: 1, signal: 0 },
+  });
+
+  await sendServicesRestart(ctx.vsockPath, 'web');
+
+  expect(agent.services).toStrictEqual([{ name: 'web', state: 'running', pid: 40, restarts: 0 }]);
+});
+
+test('it refuses a restart of a service that left only its log as NO_SERVICE', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\n');
+
+  expect(sendServicesRestart(ctx.vsockPath, 'web')).rejects.toMatchObject({
+    code: 'NO_SERVICE',
+    message: 'NO_SERVICE: no service web',
+  });
+});
+
+test('it lists the services by name', async () => {
+  const ctx = await setupTest();
+
+  await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+  await sendServicesAdd(ctx.vsockPath, { name: 'worker', argv: ['worker'] }, false);
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
+
+  const listed = await sendServicesList(ctx.vsockPath);
+
+  expect(listed.services.map((service) => service.name)).toStrictEqual(['web', 'worker']);
+});
+
+test('it runs a replaced service under a new pid', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd', '-v'] }, true);
+
+  expect(agent.services).toMatchObject([{ name: 'web', pid: 41 }]);
 });
 
 test('it lists without definitions or an image user as an agent from before the services API', async () => {
@@ -162,6 +263,169 @@ test('it sends a log from the cursor, then the cursor at its end, and ends', asy
     { kind: 'data', data: new TextEncoder().encode('two\n') },
     { kind: 'cursor', cursor: { inode: 7, offset: 8 } },
   ]);
+});
+
+test('it sends the last lines a log call asks for without a cursor', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\ntwo\nthree\n');
+
+  const stream = await openServiceLogStream(ctx.vsockPath, {
+    service: 'web',
+    lines: 2,
+    follow: false,
+  });
+
+  const chunks = await Array.fromAsync(stream.chunks());
+
+  expect(chunks).toStrictEqual([
+    { kind: 'data', data: new TextEncoder().encode('two\nthree\n') },
+    { kind: 'cursor', cursor: { inode: 7, offset: 14 } },
+  ]);
+});
+
+test('it counts a last line without a newline as a line', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\ntwo\nthr');
+
+  const stream = await openServiceLogStream(ctx.vsockPath, {
+    service: 'web',
+    lines: 2,
+    follow: false,
+  });
+
+  const chunks = await Array.fromAsync(stream.chunks());
+
+  expect(chunks).toStrictEqual([
+    { kind: 'data', data: new TextEncoder().encode('two\nthr') },
+    { kind: 'cursor', cursor: { inode: 7, offset: 11 } },
+  ]);
+});
+
+test('it sends the whole log when it holds fewer lines than asked', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\ntwo\n');
+
+  const stream = await openServiceLogStream(ctx.vsockPath, {
+    service: 'web',
+    lines: 5,
+    follow: false,
+  });
+
+  const chunks = await Array.fromAsync(stream.chunks());
+
+  expect(chunks).toStrictEqual([
+    { kind: 'data', data: new TextEncoder().encode('one\ntwo\n') },
+    { kind: 'cursor', cursor: { inode: 7, offset: 8 } },
+  ]);
+});
+
+test('it sends nothing of a log for zero lines', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\ntwo\n');
+
+  const stream = await openServiceLogStream(ctx.vsockPath, {
+    service: 'web',
+    lines: 0,
+    follow: false,
+  });
+
+  const chunks = await Array.fromAsync(stream.chunks());
+
+  expect(chunks).toStrictEqual([]);
+});
+
+test('it sends the whole log from a cursor past its end, as after a truncate', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\n');
+
+  const stream = await openServiceLogStream(ctx.vsockPath, {
+    service: 'web',
+    lines: 100,
+    follow: false,
+    cursor: { inode: 7, offset: 50 },
+  });
+
+  const chunks = await Array.fromAsync(stream.chunks());
+
+  expect(chunks).toStrictEqual([
+    { kind: 'data', data: new TextEncoder().encode('one\n') },
+    { kind: 'cursor', cursor: { inode: 7, offset: 4 } },
+  ]);
+});
+
+test('it refuses a log call for more than 100000 lines as BAD_REQUEST', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.writeLog('web', 'one\n');
+
+  expect(
+    openServiceLogStream(ctx.vsockPath, { service: 'web', lines: 100_001, follow: false }),
+  ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+});
+
+test('it refuses a log call for a name with no service and no log as NO_SERVICE', async () => {
+  const ctx = await setupTest();
+
+  await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  expect(
+    openServiceLogStream(ctx.vsockPath, { service: 'web', lines: 100, follow: false }),
+  ).rejects.toMatchObject({ code: 'NO_SERVICE' });
+});
+
+test('it sends the log a removed service left', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd'] }, false);
+
+  agent.writeLog('web', 'one\n');
+
+  await sendServicesRemove(ctx.vsockPath, 'web');
+
+  const stream = await openServiceLogStream(ctx.vsockPath, {
+    service: 'web',
+    lines: 100,
+    follow: false,
+  });
+
+  const chunks = await Array.fromAsync(stream.chunks());
+
+  expect(chunks).toStrictEqual([
+    { kind: 'data', data: new TextEncoder().encode('one\n') },
+    { kind: 'cursor', cursor: { inode: 7, offset: 4 } },
+  ]);
+});
+
+test('it records each request as impd sends it', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd', '-f'] }, true);
+
+  expect(agent.requests).toStrictEqual([
+    { op: 'services.add', def: { name: 'web', argv: ['httpd', '-f'] }, replace: true },
+  ]);
+});
+
+test('it takes no request once closed', async () => {
+  const ctx = await setupTest();
+  const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
+
+  agent.close();
+
+  expect(sendServicesList(ctx.vsockPath)).rejects.toThrow();
 });
 
 test('it sends what a write adds to an open follow', async () => {

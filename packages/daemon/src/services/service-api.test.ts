@@ -404,9 +404,15 @@ test('it adds, restarts and removes an exec-scope service that runs as the image
 
   expect(agent.services.map((service) => service.name)).toStrictEqual(['web']);
 
-  expect(agent.requests.map((request) => request.op)).toIncludeAllMembers([
+  // an exec-scope call first reads which user the service runs as
+  expect(agent.requests.map((request) => request.op)).toStrictEqual([
+    'services.list',
     'services.add',
+    'services.list',
+    'services.add',
+    'services.list',
     'services.restart',
+    'services.list',
     'services.remove',
   ]);
 });
@@ -580,7 +586,23 @@ test('it lists the image’s services as root on an agent from before the servic
 
   const listed = await ctx.client.services.list({ name: 'dev' });
 
-  expect(listed.services).toMatchObject([{ name: 'dockerd', source: 'image', root: true }]);
+  // the older agent reports no definition, so each of its fields is empty
+  expect(listed.services).toStrictEqual([
+    {
+      name: 'dockerd',
+      argv: [],
+      cwd: null,
+      envKeys: [],
+      user: null,
+      restart: 'always',
+      state: 'running',
+      pid: 212,
+      restarts: 0,
+      lastExit: null,
+      source: 'image',
+      root: true,
+    },
+  ]);
 });
 
 test('it sends one service’s log, 100 lines by default', async () => {
@@ -669,9 +691,7 @@ test('it merges a follow of every service, and closes each when the reader stops
   await iterator.return?.();
 
   await waitFor(() => {
-    if (agent.follows.length !== 2 || agent.follows.some((follow) => !follow.isClosed)) {
-      throw new Error('a follow is still open');
-    }
+    expect(agent.follows.map((follow) => follow.isClosed)).toStrictEqual([true, true]);
   });
 
   expect([first.value, second.value]).toIncludeSameMembers([
@@ -928,9 +948,7 @@ test('it looks again after the short retry, not the long recheck, while a lifecy
 
   // the dropped connection's retry, then the look that finds the imp held
   await waitFor(() => {
-    if (timers.readPendingMs().length === 0) {
-      throw new Error('no retry yet');
-    }
+    expect(timers.readPendingMs()).not.toBeEmpty();
   });
 
   timers.firePending();
@@ -940,9 +958,7 @@ test('it looks again after the short retry, not the long recheck, while a lifecy
   const resuming = stream.next();
 
   await waitFor(() => {
-    if (timers.readPendingMs().length === 0) {
-      throw new Error('no wait yet');
-    }
+    expect(timers.readPendingMs()).not.toBeEmpty();
   });
 
   const pendingMs = timers.readPendingMs();
@@ -975,12 +991,10 @@ test('it goes on with a follow when the wake’s event comes before the wake let
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
-  // a write per wake: the event then reaches the follow while the wake
-  // still holds the imp
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
-    if (write.kind === 'changed' && write.reason === 'woke') {
-      void updateImpActivity(ctx.db, write.imp.id, new Date());
-    }
+  // a write after each of the imp's writes, the wake's among them: the
+  // wake's event then reaches the follow while the wake still holds the imp
+  const unsubscribe = subscribeImpWrites(ctx.db, () => {
+    void updateImpActivity(ctx.db, imp.id, new Date());
   });
 
   onTestFinished(unsubscribe);
@@ -995,14 +1009,19 @@ test('it goes on with a follow when the wake’s event comes before the wake let
 
   const asleep = await iterator.next();
 
+  const wokeAt = Date.now();
+
   await ctx.client.imps.wake({ name: 'dev' });
 
   const awake = await iterator.next();
+
+  const waitedMs = Date.now() - wokeAt;
 
   await iterator.return?.();
 
   expect(asleep.value).toStrictEqual({ type: 'sleeping', state: 'sleeping' });
   expect(awake.value).toStrictEqual({ type: 'awake' });
+  expect(waitedMs).toBeLessThan(2000);
 });
 
 test('it ends a follow with the error once its log fails to open five times in a row', async () => {
@@ -1047,9 +1066,7 @@ test('it ends a follow with the error once its log fails to open five times in a
   await waitFor(() => {
     timers.firePending();
 
-    if (agent.requests.filter((request) => request.op === 'services.logs').length < 6) {
-      throw new Error('fewer than 6 opens');
-    }
+    expect(agent.requests.filter((request) => request.op === 'services.logs')).toHaveLength(6);
   });
 
   const ended = await reading.ended;
@@ -1094,9 +1111,7 @@ test('it lets a list wait out a step that holds a running imp', async () => {
   const listing = api.listServices('dev');
 
   await waitFor(() => {
-    if (timers.readPendingMs().length === 0) {
-      throw new Error('no wait yet');
-    }
+    expect(timers.readPendingMs()).not.toBeEmpty();
   });
 
   release.resolve();
@@ -1142,9 +1157,7 @@ test('it refuses a list as INVALID_STATE once a step holds a running imp past 10
   const listing = api.listServices('dev');
 
   await waitFor(() => {
-    if (timers.readPendingMs().length === 0) {
-      throw new Error('no wait yet');
-    }
+    expect(timers.readPendingMs()).not.toBeEmpty();
   });
 
   clock.ms = 10_001;
@@ -1175,9 +1188,7 @@ test('it ends a follow when the imp is destroyed', async () => {
   const reading = readInBackground(stream);
 
   await waitFor(() => {
-    if (reading.items.length === 0) {
-      throw new Error('no event yet');
-    }
+    expect(reading.items).not.toBeEmpty();
   });
 
   await ctx.client.imps.destroy({ name: 'dev' });
@@ -1210,9 +1221,7 @@ test('it ends a follow with restarting when impd restarts', async () => {
   const reading = readInBackground(stream);
 
   await waitFor(() => {
-    if (reading.items.length === 0) {
-      throw new Error('no line yet');
-    }
+    expect(reading.items).not.toBeEmpty();
   });
 
   ctx.impd.imps.endLogFollows();
