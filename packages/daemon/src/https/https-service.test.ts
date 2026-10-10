@@ -18,13 +18,19 @@ import { createDnsToken } from './dns/dns-token';
 import { createHttpsService } from './https-service';
 
 async function setupTest() {
+  // one stack: a service a test starts stops before its dir goes
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
   const dir = await mkdtemp(join(tmpdir(), 'imp-https-'));
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
   const logs: string[] = [];
 
   return {
+    stack,
     dir,
     store: createCertStore(dir),
     logs,
@@ -68,12 +74,18 @@ test('it serves nothing until the first certificate arrives', async () => {
     timer: ctx.timer.timer,
   });
 
-  onTestFinished(() => service.stop());
+  ctx.stack.defer(() => service.stop());
 
-  onTestFinished(async () => {
+  // the certificate arrives once the test is over, and is on disk before the
+  // dir goes: the service writes it there as it arrives
+  ctx.stack.defer(async () => {
     const arrived = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
     issued.resolve(arrived);
+
+    await waitFor(() => {
+      expect(ctx.logs).toSatisfyAny((line: string) => line.includes('got a certificate'));
+    });
   });
 
   service.start();
