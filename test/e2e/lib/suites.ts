@@ -8,6 +8,10 @@ export interface Suite {
   // every imp the suite creates is named with this prefix
   readonly prefix: string;
   readonly images: readonly FixtureImage[];
+
+  // its journey files under test/e2e/suites, in run order, when they are more
+  // than <name>.e2e.ts; each runs as its own bun test process
+  readonly journeys?: readonly string[];
 }
 
 // Every suite, in run order. The order is the acceptance numbering
@@ -37,7 +41,12 @@ export const SUITES: readonly Suite[] = [
   { name: 'ssh-wake', prefix: 'e2e-sshw-', images: ['e2e-tiny'] },
   { name: 'ssh-agent', prefix: 'e2e-ssha-', images: ['e2e-git'] },
   { name: 'reverse', prefix: 'e2e-rev-', images: ['e2e-git'] },
-  { name: 'proxy', prefix: 'e2e-px-', images: ['e2e-tiny'] },
+  {
+    name: 'proxy',
+    prefix: 'e2e-px-',
+    images: ['e2e-tiny'],
+    journeys: ['proxy-refusals', 'proxy-forwards', 'proxy-agent-outdated', 'proxy-tunnel-limit'],
+  },
   { name: 'proxy-wake', prefix: 'e2e-pxw-', images: ['e2e-tiny'] },
   { name: 'cp', prefix: 'e2e-copy-', images: ['e2e-git'] },
   { name: 'connectors', prefix: 'e2e-conn-', images: ['base'] },
@@ -143,20 +152,36 @@ export const FAST_GROUPS: readonly (readonly string[])[] = [
 // builds the most fixture images, and group 3 has the most suite work.
 export const HOST_TESTS_GROUP = 2;
 
-// generous: a suite's own waits fail long before this
-const SUITE_TIMEOUT_MS = 3_600_000;
+// the journey files a suite runs, each as its own bun test process
+export function listJourneys(suite: Readonly<Suite>): readonly string[] {
+  return suite.journeys ?? [suite.name];
+}
+
+// the prefix a suite's journeys name what they make with
+export function readSuitePrefix(name: string): string {
+  const suite = SUITES.find((candidate) => candidate.name === name);
+
+  if (suite === undefined) {
+    throw new Error(`no suite named ${name}`);
+  }
+
+  return suite.prefix;
+}
+
+// generous: a journey's own waits fail long before this
+const JOURNEY_TIMEOUT_MS = 3_600_000;
 
 // Plain `bun test` skips *.e2e.ts; a ./ path runs one anyway, where a bare
 // path is a name filter. The suites' own bunfig has no MSW server. --bail ends
-// a suite at its first failure: the steps build on each other.
-export function buildSuiteArgv(bunPath: string, name: string): readonly string[] {
+// a journey file at its first failure.
+export function buildJourneyArgv(bunPath: string, journey: string): readonly string[] {
   return [
     bunPath,
     'test',
     '--config=test/e2e/bunfig.toml',
     '--bail',
     '--timeout',
-    String(SUITE_TIMEOUT_MS),
-    `./test/e2e/suites/${name}.e2e.ts`,
+    String(JOURNEY_TIMEOUT_MS),
+    `./test/e2e/suites/${journey}.e2e.ts`,
   ];
 }

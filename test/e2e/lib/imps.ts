@@ -42,3 +42,22 @@ export async function writeGuestFile(name: string, path: string, content: string
 export function readGuestFile(name: string, path: string): Promise<string> {
   return runShellInImp(name, `cat ${path} 2>/dev/null || echo none`);
 }
+
+export interface GuestIdentity {
+  readonly machineId: string;
+
+  // the fingerprint of the ed25519 host key
+  readonly hostKey: string;
+}
+
+// what makes a guest a machine of its own; the image needs ssh-keygen
+export async function readGuestIdentity(name: string): Promise<GuestIdentity> {
+  const machineId = await readGuestFile(name, '/etc/machine-id');
+
+  const hostKey = await runShellInImp(
+    name,
+    "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2",
+  );
+
+  return { machineId, hostKey };
+}

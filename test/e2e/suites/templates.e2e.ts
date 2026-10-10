@@ -1,92 +1,121 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { listImageNames, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
-import { createImp, holdImp, readGuestFile, removeImps, writeGuestFile } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import {
+  createInstanceClient,
+  listImageNames,
+  runImp,
+  runShellInImp,
+  tryImp,
+} from '../lib/imp-cli';
+import {
+  holdImp,
+  readGuestFile,
+  readGuestIdentity,
+  waitForExec,
+  writeGuestFile,
+} from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImageIfPresent, removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 
 // `imp template` (docs/guides/templates.md) on the e2e-git image, which has
 // ssh-keygen. Its USER is `dev`, so root's steps go through sudo.
 
-const prefix = setupSuite('templates');
-const GIT = resolveImageName('e2e-git');
-const source = `${prefix}src`;
-const template = `${prefix}golden`;
-const first = `${prefix}a`;
-const second = `${prefix}b`;
-const SOURCE_ID = '0123456789abcdef0123456789abcdef';
+// one stack for every release, so each imp goes before the template it boots
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// the machine-id, and the fingerprint of the ed25519 host key
-async function readIdentity(name: string): Promise<{ machineId: string; hostKey: string }> {
-  const machineId = await readGuestFile(name, '/etc/machine-id');
+  onTestFinished(() => stack.disposeAsync());
 
-  const hostKey = await runShellInImp(
-    name,
-    "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2",
-  );
+  const client = await createInstanceClient();
 
-  return { machineId, hostKey };
+  return { prefix: readSuitePrefix('templates'), stack, client };
 }
 
-test('a template copies the disk, and each copy gets its own identity', async () => {
-  await createImp(source, '--image', GIT, '--memory', '512');
+test('it copies a running imp into a template whose copies each get their own identity, and removes the template once no imp boots it', async () => {
+  const ctx = await setupTest();
+
+  const source = `${ctx.prefix}src`;
+  const template = `${ctx.prefix}golden`;
+  const first = `${ctx.prefix}a`;
+  const second = `${ctx.prefix}b`;
+  const sourceId = '0123456789abcdef0123456789abcdef';
+
+  await runImp('new', source, '--image', resolveImageName('e2e-git'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
+
+  await waitForExec(source);
   await holdImp(source);
 
   await runShellInImp(
     source,
-    `echo ${SOURCE_ID} | sudo tee /etc/machine-id >/dev/null && sudo ssh-keygen -A >/dev/null`,
+    `echo ${sourceId} | sudo tee /etc/machine-id >/dev/null && sudo ssh-keygen -A >/dev/null`,
   );
 
   await writeGuestFile(source, '/home/dev/marker', 'golden');
 
-  const sourceIdentity = await readIdentity(source);
+  const sourceIdentity = await readGuestIdentity(source);
 
-  expect(sourceIdentity.machineId).toBe(SOURCE_ID);
+  expect(sourceIdentity.machineId).toBe(sourceId);
   expect(sourceIdentity.hostKey).toStartWith('SHA256:');
 
   // the source is running: impd freezes it around the clone
   await runImp('template', 'create', source, template);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImageIfPresent(ctx.client, template));
 
   const templates = await runImp('template', 'ls');
 
   expect(templates).toContain(template);
   expect(templates).toContain(`imp:${source}`);
 
-  await createImp(first, '--image', template, '--memory', '512');
-  await createImp(second, '--image', template, '--memory', '512');
+  await runImp('new', first, '--image', template, '--memory', '512');
 
-  const firstIdentity = await readIdentity(first);
-  const secondIdentity = await readIdentity(second);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
-  for (const copy of [firstIdentity, secondIdentity]) {
-    expect(copy.machineId).toMatch(/^[\da-f]{32}$/);
-    expect(copy.machineId).not.toBe(SOURCE_ID);
-    expect(copy.hostKey).toStartWith('SHA256:');
-    expect(copy.hostKey).not.toBe(sourceIdentity.hostKey);
-  }
+  await runImp('new', second, '--image', template, '--memory', '512');
 
-  expect(firstIdentity.machineId).not.toBe(secondIdentity.machineId);
-  expect(firstIdentity.hostKey).not.toBe(secondIdentity.hostKey);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
 
+  await waitForExec(first);
+  await waitForExec(second);
+
+  const firstIdentity = await readGuestIdentity(first);
+  const secondIdentity = await readGuestIdentity(second);
   const marker = await readGuestFile(first, '/home/dev/marker');
 
+  expect(firstIdentity.machineId).toMatch(/^[\da-f]{32}$/);
+  expect(firstIdentity.machineId).not.toBe(sourceId);
+  expect(firstIdentity.hostKey).toStartWith('SHA256:');
+  expect(firstIdentity.hostKey).not.toBe(sourceIdentity.hostKey);
+  expect(secondIdentity.machineId).toMatch(/^[\da-f]{32}$/);
+  expect(secondIdentity.machineId).not.toBe(sourceId);
+  expect(secondIdentity.hostKey).toStartWith('SHA256:');
+  expect(secondIdentity.hostKey).not.toBe(sourceIdentity.hostKey);
+  expect(secondIdentity.machineId).not.toBe(firstIdentity.machineId);
+  expect(secondIdentity.hostKey).not.toBe(firstIdentity.hostKey);
   expect(marker).toBe('golden');
 
   // a later boot keeps the identity the first one made
   await runImp('stop', first);
   await runImp('start', first);
 
-  const rebooted = await readIdentity(first);
+  const rebooted = await readGuestIdentity(first);
 
-  expect(rebooted).toEqual(firstIdentity);
-});
+  expect(rebooted).toStrictEqual(firstIdentity);
 
-test('a template in use cannot be removed; one with no imps can', async () => {
   const inUse = await tryImp(['template', 'rm', template]);
 
-  expect(inUse.exitCode).toBe(1);
-  expect(inUse.stderr).toContain('used by 2 imp(s)');
+  expect(inUse).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `imp: CONFLICT: image ${template} is used by 2 imp(s)\n`,
+  });
 
-  await removeImps(first, second);
+  await runImp('rm', first);
+  await runImp('rm', second);
   await runImp('template', 'rm', template);
 
   const images = await listImageNames();

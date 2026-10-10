@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { countMatches, openHeldSocket, sendRequest } from './imp-proxy';
+import { countMatches, openHeldSocket, sendOverHeldSocket, sendRequest } from './imp-proxy';
 
 test('#countMatches counts each occurrence of the needle', () => {
   expect(countMatches('ok\nok\nnope\nok\n', 'ok')).toBe(3);
@@ -70,4 +70,59 @@ test('#openHeldSocket settles closed when the far end closes the connection', as
   });
 
   await expect(held.closed).toResolve();
+});
+
+test('#sendOverHeldSocket resolves with the far end’s first reply and leaves the socket open', async () => {
+  // echoes each chunk, as `nc -e cat` does
+  const server = Bun.listen({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data: (socket, chunk) => {
+        socket.write(chunk);
+      },
+    },
+  });
+
+  onTestFinished(() => {
+    server.stop(true);
+  });
+
+  const held = await openHeldSocket(server.port);
+
+  onTestFinished(() => {
+    held.socket.destroy();
+  });
+
+  const reply = await sendOverHeldSocket(held, 'x');
+
+  expect(reply).toBe('x');
+  expect(held.socket.destroyed).toBeFalse();
+});
+
+test('#sendOverHeldSocket rejects when the far end closes before it replies', async () => {
+  const server = Bun.listen({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data: (socket) => {
+        socket.end();
+      },
+    },
+  });
+
+  onTestFinished(() => {
+    server.stop(true);
+  });
+
+  const held = await openHeldSocket(server.port);
+
+  onTestFinished(() => {
+    held.socket.destroy();
+  });
+
+  expect(sendOverHeldSocket(held, 'x')).rejects.toThrowWithMessage(
+    Error,
+    'the held socket closed before a reply',
+  );
 });

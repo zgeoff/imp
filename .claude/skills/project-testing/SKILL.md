@@ -141,26 +141,34 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    names, so an `e2e-` imp that matches no suite prefix survives it (the end-of-run cleanup in step
    6 still takes every `e2e-` imp and image). A removal impd refuses, such as `CONFLICT` for an
    image another imp boots, fails setup, and no suite runs.
-4. Runs each suite as its own process group (`test/e2e/lib/run-suite.ts`),
-   `bun test --config=test/e2e/bunfig.toml --bail --timeout 3600000 ./test/e2e/suites/<name>.e2e.ts`,
-   in the order of `SUITES` in `test/e2e/lib/suites.ts`. The first SIGINT or SIGTERM stops the
-   running suite's group and runs no more suites; a second exits at once. The harness forgets the
-   suite's group as soon as it exits, before any reset, and `stopSuiteGroup` treats a group that is
-   already gone (`ESRCH`) as stopped, so a signal during a reset does not crash the run.
-5. After each suite, whether it passed, failed or was stopped, resets the baseline for its prefix
-   (`e2e-<abbr>-`), unless `--keep`. After a suite that failed, and before that reset, it reboots
-   the instance with the run's settings (`scripts/dev.sh reboot`), since the suite may have left
-   impd rebooted onto its own; an interrupted run skips that reboot. `scale` keeps its imps when
-   `restart` runs after it, and `restart`'s reset takes them; then `scale` gets neither the reset
-   nor the reboot, even when it fails, so `restart` runs on whatever `scale` left. A suite whose
-   process cannot start, or whose checks throw, fails like one that exits non-zero, and the run goes
-   on. A reset or reboot that fails fails the suite, and the harness then makes the instance anew
-   (the `--clean` reset below, then up with the run's settings, privilege check, token and fixture
-   images) and runs on; if that fails too, the run stops with the reason and fails. On the ZFS
-   backend that reset also empties the run's root dataset (below). It also fails a suite when the
-   impd log shows a boot-template fallback (the `chaos` suite may cause one). The loop is
+4. Runs each suite's journey files, in the order of `SUITES` in `test/e2e/lib/suites.ts`. A suite's
+   `journeys` list names its files under `test/e2e/suites/` in run order (`proxy` has four); a suite
+   without one runs `<name>.e2e.ts` (`listJourneys`). Each journey file runs as its own process
+   group (`test/e2e/lib/run-suite.ts`),
+   `bun test --config=test/e2e/bunfig.toml --bail --timeout 3600000 ./test/e2e/suites/<journey>.e2e.ts`
+   (`buildJourneyArgv`). `suites.test.ts` checks that every `*.e2e.ts` file belongs to exactly one
+   suite. The first SIGINT or SIGTERM stops the running journey's group and runs no more journeys; a
+   second exits at once. The harness forgets the journey's group as soon as it exits, before any
+   reset, and `stopSuiteGroup` treats a group that is already gone (`ESRCH`) as stopped, so a signal
+   during a reset does not crash the run.
+5. After each journey file, whether it passed, failed or was stopped, resets the baseline for its
+   suite's prefix (`e2e-<abbr>-`), unless `--keep`; with the startup reset, every journey starts on
+   the baseline. After a journey that failed, and before that reset, it reboots the instance with
+   the run's settings (`scripts/dev.sh reboot`), since the journey may have left impd rebooted onto
+   its own; an interrupted run skips that reboot, runs no more journeys, and fails the suite whose
+   journeys it skipped. `scale` keeps its imps when `restart` runs after it, and `restart`'s first
+   reset takes them; then `scale` gets neither the reset nor the reboot, even when it fails, so
+   `restart` runs on whatever `scale` left. A journey whose process cannot start, or whose checks
+   throw, fails like one that exits non-zero, and the run goes on. A reset or reboot that fails
+   fails the suite, and the harness then makes the instance anew (the `--clean` reset below, then up
+   with the run's settings, privilege check, token and fixture images) before the next journey; if
+   that fails too, the run stops with the reason and fails. On the ZFS backend that reset also
+   empties the run's root dataset (below). It also fails a suite when the impd log since one of its
+   journeys started shows a boot-template fallback (the `chaos` suite may cause one). A suite passes
+   only when every journey passed, and its time runs from its start to its last reset. The loop is
    `runSuites` in `test/e2e/lib/run-suites.ts`, which takes each step as a dependency;
-   `run-suites.test.ts` checks the order of runs, reboots, resets and re-creations.
+   `run-suites.test.ts` checks the order of runs, reboots, resets and re-creations, between the
+   journeys of one suite too.
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
    (`E2E_METRICS_FILE`). The run passes only when every section passed, nothing stopped it, and no
@@ -189,15 +197,37 @@ suite prefix and stays. A removal impd refuses, such as an image another imp boo
 reset. `reset-baseline.test.ts` boots impd's real app (`createImpd` on the stub VMM) in process,
 makes each of those kinds, resets, and reads every list back before and after; it also checks that
 an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) and an unprefixed OAuth client
-stay. Sessions and services are not proven: making either needs a guest agent, which the stub VMM
-has no stand-in for. What the reset does not cover: the instance's own settings (the reboot after a
-failure restores those), the `moves` suites' second host (`removeMoveLeftovers` at the end of a run
-that includes them), and a registry container or SSH key a suite file made.
+stay, and that it removes an imp a failed boot left in `error`. Sessions and services are not
+proven: making either needs a guest agent, which the stub VMM has no stand-in for. What the reset
+does not cover: the instance's own settings (the reboot after a failure restores those), the `moves`
+suites' second host (`removeMoveLeftovers` at the end of a run that includes them), and a registry
+container or SSH key a suite file made.
 
-A suite file also runs alone against an instance that is up:
+A journey file releases what it makes itself, in the order the scenario needs: its `setupTest()`
+creates one `AsyncDisposableStack`, registers `onTestFinished(() => stack.disposeAsync())`, and
+returns it with the run's client (`createInstanceClient`) and the suite's prefix (`readSuitePrefix`
+in `suites.ts`). The test registers each removal on the line after the act that made the thing, with
+`registerRemoval(stack, config.keep, remove)` (`register-removal.ts`):
+`removeImpIfPresent(client, name)` after `imp new`, before the exec wait, and
+`removeImageIfPresent(client, name)` after `imp template create` (both in `reset-baseline.ts`), so
+an imp goes before the template it boots. Each passes over a name the journey already removed and
+throws on any other refusal; `reset-baseline.test.ts` checks both against the in-process impd. Under
+`--keep` (`E2E_KEEP=1`) `registerRemoval` defers nothing, so the journey's imps and images stay, as
+the harness's resets and end-of-run cleanup also skip; other releases, such as a proxy process or a
+held socket, still run.
+
+A burst of connections past a guest server's accept backlog (busybox `httpd` on `e2e-tiny`) leaves
+some that the agent's dial completed but the server never accepted; the guest kernel logs
+`Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
+`the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
+`nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
+`templates`, `offsets` and the four `proxy-*` files work this way. The other suite files still read
+their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
+rely on the harness's reset after them.
+
+A journey file also runs alone against an instance that is up:
 `bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`. Nothing then resets the
-baseline or builds missing fixture images for it; `setupSuite` in `test/e2e/lib/setup-suite.ts` only
-returns the suite's prefix and registers no hooks. `runDevScript` passes the run's
+baseline or builds missing fixture images for it. `runDevScript` passes the run's
 `IMP_RAM_BUDGET_MIB` and `IMP_IDLE_TIMEOUT_S` (from `config.ts`) under whatever `process.env` sets:
 a suite that reboots the instance onto its own tuning sets them in `process.env`, and that must win.
 So a shell's `IMP_RAM_BUDGET_MIB` or `IMP_IDLE_TIMEOUT_S` wins when a suite file runs alone; through

@@ -1,250 +1,285 @@
-import { expect, test } from 'bun:test';
-import * as z from 'zod';
-import { openSessionSocket, requireOutput } from '../lib/exec-socket';
-import type { SessionOutput, SessionSocket } from '../lib/exec-socket';
+import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
+import { config } from '../lib/config';
+import { openSessionSocket, requireOutput, requireSessionError } from '../lib/exec-socket';
 import { resolveImageName } from '../lib/fixtures';
-import { assertState, requireImp, runImp } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
-import { runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import { assertState, createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
+import { waitForExec } from '../lib/imps';
+import { stopFirecrackerHard } from '../lib/instance';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
 // Session output offsets (docs/architecture/daemon.md#output-offsets): a
 // client resumes from the byte it last saw, and learns what it missed.
 
-const prefix = setupSuite('offsets');
-const BARE = resolveImageName('e2e-bare');
-const name = `${prefix}a`;
-const MIB = 1_048_576;
-const RING_BYTES = 262_144;
+// one stack for every release, so each session socket closes before its imp
+// goes
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// exactly 1 MiB of output, untouched by the tty (no CR before LF, no echo),
-// then a process that writes nothing more
-const PRODUCER = [
-  'sh',
-  '-c',
-  `stty -opost -echo; head -c ${String(MIB)} /dev/zero | tr '\\0' x; exec sleep 3600`,
-];
+  onTestFinished(() => stack.disposeAsync());
 
-const ColdBootRowSchema = z.object({ bootId: z.string(), cause: z.string() });
+  const client = await createInstanceClient();
 
-const ErrorDataSchema = z.object({
-  bootId: z.string().optional(),
-  state: z.string().optional(),
-  coldBoots: z.array(ColdBootRowSchema),
-});
-
-// what the steps carry forward: the client's generation and boot
-const seen: { output: SessionOutput | null } = { output: null };
-
-function requireSeen(): SessionOutput {
-  if (seen.output === null) {
-    throw new Error('no session output from an earlier step');
-  }
-
-  return seen.output;
+  return { prefix: readSuitePrefix('offsets'), stack, client };
 }
 
-function readError(opened: Readonly<SessionSocket>) {
-  if (opened.first.type !== 'error') {
-    throw new Error(`expected an error, got ${JSON.stringify(opened.first)}`);
-  }
+test('it resumes session output from the offset a client saw, and names the gap, the new generation and the cause of each cold boot', async () => {
+  const ctx = await setupTest();
 
-  return { code: opened.first.code, data: ErrorDataSchema.parse(opened.first.data) };
-}
+  const name = `${ctx.prefix}a`;
+  const mib = 1_048_576;
 
-function startProducer() {
-  return openSessionSocket({ type: 'start', name, session: 'out', argv: PRODUCER, tty: true });
-}
+  // impd's ring of session output per session
+  const ringBytes = 262_144;
 
-function openResume(offset: number, generation = requireSeen().executionGeneration) {
-  return openSessionSocket({
-    type: 'attach',
+  // exactly 1 MiB of output, untouched by the tty (no CR before LF, no echo),
+  // then a process that writes nothing more
+  const producer = [
+    'sh',
+    '-c',
+    `stty -opost -echo; head -c ${String(mib)} /dev/zero | tr '\\0' x; exec sleep 3600`,
+  ];
+
+  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  const started = await openSessionSocket({
+    type: 'start',
     name,
     session: 'out',
-    resumeFrom: { executionGeneration: generation, offset },
+    argv: producer,
+    tty: true,
   });
-}
 
-// the Firecracker of the imp, by the imp id in its API socket path
-async function stopFirecracker(id: string): Promise<void> {
-  const found = await runInContainer(['pgrep', '-f', `/imps/${id}/run/api.sock`]);
+  ctx.stack.defer(() => {
+    started.close();
+  });
 
-  const pids = found.stdout.split('\n').filter((pid) => pid !== '');
+  const startedOutput = requireOutput(started);
 
-  if (pids.length === 0) {
-    throw new Error(`no firecracker for imp ${id}`);
-  }
+  await started.readBytes(mib);
 
-  for (const pid of pids) {
-    await runInContainer(['kill', '-9', pid]);
-  }
-}
-
-test('1 MiB of output, then a resume from 0, gives a gap and exactly the ring', async () => {
-  await createImp(name, '--image', BARE, '--memory', '256');
-
-  const producer = await startProducer();
-
-  const started = requireOutput(producer);
-
-  await producer.readBytes(MIB);
-
-  producer.close();
+  started.close();
 
   const opening = performance.now();
 
-  const resumed = await openResume(0, started.executionGeneration);
+  const gapResume = await openSessionSocket({
+    type: 'attach',
+    name,
+    session: 'out',
+    resumeFrom: { executionGeneration: startedOutput.executionGeneration, offset: 0 },
+  });
 
-  const output = requireOutput(resumed);
+  ctx.stack.defer(() => {
+    gapResume.close();
+  });
 
-  const data = await resumed.readBytes(RING_BYTES);
+  const gapOutput = requireOutput(gapResume);
+
+  const ring = await gapResume.readBytes(ringBytes);
 
   const resumeMs = Math.round(performance.now() - opening);
 
-  resumed.close();
-
-  seen.output = output;
+  gapResume.close();
 
   writeMetric('offsets_gap_resume_ms', resumeMs);
 
-  expect(started).toMatchObject({ offset: 0, prelude: 0, bufferStart: 0 });
-  expect(started.coldBoots[0]).toMatchObject({ bootId: started.bootId, cause: 'start' });
+  expect(startedOutput).toMatchObject({ offset: 0, prelude: 0, bufferStart: 0 });
 
-  expect(output).toMatchObject({
-    executionGeneration: started.executionGeneration,
-    bufferStart: MIB - RING_BYTES,
-    end: MIB,
-    offset: MIB - RING_BYTES,
-    prelude: 0,
-    resume: { kind: 'gap', from: 0, to: MIB - RING_BYTES },
+  expect(startedOutput.coldBoots[0]).toMatchObject({
+    bootId: startedOutput.bootId,
+    cause: 'start',
   });
 
-  expect(data.byteLength).toBe(RING_BYTES);
-  expect(data.every((byte) => byte === 120)).toBeTrue();
-});
+  expect(gapOutput).toMatchObject({
+    executionGeneration: startedOutput.executionGeneration,
+    bufferStart: mib - ringBytes,
+    end: mib,
+    offset: mib - ringBytes,
+    prelude: 0,
+    resume: { kind: 'gap', from: 0, to: mib - ringBytes },
+  });
 
-test('a sleep and a memory wake keep the generation: the resume is exact', async () => {
-  const before = requireSeen();
+  expect(new TextDecoder().decode(ring)).toBe('x'.repeat(ringBytes));
 
+  // a sleep and a memory wake keep the generation, so the resume is exact
   await runImp('sleep', name);
   await assertState(name, 'sleeping');
 
-  const resumed = await openResume(MIB - 100);
+  const exactResume = await openSessionSocket({
+    type: 'attach',
+    name,
+    session: 'out',
+    resumeFrom: { executionGeneration: gapOutput.executionGeneration, offset: mib - 100 },
+  });
 
-  const output = requireOutput(resumed);
+  ctx.stack.defer(() => {
+    exactResume.close();
+  });
 
-  const data = await resumed.readBytes(100);
+  const exactOutput = requireOutput(exactResume);
 
-  resumed.close();
+  const tail = await exactResume.readBytes(100);
 
-  expect(output).toMatchObject({
-    bootId: before.bootId,
-    executionGeneration: before.executionGeneration,
-    offset: MIB - 100,
-    end: MIB,
+  exactResume.close();
+
+  expect(exactOutput).toMatchObject({
+    bootId: gapOutput.bootId,
+    executionGeneration: gapOutput.executionGeneration,
+    offset: mib - 100,
+    end: mib,
     resume: { kind: 'exact' },
   });
 
-  expect(output.coldBoots).toEqual(before.coldBoots);
-  expect(data.byteLength).toBe(100);
-});
+  expect(exactOutput.coldBoots).toStrictEqual(gapOutput.coldBoots);
+  expect(new TextDecoder().decode(tail)).toBe('x'.repeat(100));
 
-test('wake: false on a stopped imp fails with INVALID_STATE and boots nothing', async () => {
+  // wake: false on a stopped imp boots nothing
   await runImp('stop', name);
 
   const refused = await openSessionSocket({ type: 'attach', name, session: 'out', wake: false });
 
-  const error = readError(refused);
+  ctx.stack.defer(() => {
+    refused.close();
+  });
+
+  const refusal = requireSessionError(refused);
 
   refused.close();
 
   await assertState(name, 'stopped');
 
-  expect(error.code).toBe('INVALID_STATE');
-  expect(error.data.state).toBe('stopped');
-  expect(error.data.coldBoots[0]?.bootId).toBe(requireSeen().bootId);
-});
+  expect(refusal.code).toBe('INVALID_STATE');
+  expect(refusal.data.state).toBe('stopped');
+  expect(refusal.data.coldBoots[0]?.bootId).toBe(exactOutput.bootId);
 
-test('a stop and start end the generation: NO_SESSION, then generation_changed, cause start', async () => {
-  const before = requireSeen();
-
+  // a stop and a start end the generation
   await runImp('start', name);
 
-  const gone = await openResume(MIB);
+  const afterStart = await openSessionSocket({
+    type: 'attach',
+    name,
+    session: 'out',
+    resumeFrom: { executionGeneration: exactOutput.executionGeneration, offset: mib },
+  });
 
-  const error = readError(gone);
+  ctx.stack.defer(() => {
+    afterStart.close();
+  });
 
-  gone.close();
+  const startGone = requireSessionError(afterStart);
+
+  afterStart.close();
 
   const restarted = await openSessionSocket({
     type: 'start',
     name,
     session: 'out',
-    argv: PRODUCER,
+    argv: producer,
     tty: true,
-    resumeFrom: { executionGeneration: before.executionGeneration, offset: MIB },
+    resumeFrom: { executionGeneration: exactOutput.executionGeneration, offset: mib },
   });
 
-  const output = requireOutput(restarted);
+  ctx.stack.defer(() => {
+    restarted.close();
+  });
+
+  const restartedOutput = requireOutput(restarted);
 
   restarted.close();
 
-  seen.output = output;
+  expect(startGone.code).toBe('NO_SESSION');
 
-  expect(error.code).toBe('NO_SESSION');
-  expect(error.data.bootId).not.toBe(before.bootId);
-  expect(error.data.coldBoots.map((boot) => boot.cause).slice(0, 2)).toEqual(['start', 'start']);
-  expect(error.data.coldBoots[1]?.bootId).toBe(before.bootId);
-  expect(output.executionGeneration).not.toBe(before.executionGeneration);
-  expect(output.coldBoots[0]).toMatchObject({ bootId: output.bootId, cause: 'start' });
+  invariant(startGone.data.bootId);
 
-  expect(output.resume).toEqual({
+  expect(startGone.data.bootId).not.toBe(exactOutput.bootId);
+
+  expect(startGone.data.coldBoots.map((boot) => boot.cause).slice(0, 2)).toStrictEqual([
+    'start',
+    'start',
+  ]);
+
+  expect(startGone.data.coldBoots[1]?.bootId).toBe(exactOutput.bootId);
+  expect(restartedOutput.executionGeneration).not.toBe(exactOutput.executionGeneration);
+
+  expect(restartedOutput.coldBoots[0]).toMatchObject({
+    bootId: restartedOutput.bootId,
+    cause: 'start',
+  });
+
+  expect(restartedOutput.resume).toStrictEqual({
     kind: 'generation_changed',
-    executionGeneration: output.executionGeneration,
+    executionGeneration: restartedOutput.executionGeneration,
     firstOffset: 0,
   });
-});
 
-test('a checkpoint restore ends the generation with the cause restore', async () => {
+  // a checkpoint restore ends the generation with the cause restore
   await runImp('checkpoint', name, 'offsets');
   await runImp('restore', name, 'offsets');
 
-  const gone = await openResume(0);
+  const afterRestore = await openSessionSocket({
+    type: 'attach',
+    name,
+    session: 'out',
+    resumeFrom: { executionGeneration: restartedOutput.executionGeneration, offset: 0 },
+  });
 
-  const error = readError(gone);
+  ctx.stack.defer(() => {
+    afterRestore.close();
+  });
 
-  gone.close();
+  const restoreGone = requireSessionError(afterRestore);
 
-  expect(error.code).toBe('NO_SESSION');
-  expect(error.data.coldBoots[0]?.cause).toBe('restore');
-  expect(error.data.coldBoots[1]?.bootId).toBe(requireSeen().bootId);
-});
+  afterRestore.close();
 
-test('a killed VM ends the generation with the cause recovery, which the attach that boots keeps', async () => {
-  const producer = await startProducer();
+  expect(restoreGone.code).toBe('NO_SESSION');
+  expect(restoreGone.data.coldBoots[0]?.cause).toBe('restore');
+  expect(restoreGone.data.coldBoots[1]?.bootId).toBe(restartedOutput.bootId);
 
-  const before = requireOutput(producer);
+  // a killed VM ends the generation with the cause recovery, which the
+  // attach that boots the imp keeps
+  const beforeKill = await openSessionSocket({
+    type: 'start',
+    name,
+    session: 'out',
+    argv: producer,
+    tty: true,
+  });
 
-  producer.close();
+  ctx.stack.defer(() => {
+    beforeKill.close();
+  });
 
-  seen.output = before;
+  const beforeKillOutput = requireOutput(beforeKill);
+
+  beforeKill.close();
 
   const imp = await requireImp(name);
 
-  await stopFirecracker(imp.id);
+  await stopFirecrackerHard(imp.id);
 
   // the attach finds the VM gone, and boots the imp to answer
-  const gone = await waitFor('an attach after the kill', async () => {
-    const opened = await openResume(0);
+  const recoveryGone = await waitFor('an attach after the kill', async () => {
+    const opened = await openSessionSocket({
+      type: 'attach',
+      name,
+      session: 'out',
+      resumeFrom: { executionGeneration: beforeKillOutput.executionGeneration, offset: 0 },
+    });
 
     opened.close();
 
-    return readError(opened);
+    return requireSessionError(opened);
   });
 
-  expect(gone.code).toBe('NO_SESSION');
-  expect(gone.data.coldBoots[0]?.cause).toBe('recovery');
-  expect(gone.data.coldBoots[1]?.bootId).toBe(before.bootId);
+  expect(recoveryGone.code).toBe('NO_SESSION');
+  expect(recoveryGone.data.coldBoots[0]?.cause).toBe('recovery');
+  expect(recoveryGone.data.coldBoots[1]?.bootId).toBe(beforeKillOutput.bootId);
 });

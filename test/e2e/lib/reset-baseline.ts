@@ -64,3 +64,34 @@ export async function resetBaseline(options: Readonly<ResetBaselineOptions>): Pr
 
   await rm(join(options.dataDir, 'broker-test-upstreams.json'), { force: true });
 }
+
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && error.code === 'NOT_FOUND'
+  );
+}
+
+// A journey's own release of an imp it made, deferred where the journey
+// makes it: one the journey removed itself is no error, and any other
+// refusal fails the journey.
+export async function removeImpIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.imps.destroy({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
+// The same for an image or template a journey made; release it after the
+// imps that boot it.
+export async function removeImageIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.images.delete({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
