@@ -77,3 +77,12 @@ test('it reports the bytes the test queued for the client', () => {
 
   expect(socket.peer.readBufferedAmount()).toBe(2_000_000);
 });
+
+test('it counts each read of the bytes queued for the client', () => {
+  const socket = buildStubExecSocket();
+
+  socket.peer.readBufferedAmount();
+  socket.peer.readBufferedAmount();
+
+  expect(socket.buffered.reads).toBe(2);
+});

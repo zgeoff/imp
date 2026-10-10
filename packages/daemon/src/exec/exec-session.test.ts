@@ -767,6 +767,45 @@ test("it sends a plain exec's stdout without waiting for acks", async () => {
   });
 });
 
+test('it holds the next output while the client has more than 1 MiB queued, until it drains', async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
+  );
+
+  socket.buffered.bytes = 2_000_000;
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('one') });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('two') });
+
+  // a read that saw the queue past the mark leaves the session waiting
+  await waitFor(() => {
+    expect(socket.buffered.reads).toBeGreaterThanOrEqual(1);
+  });
+
+  const held = [...socket.sent];
+
+  socket.buffered.bytes = 0;
+
+  session.handleDrain();
+
+  await waitFor(() => {
+    expect(socket.sent).toHaveLength(3);
+  });
+
+  expect(held).toStrictEqual([{ type: 'started', pid: 7 }, [EXEC_CHANNELS.stdout, 'one']]);
+
+  expect(socket.sent).toStrictEqual([
+    { type: 'started', pid: 7 },
+    [EXEC_CHANNELS.stdout, 'one'],
+    [EXEC_CHANNELS.stdout, 'two'],
+  ]);
+});
+
 test("it places a session's data in started and gives the offset after it in the exit", async () => {
   const output = buildMockSessionOutput({ bufferStart: 0, end: 100, offset: 90, prelude: 3 });
   const fake = buildStubAgentExecStream({ session: 'main', output });

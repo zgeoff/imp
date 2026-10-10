@@ -20,8 +20,8 @@ export function buildStubExecSocket(options: StubExecSocketOptions = {}) {
   const binary = { count: 0 };
 
   // the bytes queued for the client; a test that lowers them then calls the
-  // session's handleDrain, as Bun's drain does
-  const buffered = { bytes: 0 };
+  // session's handleDrain, as Bun's drain does. `reads` counts each look.
+  const buffered = { bytes: 0, reads: 0 };
 
   const peer: ExecPeer = {
     sendText: (text) => {
@@ -44,7 +44,11 @@ export function buildStubExecSocket(options: StubExecSocketOptions = {}) {
       closes.push(code ?? 1000);
       closeReasons.push(reason);
     },
-    readBufferedAmount: () => buffered.bytes,
+    readBufferedAmount: () => {
+      buffered.reads += 1;
+
+      return buffered.bytes;
+    },
   };
 
   return { peer, sent, closes, closeReasons, buffered };
