@@ -94,20 +94,18 @@ the SQLite handle itself, since Kysely closes a driver only after a query starte
 `buildQueryGate` (it releases a held select), `findFreePorts` (it releases its port claims),
 `startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
 `startStubSshAgent`, `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
-`setupImpTest`, `setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
+`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
 `startStubFirecracker`.
-
-`setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
-branches that hold them with `await using`; a later GEO-135 PR removes it once those branches land.
 
 Utils that take a caller's stack and register nothing themselves:
 
-- `createImpTest(stack, options)` in `imps/test-imps.ts`: the `setupImpTest` harness. For each impd
-  it starts, the stack stops its boot templates, which waits for a running template build, before it
-  removes the data dir. It releases the fake's hangs first, and stops waiting for a replaced impd's
-  build once its VM call parks (`whenTemplateBuildParks`); a build past that call still finishes. A
-  test that holds the `template` step defers the release into the same stack, so the release runs
-  first.
+- `createImpTest(stack, options)` in `imps/test-imps.ts`: the governed-imps harness. A test creates
+  the stack and registers its disposal on the next line; the client smoke's `run-stub-impd.ts`
+  disposes it at exit. For each impd it starts, the stack stops its boot templates, which waits for
+  a running template build, before it removes the data dir. It releases the fake's hangs first, and
+  stops waiting for a replaced impd's build once its VM call parks (`whenTemplateBuildParks`); a
+  build past that call still finishes. A test that holds the `template` step defers the release into
+  the same stack, so the release runs first.
 - `createMoveHosts(stack, options)` in `moves/test-moves.ts`: the two `setupMoveHosts` impds.
 - The broker stand-ins `test-utils/start-stub-broker-*.ts` that start something: the TLS and plain
   upstreams, the reply and hold targets, the guest socket and the tunnel.
@@ -432,7 +430,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | ---------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | VMM                          | `test-utils/build-stub-vmm.ts` (`buildStubVmm`) (12)                                               | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step                          |
 | impd                         | `create-impd.ts` (`createImpd`) with stubs as its deps                                             | The host: see Booting impd below                                                   |
-| Governed imps                | `imps/test-imps.ts` (`setupImpTest`, `createImpTest`, `buildTestApp`)                              | A shim over createImpd's parts, without its start steps                            |
+| Governed imps                | `imps/test-imps.ts` (`createImpTest`, `buildTestApp`)                                              | A shim over createImpd's parts, without its start steps                            |
 | Firecracker API              | `test-utils/start-stub-firecracker-api.ts` (1); `test-utils/start-stub-firecracker.ts` (2)         | Firecracker's HTTP API on its socket                                               |
 | Firecracker process          | `test-utils/start-stub-firecracker-process.ts` (3)                                                 | A process whose cmdline matches Firecracker's                                      |
 | Jails for the runner         | `test-utils/build-stub-jails.ts` (`buildStubJails`)                                                | The `Jails` a runner prepares and seals; each call in order, refusals on request   |
@@ -549,7 +547,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
    function of a sourced script with only `PATH` and the variables a test passes.
 8. Bash that `egress/egress-ruleset.host.test.ts` runs in a mount and network namespace.
 9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
-10. `setupImpTest`'s default `runNft` still records scripts for the suites that use it.
+10. `createImpTest`'s default `runNft` still records scripts for the suites that use it.
 11. An MSW handler a test adds with `server.use`; an unissued refresh token gets `invalid_grant`.
 12. `countHungCalls` and `countParkedCalls` count the calls that wait on a `hang` or on a runner of
     an older generation; a test waits for them with `waitFor` before it peeks at the call.
@@ -677,20 +675,23 @@ host's real one. With tailnet names configured, `runCommand` also reaches `build
 `tailscale serve` calls, so `tailnet-names.test.ts` boots named impds on `buildStubTailscaleServe`'s
 `run`. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`,
 `loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for
-`createImpTest`, which wires them without the start steps into a caller's stack; `setupImpTest`
-wraps it with its own stack, and the client smoke's `run-stub-impd.ts` runs it outside a test. Its
-clock is the wall clock plus what `advance` adds; with `frozenClockMs` it starts there and is also
-`imps.sleepTiming`'s clock, and each young-guest pause moves it at once by the pause's length
-instead of waiting. `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The
-egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
-`test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's ephemeral
-range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands out with
-an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in parallel
-processes never hand out the same port. A process that binds a port without a claim can still take
-one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by default), so a
-test fires a sweep by calling the function it was handed. A `createImpd` test whose storage clones
-with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
-checkpoint's copy or a fork takes minutes (`networks/network-service.test.ts` forks).
+`createImpTest`, which wires them without the start steps into a caller's stack; the client smoke's
+`run-stub-impd.ts` runs it outside a test. `buildTestApp` builds impd's app with `buildImpdApp` over
+the harness's impd or one that `restartImpd` started. The app hands each unexpected RPC failure to
+the harness's `logRpcFailure`, as `createImpd` hands its deps' to `buildApp`: the harness keeps the
+failure in `rpcFailures` and writes an `impd: rpc failed:` line to its log, not to stderr. The
+harness's clock is the wall clock plus what `advance` adds; with `frozenClockMs` it starts there and
+is also `imps.sleepTiming`'s clock, and each young-guest pause moves it at once by the pause's
+length instead of waiting. `packages/daemon/src/create-impd.test.ts` boots `createImpd` whole on the
+stubs. The egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one
+from `test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's
+ephemeral range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands
+out with an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in
+parallel processes never hand out the same port. A process that binds a port without a claim can
+still take one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by
+default), so a test fires a sweep by calling the function it was handed. A `createImpd` test whose
+storage clones with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file
+and a checkpoint's copy or a fork takes minutes (`networks/network-service.test.ts` forks).
 
 `moves/test-moves.ts` (tested in `test-moves.test.ts`) builds two impds on `createImpTest`. Its
 `hook` gets each request the source sends, a `forward(replacement?)` to the target's move routes,

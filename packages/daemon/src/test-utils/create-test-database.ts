@@ -4,10 +4,6 @@ import type { ImpDatabase } from '../db/open-database';
 
 interface TestDatabase {
   readonly db: ImpDatabase;
-
-  // transitional: in-flight area branches still hold this with `await using`;
-  // a later GEO-135 PR removes it
-  [Symbol.asyncDispose]: () => Promise<void>;
 }
 
 // a migrated in-memory database, empty, closed when the test finishes
@@ -16,5 +12,5 @@ export async function createTestDatabase(): Promise<TestDatabase> {
 
   onTestFinished(() => db.destroy());
 
-  return { db, [Symbol.asyncDispose]: () => db.destroy() };
+  return { db };
 }
