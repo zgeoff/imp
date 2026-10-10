@@ -275,21 +275,26 @@ harness's (step 5). Suites that reboot the instance pass impd settings through `
 
 Suites with extra needs:
 
-| Suite                        | Needs, or skips without                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------- |
-| `tailscale`, `moves-tailnet` | A Tailscale key and this machine `Running` on the tailnet; skips outside `acceptance`        |
-| `tailscale` per-imp names    | `IMP_E2E_TAILNET_NAMES=1` and the OAuth client in 1Password                                  |
-| `registry`                   | `imp-e2e-registry.test` resolving to 127.0.0.1 and passwordless sudo; fails when `CI` is set |
-| `ksm`                        | `/sys/kernel/mm/ksm/run` set to 1 and a kernel of 6.10 or later                              |
-| `https`                      | Pebble, which `main.ts` starts only when the run includes `https`                            |
-| `moves`, `moves-tailnet`     | A second instance, `<IMP_DEV_NAME>-mv-b` with data in `<IMP_DEV_DATA>-mv-b`                  |
-| `dashboard`                  | Playwright's Chromium; runs `packages/dashboard`'s `bun run e2e` against the instance        |
-| `lifecycle` and others       | Public internet from the guest (`example.com`) and for fixture image pulls                   |
+| Suite                        | Needs, or skips without                                                                              |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `tailscale`, `moves-tailnet` | The `tag:imp-e2e` OAuth client and this machine `Running` on the tailnet; skips outside `acceptance` |
+| `tailscale` per-imp names    | `IMP_E2E_TAILNET_NAMES=1` and the OAuth client in 1Password                                          |
+| `registry`                   | `imp-e2e-registry.test` resolving to 127.0.0.1 and passwordless sudo; fails when `CI` is set         |
+| `ksm`                        | `/sys/kernel/mm/ksm/run` set to 1 and a kernel of 6.10 or later                                      |
+| `https`                      | Pebble, which `main.ts` starts only when the run includes `https`                                    |
+| `moves`, `moves-tailnet`     | A second instance, `<IMP_DEV_NAME>-mv-b` with data in `<IMP_DEV_DATA>-mv-b`                          |
+| `dashboard`                  | Playwright's Chromium; runs `packages/dashboard`'s `bun run e2e` against the instance                |
+| `lifecycle` and others       | Public internet from the guest (`example.com`) and for fixture image pulls                           |
 
-The Tailscale key comes from `TAILSCALE_AUTHKEY`, else a 1Password read of
-`IMP_TAILSCALE_AUTHKEY_REF` when `IMP_TAILSCALE_OP=1`, else `TAILSCALE_AUTHKEY` in `.env`
-(`load_tailscale_authkey` in `scripts/lib.sh`). `main.ts` sets `IMP_TAILSCALE_OP=1` only when the
-run includes `tailscale` or `moves-tailnet`.
+The tailnet suites join as `tag:imp-e2e`, never `tag:imp`: the tailnet policy lets `tag:imp-e2e`
+reach only other `tag:imp-e2e` nodes on tcp 7070, so a test node cannot reach a live impd. When the
+run includes `tailscale` or `moves-tailnet`, `main.ts` reads the `tag:imp-e2e` OAuth client secret
+(`load_tailscale_e2e_authkey` in `scripts/lib.sh`): `IMP_E2E_TAILSCALE_AUTHKEY`, else
+`op read op://imp-e2e/imp-e2e-tailscale-oauth/client-secret`. The `imp` op-mint profile's token
+covers the `imp-e2e` vault and nothing else. `main.ts` drops any `TAILSCALE_AUTHKEY` from its env,
+and without the e2e client it sets `IMP_DEV_TAILNET=0`, so dev's `tag:imp` key in `.env` never joins
+an e2e node. An instance that joined as `tag:imp` before keeps its node state: run with `--clean`
+once.
 
 The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and need no KVM, Docker or dev
 instance. Some start real processes: `reset-baseline.test.ts` boots impd's app in process

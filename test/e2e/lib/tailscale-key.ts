@@ -1,23 +1,27 @@
 import { LIB_SCRIPT, runCommand } from './instance';
 
-// The Tailscale auth key as dev.sh finds it (load_tailscale_authkey in
-// scripts/lib.sh), or null; never print it. An op miss stays in this
-// process's env, so later reads and the scripts this run starts skip op.
-export async function readTailscaleAuthKey(): Promise<string | null> {
+// The e2e suites' Tailscale key and tags as load_tailscale_e2e_authkey in
+// scripts/lib.sh finds them, or null; never print the key. Only the tag:imp-e2e
+// OAuth client: dev's tag:imp key would join a node that reaches a live impd.
+export async function readTailscaleE2EAuthKey(): Promise<{ key: string; tags: string } | null> {
   const result = await runCommand([
     'bash',
     '-c',
-    String.raw`source "$1"; load_tailscale_authkey; printf "%s\n%s" "$IMP_TAILSCALE_OP_MISSED" "$TAILSCALE_AUTHKEY"`,
+    String.raw`source "$1"; load_tailscale_e2e_authkey || exit 0; printf "%s\n%s" "$IMP_TAILSCALE_TAGS" "$TAILSCALE_AUTHKEY"`,
     'bash',
     LIB_SCRIPT,
   ]);
 
-  const [missed = '', ...rest] = result.stdout.split('\n');
+  const [tags = '', ...rest] = result.stdout.split('\n');
   const key = rest.join('\n').trim();
 
-  if (missed !== '') {
-    process.env['IMP_TAILSCALE_OP_MISSED'] = missed;
-  }
+  return key === '' ? null : { key, tags };
+}
 
-  return key === '' ? null : key;
+// whether main.ts gave this run the e2e key; the tailnet suites skip without it
+export function hasTailscaleE2EKey(): boolean {
+  return (
+    (process.env['TAILSCALE_AUTHKEY'] ?? '') !== '' &&
+    process.env['IMP_TAILSCALE_TAGS'] === 'tag:imp-e2e'
+  );
 }
