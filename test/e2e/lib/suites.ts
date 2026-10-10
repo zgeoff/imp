@@ -1,6 +1,8 @@
 import type { DevInstance } from './instance';
+import { checkHostRunsKsm } from './ksm-host';
 import { buildMoveSettings, readMoveOptions } from './move-hosts';
 import type { HostBFixtureName } from './move-hosts';
+import { buildRouteOrigin } from './oauth-route';
 
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
@@ -89,7 +91,12 @@ export const SUITES: readonly Suite[] = [
     }),
   },
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
-  { name: 'mcp-oauth', prefix: 'e2e-oa-', images: ['e2e-tiny'] },
+  {
+    name: 'mcp-oauth',
+    prefix: 'e2e-oa-',
+    images: ['e2e-tiny'],
+    settings: (target) => ({ IMP_MCP_PUBLIC_URL: buildRouteOrigin(target) }),
+  },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
   { name: 'offsets', prefix: 'e2e-off-', images: ['e2e-bare'] },
   { name: 'session-logs', prefix: 'e2e-slog-', images: ['e2e-bare'] },
@@ -188,8 +195,23 @@ export const SUITES: readonly Suite[] = [
   },
   { name: 'memory', prefix: 'e2e-mem-', images: ['e2e-tiny'] },
 
-  // skips unless KSM runs on this host, as CI turns it on; reboots the instance
-  { name: 'ksm', prefix: 'e2e-ksm-', images: ['e2e-tiny'] },
+  // skips unless KSM runs on this host, as CI turns it on; impd cannot start
+  // with IMP_KSM elsewhere. One guest's memory as the budget, boots reserving
+  // 20 %, and no idle sleeps to hide a breach.
+  {
+    name: 'ksm',
+    prefix: 'e2e-ksm-',
+    images: ['e2e-tiny'],
+    settings: () =>
+      checkHostRunsKsm()
+        ? {
+            IMP_KSM: '1',
+            IMP_RAM_BUDGET_MIB: '512',
+            IMP_BOOT_RESERVE_PERCENT: '20',
+            IMP_IDLE_TIMEOUT_S: '600',
+          }
+        : {},
+  },
 
   // last: it reboots the instance with backups on, then off again
   { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },

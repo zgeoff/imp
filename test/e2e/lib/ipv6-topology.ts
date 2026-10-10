@@ -1,4 +1,4 @@
-import { runShellInImp } from './imp-cli';
+import { requireImp, runShellInImp } from './imp-cli';
 import { instance, runChecked, runCommand, runDevScript, runInContainer } from './instance';
 
 // The ipv6 suite's network (docs/architecture/networking.md#ipv6): a router
@@ -62,10 +62,50 @@ export function parseGlobal128(addresses: string): string {
 }
 
 // the packet count of ip6tables' INPUT rule that drops from the taps
-export function parseTapDrops(listing: string): number {
-  const line = listing.split('\n').find((row) => row.includes('DROP') && row.includes('imp+'));
+// the packets the RS ACCEPT rule of `ip6tables -vnxL INPUT` counted
+export function parseRsAccepts(listing: string): number {
+  const line = listing
+    .split('\n')
+    .find((row) => row.includes('ACCEPT') && row.includes('imp+') && row.includes('icmptype 133'));
 
   return Number(line?.trim().split(/\s+/v)[0] ?? Number.NaN);
+}
+
+const RA_COUNTER_TABLE = 'e2e_ra';
+
+// A netdev table that counts the tap's router advertisements and
+// solicitations on ingress, before any inet hook can drop them.
+export function buildRaCounterRuleset(tap: string): string {
+  return [
+    `table netdev ${RA_COUNTER_TABLE} {`,
+    '  chain ingress {',
+    `    type filter hook ingress device "${tap}" priority 0;`,
+    '    icmpv6 type nd-router-advert counter',
+    '    icmpv6 type nd-router-solicit counter',
+    '  }',
+    '}',
+  ].join('\n');
+}
+
+export interface RaCounts {
+  readonly adverts: number;
+  readonly solicits: number;
+}
+
+// the two counters of `nft list table netdev e2e_ra`
+export function parseRaCounts(listing: string): RaCounts {
+  const readCount = (type: string) => {
+    const match = new RegExp(String.raw`${type} counter packets (?<n>\d+)`, 'v').exec(listing);
+
+    return Number(match?.groups?.['n'] ?? Number.NaN);
+  };
+
+  return { adverts: readCount('nd-router-advert'), solicits: readCount('nd-router-solicit') };
+}
+
+// the device the instance routes an address through
+export function parseRouteDevice(route: string): string {
+  return /\bdev (?<dev>\S+)/v.exec(route)?.groups?.['dev'] ?? '';
 }
 
 // Thin glue over Docker, the dev instance and live guests below.
@@ -232,14 +272,47 @@ export async function readGuestIpv6(name: string): Promise<string> {
   return parseGlobal128(addresses);
 }
 
-export async function readTapDrops(): Promise<number> {
+export async function readRsAccepts(): Promise<number> {
   const result = await runInContainer(['ip6tables', '-w', '-vnxL', 'INPUT']);
 
-  return parseTapDrops(result.stdout);
+  return parseRsAccepts(result.stdout);
+}
+
+// the host side of the imp's tap, by the route to its address
+export async function readImpTap(name: string): Promise<string> {
+  const row = await requireImp(name);
+  const route = await runInContainer(['ip', '-o', 'route', 'get', row.ip]);
+
+  return parseRouteDevice(route.stdout);
+}
+
+// the caller stops it with stopRaCounter
+export async function startRaCounter(tap: string): Promise<void> {
+  const result = await runCommand(['docker', 'exec', '-i', instance.container, 'nft', '-f', '-'], {
+    stdin: buildRaCounterRuleset(tap),
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(`nft -f - exited ${String(result.exitCode)}: ${result.stderr.trim()}`);
+  }
+}
+
+export async function stopRaCounter(): Promise<void> {
+  await runInContainer(['nft', 'delete', 'table', 'netdev', RA_COUNTER_TABLE]);
+}
+
+export async function readRaCounts(): Promise<RaCounts> {
+  const result = await runInContainer(['nft', 'list', 'table', 'netdev', RA_COUNTER_TABLE]);
+
+  return parseRaCounts(result.stdout);
 }
 
 export async function readHostRouting(): Promise<string> {
-  const result = await runInContainer(['sh', '-c', 'ip -6 route; ip -6 addr show scope global']);
+  const result = await runInContainer([
+    'sh',
+    '-c',
+    'ip -6 route; ip -6 addr show scope global; sysctl net.ipv6.conf.all.accept_ra net.ipv6.conf.default.accept_ra',
+  ]);
 
   return result.stdout;
 }

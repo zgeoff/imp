@@ -1,5 +1,14 @@
 import { expect, test } from 'bun:test';
-import { buildPkceChallenge, parseApprovalPage, parseMcpBody } from './oauth-route';
+import {
+  buildPkceChallenge,
+  buildRouteOrigin,
+  parseApprovalPage,
+  parseMcpBody,
+} from './oauth-route';
+
+test('#buildRouteOrigin publishes the route at the instance’s port offset', () => {
+  expect(buildRouteOrigin({ portOffset: 700 })).toBe('http://127.0.0.1:7771');
+});
 
 test('#buildPkceChallenge gives RFC 7636 appendix B challenge', () => {
   expect(buildPkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk')).toBe(

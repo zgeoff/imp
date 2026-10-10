@@ -147,10 +147,19 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
   const all = await tryImp(['backup', 'restore', '--all']);
   const merged = await tryImp(['backup', 'restore', '--all', '--merge']);
 
-  expect(all.exitCode).toBe(1);
-  expect(all.stderr).toContain('restore --all --merge');
-  expect(merged.exitCode).toBe(1);
-  expect(merged.stderr).toMatch(new RegExp(`an imp named ${ctx.prefix}(?:src|idle) exists`, 'v'));
+  expect(all).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('restore --all --merge'),
+  });
+
+  expect(merged).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toSatisfy((stderr: string) =>
+      new RegExp(`an imp named ${ctx.prefix}(?:src|idle) exists`, 'v').test(stderr),
+    ),
+  });
 
   // the newest point that holds the source: a scheduled run after the
   // removal below would hold none of the journey's imps, and one after the
@@ -176,8 +185,13 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
   const states = await Promise.all((point?.imps ?? []).map((name) => readState(name)));
 
   expect(others).toStrictEqual([]);
-  expect(result.exitCode).toBe(0);
-  expect(result.stderr).toContain('stop the old impd');
+
+  expect(result).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toBeString(),
+    stderr: expect.toInclude('stop the old impd'),
+  });
+
   expect(point?.imps).toContain(idle);
   expect(point?.imps).toContain(source);
   expect(states).toSatisfyAll((state: string) => state === 'stopped');
@@ -255,8 +269,7 @@ test('it restores a point that survived the scheduled forget and prune, and find
   // every run so far fell in one hour: forget keeps only the newest
   expect(status.points.at(-1)?.imps).toContain(idle);
   expect(survivorState).toBe('stopped');
-  expect(gone.exitCode).toBe(1);
-  expect(gone.stderr).toContain('not found');
+  expect(gone).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toInclude('not found') });
 });
 
 test('it restores past a stale lock in the repository, and fails the check loudly on a corrupted pack', async () => {

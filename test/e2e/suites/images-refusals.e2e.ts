@@ -51,12 +51,19 @@ test('it refuses a RUN step that asks for the host network or insecure mode', as
   const insecureResult = await tryImp(['image', 'build', insecure, '--name', name]);
   const images = await listImageNames();
 
-  expect(netResult).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(netResult.stderr).toInclude('network.host is not allowed');
+  expect(netResult).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('network.host is not allowed'),
+  });
 
   // the pinned stable frontend has no --security; the engine never sees the step
-  expect(insecureResult).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(insecureResult.stderr).toInclude('unknown flag: --security');
+  expect(insecureResult).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('unknown flag: --security'),
+  });
+
   expect(images).not.toContain(name);
 });
 
@@ -96,8 +103,11 @@ test('it fails the pull of a FROM image that only the host’s Docker has', asyn
 
   const result = await tryImp(['image', 'build', dir, '--name', name]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude(`FROM ${local}: the pull failed`);
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude(`FROM ${local}: the pull failed`),
+  });
 });
 
 test('it refuses a FROM image from the host’s own registry under the proxy’s pull rules', async () => {
@@ -115,8 +125,11 @@ test('it refuses a FROM image from the host’s own registry under the proxy’s
 
   const result = await tryImp(['image', 'build', dir, '--name', name]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude("registry localhost:5000 is the host's own");
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude("registry localhost:5000 is the host's own"),
+  });
 });
 
 // #145: what the engine would fetch on its own is refused before the build,
@@ -163,8 +176,12 @@ test.each([
 
   const result = await tryImp(['image', 'build', dir, '--name', name]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude(refusal.replaceAll('{url}', url));
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude(refusal.replaceAll('{url}', url)),
+  });
+
   expect(requests).toStrictEqual([]);
 });
 
@@ -183,8 +200,11 @@ test('it refuses ONBUILD, also in a local stage a later FROM runs', async () => 
 
   const result = await tryImp(['image', 'build', dir, '--name', name]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude('ONBUILD is refused');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('ONBUILD is refused'),
+  });
 });
 
 test('it fails a build in its builder whose FROM registry name resolves to a private address', async () => {
@@ -202,9 +222,14 @@ test('it fails a build in its builder whose FROM registry name resolves to a pri
 
   const result = await tryImp(['image', 'build', dir, '--name', name]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude('FROM 10-0-0-1.nip.io:5000/e2e/x:1: the pull failed');
-  expect(result.stderr).toInclude('no such host');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toIncludeMultiple([
+      'FROM 10-0-0-1.nip.io:5000/e2e/x:1: the pull failed',
+      'no such host',
+    ]),
+  });
 });
 
 test('it fails an add in its builder whose registry name resolves to a private address', async () => {
@@ -217,7 +242,11 @@ test('it fails an add in its builder whose registry name resolves to a private a
   const result = await tryImp(['image', 'add', '10-0-0-1.nip.io:5000/e2e/x:1', '--name', name]);
   const names = await listImageNames();
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude('the pull of 10-0-0-1.nip.io:5000/e2e/x:1 in the builder failed');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('the pull of 10-0-0-1.nip.io:5000/e2e/x:1 in the builder failed'),
+  });
+
   expect(names).not.toContain(name);
 });

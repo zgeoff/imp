@@ -1,10 +1,13 @@
 import { expect, test } from 'bun:test';
 import {
   buildGuestIpv6,
+  buildRaCounterRuleset,
   buildV6Names,
   buildV6Plan,
   parseGlobal128,
-  parseTapDrops,
+  parseRaCounts,
+  parseRouteDevice,
+  parseRsAccepts,
   parseUlaNetwork,
 } from './ipv6-topology';
 
@@ -68,13 +71,48 @@ test('#parseGlobal128 reads no global address as empty', () => {
   expect(parseGlobal128('2: eth0: <UP> mtu 1500\n')).toBe('');
 });
 
-test('#parseTapDrops reads the packets the taps’ DROP rule counted', () => {
+test('#parseRsAccepts reads the packets the taps’ RS ACCEPT rule counted', () => {
   const listing = [
     'Chain INPUT (policy ACCEPT 0 packets, 0 bytes)',
     '    pkts      bytes target     prot opt in     out     source               destination',
-    '      12      960 ACCEPT     all      lo     *       ::/0                 ::/0',
-    '       3      216 DROP       all      imp+   *       ::/0                 ::/0',
+    '       0        0 ACCEPT     ipv6-icmp --  imp+   *       ::/0                 ::/0                 ipv6-icmptype 136 HL match HL == 255',
+    '       3      168 ACCEPT     ipv6-icmp --  imp+   *       ::/0                 ::/0                 ipv6-icmptype 133 HL match HL == 255',
+    '       0        0 DROP       all  --  imp+   *       ::/0                 ::/0',
   ].join('\n');
 
-  expect(parseTapDrops(listing)).toBe(3);
+  expect(parseRsAccepts(listing)).toBe(3);
+});
+
+test('#buildRaCounterRuleset counts the tap’s advertisements and solicitations on ingress', () => {
+  expect(buildRaCounterRuleset('imp3')).toBe(
+    [
+      'table netdev e2e_ra {',
+      '  chain ingress {',
+      '    type filter hook ingress device "imp3" priority 0;',
+      '    icmpv6 type nd-router-advert counter',
+      '    icmpv6 type nd-router-solicit counter',
+      '  }',
+      '}',
+    ].join('\n'),
+  );
+});
+
+test('#parseRaCounts reads both counters of the table nft lists', () => {
+  const listing = [
+    'table netdev e2e_ra {',
+    '\tchain ingress {',
+    '\t\ttype filter hook ingress device "imp3" priority filter; policy accept;',
+    '\t\ticmpv6 type nd-router-advert counter packets 3 bytes 264',
+    '\t\ticmpv6 type nd-router-solicit counter packets 1 bytes 56',
+    '\t}',
+    '}',
+  ].join('\n');
+
+  expect(parseRaCounts(listing)).toStrictEqual({ adverts: 3, solicits: 1 });
+});
+
+test('#parseRouteDevice reads the device of a route', () => {
+  expect(parseRouteDevice(String.raw`10.66.0.6 dev imp3 src 10.66.0.5 uid 0 \    cache`)).toBe(
+    'imp3',
+  );
 });

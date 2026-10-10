@@ -189,8 +189,12 @@ test('it refuses to write through a symlink in the imp', async () => {
     'if [ -e /etc/planted ]; then echo there; else echo gone; fi',
   );
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude('under a symlink');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('under a symlink'),
+  });
+
   expect(planted).toBe('gone');
 });
 
@@ -207,8 +211,7 @@ test('it fails with the path when the path is not in the imp', async () => {
 
   const result = await tryImp(['cp', `${name}:/no/such`, ctx.local]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude('/no/such');
+  expect(result).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toInclude('/no/such') });
 });
 
 test('it refuses with AGENT_OUTDATED an imp whose agent predates imp cp', async () => {
@@ -240,6 +243,9 @@ test('it refuses with AGENT_OUTDATED an imp whose agent predates imp cp', async 
 
   const result = await tryImp(['cp', file, `${name}:/tmp`]);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toInclude('AGENT_OUTDATED');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('AGENT_OUTDATED'),
+  });
 });

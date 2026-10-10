@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import * as z from 'zod';
 import { tryImp } from './imp-cli';
+import type { DevInstance } from './instance';
 
 // A client of impd's public MCP route (docs/guides/mcp.md#public-route): the
 // sign-in page, the CLI's approval, the token endpoint, and /mcp.
@@ -12,6 +13,12 @@ export const RouteTokensSchema = z.object({
 });
 
 export type RouteTokens = z.infer<typeof RouteTokensSchema>;
+
+// The route's origin on the instance: impd's :7071, published at the
+// instance's offset; plain http on loopback, as tests alone may use.
+export function buildRouteOrigin(target: Readonly<Pick<DevInstance, 'portOffset'>>): string {
+  return `http://127.0.0.1:${String(7071 + target.portOffset)}`;
+}
 
 // RFC 7636's S256: the verifier's SHA-256, base64url
 export function buildPkceChallenge(verifier: string): string {

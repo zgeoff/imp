@@ -51,8 +51,12 @@ test('it keeps the agent answering after rm -rf / inside, and a checkpoint resto
 
   const state = await readState(name);
 
-  expect(broken.exitCode).toBe(127);
-  expect(broken.stderr).toContain('EXEC_FAILED');
+  expect(broken).toStrictEqual({
+    exitCode: 127,
+    stdout: '',
+    stderr: expect.toInclude('EXEC_FAILED'),
+  });
+
   expect(tookMs).toBeLessThan(10_000);
   expect(state).toBe('running');
 

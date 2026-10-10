@@ -123,8 +123,13 @@ test('it takes a secret on stdin, never shows it back, gives a granted guest the
   const ran = await runShellInImp(name, 'test -e /root/e2e-ungranted-ran && echo ran || echo none');
 
   expect(upstream.seen).toHaveLength(seenBefore);
-  expect(refused.exitCode).toBe(255);
-  expect(refused.stderr).toContain('the imp has no grant');
+
+  expect(refused).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('the imp has no grant'),
+  });
+
   expect(ran).toBe('none');
 });
 
@@ -373,9 +378,15 @@ test('it refuses an exec that requires the broker when the CA bundle step failed
     'echo "$HTTPS_PROXY"',
   );
 
-  expect(refused.exitCode).toBe(255);
-  expect(refused.stderr).toContain('PRECONDITION_FAILED');
-  expect(refused.stderr).toContain('the broker CA bundle is not in this boot');
+  expect(refused).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toIncludeMultiple([
+      'PRECONDITION_FAILED',
+      'the broker CA bundle is not in this boot',
+    ]),
+  });
+
   expect(ran).toBe('none');
   expect(proxy).toContain(':7081');
 });

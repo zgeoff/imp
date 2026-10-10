@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { release as readKernelRelease } from 'node:os';
 import { requireImp } from './imp-cli';
 import { runInContainer } from './instance';
 
@@ -87,12 +88,19 @@ export function parseGuestMappings(smaps: string, guestMib: number): readonly st
 // Thin glue over this host and the host container below.
 
 // a file on this host, '' when it cannot be read
-export function readHostFile(path: string): string {
+function readHostFile(path: string): string {
   try {
     return readFileSync(path, 'utf8').trim();
   } catch {
     return '';
   }
+}
+
+// KSM on, in a kernel whose merges the suite can rely on
+export function checkHostRunsKsm(): boolean {
+  return (
+    readHostFile('/sys/kernel/mm/ksm/run') === '1' && checkKernelSupportsKsm(readKernelRelease())
+  );
 }
 
 // ksmd's CPU time on this host, in ms

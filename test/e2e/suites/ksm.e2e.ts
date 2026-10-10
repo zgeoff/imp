@@ -1,5 +1,4 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { release } from 'node:os';
 import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-governor';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -12,11 +11,9 @@ import {
   runShellInImp,
 } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
-import { instance, runDevScript } from '../lib/instance';
 import {
-  checkKernelSupportsKsm,
+  checkHostRunsKsm,
   readGuestMappings,
-  readHostFile,
   readKsmdCpuMs,
   readMergingPages,
   readVmPssMib,
@@ -29,9 +26,8 @@ import { writeMetric } from '../lib/write-metric';
 
 // IMP_KSM with real merges (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
 // KSM is global to the kernel: CI turns it on, and on any other host the
-// suite skips. Each test reboots the instance onto KSM and back.
-const isKsmReady =
-  readHostFile('/sys/kernel/mm/ksm/run') === '1' && checkKernelSupportsKsm(release());
+// suite skips. Its settings put the instance on KSM and a 512 MiB budget.
+const isKsmReady = checkHostRunsKsm();
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -51,18 +47,6 @@ test.skipIf(!isKsmReady)(
     const image = resolveImageName('e2e-tiny');
     const a = `${ctx.prefix}a`;
     const b = `${ctx.prefix}b`;
-
-    // a budget of one guest's memory, with boots reserving 20 %, and no idle
-    // sleeps to hide a breach
-    await runDevScript('reboot', instance, {
-      IMP_KSM: '1',
-      IMP_RAM_BUDGET_MIB: '512',
-      IMP_BOOT_RESERVE_PERCENT: '20',
-      IMP_IDLE_TIMEOUT_S: '600',
-    });
-
-    ctx.stack.defer(() => runDevScript('reboot'));
-
     const cpuBefore = readKsmdCpuMs();
 
     await runImp('new', a, '--image', image, '--memory', '512m');
@@ -185,15 +169,6 @@ test.skipIf(!isKsmReady)(
     const ctx = await setupTest();
 
     const name = `${ctx.prefix}grow`;
-
-    await runDevScript('reboot', instance, {
-      IMP_KSM: '1',
-      IMP_RAM_BUDGET_MIB: '512',
-      IMP_BOOT_RESERVE_PERCENT: '20',
-      IMP_IDLE_TIMEOUT_S: '600',
-    });
-
-    ctx.stack.defer(() => runDevScript('reboot'));
 
     await runImp(
       'new',

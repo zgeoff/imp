@@ -90,9 +90,12 @@ test('it signs an oauth secret in, rotates its tokens on a forced refresh, refus
 
   const listed = await runImp('secret', 'ls');
 
-  expect(added.exitCode).toBe(0);
-  expect(added.stderr).toContain(`${secret} signed in`);
-  expect(added.stdout).toContain('ready until');
+  expect(added).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toInclude('ready until'),
+    stderr: expect.toInclude(`${secret} signed in`),
+  });
+
   expect(MeSchema.parse(JSON.parse(signedIn))).toStrictEqual({ generation: 1, authorized: true });
   expect(listed).toContain(secret);
   expect(listed).toContain('ready until');
@@ -213,8 +216,12 @@ test('it reaches a service with no public name over plain http through a secret 
   const audit = await readBrokerAudit(name);
   const listed = await runImp('secret', 'ls');
 
-  expect(added.exitCode).toBe(0);
-  expect(added.stdout).toContain(upstream.plainOrigin);
+  expect(added).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toInclude(upstream.plainOrigin),
+    stderr: expect.toBeString(),
+  });
+
   expect(JSON.parse(body)).toStrictEqual({ authorized: true });
 
   expect(upstream.seen.slice(seenBefore)).toStrictEqual([

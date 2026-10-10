@@ -5,10 +5,11 @@ import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, readImpEnv, runImp, tryImp } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
-import { instance, runDevScript } from '../lib/instance';
+import { instance } from '../lib/instance';
 import {
   RouteTokensSchema,
   buildPkceChallenge,
+  buildRouteOrigin,
   openRouteMcp,
   parseApprovalPage,
   runSignIn,
@@ -24,9 +25,8 @@ import {
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// The public MCP route (docs/guides/mcp.md#public-route) on plain http on
-// loopback, as tests alone may use. Each test reboots the instance with the
-// route on, and back; a named token approves each sign-in with the CLI.
+// The public MCP route (docs/guides/mcp.md#public-route), which the suite's
+// settings turn on; a named token approves each sign-in with the CLI.
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -35,7 +35,7 @@ async function setupTest() {
 
   const client = await createInstanceClient();
 
-  const origin = `http://127.0.0.1:${String(7071 + instance.portOffset)}`;
+  const origin = buildRouteOrigin(instance);
 
   // the redirect URI's server: it takes the code a sign-in sends back
   const catcher = Bun.serve({
@@ -57,11 +57,6 @@ async function setupTest() {
 
 test('it serves the route’s discovery documents and nothing private', async () => {
   const ctx = await setupTest();
-
-  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
-
   const metadata = await fetch(`${ctx.origin}/.well-known/oauth-authorization-server`);
   const resource = await fetch(`${ctx.origin}/.well-known/oauth-protected-resource/mcp`);
   const unauthorized = await fetch(`${ctx.origin}/mcp`, { method: 'POST' });
@@ -100,10 +95,6 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
   const box = `${ctx.prefix}box`;
   const clientName = `${ctx.prefix}conn`;
   const approver = `${ctx.prefix}approver`;
-
-  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
 
   await runImp('new', box, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
@@ -151,9 +142,14 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
     token: token.secret,
   });
 
-  expect(approved.exitCode).toBe(0);
-  expect(approved.stderr).toContain(`client:       ${clientName}`);
-  expect(approved.stderr).toContain(`returns to:   ${ctx.redirect}`);
+  expect(approved).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toBeString(),
+    stderr: expect.toIncludeMultiple([
+      `client:       ${clientName}`,
+      `returns to:   ${ctx.redirect}`,
+    ]),
+  });
 
   // as a browser posts it from a page whose referrer policy is same-origin
   // or stricter: Origin null, and Sec-Fetch-Site it sets itself
@@ -219,10 +215,6 @@ test('it rotates a refresh, and ends the grant when a spent refresh token comes 
   const clientName = `${ctx.prefix}conn`;
   const approver = `${ctx.prefix}approver`;
 
-  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
-
   const added = await ctx.client.oauth.clients.add({
     name: clientName,
     redirectUris: [ctx.redirect],
@@ -276,10 +268,6 @@ test('it stops the command a grant runs when the approving token goes, then answ
   const box = `${ctx.prefix}box`;
   const clientName = `${ctx.prefix}conn`;
   const approver = `${ctx.prefix}approver`;
-
-  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
 
   await runImp('new', box, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
@@ -355,10 +343,6 @@ test('it answers 429 to sign-ins past the burst', async () => {
   const ctx = await setupTest();
 
   const clientName = `${ctx.prefix}conn`;
-
-  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
 
   const added = await ctx.client.oauth.clients.add({
     name: clientName,

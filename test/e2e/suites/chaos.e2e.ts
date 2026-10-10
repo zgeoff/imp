@@ -241,7 +241,11 @@ test('it keeps an imp awake with DISK_FULL when the disk cannot take its sleep',
   const result = await tryImp(['sleep', name]);
   const after = await requireImp(name);
 
-  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
-  expect(result.stderr).toStartWith('imp: DISK_FULL: ');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toStartWith('imp: DISK_FULL: '),
+  });
+
   expect(after.state).toBe('running');
 });
