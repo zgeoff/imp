@@ -520,6 +520,9 @@ async function main(): Promise<number> {
       checkJourney: (suite, journey) =>
         checkNoBootFallbacks(suite, startedAt.get(journey) ?? new Date()),
       reset: resetSuites,
+      settingsOf: (name) =>
+        SUITES.find((suite) => suite.name === name)?.settings?.(instance) ?? null,
+      rebootOnto: (settings) => runDevScript('reboot', instance, settings),
       reboot: () => runDevScript('reboot'),
 
       // a fresh instance: the container and data dir go, and come back
