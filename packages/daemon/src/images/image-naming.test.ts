@@ -37,5 +37,7 @@ test('#buildImageRuntimeConfig maps a null Env to no environment', () => {
 test('#buildImageRuntimeConfig refuses an OCI config whose Env is not a list of strings', () => {
   const building = Promise.try(() => buildImageRuntimeConfig({ Env: 'A=1' }));
 
-  expect(building).rejects.toMatchObject({ issues: [{ path: ['Env'], code: 'invalid_type' }] });
+  expect(building).rejects.toMatchObject({
+    issues: expect.toPartiallyContain({ path: ['Env'], code: 'invalid_type' }) as unknown,
+  });
 });

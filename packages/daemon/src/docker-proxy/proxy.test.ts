@@ -19,8 +19,7 @@ async function setupTest() {
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  // what an export streams, for the tests that export a container
-  const engine = startStubDockerEngine({ dir, exportBytes: new TextEncoder().encode('tar bytes') });
+  const engine = startStubDockerEngine({ dir });
 
   stack.defer(() => engine.stop());
 
@@ -329,7 +328,11 @@ test('it exports a container it created by its full ID', async () => {
     log: ctx.log,
   });
 
-  await ctx.engine.addContainer({ id: 'a'.repeat(64), labels: { [PROXY_LABEL]: 'test-token' } });
+  await ctx.engine.addContainer({
+    id: 'a'.repeat(64),
+    labels: { [PROXY_LABEL]: 'test-token' },
+    exportBytes: new TextEncoder().encode('tar bytes'),
+  });
 
   const response = await proxy(new Request('http://docker/v1.55/containers/aaaa/export'));
   const tar = await response.text();

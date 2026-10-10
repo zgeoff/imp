@@ -1,32 +1,74 @@
 import { expect, test } from 'bun:test';
 import { findRequestRoute, formatQuery, parseQuery } from './router';
+import type { RoutedRequest } from './router';
 
-test.each([
-  ['HEAD', '/_ping', { kind: 'ping' }],
-  ['GET', '/_ping', { kind: 'ping' }],
-  ['GET', '/v1.55/version', { kind: 'version' }],
+test.each<[string, string, RoutedRequest]>([
+  ['HEAD', '/_ping', { versionPrefix: '', route: { kind: 'ping' }, query: new Map() }],
+  ['GET', '/_ping', { versionPrefix: '', route: { kind: 'ping' }, query: new Map() }],
+  [
+    'GET',
+    '/v1.55/version',
+    { versionPrefix: '/v1.55', route: { kind: 'version' }, query: new Map() },
+  ],
   [
     'GET',
     '/v1.55/images/docker.io/library/busybox:latest/json',
-    { kind: 'image-inspect', name: 'docker.io/library/busybox:latest' },
-  ],
-  ['POST', '/v1.55/images/create?fromImage=busybox&tag=latest', { kind: 'pull' }],
-  ['POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=2', { kind: 'build' }],
-  ['POST', '/v1.55/containers/create', { kind: 'create' }],
-  ['POST', '/containers/create', { kind: 'create' }],
-  ['GET', `/v1.55/containers/${'a'.repeat(64)}/export`, { kind: 'export', id: 'a'.repeat(64) }],
-  ['DELETE', `/v1.55/containers/${'a'.repeat(64)}?force=1`, { kind: 'remove', id: 'a'.repeat(64) }],
-])('#findRequestRoute routes %s %s, a call impd makes', (method, target, route) => {
-  const routed = findRequestRoute(method, target);
-
-  expect(routed as unknown).toStrictEqual({
-    isAllowed: true,
-    request: {
-      versionPrefix: expect.any(String) as unknown,
-      route,
-      query: expect.any(Map) as unknown,
+    {
+      versionPrefix: '/v1.55',
+      route: { kind: 'image-inspect', name: 'docker.io/library/busybox:latest' },
+      query: new Map(),
     },
-  });
+  ],
+  [
+    'POST',
+    '/v1.55/images/create?fromImage=busybox&tag=latest',
+    {
+      versionPrefix: '/v1.55',
+      route: { kind: 'pull' },
+      query: new Map([
+        ['fromImage', ['busybox']],
+        ['tag', ['latest']],
+      ]),
+    },
+  ],
+  [
+    'POST',
+    '/v1.55/build?t=imp%2Fx%3Alatest&version=2',
+    {
+      versionPrefix: '/v1.55',
+      route: { kind: 'build' },
+      query: new Map([
+        ['t', ['imp/x:latest']],
+        ['version', ['2']],
+      ]),
+    },
+  ],
+  [
+    'POST',
+    '/v1.55/containers/create',
+    { versionPrefix: '/v1.55', route: { kind: 'create' }, query: new Map() },
+  ],
+  [
+    'POST',
+    '/containers/create',
+    { versionPrefix: '', route: { kind: 'create' }, query: new Map() },
+  ],
+  [
+    'GET',
+    `/v1.55/containers/${'a'.repeat(64)}/export`,
+    { versionPrefix: '/v1.55', route: { kind: 'export', id: 'a'.repeat(64) }, query: new Map() },
+  ],
+  [
+    'DELETE',
+    `/v1.55/containers/${'a'.repeat(64)}?force=1`,
+    {
+      versionPrefix: '/v1.55',
+      route: { kind: 'remove', id: 'a'.repeat(64) },
+      query: new Map([['force', ['1']]]),
+    },
+  ],
+])('#findRequestRoute routes %s %s, a call impd makes', (method, target, request) => {
+  expect(findRequestRoute(method, target)).toStrictEqual({ isAllowed: true, request });
 });
 
 test('#findRequestRoute keeps the version prefix and every query value', () => {

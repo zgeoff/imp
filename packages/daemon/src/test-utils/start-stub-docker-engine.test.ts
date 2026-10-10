@@ -17,7 +17,7 @@ async function setupTest() {
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const engine = startStubDockerEngine({ dir, exportBytes: new TextEncoder().encode('tar bytes') });
+  const engine = startStubDockerEngine({ dir });
 
   stack.defer(() => engine.stop());
 
@@ -152,7 +152,11 @@ test('it answers 404 for the inspect of a container it does not have', async () 
 test('it streams the export bytes of a container it has', async () => {
   const ctx = await setupTest();
 
-  await ctx.engine.addContainer({ id: 'a'.repeat(64), labels: {} });
+  await ctx.engine.addContainer({
+    id: 'a'.repeat(64),
+    labels: {},
+    exportBytes: new TextEncoder().encode('tar bytes'),
+  });
 
   const response = await fetch(`http://docker/v1.55/containers/${'a'.repeat(64)}/export`, {
     unix: ctx.engine.socket,
