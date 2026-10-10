@@ -280,8 +280,9 @@ own there, which its dispose removes. A journey that checks something keeps an i
 idle timeout waits with `waitAwakePastIdle` (`test/e2e/lib/awake-past-idle.ts`): the idle loop moves
 an imp's `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
 `lastActiveAt` reaches the idle timeout past the release has stayed awake that long; its wake count
-and `sleptAt` must stay as the wait first read them, so a sleep and a wake in between fail it. The
-wait polls `imp ls`, which records no activity, so the journey must not exec in the imp during it.
+and `sleptAt` must stay as the wait first read them once the imp ran, so a sleep and a wake in
+between fail it. The wait polls `imp ls`, which records no activity, so the journey must not exec in
+the imp during it.
 
 A journey file also runs alone against an instance that is up:
 `bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep-memory.e2e.ts`. Nothing then resets

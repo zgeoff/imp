@@ -23,10 +23,18 @@ export function checkAwakePastIdle(
 }
 
 // Waits, without touching `name` (a listing records no activity), until
-// checkAwakePastIdle holds against its first read; fails a few idle-loop
-// ticks past the timeout.
+// checkAwakePastIdle holds against its first read as running (it may still
+// be waking); fails a few idle-loop ticks past the timeout.
 export async function waitAwakePastIdle(name: string, sinceMs: number): Promise<void> {
-  const before = await requireImp(name);
+  const before = await waitFor(`${name} to run`, async () => {
+    const row = await requireImp(name);
+
+    if (row.state !== 'running') {
+      throw new Error(`${name} is ${row.state}`);
+    }
+
+    return row;
+  });
 
   await waitFor(
     `${name} to stay awake ${String(config.idleTimeoutS)} s past the idle timeout`,
