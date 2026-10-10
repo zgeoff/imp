@@ -87,7 +87,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/dashboard/tsconfig.json --noEmit",
     "format": "oxfmt . && format-codemod --quiet .",
     "format:check": "oxfmt --check . && format-codemod --check --quiet .",
-    "prepare": "command -v git > /dev/null 2>&1 && lefthook install --force || true"
+    "prepare": "command -v git > /dev/null 2>&1 && lefthook install --force || true",
+    "files:branch": "bun scripts/collect-branch-files.ts",
+    "lint:files": "oxlint --no-error-on-unmatched-pattern",
+    "test:related": "bun scripts/run-related-tests.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",
