@@ -39,10 +39,12 @@ async function stopAndExit(): Promise<void> {
 }
 
 async function startStubImpd() {
-  // impd's log, its unexpected RPC failures among it, on stderr
+  // only impd's unexpected RPC failures reach stderr, as on a host
   const harness = await createImpTest(stack, {
     onLog: (message) => {
-      console.error(message);
+      if (message.startsWith('impd: rpc failed: ')) {
+        console.error(message);
+      }
     },
   });
 
