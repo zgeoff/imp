@@ -69,6 +69,11 @@ const NO_EGRESS: ImpEgress = {
   releaseSlot: () => Promise.resolve(),
 };
 
+interface SleepTiming {
+  readonly now: () => number;
+  readonly sleep: (ms: number) => Promise<void>;
+}
+
 export interface ImpServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
@@ -112,6 +117,10 @@ export interface ImpServiceDeps {
   // the pause between an elastic guest's looks while a sleep shrinks it;
   // Bun.sleep by default
   readonly sleep?: (ms: number) => Promise<void>;
+
+  // the clock a sleep's timings read and the pause of its young-guest wait;
+  // performance.now and Bun.sleep by default
+  readonly sleepTiming?: SleepTiming;
 
   // `KEY=VALUE` entries every exec in the imp starts with, under the
   // caller's own: the credential broker's proxy and CA variables, or why
@@ -179,6 +188,7 @@ export interface ImpContext {
   readonly readServiceUrl: (name: string) => string | null;
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
+  readonly sleepTiming: SleepTiming;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
   readonly growFilesystem: (disk: string) => Promise<boolean>;
   readonly storageGate: StorageGate;
@@ -259,6 +269,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readServiceUrl: deps.readServiceUrl ?? (() => null),
     now: deps.now ?? Date.now,
     sleep: deps.sleep ?? Bun.sleep,
+    sleepTiming: deps.sleepTiming ?? { now: () => performance.now(), sleep: Bun.sleep },
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve({ kind: 'ungranted' })),
     growFilesystem: deps.growFilesystem ?? growFilesystem,
     readDiskUsage: deps.readDiskUsage ?? (() => {}),

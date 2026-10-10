@@ -22,6 +22,7 @@ import { openDatabase } from '../db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -61,6 +62,10 @@ async function setupTest() {
 
   // a frozen clock, far from the wall clock, that the session cookies read
   const clock = { nowMs: Date.UTC(2026, 0, 1) };
+
+  // the clock a sleep's timings and its young-guest wait read, which moves
+  // only by that wait's pauses
+  const sleepClock = buildStubClock();
 
   const deps: ImpdDeps = {
     db,
@@ -126,6 +131,7 @@ async function setupTest() {
       readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
       growFilesystem: () => Promise.resolve(false),
       hostCpus: 8,
+      sleepTiming: { now: sleepClock.now, sleep: sleepClock.sleep },
     },
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   };
@@ -150,7 +156,7 @@ async function setupTest() {
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
-  return { config, db, dataDir, deps, vmm, logs, clock, impd, client, stack };
+  return { config, db, dataDir, deps, vmm, logs, clock, sleepClock, impd, client, stack };
 }
 
 test('it sends the snapshot, then each change with its reason', async () => {
@@ -242,7 +248,8 @@ test('it counts a young guest’s wait before a sleep in the slept event’s pre
   const stream = readInBackground(events);
 
   // 200 ms short of IMP_SLEEP_MIN_GUEST_UPTIME_MS's 1500 ms default: the
-  // sleep waits the rest on the wall clock before it pauses the VM
+  // sleep waits the rest on the sleep clock before it pauses the VM, and
+  // the pause itself moves that clock by nothing
   ctx.vmm.setGuestUptime(1300);
 
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -260,12 +267,8 @@ test('it counts a young guest’s wait before a sleep in the slept event’s pre
 
   controller.abort();
 
-  const prepareMs = slept.detail?.prepareMs;
-
-  invariant(prepareMs);
-
-  expect(prepareMs).toBeGreaterThanOrEqual(200);
-  expect(slept.detail?.durationMs).toBeLessThan(prepareMs);
+  expect(slept.detail?.prepareMs).toBe(200);
+  expect(slept.detail?.durationMs).toBe(0);
 });
 
 test('it sends a repaired event when a check finds an imp’s VM gone', async () => {
