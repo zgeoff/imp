@@ -85,13 +85,14 @@ On Bun 1.4.2, `onTestFinished` callbacks run in the order they were registered, 
 the ones after it are skipped. A util that registers its own cleanup is therefore released before
 anything the test registers after calling it. These utils register their own: `startStubAgent` (its
 `close` may also run earlier; given `{ stack }`, it defers the close there instead),
-`startStubExecAgent`, `startStubSessionAgent`, `startStubAttachAgent` and `startStubServiceAgent`
-(through `startStubAgent`, so each also takes `{ stack }`), `startStubDnsUpstream`,
-`createTestDatabase`, `createUnmigratedDatabase` (it closes the SQLite handle itself, since Kysely
-closes a driver only after a query started it), `buildQueryGate` (it releases a held select),
-`findFreePorts` (it releases its port claims), `startInMemoryMetrics` (it unregisters its meter
-provider, and throws when another is registered), `setupImpTest`, `setupMoveHosts`,
-`startStubFirecrackerApi`, `startStubFirecrackerProcess` and `startStubFirecracker`.
+`startStubExecAgent`, `startStubSessionAgent`, `startStubAttachAgent`, `startStubServiceAgent`,
+`startStubDialAgent` and `startStubEchoExecAgent` (through `startStubAgent`, so each also takes
+`{ stack }`), `startStubDnsUpstream`, `createTestDatabase`, `createUnmigratedDatabase` (it closes
+the SQLite handle itself, since Kysely closes a driver only after a query started it),
+`buildQueryGate` (it releases a held select), `findFreePorts` (it releases its port claims),
+`startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
+`setupImpTest`, `setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
+`startStubFirecracker`.
 
 `setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
 branches that hold them with `await using`; a later GEO-135 PR removes it once those branches land.
@@ -406,13 +407,17 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | lseek and fstat              | `test-utils/build-stub-lseek.ts`                                                                   | `SEEK_DATA`/`SEEK_HOLE` over chosen extents, for `findDataBlocks`                  |
 | Move stream faults           | `test-utils/build-stub-move-stream-rewrite.ts`                                                     | A hook that rewrites the frames of a move's first stream part                      |
 | Part pipe timer              | `test-utils/build-stub-timer.ts` (`buildStubTimer`)                                                | `createPartPipe`'s `PartTimer`: a clock and timers that move only on `advance`     |
+| startTimer                   | `test-utils/build-stub-timers.ts` (`buildStubTimers`)                                              | A unit's `startTimer(fire, ms)`: each timer fires only when the test fires it      |
+| Session log files            | `test-utils/build-stub-generation-log-gate.ts` (`buildStubGenerationLogGate`)                      | The session logs' `createLog` over real logs, holding one chosen call until freed  |
 | Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                              | An imp's agent for the MCP tools: files and shell verbs                            |
-| Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                 | Runs, takes over, resumes and kills sessions; `release` makes it an older agent    |
+| Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                 | Runs, resumes, takes over, kills and lists sessions; `release` is an older agent   |
 | Attach agent                 | `test-utils/start-stub-attach-agent.ts` (`startStubAttachAgent`)                                   | A 0.15.0 agent: a ping with a boot id, then scripted session replies               |
 | Disk clone and grow          | `test-utils/build-stub-disk-tools.ts` (`buildStubDiskTools`)                                       | `createImpTest`'s `cloneDisk` and `growFilesystem`: fail, land empty, or hold      |
 | Imp exec agent               | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                       | An imp's agent on its vsock socket, driving `buildStubExecGuest`                   |
 | Imp service agent            | `test-utils/start-stub-service-agent.ts` (`startStubServiceAgent`)                                 | An imp's agent's services API: definitions, states and log files                   |
 | Agent exec stream            | `test-utils/build-stub-agent-exec-stream.ts`, `build-stub-tap-stream.ts`                           | The `ExecStream` an exec, attach or session tap opens, fed by the test             |
+| Dial agent                   | `test-utils/start-stub-dial-agent.ts` (`startStubDialAgent`)                                       | An agent whose dial target answers once the request's stdin ends                   |
+| Echo exec agent              | `test-utils/start-stub-echo-exec-agent.ts` (`startStubEchoExecAgent`)                              | An agent whose exec echoes stdin as `cat` does, then writes stderr and exits       |
 | Exec socket and backend      | `test-utils/build-stub-exec-socket.ts`, `build-stub-exec-backend.ts`                               | The client's `/exec` WebSocket, and the imp service an `/exec` session opens on    |
 | tailscale CLI                | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                        | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                |
 | MCP upstream                 | `test-utils/build-stub-mcp-transport.ts`                                                           | The `HttpTransport` to an imp's MCP server: calls held open until ended            |
@@ -527,9 +532,10 @@ port; the parser, formatter, config and other pure tests boot nothing. The stand
 - `build-stub-exec-peer.ts`: an in-memory `/exec` socket that sends the literal frames a test
   scripts, for protocol faults impd never sends; `exec-client.ts` takes it through `io.connect` and
   `cp/open-tool-exec.ts` through `connect`.
-- `start-stub-service-agent.ts`: the guest agent's services API on the imp's vsock path.
 - `start-warm-move-hosts.ts`: `createMoveHosts(stack, { isShared: true })` with both apps on
   loopback, because two impds in one process cannot share the data dir a warm move needs.
+
+The cli's services tests put the daemon's `startStubServiceAgent` on the imp's vsock path.
 
 The client package's tests boot impd through `createImpd` in each file's `setupTest()`, with the
 client stub agents on the imp's vsock socket. Image builds and adds run with
@@ -578,20 +584,22 @@ default); `now` reaches leases, the RAM governor and memory control, egress, the
 leaves, the leaf renewal check, its route caches, OAuth refreshes), tokens, OAuth, the audit log,
 moves and the API. It does not reach `buildTailnetNames`' services API, the template service's
 timings (`performance.now`), the disk usage cache, backups or the builders' engine wait, which stay
-on the wall clock: a known gap. A field left out takes the host's real one. Its parts
-(`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`,
-`buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for `createImpTest`, which
-wires them without the start steps into a caller's stack; `setupImpTest` wraps it with its own
-stack, and the client smoke's `run-stub-impd.ts` runs it outside a test.
-`packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress resolver binds
-`IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
+on the wall clock: a known gap. `imps.sleepTiming` (`now` and `sleep`, `performance.now` and
+`Bun.sleep` by default) is the clock of a sleep's `prepareMs` and `durationMs` and the pause of its
+young-guest wait; `events/imp-events.test.ts` passes `buildStubClock`'s. A field left out takes the
+host's real one. Its parts (`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`,
+`startGovernedImps`, `loadImpdAccess`, `buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are
+exported for `createImpTest`, which wires them without the start steps into a caller's stack;
+`setupImpTest` wraps it with its own stack, and the client smoke's `run-stub-impd.ts` runs it
+outside a test. `packages/daemon/src/create-impd.test.ts` boots it whole on the stubs. The egress
+resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
 `test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's ephemeral
 range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands out with
 an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in parallel
 processes never hand out the same port. A process that binds a port without a claim can still take
 one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by default), so a
-test fires a sweep by calling the function it was handed. A `createImpd` test whose storage
-clones with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
+test fires a sweep by calling the function it was handed. A `createImpd` test whose storage clones
+with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
 checkpoint's copy takes minutes.
 
 `moves/test-moves.ts` (tested in `test-moves.test.ts`) builds two impds on `createImpTest`. Its
