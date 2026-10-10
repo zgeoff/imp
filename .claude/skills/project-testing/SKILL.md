@@ -225,8 +225,8 @@ checks that an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) 
 OAuth client stay, and that it removes an imp a failed boot left in `error`. Sessions and services
 are not proven: making either needs a guest agent, which the stub VMM has no stand-in for. What the
 reset does not cover: the instance's own settings (the reboot after a failure restores those), the
-`moves` suites' second host (`removeMoveLeftovers` at the end of a run that includes them), and a
-registry container or SSH key a suite file made.
+`moves` suites' second host (its fixture resets it, step 5, and `removeMoveLeftovers` takes it down
+at the end of a run that includes them), and a registry container or SSH key a suite file made.
 
 A journey file releases what it makes itself, in the order the scenario needs: its `setupTest()`
 creates one `AsyncDisposableStack`, registers `onTestFinished(() => stack.disposeAsync())`, and
@@ -253,12 +253,14 @@ some that the agent's dial completed but the server never accepted; the guest ke
 `templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent`,
 `reverse`, `services`, `sessions`, `session-logs`, `ssh-wake`, `proxy-wake`, the two `sleep-*`
 files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files, the three
-`registry-*` files and the two `moves-tailnet-*` files work this way. `registry`, `scale` and
-`tailscale` take their impd settings from the suite's `settings` (step 5). A journey that reboots
-the instance onto settings only it needs, as `tailscale-names` does, sets them with `updateEnv` and
-defers a reboot back, which runs after the preload has restored the env. The other suite files still
-read their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks,
-and rely on the harness's reset after them.
+`registry-*` files, the seven `moves-*` files and the two `moves-tailnet-*` files work this way.
+`registry`, `scale`, `tailscale` and the two moves suites take their impd settings from the suite's
+`settings`, and the moves journeys read their host B from the harness's fixture with `readMoveHosts`
+(step 5); each makes and removes its own imps on both hosts. A journey that reboots the instance
+onto settings only it needs, as `tailscale-names` does, sets them with `updateEnv` and defers a
+reboot back, which runs after the preload has restored the env. The other suite files still read
+their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
+rely on the harness's reset after them.
 
 Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
 `<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`

@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { createInstanceClient, listImps, runImpWith, tryImp } from './imp-cli';
+import { createInstanceClient, runImpWith } from './imp-cli';
 import type { DevInstance } from './instance';
 import {
   REPO_ROOT,
@@ -278,82 +278,4 @@ export function readMoveHosts(options: Readonly<MoveHostsOptions>): MoveHosts {
     cliEnv: { XDG_CONFIG_HOME: names.cliDir },
     isARebooted: !options.tailnet || options.env !== undefined,
   };
-}
-
-// Starts B, and reboots A onto the network unless the move goes over the
-// tailnet, which A is on already. Removes B's imps with the prefix that an
-// earlier run left.
-export async function startMoveHosts(
-  options: MoveHostsOptions,
-  prefix: string,
-): Promise<MoveHosts> {
-  const names = buildNames();
-  const network = buildMoveNetwork(readOffset());
-
-  await removeMoveLeftovers();
-
-  await runChecked([
-    'docker',
-    'network',
-    'create',
-    '--subnet',
-    network.subnet,
-    '--gateway',
-    network.gateway,
-    names.network,
-  ]);
-
-  const rebootEnv = {
-    ...buildHostEnv(options, network, network.ipA),
-    IMP_DEV_NETWORK: names.network,
-    IMP_DEV_IP: network.ipA,
-  };
-
-  const isARebooted = !options.tailnet || options.env !== undefined;
-
-  if (isARebooted) {
-    await runDevScript('reboot', instance, rebootEnv);
-  }
-
-  const b = buildHostB(options);
-
-  await runDevScript('up', b);
-  await checkPrivileges(b.container);
-
-  rmSync(names.cliDir, { recursive: true, force: true });
-  mkdirSync(names.cliDir, { recursive: true });
-
-  const cliEnv = { XDG_CONFIG_HOME: names.cliDir };
-
-  const token = await readToken(b);
-
-  await runImpWith({ stdin: `${token}\n`, env: cliEnv }, 'login', b.apiUrl, '--name', HOST_B);
-
-  const rows = await listImps(b);
-
-  for (const row of rows.filter((candidate) => candidate.name.startsWith(prefix))) {
-    await tryImp(['rm', row.name], { target: b });
-  }
-
-  return {
-    a: instance,
-    b,
-    network: names.network,
-    gateway: network.gateway,
-    cliEnv,
-    isARebooted,
-  };
-}
-
-// B down, A back to the run's own settings, the network gone
-export async function stopMoveHosts(hosts: MoveHosts): Promise<void> {
-  await runDevScript('down', hosts.b);
-
-  if (hosts.isARebooted) {
-    await runDevScript('reboot');
-  }
-
-  await removeMoveLeftovers();
-
-  rmSync(buildNames().cliDir, { recursive: true, force: true });
 }

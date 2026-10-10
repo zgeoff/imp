@@ -4,7 +4,7 @@ import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, findImp, runImp, runImpWith } from '../lib/imp-cli';
 import { waitForExec, writeGuestFile } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
-import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
+import { HOST_B, readMoveHosts, readMoveOptions } from '../lib/move-hosts';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
@@ -47,9 +47,8 @@ test.skipIf(authKey === null && !config.acceptance)(
 
     const plain = `${ctx.prefix}a`;
 
-    const hosts = await startMoveHosts({ tailnet: true }, ctx.prefix);
-
-    ctx.stack.defer(() => stopMoveHosts(hosts));
+    // B joins the tailnet under its own name, kept up by the harness
+    const hosts = readMoveHosts(readMoveOptions('host-b-tailnet'));
 
     const clientB = await createInstanceClient(hosts.b);
     const ipA = await waitForTailnetIp();

@@ -1,4 +1,5 @@
 import type { DevInstance } from './instance';
+import { buildMoveSettings, readMoveOptions } from './move-hosts';
 import type { HostBFixtureName } from './move-hosts';
 
 // The images a suite boots besides impd's default. `base` is images/base,
@@ -18,8 +19,8 @@ export interface Suite {
 
   // the impd settings every journey runs on, over the run's: the harness
   // reboots the instance onto them before the first journey and back after
-  // the last (runSuites)
-  readonly settings?: (target: Readonly<DevInstance>) => Readonly<Record<string, string>>;
+  // the last (runSuites); null keeps the run's
+  readonly settings?: (target: Readonly<DevInstance>) => Readonly<Record<string, string>> | null;
 
   // what runs beside the instance for every journey: the harness starts it
   // before the first, resets it after each, and stops it after the last
@@ -117,14 +118,31 @@ export const SUITES: readonly Suite[] = [
     journeys: ['socket-refusals', 'socket-builds', 'socket-proxy-stopped'],
   },
 
-  // a second instance beside the run's: over a Docker network, then over
-  // the tailnet; each reboots the instance onto the network and back
-  { name: 'moves', prefix: 'e2e-mv-', images: ['e2e-tiny', 'base'] },
+  // a second instance beside the run's, the suite's fixture: over a Docker
+  // network, with the instance rebooted onto it, then over the tailnet
+  {
+    name: 'moves',
+    prefix: 'e2e-mv-',
+    images: ['e2e-tiny', 'base'],
+    journeys: [
+      'moves-cold',
+      'moves-leases',
+      'moves-abort',
+      'moves-place',
+      'moves-list',
+      'moves-warm-open',
+      'moves-warm-box',
+    ],
+    fixtures: ['host-b'],
+    settings: (target) => buildMoveSettings(readMoveOptions('host-b'), target.portOffset),
+  },
   {
     name: 'moves-tailnet',
     prefix: 'e2e-mvt-',
     images: ['e2e-tiny'],
     journeys: ['moves-tailnet-peer', 'moves-tailnet-names'],
+    fixtures: ['host-b-tailnet'],
+    settings: (target) => buildMoveSettings(readMoveOptions('host-b-tailnet'), target.portOffset),
   },
 
   // kills impd, Firecracker and the container; reboots the instance

@@ -10,7 +10,7 @@ import {
   runImpWith,
 } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
-import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
+import { HOST_B, readMoveHosts, readMoveOptions } from '../lib/move-hosts';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
@@ -58,13 +58,9 @@ test.skipIf(!namesReady)(
 
     const named = `${ctx.prefix}n`;
 
-    // per-imp names need both impds to run them under one test prefix
-    const hosts = await startMoveHosts(
-      { tailnet: true, env: { IMP_TAILNET_NAMES: '1', IMP_TAILNET_NAME_PREFIX: 'e2e-' } },
-      ctx.prefix,
-    );
-
-    ctx.stack.defer(() => stopMoveHosts(hosts));
+    // per-imp names on both impds under one test prefix, as the harness
+    // starts them once IMP_E2E_TAILNET_NAMES is set (readMoveOptions)
+    const hosts = readMoveHosts(readMoveOptions('host-b-tailnet'));
 
     const clientB = await createInstanceClient(hosts.b);
 
