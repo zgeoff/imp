@@ -69,11 +69,8 @@ test('it skips a port that a TCP listener holds', () => {
     held.stop(true);
   });
 
-  const probe = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } });
-  const next = probe.port;
-
-  probe.stop(true);
-
+  // past 65535 no socket can hold it; the pid keeps other runs' claims off it
+  const next = 65_536 + process.pid * 4;
   const picks = [held.port, next];
 
   const free = findFreePorts(1, {
@@ -96,11 +93,8 @@ test('it skips a port that a UDP socket holds', async () => {
     held.close();
   });
 
-  const probe = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } });
-  const next = probe.port;
-
-  probe.stop(true);
-
+  // past 65535 no socket can hold it; the pid keeps other runs' claims off it
+  const next = 65_536 + process.pid * 4;
   const picks = [held.port, next];
 
   const free = findFreePorts(1, {
@@ -117,19 +111,9 @@ test('it skips a port that a UDP socket holds', async () => {
 });
 
 test('it skips a port that an earlier picker in this process claimed', () => {
-  const probes = [0, 0].map(() =>
-    Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } }),
-  );
-
-  const [claimed, next] = probes.map((probe) => probe.port);
-
-  for (const probe of probes) {
-    probe.stop(true);
-  }
-
-  invariant(claimed);
-  invariant(next);
-
+  // past 65535 no socket can hold them; the pid keeps other runs' claims off them
+  const claimed = 65_536 + process.pid * 4;
+  const next = 65_536 + process.pid * 4 + 1;
   const earlierPicks = [claimed];
 
   findFreePorts(1, {
@@ -184,16 +168,9 @@ test('it never hands two pickers in separate processes the same port', async () 
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  // ports the kernel found free, which no picker has claimed; both pickers try them in this order
-  const probes = [0, 0, 0, 0].map(() =>
-    Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } }),
-  );
-
-  const sequence = probes.map((probe) => probe.port);
-
-  for (const probe of probes) {
-    probe.stop(true);
-  }
+  // ports past 65535, which no socket can hold, and the pid keeps other
+  // runs' claims off; both pickers try them in this order
+  const sequence = [0, 1, 2, 3].map((offset) => 65_536 + process.pid * 4 + offset);
 
   await writeFile(
     join(dir, 'picker.test.ts'),
