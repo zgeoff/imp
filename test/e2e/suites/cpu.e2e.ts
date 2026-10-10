@@ -1,78 +1,22 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
+import { readContainerFile, readImpCgroupDir, runBusyLoop } from '../lib/cpu-cgroup';
 import { resolveImageName } from '../lib/fixtures';
-import { assertState, readInfo, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
-import { createImp, holdImp, waitForExec } from '../lib/imps';
+import { assertState, createInstanceClient, readInfo, requireImp, runImp } from '../lib/imp-cli';
+import { holdImp, waitForExec } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-const prefix = setupSuite('cpu');
-const TINY = resolveImageName('e2e-tiny');
-const name = `${prefix}box`;
-
-// one guest core busy for this long, against a limit of half a core
-const BUSY_S = 5;
-
-// an upper bound only: a loaded host may give the VM less, never more
-const MAX_SHARE = 0.55;
-
-async function readCgroupDir(): Promise<string> {
-  const row = await requireImp(name);
-
-  return `/sys/fs/cgroup/imps/${row.id}`;
-}
-
-async function readContainerFile(path: string): Promise<string> {
-  const result = await runInContainer(['cat', path]);
-
-  if (result.exitCode !== 0) {
-    throw new Error(`cat ${path} exited ${String(result.exitCode)}: ${result.stderr.trim()}`);
-  }
-
-  return result.stdout;
-}
-
-async function readCpuStat(): Promise<{ usageUsec: number; throttledUsec: number }> {
-  const dir = await readCgroupDir();
-  const text = await readContainerFile(`${dir}/cpu.stat`);
-
-  const readField = (field: string): number =>
-    Number(new RegExp(`^${field} (?<value>\\d+)$`, 'mv').exec(text)?.groups?.['value'] ?? NaN);
-
-  return { usageUsec: readField('usage_usec'), throttledUsec: readField('throttled_usec') };
-}
-
-// Runs one busy guest core for BUSY_S and returns the VM's CPU over host
-// wall time, in cores, from its cgroup's cpu.stat.
-async function runBusyLoop(): Promise<{ share: number; throttledUsec: number }> {
-  const before = await readCpuStat();
-
-  const started = performance.now();
-
-  await runShellInImp(
-    name,
-    `end=$(($(date +%s) + ${String(BUSY_S)})); while [ "$(date +%s)" -lt "$end" ]; do :; done`,
-  );
-
-  const wallUsec = (performance.now() - started) * 1000;
-
-  const after = await readCpuStat();
-
-  return {
-    share: (after.usageUsec - before.usageUsec) / wallUsec,
-    throttledUsec: after.throttledUsec - before.throttledUsec,
-  };
-}
-
-// A host whose Docker does not hand the cpu controller to the container
-// cannot limit CPU: the suite skips there and says why. CI must enforce, so
-// there it fails instead, and a green run proves the limits hold.
+// CPU limits (docs/guides/cpu-limits.md) through each imp's cgroup. Where
+// Docker withholds the cpu controller the limit tests skip and say why; CI
+// must enforce, so there they fail instead.
 const info = await readInfo();
 
-const isEnforced = info.cpu?.limitsEnforced === true;
-const isCi = (process.env['CI'] ?? '') !== '';
-const shouldSkip = !isEnforced && !isCi;
+const shouldSkip = info.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '';
 
 if (shouldSkip) {
   console.warn(
@@ -80,91 +24,129 @@ if (shouldSkip) {
   );
 }
 
-test('docker exec still works after the cgroup move', async () => {
-  // the entrypoint moved every process out of the root cgroup when it could:
-  // docker exec still lands somewhere it may run
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const client = await createInstanceClient();
+
+  return { prefix: readSuitePrefix('cpu'), stack, client };
+}
+
+// the entrypoint moved every process out of the root cgroup when it could
+test('it still lands docker exec in a cgroup where it may run after the cgroup move', async () => {
   const exec = await runInContainer(['true']);
 
   expect(exec.exitCode).toBe(0);
 });
 
-test.skipIf(shouldSkip)('impd enforces CPU limits', () => {
+test.skipIf(shouldSkip)('it reports CPU limits as enforced', () => {
   expect(info.cpu?.limitsEnforced).toBeTrue();
 });
 
-test.skipIf(shouldSkip)('a limit of half a core holds a busy guest under it', async () => {
-  await createImp(name, '--image', TINY, '--cpu-limit', '0.5');
-  await holdImp(name);
+test.skipIf(shouldSkip)(
+  'it holds a busy guest under a limit of half a core, again after a sleep and a wake, and under a limit imp set changes at once',
+  async () => {
+    const ctx = await setupTest();
 
-  const dir = await readCgroupDir();
-  const cpuMax = await readContainerFile(`${dir}/cpu.max`);
+    const name = `${ctx.prefix}box`;
 
-  expect(cpuMax.trim()).toBe('50000 100000');
+    await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--cpu-limit', '0.5');
 
-  const procs = await readContainerFile(`${dir}/cgroup.procs`);
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  expect(procs.trim()).not.toBe('');
+    await waitForExec(name);
+    await holdImp(name);
 
-  const busy = await runBusyLoop();
+    const dir = await readImpCgroupDir(name);
+    const cpuMax = await readContainerFile(`${dir}/cpu.max`);
+    const procs = await readContainerFile(`${dir}/cgroup.procs`);
 
-  writeMetric('cpuLimitedShare', busy.share);
+    // one guest core busy for 5 s against half a core: an upper bound only
+    const busy = await runBusyLoop(name, 5);
 
-  expect(busy.share).toBeLessThanOrEqual(MAX_SHARE);
-  expect(busy.throttledUsec).toBeGreaterThan(0);
-});
+    writeMetric('cpuLimitedShare', busy.share);
 
-test.skipIf(shouldSkip)('the limit holds again after a sleep and a wake', async () => {
-  await runImp('sleep', name);
-  await assertState(name, 'sleeping');
-  await runImp('wake', name);
-  await waitForExec(name);
+    expect(cpuMax.trim()).toBe('50000 100000');
+    expect(procs.trim()).not.toBe('');
+    expect(busy.share).toBeLessThanOrEqual(0.55);
+    expect(busy.throttledUsec).toBeGreaterThan(0);
 
-  const dir = await readCgroupDir();
-  const cpuMax = await readContainerFile(`${dir}/cpu.max`);
+    await runImp('sleep', name);
+    await assertState(name, 'sleeping');
+    await runImp('wake', name);
+    await waitForExec(name);
 
-  expect(cpuMax.trim()).toBe('50000 100000');
+    const wokeDir = await readImpCgroupDir(name);
+    const wokeCpuMax = await readContainerFile(`${wokeDir}/cpu.max`);
+    const wokeBusy = await runBusyLoop(name, 5);
+    const woke = await requireImp(name);
 
-  const busy = await runBusyLoop();
+    expect(wokeCpuMax.trim()).toBe('50000 100000');
+    expect(wokeBusy.share).toBeLessThanOrEqual(0.55);
+    expect(woke.resources?.wakeCount).toBe(1);
 
-  expect(busy.share).toBeLessThanOrEqual(MAX_SHARE);
+    await runImp('set', name, '--cpu-limit', '0.25', '--cpu-weight', '50');
 
-  const row = await requireImp(name);
+    const setCpuMax = await readContainerFile(`${wokeDir}/cpu.max`);
+    const setCpuWeight = await readContainerFile(`${wokeDir}/cpu.weight`);
+    const setBusy = await runBusyLoop(name, 5);
 
-  expect(row.resources?.wakeCount).toBe(1);
-});
+    expect(setCpuMax.trim()).toBe('25000 100000');
+    expect(setCpuWeight.trim()).toBe('50');
+    expect(setBusy.share).toBeLessThanOrEqual(0.3);
 
-test.skipIf(shouldSkip)('imp set changes the limit of a running imp at once', async () => {
-  await runImp('set', name, '--cpu-limit', '0.25', '--cpu-weight', '50');
+    await runImp('set', name, '--cpu-limit', 'none');
 
-  const dir = await readCgroupDir();
-  const cpuMax = await readContainerFile(`${dir}/cpu.max`);
-  const cpuWeight = await readContainerFile(`${dir}/cpu.weight`);
+    const unlimited = await readContainerFile(`${wokeDir}/cpu.max`);
 
-  expect(cpuMax.trim()).toBe('25000 100000');
-  expect(cpuWeight.trim()).toBe('50');
+    expect(unlimited.trim()).toBe('max 100000');
+  },
+);
 
-  const busy = await runBusyLoop();
+test.skipIf(shouldSkip)(
+  'it prints the imp in imp top with its sampled throttling and weight',
+  async () => {
+    const ctx = await setupTest();
 
-  expect(busy.share).toBeLessThanOrEqual(0.3);
+    const name = `${ctx.prefix}top`;
 
-  await runImp('set', name, '--cpu-limit', 'none');
+    await runImp(
+      'new',
+      name,
+      '--image',
+      resolveImageName('e2e-tiny'),
+      '--cpu-limit',
+      '0.5',
+      '--cpu-weight',
+      '50',
+    );
 
-  const unlimited = await readContainerFile(`${dir}/cpu.max`);
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  expect(unlimited.trim()).toBe('max 100000');
-});
+    await waitForExec(name);
+    await holdImp(name);
 
-test.skipIf(shouldSkip)('imp top prints the imp with its sample', async () => {
-  await waitFor(`a resource sample for ${name}`, async () => {
-    const row = await requireImp(name);
+    await waitFor(`a resource sample for ${name}`, async () => {
+      const row = await requireImp(name);
 
-    expect(row.resources?.sample).toBeDefined();
-  });
+      if (row.resources?.sample === undefined) {
+        throw new Error(`${name} has no sample yet`);
+      }
+    });
 
-  const top = await runImp('top', '--once');
+    const top = await runImp('top', '--once');
 
-  const line = top.split('\n').find((candidate) => candidate.startsWith(name));
+    const line = top.split('\n').find((candidate) => candidate.startsWith(`${name} `)) ?? '';
 
-  expect(line).toBeDefined();
-  expect(line).toContain('running');
-});
+    // NAME STATE CPU WEIGHT THROTTLED ...: a sample fills THROTTLED, which is
+    // `-` without one
+    const columns = line.split(/\s{2,}/v);
+
+    expect(columns[0]).toBe(name);
+    expect(columns[1]).toBe('running');
+    expect(columns[3]).toBe('50');
+    expect(columns[4]).not.toBe('-');
+  },
+);

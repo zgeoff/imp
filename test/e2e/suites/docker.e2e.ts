@@ -1,36 +1,43 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { getThroughProxy } from '../lib/http';
-import { runImp, runInImp, runShellInImp } from '../lib/imp-cli';
-import { createImp, holdImp, waitForExec } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import { createInstanceClient, runImp, runInImp, runShellInImp } from '../lib/imp-cli';
+import { holdImp, waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-const prefix = setupSuite('docker');
-const name = `${prefix}a`;
-const NGINX_TITLE = '<title>Welcome to nginx!</title>';
+// Docker inside an imp of images/base, whose dockerd starts with the guest.
+// Each test boots its own imp and waits for its dockerd.
 
-function waitForDockerd(): Promise<string> {
-  return waitFor(`dockerd in ${name}`, () => runInImp(name, 'docker', 'info'), {
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const client = await createInstanceClient();
+
+  return { prefix: readSuitePrefix('docker'), stack, client };
+}
+
+test('it runs and builds images with docker inside an imp', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}build`;
+
+  await runImp('new', name, '--image', 'base');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+  await holdImp(name);
+
+  await waitFor(`dockerd in ${name}`, () => runInImp(name, 'docker', 'info'), {
     timeoutMs: 90_000,
   });
-}
-
-function waitForNginx(): Promise<void> {
-  return waitFor(`nginx in ${name} through the proxy`, async () => {
-    const page = await getThroughProxy(name);
-
-    expect(page).toContain(NGINX_TITLE);
-  });
-}
-
-test('docker runs and builds images inside an imp from images/base', async () => {
-  await createImp(name, '--image', 'base');
-  await holdImp(name);
-  await waitForDockerd();
 
   const hello = await runInImp(name, 'docker', 'run', '--rm', 'hello-world');
-
-  expect(hello).toContain('Hello from Docker!');
 
   const built = await runShellInImp(
     name,
@@ -41,10 +48,26 @@ test('docker runs and builds images inside an imp from images/base', async () =>
     ].join('\n'),
   );
 
+  expect(hello).toContain('Hello from Docker!');
   expect(built).toBe('built-42');
 });
 
-test('a container from scratch runs in the inner container, with no registry', async () => {
+test('it runs a container from scratch in the inner container, with no registry', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}scratch`;
+
+  await runImp('new', name, '--image', 'base');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+  await holdImp(name);
+
+  await waitFor(`dockerd in ${name}`, () => runInImp(name, 'docker', 'info'), {
+    timeoutMs: 90_000,
+  });
+
   // the agent is a static binary: an image of it alone needs no pull
   const version = await runShellInImp(
     name,
@@ -61,12 +84,22 @@ test('a container from scratch runs in the inner container, with no registry', a
   expect(version).toMatch(/^\d+\.\d+\.\d+$/v);
 });
 
-test('a container port published on 8080 answers through the wake proxy', async () => {
-  await runInImp(name, 'docker', 'run', '-d', '--name', 'web', '-p', '8080:80', 'nginx:alpine');
-  await waitForNginx();
-});
+test('it lets a container resolve names and reach the internet', async () => {
+  const ctx = await setupTest();
 
-test('a container resolves names and reaches the internet', async () => {
+  const name = `${ctx.prefix}net`;
+
+  await runImp('new', name, '--image', 'base');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+  await holdImp(name);
+
+  await waitFor(`dockerd in ${name}`, () => runInImp(name, 'docker', 'info'), {
+    timeoutMs: 90_000,
+  });
+
   const page = await runInImp(
     name,
     'docker',
@@ -81,12 +114,40 @@ test('a container resolves names and reaches the internet', async () => {
   expect(page).toContain('<title>Example Domain</title>');
 });
 
-test('dockerd and its containers come back after a cold boot', async () => {
+test('it serves a container port published on 8080 through the wake proxy, again after a cold boot', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}web`;
+
+  await runImp('new', name, '--image', 'base');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+  await holdImp(name);
+
+  await waitFor(`dockerd in ${name}`, () => runInImp(name, 'docker', 'info'), {
+    timeoutMs: 90_000,
+  });
+
+  await runInImp(name, 'docker', 'run', '-d', '--name', 'web', '-p', '8080:80', 'nginx:alpine');
+
+  const page = await waitFor(`nginx in ${name} through the proxy`, () => getThroughProxy(name));
+
+  expect(page).toContain('<title>Welcome to nginx!</title>');
+
   await runImp('stop', name);
   await runImp('start', name);
   await waitForExec(name);
   await holdImp(name);
-  await waitForDockerd();
+
+  await waitFor(`dockerd in ${name} after the cold boot`, () => runInImp(name, 'docker', 'info'), {
+    timeoutMs: 90_000,
+  });
+
   await runInImp(name, 'docker', 'start', 'web');
-  await waitForNginx();
+
+  const again = await waitFor(`nginx in ${name} after the cold boot`, () => getThroughProxy(name));
+
+  expect(again).toContain('<title>Welcome to nginx!</title>');
 });

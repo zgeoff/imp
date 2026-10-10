@@ -117,7 +117,12 @@ export const SUITES: readonly Suite[] = [
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
   { name: 'templates', prefix: 'e2e-tpl-', images: ['e2e-git'] },
   { name: 'boot-templates', prefix: 'e2e-bt-', images: ['e2e-ws'] },
-  { name: 'inner', prefix: 'e2e-in-', images: ['e2e-tiny'] },
+  {
+    name: 'inner',
+    prefix: 'e2e-in-',
+    images: ['e2e-tiny'],
+    journeys: ['inner-isolation', 'inner-restart', 'inner-agent', 'inner-wipe'],
+  },
 
   // root in the container reaches Docker only through imp-docker-proxy; it
   // stops and starts the proxy
@@ -160,7 +165,12 @@ export const SUITES: readonly Suite[] = [
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
 
   // reboots the instance with the jailer off, then on again
-  { name: 'jail', prefix: 'e2e-jail-', images: ['e2e-bare'] },
+  {
+    name: 'jail',
+    prefix: 'e2e-jail-',
+    images: ['e2e-bare'],
+    journeys: ['jail', 'jail-rollback', 'jail-oom', 'jail-remove'],
+  },
   { name: 'memory', prefix: 'e2e-mem-', images: ['e2e-tiny'] },
 
   // skips unless KSM runs on this host, as CI turns it on; reboots the instance

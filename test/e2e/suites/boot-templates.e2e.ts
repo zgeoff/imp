@@ -1,239 +1,305 @@
-import { expect, test } from 'bun:test';
-import { openSessionSocket, requireOutput } from '../lib/exec-socket';
-import type { SessionOutput } from '../lib/exec-socket';
+import { expect, onTestFinished, test } from 'bun:test';
+import {
+  readIsnSecret,
+  readMac,
+  readSessionOutput,
+  waitForShapeTemplate,
+} from '../lib/boot-template-guest';
+import { findU32Span, parseLoggedSteps, pickPercentile } from '../lib/boot-template-timing';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { requireImp, runImp, runInImp, runShellInImp } from '../lib/imp-cli';
-import { createImp, removeImps } from '../lib/imps';
-import { readImpdLogTail, runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
-import { waitFor } from '../lib/wait-for';
+import { createInstanceClient, requireImp, runImp, runInImp, runShellInImp } from '../lib/imp-cli';
+import { waitForExec } from '../lib/imps';
+import { readImpdLogSince, runInContainer } from '../lib/instance';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
 // Boot templates (docs/architecture/boot-templates.md): every restored imp
-// must be its own machine. The e2e-ws image carries isn-probe, which prints
-// the secret part of the TCP ISN.
+// is its own machine. Each test boots a shape no other suite boots twice, so
+// the second boot builds its template unless an earlier test left one.
 
-const prefix = setupSuite('boot-templates');
-const WS = resolveImageName('e2e-ws');
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// a shape no other suite boots, so this suite sees its own template made
-const MEMORY_MIB = '288';
-const TEMPLATE_MAC = '06:00:a9:fe:ff:fe';
-const GIB_KIB = 1024 * 1024;
-const first = `${prefix}a`;
-const second = `${prefix}b`;
-const third = `${prefix}c`;
-const spare = `${prefix}x`;
+  onTestFinished(() => stack.disposeAsync());
 
-// two guests that share the kernel's net_secret print values within a few
-// hundred of each other; isn-probe's own noise is well under this
-const SHARED_SECRET_SPAN = 100_000;
+  const client = await createInstanceClient();
 
-// creates timed one after another, each removed before the next
-const TIMED_CREATES = 10;
-
-function createShaped(name: string, ...args: readonly string[]): Promise<string> {
-  return createImp(name, '--image', WS, '--memory', MEMORY_MIB, '--cpus', '1', ...args);
+  return { prefix: readSuitePrefix('boot-templates'), stack, client };
 }
 
-// the distance between two u32 values, around the wrap
-function findSpan(a: number, b: number): number {
-  const span = Math.abs(a - b);
+test('it makes the template of a shape on its second boot and restores it as imps with their own name, MAC, address, disk and CRNG', async () => {
+  const ctx = await setupTest();
 
-  return Math.min(span, 2 ** 32 - span);
-}
+  const image = resolveImageName('e2e-ws');
+  const first = `${ctx.prefix}a`;
+  const spare = `${ctx.prefix}x`;
+  const second = `${ctx.prefix}b`;
+  const third = `${ctx.prefix}c`;
 
-async function readIsnSecret(name: string): Promise<number> {
-  const stdout = await runInImp(name, 'isn-probe');
+  const started = new Date();
 
-  return Number(stdout.trim());
-}
+  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
 
-// a session's output identity: its boot, and the imp's last cold boots
-async function readSessionOutput(name: string): Promise<SessionOutput> {
-  const opened = await openSessionSocket({
-    type: 'start',
-    name,
-    session: 'boot',
-    argv: ['sleep', 'infinity'],
-    tty: true,
-  });
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
-  const output = requireOutput(opened);
+  await waitForExec(first);
+  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
 
-  opened.close();
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
 
-  return output;
-}
+  await waitForExec(spare);
+  await runImp('rm', spare);
+  await waitForShapeTemplate(288);
+  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1', '--disk', '6g');
 
-async function readMac(name: string): Promise<string> {
-  const stdout = await runInImp(name, 'cat', '/sys/class/net/eth0/address');
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
 
-  return stdout.trim();
-}
+  await waitForExec(second);
+  await runImp('new', third, '--image', image, '--memory', '288', '--cpus', '1');
 
-test('the second boot of a shape makes its template; later boots restore it', async () => {
-  await createShaped(first);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, third));
 
-  // the second miss of the key starts the build
-  await createShaped(spare);
-  await removeImps(spare);
+  await waitForExec(third);
 
-  await waitFor(
-    'the boot template of the shape',
-    async () => {
-      const found = await runInContainer([
-        'sh',
-        '-c',
-        `grep -l '"memoryMib": ${MEMORY_MIB}' /var/lib/imp/templates/*/meta.json`,
-      ]);
+  const log = await readImpdLogSince(started);
+  const row = await requireImp(second);
 
-      expect(found.exitCode).toBe(0);
-    },
-    { timeoutMs: 120_000 },
-  );
+  const consoleLog = await runInContainer([
+    'cat',
+    `/var/lib/imp/imps/${row.id}/run/firecracker.log`,
+  ]);
 
-  await createShaped(second, '--disk', '6g');
-  await createShaped(third);
+  const hostname = await runInImp(second, 'hostname');
+  const secondMac = await readMac(second);
+  const thirdMac = await readMac(third);
+  const df = await runInImp(second, 'df', '-k', '/');
+  const route = await runShellInImp(second, 'ip -4 route show default');
 
-  const log = await readImpdLogTail(400);
+  const sizeKib = Number(df.trim().split('\n').at(-1)?.split(/\s+/v)[1]);
 
   expect(log).toContain(`${second}: restored boot template`);
   expect(log).toContain(`${third}: restored boot template`);
 
   // the guest's own word that the claim reseeded its CRNG
-  const found = await requireImp(second);
-
-  const consoleLog = await runInContainer([
-    'cat',
-    `/var/lib/imp/imps/${found.id}/run/firecracker.log`,
-  ]);
-
   expect(consoleLog.stdout).toContain('boot: claim: crng reseeded from a 64-byte seed');
-});
+  expect(hostname).toBe(second);
 
-test('a restored imp has its own name, MAC, address and disk size', async () => {
-  const hostname = await runInImp(second, 'hostname');
-
-  const macs = [await readMac(second), await readMac(third)];
-
-  expect(hostname.trim()).toBe(second);
-  expect(macs[0]).not.toBe(TEMPLATE_MAC);
-  expect(macs[1]).not.toBe(TEMPLATE_MAC);
-  expect(macs[0]).not.toBe(macs[1]);
-
-  const df = await runInImp(second, 'df', '-k', '/');
-
-  const sizeKib = Number(df.trim().split('\n').at(-1)?.split(/\s+/)[1]);
+  // the template's own MAC
+  expect(secondMac).not.toBe('06:00:a9:fe:ff:fe');
+  expect(thirdMac).not.toBe('06:00:a9:fe:ff:fe');
+  expect(secondMac).not.toBe(thirdMac);
 
   // ext4 keeps some of the 6 GiB for itself
-  expect(sizeKib / GIB_KIB).toBeGreaterThan(5.8);
+  expect(sizeKib / (1024 * 1024)).toBeGreaterThan(5.8);
 
   // the claim's gateway is the default route
-  const route = await runShellInImp(second, 'ip -4 route show default');
-
   expect(route).toContain('via');
 });
 
-test('each restored imp keys TCP with its own secret', async () => {
-  const secrets = {
-    first: await readIsnSecret(first),
-    second: await readIsnSecret(second),
-    third: await readIsnSecret(third),
-  };
+test('it keys TCP with its own secret in each restored imp', async () => {
+  const ctx = await setupTest();
 
-  // the probe itself: one guest, twice, gives the same secret
+  const image = resolveImageName('e2e-ws');
+  const first = `${ctx.prefix}a`;
+  const spare = `${ctx.prefix}x`;
+  const second = `${ctx.prefix}b`;
+  const third = `${ctx.prefix}c`;
+
+  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
+
+  await waitForExec(first);
+  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
+
+  await waitForExec(spare);
+  await runImp('rm', spare);
+  await waitForShapeTemplate(288);
+  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
+
+  await waitForExec(second);
+  await runImp('new', third, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, third));
+
+  await waitForExec(third);
+
+  const firstSecret = await readIsnSecret(first);
+  const secondSecret = await readIsnSecret(second);
+  const thirdSecret = await readIsnSecret(third);
+
+  // the probe itself: one guest, twice, gives the same secret; two guests
+  // that share the kernel's net_secret land within a few hundred
   const again = await readIsnSecret(second);
 
-  expect(findSpan(secrets.second, again)).toBeLessThan(SHARED_SECRET_SPAN);
-  expect(findSpan(secrets.second, secrets.third)).toBeGreaterThan(SHARED_SECRET_SPAN);
-  expect(findSpan(secrets.first, secrets.second)).toBeGreaterThan(SHARED_SECRET_SPAN);
-  expect(findSpan(secrets.first, secrets.third)).toBeGreaterThan(SHARED_SECRET_SPAN);
+  expect(findU32Span(secondSecret, again)).toBeLessThan(100_000);
+  expect(findU32Span(secondSecret, thirdSecret)).toBeGreaterThan(100_000);
+  expect(findU32Span(firstSecret, secondSecret)).toBeGreaterThan(100_000);
+  expect(findU32Span(firstSecret, thirdSecret)).toBeGreaterThan(100_000);
 });
 
-test('each restored boot names itself, so its cold boot is recorded', async () => {
+test('it records each restored boot as its own cold boot, again after a restart restores the template', async () => {
+  const ctx = await setupTest();
+
+  const image = resolveImageName('e2e-ws');
+  const first = `${ctx.prefix}a`;
+  const spare = `${ctx.prefix}x`;
+  const second = `${ctx.prefix}b`;
+  const third = `${ctx.prefix}c`;
+
+  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
+
+  await waitForExec(first);
+  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
+
+  await waitForExec(spare);
+  await runImp('rm', spare);
+  await waitForShapeTemplate(288);
+  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
+
+  await waitForExec(second);
+  await runImp('new', third, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, third));
+
+  await waitForExec(third);
+
   const before = await readSessionOutput(second);
   const other = await readSessionOutput(third);
 
+  const restarted = new Date();
+
   await runImp('stop', second);
   await runImp('start', second);
+  await waitForExec(second);
 
   const after = await readSessionOutput(second);
-  const log = await readImpdLogTail(400);
+  const log = await readImpdLogSince(restarted);
 
   // the start restored the template again, not the kernel
-  expect(log.split(`${second}: restored boot template`).length - 1).toBeGreaterThanOrEqual(2);
+  expect(log).toContain(`${second}: restored boot template`);
   expect(other.bootId).not.toBe(before.bootId);
   expect(after.bootId).not.toBe(before.bootId);
 
-  expect(after.coldBoots.map((boot) => boot.bootId).slice(0, 2)).toEqual([
+  expect(after.coldBoots.map((boot) => boot.bootId).slice(0, 2)).toStrictEqual([
     after.bootId,
     before.bootId,
   ]);
 });
 
-test('a restored imp sleeps and wakes like any other', async () => {
-  await runInImp(second, 'sh', '-c', 'echo kept > /root/marker');
+test('it sleeps and wakes a restored imp like any other', async () => {
+  const ctx = await setupTest();
+
+  const image = resolveImageName('e2e-ws');
+  const first = `${ctx.prefix}a`;
+  const spare = `${ctx.prefix}x`;
+  const second = `${ctx.prefix}b`;
+
+  const started = new Date();
+
+  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
+
+  await waitForExec(first);
+  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
+
+  await waitForExec(spare);
+  await runImp('rm', spare);
+  await waitForShapeTemplate(288);
+  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
+
+  await waitForExec(second);
+  await runShellInImp(second, 'echo kept > /root/marker');
   await runImp('sleep', second);
 
-  const marker = await runInImp(second, 'cat', '/root/marker');
+  const asleep = await requireImp(second);
 
-  expect(marker.trim()).toBe('kept');
+  // the exec wakes it
+  const marker = await runInImp(second, 'cat', '/root/marker');
+  const log = await readImpdLogSince(started);
+
+  expect(log).toContain(`${second}: restored boot template`);
+  expect(asleep.state).toBe('sleeping');
+  expect(marker).toBe('kept');
 });
 
-// `name=12ms` pairs from the impd log line that names the imp and `what`
-function readLoggedSteps(log: string, name: string, what: string): Record<string, number> {
-  const line = log.split('\n').findLast((candidate) => candidate.includes(`${name}: ${what}`));
-  const steps: Record<string, number> = {};
+test('it times imp new from a template: the wall time and its spans', async () => {
+  const ctx = await setupTest();
 
-  for (const match of line?.matchAll(/(?<step>\w+)=(?<ms>\d+)ms/g) ?? []) {
-    steps[match.groups?.['step'] ?? ''] = Number(match.groups?.['ms']);
-  }
-
-  const total = /created in (?<ms>\d+)ms/.exec(line ?? '')?.groups?.['ms'];
-
-  return total === undefined ? steps : { ...steps, total: Number(total) };
-}
-
-function pickPercentile(values: readonly number[], fraction: number): number {
-  const sorted = values.toSorted((a, b) => a - b);
-
-  return sorted[Math.max(0, Math.ceil(fraction * sorted.length) - 1)] ?? 0;
-}
-
-test('imp new from a template, timed: the wall time and its spans', async () => {
+  const image = resolveImageName('e2e-ws');
+  const first = `${ctx.prefix}a`;
+  const spare = `${ctx.prefix}x`;
   const walls: number[] = [];
   const spans: Record<string, number[]> = {};
 
-  for (let index = 0; index < TIMED_CREATES; index += 1) {
-    const name = `${prefix}t${String(index)}`;
-    const started = performance.now();
+  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
 
-    await createShaped(name);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
-    walls.push(performance.now() - started);
+  await waitForExec(first);
+  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
 
-    const log = await readImpdLogTail(50);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
 
-    const created = readLoggedSteps(log, name, 'created in');
-    const restored = readLoggedSteps(log, name, 'restored boot template');
-    const vmMs = Object.values(restored).reduce((sum, ms) => sum + ms, 0);
+  await waitForExec(spare);
+  await runImp('rm', spare);
+  await waitForShapeTemplate(288);
 
-    expect(restored['agent']).toBeNumber();
+  // ten creates, one after another, each removed before the next
+  for (let index = 0; index < 10; index += 1) {
+    const name = `${ctx.prefix}t${String(index)}`;
 
-    // the CLI's process and the API round trip, and impd's write-up after the VM
+    const created = new Date();
+
+    const wallStarted = performance.now();
+
+    await runImp('new', name, '--image', image, '--memory', '288', '--cpus', '1');
+
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+    // the wall time runs until the imp takes an exec
+    await waitForExec(name);
+
+    walls.push(performance.now() - wallStarted);
+
+    const log = await readImpdLogSince(created);
+
+    const createdSteps = parseLoggedSteps(log, name, 'created in');
+    const restoredSteps = parseLoggedSteps(log, name, 'restored boot template');
+    const vmMs = Object.values(restoredSteps).reduce((sum, ms) => sum + ms, 0);
+
+    // the CLI's process and the API round trip, and impd's write-up after
+    // the VM
     const found = {
-      ...restored,
-      ...created,
-      cli: Math.round((walls.at(-1) ?? 0) - (created['total'] ?? 0)),
-      finish: (created['boot'] ?? 0) - vmMs,
+      ...restoredSteps,
+      ...createdSteps,
+      cli: Math.round((walls.at(-1) ?? 0) - (createdSteps['total'] ?? 0)),
+      finish: (createdSteps['boot'] ?? 0) - vmMs,
     };
 
     for (const [step, ms] of Object.entries(found)) {
       spans[step] = [...(spans[step] ?? []), ms];
     }
 
-    await removeImps(name);
+    await runImp('rm', name);
   }
 
   const medians = Object.fromEntries(
@@ -247,4 +313,7 @@ test('imp new from a template, timed: the wall time and its spans', async () => 
   });
 
   writeMetric('bootTemplateNewSpansP50Ms', medians);
+
+  // every create restored the template: each has the agent's span
+  expect(spans['agent']).toHaveLength(10);
 });

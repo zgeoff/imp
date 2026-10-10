@@ -1,113 +1,83 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { checkLimit } from '../lib/check-limit';
+import { hasCheckpointStorage, hasImpDir, writeCrossFiles } from '../lib/checkpoint-storage';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import {
+  createInstanceClient,
   listCheckpoints,
-  readInfo,
   readState,
   requireImp,
   runImp,
   runInImp,
   tryImp,
 } from '../lib/imp-cli';
-import {
-  createImp,
-  holdImp,
-  readGuestFile,
-  removeImps,
-  waitForExec,
-  writeGuestFile,
-} from '../lib/imps';
-import { readImpdLoggedMs, runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import { holdImp, readGuestFile, waitForExec, writeGuestFile } from '../lib/imps';
+import { readImpdLoggedMs } from '../lib/instance';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-const prefix = setupSuite('checkpoints');
-const TINY = resolveImageName('e2e-tiny');
-const source = `${prefix}src`;
-const fromCheckpoint = `${prefix}fork-cp`;
-const fromLive = `${prefix}fork-live`;
-const IMP_DIR = '/var/lib/imp/imps';
+// `imp checkpoint`, `imp restore` and `imp fork` on the instance's storage
+// backend: a reflink on XFS, a snapshot on ZFS. Each test boots its own
+// source imp and takes its own checkpoints.
 
-// a write on one side is invisible on the other
-async function assertIndependent(a: string, b: string, tag: string): Promise<void> {
-  await writeGuestFile(a, `/root/only-${tag}-a`, 'a');
-  await writeGuestFile(b, `/root/only-${tag}-b`, 'b');
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  const seenInA = await readGuestFile(a, `/root/only-${tag}-b`);
-  const seenInB = await readGuestFile(b, `/root/only-${tag}-a`);
-  const own = await readGuestFile(b, `/root/only-${tag}-b`);
+  onTestFinished(() => stack.disposeAsync());
 
-  expect(seenInA).toBe('none');
-  expect(seenInB).toBe('none');
-  expect(own).toBe('b');
+  const client = await createInstanceClient();
+
+  return { prefix: readSuitePrefix('checkpoints'), stack, client };
 }
 
-async function checkInContainer(...argv: readonly string[]): Promise<boolean> {
-  const result = await runInContainer(argv);
+test('it restores the disk of a running imp from its checkpoint, within the limit', async () => {
+  const ctx = await setupTest();
 
-  return result.exitCode === 0;
-}
+  const source = `${ctx.prefix}run`;
 
-// A reflink file on XFS; on ZFS a snapshot not yet marked for destroy (one a
-// fork still needs stays, marked, until the fork goes).
-async function hasCheckpointStorage(impId: string, checkpointId: string): Promise<boolean> {
-  const info = await readInfo();
+  await runImp('new', source, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
 
-  if (info.storage.backend === 'xfs') {
-    return checkInContainer('test', '-e', `${IMP_DIR}/${impId}/checkpoints/${checkpointId}`);
-  }
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
 
-  return checkInContainer(
-    'sh',
-    '-c',
-    `zfs list -H -t snapshot -o name,defer_destroy | awk -F '\t' -v id="@$1" 'substr($1, length($1) - length(id) + 1) == id && $2 == "off" { found = 1 } END { exit !found }'`,
-    'sh',
-    checkpointId,
-  );
-}
-
-test('a checkpoint of a running imp restores its disk', async () => {
-  await createImp(source, '--image', TINY, '--memory', '512');
+  await waitForExec(source);
   await holdImp(source);
   await writeGuestFile(source, '/root/f', 'v1');
 
-  let started = Date.now();
+  const checkpointStarted = Date.now();
 
   await runImp('checkpoint', source, 'cp1');
 
-  writeMetric('checkpointMs', Date.now() - started);
+  writeMetric('checkpointMs', Date.now() - checkpointStarted);
 
-  const checkpoints = await listCheckpoints(source);
+  const [cp1] = await listCheckpoints(source);
 
-  const cp1 = checkpoints[0]?.id ?? '';
-
-  expect(checkpoints[0]?.label).toBe('cp1');
+  invariant(cp1);
 
   // impd's own timing, without the CLI round trip
-  const impdMs = await readImpdLoggedMs(`${source}: checkpoint ${cp1} in`);
+  const impdMs = await readImpdLoggedMs(`${source}: checkpoint ${cp1.id} in`);
 
-  if (impdMs === null) {
-    throw new Error(`impd logged no checkpoint time for ${source}`);
-  }
-
+  invariant(impdMs);
   checkLimit('checkpoint (impd)', impdMs, config.maxCheckpointMs);
 
   const row = await requireImp(source);
-  const hasDisk = await hasCheckpointStorage(row.id, cp1);
+  const hasDisk = await hasCheckpointStorage(row.id, cp1.id);
 
+  expect(cp1.label).toBe('cp1');
   expect(hasDisk).toBeTrue();
 
   await writeGuestFile(source, '/root/f', 'v2');
   await writeGuestFile(source, '/root/g', 'later');
 
-  started = Date.now();
+  const restoreStarted = Date.now();
 
   await runImp('restore', source, 'cp1');
   await waitForExec(source);
 
-  writeMetric('restoreMs', Date.now() - started);
+  writeMetric('restoreMs', Date.now() - restoreStarted);
 
   const state = await readState(source);
   const restored = await readGuestFile(source, '/root/f');
@@ -118,7 +88,19 @@ test('a checkpoint of a running imp restores its disk', async () => {
   expect(later).toBe('none');
 });
 
-test('restoring a stopped imp leaves it stopped', async () => {
+test('it leaves a stopped imp stopped on a restore, with the checkpoint’s disk at its next start', async () => {
+  const ctx = await setupTest();
+
+  const source = `${ctx.prefix}stop`;
+
+  await runImp('new', source, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
+
+  await waitForExec(source);
+  await holdImp(source);
+  await writeGuestFile(source, '/root/f', 'v1');
+  await runImp('checkpoint', source, 'cp1');
   await writeGuestFile(source, '/root/f', 'v3');
   await runImp('stop', source);
   await runImp('restore', source, 'cp1');
@@ -135,32 +117,52 @@ test('restoring a stopped imp leaves it stopped', async () => {
   expect(restored).toBe('v1');
 });
 
-test('a fork from a checkpoint and a fork from the live disk are independent imps', async () => {
+test('it makes a fork from a checkpoint and a fork from the live disk independent imps', async () => {
+  const ctx = await setupTest();
+
+  const source = `${ctx.prefix}src`;
+  const fromCheckpoint = `${ctx.prefix}fork-cp`;
+  const fromLive = `${ctx.prefix}fork-live`;
+
+  await runImp('new', source, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
+
+  await waitForExec(source);
+  await holdImp(source);
+  await writeGuestFile(source, '/root/f', 'v1');
+  await runImp('checkpoint', source, 'cp1');
   await writeGuestFile(source, '/root/f', 'v2');
 
-  let started = Date.now();
+  const checkpointForkStarted = Date.now();
 
   await runImp('fork', source, fromCheckpoint, '--from', 'cp1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, fromCheckpoint));
+
   await waitForExec(fromCheckpoint);
 
-  writeMetric('forkCheckpointMs', Date.now() - started);
+  writeMetric('forkCheckpointMs', Date.now() - checkpointForkStarted);
 
   await holdImp(fromCheckpoint);
 
   const forked = await readGuestFile(fromCheckpoint, '/root/f');
   const unchanged = await readGuestFile(source, '/root/f');
+  const sourceAndCheckpointFork = await writeCrossFiles(source, fromCheckpoint, 'cp');
 
   expect(forked).toBe('v1');
   expect(unchanged).toBe('v2');
+  expect(sourceAndCheckpointFork).toStrictEqual({ seenInA: 'none', seenInB: 'none', ownInB: 'b' });
 
-  await assertIndependent(source, fromCheckpoint, 'cp');
-
-  started = Date.now();
+  const liveForkStarted = Date.now();
 
   await runImp('fork', source, fromLive);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, fromLive));
+
   await waitForExec(fromLive);
 
-  writeMetric('forkLiveMs', Date.now() - started);
+  writeMetric('forkLiveMs', Date.now() - liveForkStarted);
 
   await holdImp(fromLive);
 
@@ -170,6 +172,8 @@ test('a fork from a checkpoint and a fork from the live disk are independent imp
   const forkCheckpoints = await listCheckpoints(fromLive);
   const live = await readGuestFile(fromLive, '/root/f');
   const earlier = await readGuestFile(fromLive, '/root/only-cp-a');
+  const sourceAndLiveFork = await writeCrossFiles(source, fromLive, 'live');
+  const theForks = await writeCrossFiles(fromLive, fromCheckpoint, 'forks');
 
   expect(fork.state).toBe('running');
   expect(fork.id).not.toBe(sourceRow.id);
@@ -177,45 +181,85 @@ test('a fork from a checkpoint and a fork from the live disk are independent imp
   expect(forkCheckpoints).toBeEmpty();
   expect(live).toBe('v2');
   expect(earlier).toBe('a');
-
-  await assertIndependent(source, fromLive, 'live');
-  await assertIndependent(fromLive, fromCheckpoint, 'forks');
+  expect(sourceAndLiveFork).toStrictEqual({ seenInA: 'none', seenInB: 'none', ownInB: 'b' });
+  expect(theForks).toStrictEqual({ seenInA: 'none', seenInB: 'none', ownInB: 'b' });
 });
 
-test('checkpoints list newest first, take unique labels and can be deleted', async () => {
+test('it lists checkpoints newest first, refuses a label taken, and deletes one with its storage', async () => {
+  const ctx = await setupTest();
+
+  const source = `${ctx.prefix}list`;
+
+  await runImp('new', source, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
+
+  await waitForExec(source);
+  await holdImp(source);
+  await runImp('checkpoint', source, 'cp1');
   await runImp('checkpoint', source);
 
   const listed = await listCheckpoints(source);
-
-  expect(listed).toHaveLength(2);
-  expect(listed[1]?.label).toBe('cp1');
-
   const duplicate = await tryImp(['checkpoint', source, 'cp1']);
 
-  expect(duplicate.exitCode).not.toBe(0);
+  const [, cp1] = listed;
 
-  const cp1 = listed[1]?.id ?? '';
+  expect(listed).toHaveLength(2);
+  expect(cp1?.label).toBe('cp1');
+
+  expect(duplicate).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'imp: CONFLICT: checkpoint cp1 already exists\n',
+  });
+
+  invariant(cp1);
 
   const row = await requireImp(source);
 
   await runImp('checkpoint', 'rm', source, 'cp1');
 
   const remaining = await listCheckpoints(source);
-  const hasDisk = await hasCheckpointStorage(row.id, cp1);
+  const hasDisk = await hasCheckpointStorage(row.id, cp1.id);
   const restore = await tryImp(['restore', source, 'cp1']);
 
   expect(remaining).toHaveLength(1);
   expect(hasDisk).toBeFalse();
-  expect(restore.exitCode).not.toBe(0);
+
+  expect(restore).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'imp: NOT_FOUND: checkpoint cp1 not found\n',
+  });
 });
 
-test('rm deletes the checkpoints with the imp, and a fork outlives its source', async () => {
+test('it deletes the checkpoints with the imp on rm, and a fork from one outlives its source', async () => {
+  const ctx = await setupTest();
+
+  const source = `${ctx.prefix}rm`;
+  const fork = `${ctx.prefix}rm-fork`;
+
+  await runImp('new', source, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, source));
+
+  await waitForExec(source);
+  await holdImp(source);
+  await writeGuestFile(source, '/root/f', 'v1');
+  await runImp('checkpoint', source, 'cp1');
+  await runImp('fork', source, fork, '--from', 'cp1');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, fork));
+
+  await waitForExec(fork);
+  await holdImp(fork);
+
   const row = await requireImp(source);
 
-  await removeImps(source);
+  await runImp('rm', source);
 
-  const hasDir = await checkInContainer('test', '-e', `${IMP_DIR}/${row.id}`);
-  const forked = await readGuestFile(fromCheckpoint, '/root/f');
+  const hasDir = await hasImpDir(row.id);
+  const forked = await readGuestFile(fork, '/root/f');
 
   expect(hasDir).toBeFalse();
   expect(forked).toBe('v1');
