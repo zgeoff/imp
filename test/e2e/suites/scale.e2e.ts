@@ -1,6 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
-import { updateEnv } from '@imp/test-utils/update-env';
 import { loadConfig } from '../../../packages/daemon/src/config';
 import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-governor';
 import { findOvershoots } from '../lib/budget-overshoot';
@@ -18,7 +17,6 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
-import { runDevScript } from '../lib/instance';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import {
@@ -54,13 +52,7 @@ async function setupTest() {
 test(`it keeps ${String(config.scaleCount)} imps inside the RAM budget, sleeps the least recently active, and wakes each on request`, async () => {
   const ctx = await setupTest();
 
-  // Long enough that only the governor sleeps imps, or the budget never
-  // fills. The instance keeps it until its next reboot: restart's, or the
-  // harness's after a failed journey.
-  updateEnv('IMP_IDLE_TIMEOUT_S', '600');
-
-  await runDevScript('reboot');
-
+  // the suite's settings: the governor, not the idle timeout, sleeps imps
   const start = await readInfo();
 
   expect(start.ramBudgetMib).toBe(config.ramBudgetMib);

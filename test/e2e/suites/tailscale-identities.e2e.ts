@@ -1,10 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { updateEnv } from '@imp/test-utils/update-env';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
-import { runDevScript } from '../lib/instance';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
@@ -18,10 +16,10 @@ import {
 import { readTailscaleAuthKey } from '../lib/tailscale-key';
 
 // Tailnet identity rules (docs/guides/tailscale.md): a member that a rule
-// names reaches impd's API with no token, at the rule's scope.
+// names reaches impd's API with no token, at the rule's scope. The suite's
+// settings hold the rule (suites.ts).
 
-// one stack for every release, so the reboot back to the run's settings
-// runs once the imp is gone
+// one stack for every release
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -53,14 +51,6 @@ test.skipIf(!ready && !config.acceptance)(
 
     const name = `${ctx.prefix}rule`;
 
-    // impd reads the rules at start; the reboot keeps its node. The reboot
-    // back runs after the preload has restored the env, so it takes the
-    // run's settings.
-    updateEnv('IMP_TAILNET_IDENTITIES', JSON.stringify([{ match: '*', scope: 'read' }]));
-
-    ctx.stack.defer(() => runDevScript('reboot'));
-
-    await runDevScript('reboot');
     await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
 
     registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));

@@ -240,11 +240,13 @@ some that the agent's dial completed but the server never accepted; the guest ke
 `nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
 `templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent`,
 `reverse`, `services`, `sessions`, `session-logs`, `ssh-wake`, `proxy-wake`, the two `sleep-*`
-files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files and the two
-`moves-tailnet-*` files work this way. A journey that reboots the instance onto settings of its own
-sets them with `updateEnv` and defers a reboot back, which runs after the preload has restored the
-env. The other suite files still read their prefix through `setupSuite` in
-`test/e2e/lib/setup-suite.ts`, which registers no hooks, and rely on the harness's reset after them.
+files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files, the three
+`registry-*` files and the two `moves-tailnet-*` files work this way. `registry`, `scale` and
+`tailscale` take their impd settings from the suite's `settings` (step 5). A journey that reboots
+the instance onto settings only it needs, as `tailscale-names` does, sets them with `updateEnv` and
+defers a reboot back, which runs after the preload has restored the env. The other suite files still
+read their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks,
+and rely on the harness's reset after them.
 
 Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
 `<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`
@@ -823,5 +825,6 @@ file leaves every host on its real origin.
   removes a `<host>:*` directory only when its owner file parses and its pid's start time is not the
   recorded one (the process is gone, or its pid now names another). A directory with no owner file,
   one that does not parse, one that records no start time, and one whose owner still runs all stay,
-  and `mkdir` then refuses the last three if they hold the same port. The suite still removes stale
-  registry containers by the name pattern `e2e-reg-registry-`.
+  and `mkdir` then refuses the last three if they hold the same port. Each `registry-*` journey
+  starts its own registry and trusts its own certificate (`test/e2e/lib/registry-steps.ts`), and
+  first removes stale registry containers by the name pattern `e2e-reg-registry-`.

@@ -31,7 +31,16 @@ export const SUITES: readonly Suite[] = [
 
   // a registry on the host's loopback; skips unless its name resolves there,
   // as CI's /etc/hosts makes it
-  { name: 'registry', prefix: 'e2e-reg-', images: [] },
+  {
+    name: 'registry',
+    prefix: 'e2e-reg-',
+    images: [],
+    journeys: ['registry-moved-tag', 'registry-copy-from', 'registry-multi-platform'],
+
+    // the host engine's builds: a builder imp may not reach the host's
+    // loopback, by design, so not this registry either
+    settings: () => ({ IMP_BUILD_ISOLATION: 'host' }),
+  },
   { name: 'checkpoints', prefix: 'e2e-cp-', images: ['e2e-tiny'] },
   { name: 'disks', prefix: 'e2e-disk-', images: ['e2e-tiny'] },
   {
@@ -40,13 +49,27 @@ export const SUITES: readonly Suite[] = [
     images: ['e2e-bare', 'e2e-ws'],
     journeys: ['sleep-memory', 'sleep-websocket'],
   },
-  { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
+  {
+    name: 'scale',
+    prefix: 'e2e-scale-',
+    images: ['e2e-tiny'],
+
+    // long enough that only the governor sleeps imps, or the budget never
+    // fills
+    settings: () => ({ IMP_IDLE_TIMEOUT_S: '600' }),
+  },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
   {
     name: 'tailscale',
     prefix: 'e2e-ts-',
     images: ['e2e-tiny'],
     journeys: ['tailscale-reach', 'tailscale-identities', 'tailscale-names'],
+
+    // the rule tailscale-identities proves: impd reads it at start, and the
+    // reboot keeps the node
+    settings: () => ({
+      IMP_TAILNET_IDENTITIES: JSON.stringify([{ match: '*', scope: 'read' }]),
+    }),
   },
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
   { name: 'mcp-oauth', prefix: 'e2e-oa-', images: ['e2e-tiny'] },
