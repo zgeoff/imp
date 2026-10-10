@@ -38,7 +38,7 @@ test('#planChaosRound plans a held exec, the other steps, the fault and the dela
   const draws = [0.5, 0.7, 0.3, 0.1, 0.9, 0.7, 0.2, 0.4];
   const readNextDraw = () => draws.shift() ?? 0;
 
-  expect(planChaosRound(readNextDraw, ['e2e-chaos-a', 'e2e-chaos-b'])).toStrictEqual({
+  expect(planChaosRound(readNextDraw, ['e2e-chaos-a', 'e2e-chaos-b'], new Set())).toStrictEqual({
     steps: [
       { op: 'exec', name: 'e2e-chaos-b' },
       { op: 'wake', name: 'e2e-chaos-a' },
@@ -50,7 +50,9 @@ test('#planChaosRound plans a held exec, the other steps, the fault and the dela
 });
 
 test('#planChaosRound keeps the other steps off the held exec’s imp', () => {
-  expect(planChaosRound(() => 0.9999, ['e2e-chaos-a', 'e2e-chaos-b']).steps).toStrictEqual([
+  expect(
+    planChaosRound(() => 0.9999, ['e2e-chaos-a', 'e2e-chaos-b'], new Set()).steps,
+  ).toStrictEqual([
     { op: 'exec', name: 'e2e-chaos-b' },
     { op: 'stop-start', name: 'e2e-chaos-a' },
     { op: 'stop-start', name: 'e2e-chaos-a' },
@@ -58,14 +60,44 @@ test('#planChaosRound keeps the other steps off the held exec’s imp', () => {
 });
 
 test('#planChaosRound plans only the held exec when one imp is left', () => {
-  expect(planChaosRound(() => 0.9999, ['e2e-chaos-a']).steps).toStrictEqual([
+  expect(planChaosRound(() => 0.9999, ['e2e-chaos-a'], new Set()).steps).toStrictEqual([
     { op: 'exec', name: 'e2e-chaos-a' },
   ]);
 });
 
+test('#planChaosRound holds its exec on an imp not in error', () => {
+  expect(
+    planChaosRound(() => 0, ['e2e-chaos-a', 'e2e-chaos-b', 'e2e-chaos-c'], new Set(['e2e-chaos-a']))
+      .steps,
+  ).toStrictEqual([{ op: 'exec', name: 'e2e-chaos-b' }]);
+});
+
+test('#planChaosRound runs the other steps on an imp in error', () => {
+  // the held exec's imp, the step count, then each step's op and imp
+  const draws = [0, 0.5, 0, 0];
+  const readNextDraw = () => draws.shift() ?? 0;
+
+  expect(
+    planChaosRound(
+      readNextDraw,
+      ['e2e-chaos-a', 'e2e-chaos-b', 'e2e-chaos-c'],
+      new Set(['e2e-chaos-a']),
+    ).steps,
+  ).toStrictEqual([
+    { op: 'exec', name: 'e2e-chaos-b' },
+    { op: 'sleep', name: 'e2e-chaos-a' },
+  ]);
+});
+
+test('#planChaosRound throws when every imp is in error', () => {
+  expect(() =>
+    planChaosRound(() => 0, ['e2e-chaos-a'], new Set(['e2e-chaos-a'])),
+  ).toThrowWithMessage(RangeError, 'nothing to pick from');
+});
+
 test('#planChaosRound holds its exec past the latest fault offset', () => {
   expect(CHAOS_EXEC_S * 1000).toBeGreaterThan(
-    planChaosRound(() => 0.9999, ['e2e-chaos-a', 'e2e-chaos-b']).delayMs,
+    planChaosRound(() => 0.9999, ['e2e-chaos-a', 'e2e-chaos-b'], new Set()).delayMs,
   );
 });
 

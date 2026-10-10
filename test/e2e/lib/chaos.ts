@@ -55,11 +55,21 @@ export function pickOne<T>(random: () => number, items: readonly T[]): T {
   return item;
 }
 
-// An exec that outlasts the fault's offset, so some operation is always in
-// flight when it lands, then up to two more operations on the imps, then a
-// fault, impd's twice as likely, within 3 s.
-export function planChaosRound(random: () => number, names: readonly string[]): ChaosRound {
-  const held: ChaosStep = { op: 'exec', name: pickOne(random, names) };
+// An exec that outlasts the fault's offset, on an imp not in error, then up
+// to two more operations on any other imp, errored ones too, then a fault,
+// impd's twice as likely, within 3 s.
+export function planChaosRound(
+  random: () => number,
+  names: readonly string[],
+  errored: ReadonlySet<string>,
+): ChaosRound {
+  const held: ChaosStep = {
+    op: 'exec',
+    name: pickOne(
+      random,
+      names.filter((name) => !errored.has(name)),
+    ),
+  };
 
   // a stop or sleep of the held exec's imp would end it before the fault
   const rest = names.filter((name) => name !== held.name);
