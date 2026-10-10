@@ -8,14 +8,18 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      eval = import ./deploy/nixos/tests/eval.nix { inherit nixpkgs pkgs self; };
     in
     {
       # The imp host on NixOS (docs/guides/nixos.md).
       nixosModules.imp = ./deploy/nixos/module.nix;
       nixosModules.default = self.nixosModules.imp;
 
+      # The module's nix-unit cases, which checks.eval runs.
+      tests = eval.cases;
+
       checks.${system} = {
-        eval = import ./deploy/nixos/tests/eval.nix { inherit nixpkgs pkgs self; };
+        eval = eval.check;
         vm = import ./deploy/nixos/tests/vm.nix { inherit pkgs self; };
       };
 
