@@ -789,6 +789,7 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
           imps,
           readTailscale,
           log,
+          runCommand: deps.runCommand,
         });
 
   namesHolder.names = tailnetNames;

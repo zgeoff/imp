@@ -14,20 +14,32 @@ import type { RemoteForwardRequest } from './remote-forwarding';
 import { handleSession } from './session-channel';
 import type { SshBackend, SshConnectionContext } from './ssh-connection-context';
 
-// A client must log in within this time of connecting, or it is dropped.
-const AUTH_TIMEOUT_MS = 30_000;
+// How long and how often the gateway waits on a client.
+export interface SshGatewayLimits {
+  // a client must log in within this time of connecting, or it is dropped
+  readonly authTimeoutMs: number;
 
-// at most this many connections waiting to log in; more are dropped at once
-const MAX_UNAUTHENTICATED = 32;
+  // at most this many connections waiting to log in; more are dropped at once
+  readonly maxUnauthenticated: number;
 
-// rejected signed logins before the connection is dropped (OpenSSH's
-// MaxAuthTries is 6)
-const MAX_AUTH_FAILURES = 6;
+  // rejected logins before the connection is dropped
+  readonly maxAuthFailures: number;
 
-// A client that vanished without a FIN would keep its imp awake for good;
-// the keepalive drops it after about 45 s of silence.
-const KEEPALIVE_INTERVAL_MS = 15_000;
-const KEEPALIVE_COUNT_MAX = 3;
+  // a client that vanished without a FIN would keep its imp awake for good;
+  // after this many unanswered keepalives, this far apart, it is dropped
+  readonly keepaliveIntervalMs: number;
+  readonly keepaliveCountMax: number;
+}
+
+// OpenSSH's MaxAuthTries is 6; the keepalive drops a silent client after
+// about 45 s
+export const DEFAULT_LIMITS: SshGatewayLimits = {
+  authTimeoutMs: 30_000,
+  maxUnauthenticated: 32,
+  maxAuthFailures: 6,
+  keepaliveIntervalMs: 15_000,
+  keepaliveCountMax: 3,
+};
 
 export interface SshGatewayDeps {
   readonly hostKey: string;
@@ -37,6 +49,9 @@ export interface SshGatewayDeps {
   // aborts when the token or key with this id is removed; null for none
   readonly readRevocation: (id: string | null) => AbortSignal | null;
   readonly log: (message: string) => void;
+
+  // the defaults outside tests
+  readonly limits?: Partial<SshGatewayLimits>;
 }
 
 export interface SshGateway {
@@ -72,6 +87,8 @@ export async function startSshGateway(
   port: number,
   host: string,
 ): Promise<SshGateway> {
+  const limits: SshGatewayLimits = { ...DEFAULT_LIMITS, ...deps.limits };
+
   const pending = new Map<string, PendingSocket>();
   const clients = new Set<Connection>();
 
@@ -79,8 +96,8 @@ export async function startSshGateway(
     {
       hostKeys: [deps.hostKey],
       ident: 'imp',
-      keepaliveInterval: KEEPALIVE_INTERVAL_MS,
-      keepaliveCountMax: KEEPALIVE_COUNT_MAX,
+      keepaliveInterval: limits.keepaliveIntervalMs,
+      keepaliveCountMax: limits.keepaliveCountMax,
     },
     (client, info) => {
       const key = buildRemoteKey(info.ip, info.port);
@@ -103,7 +120,7 @@ export async function startSshGateway(
         client.end();
       });
 
-      handleClient(client, info, entry.socket, deps, () => {
+      handleClient(client, info, entry.socket, deps, limits.maxAuthFailures, () => {
         clearTimeout(entry.timer);
 
         pending.delete(key);
@@ -112,7 +129,7 @@ export async function startSshGateway(
   );
 
   const listener = createServer((socket) => {
-    if (pending.size >= MAX_UNAUTHENTICATED) {
+    if (pending.size >= limits.maxUnauthenticated) {
       socket.destroy();
 
       return;
@@ -122,7 +139,7 @@ export async function startSshGateway(
 
     const timer = setTimeout(() => {
       socket.destroy();
-    }, AUTH_TIMEOUT_MS);
+    }, limits.authTimeoutMs);
 
     pending.set(key, { socket, timer });
 
@@ -179,6 +196,7 @@ function handleClient(
   info: ClientInfo,
   socket: Socket,
   deps: SshGatewayDeps,
+  maxAuthFailures: number,
   onAuthenticated: () => void,
 ): void {
   const login: { granted: Login | null; failures: number } = { granted: null, failures: 0 };
@@ -200,7 +218,7 @@ function handleClient(
 
       login.failures += 1;
 
-      if (login.failures >= MAX_AUTH_FAILURES) {
+      if (login.failures >= maxAuthFailures) {
         client.end();
       }
 

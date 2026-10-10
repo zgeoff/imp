@@ -1,18 +1,25 @@
 import { expect, test } from 'bun:test';
 import { parseHostName } from './parse-host-name';
 
-test('it takes the imp name from the first label', () => {
-  expect(parseHostName('dev.imp.localhost:7080')).toBe('dev');
-  expect(parseHostName('dev.imp.localhost')).toBe('dev');
-  expect(parseHostName('Web-1.example.com.')).toBe('web-1');
-  expect(parseHostName('api.imp.tail1234.ts.net:7080')).toBe('api');
+test.each([
+  ['dev.imp.localhost:7080', 'dev'],
+  ['dev.imp.localhost', 'dev'],
+  ['Web-1.example.com.', 'web-1'],
+  ['api.imp.tail1234.ts.net:7080', 'api'],
+])('it takes the imp name from the first label of %s', (host, expected) => {
+  expect(parseHostName(host)).toBe(expected);
 });
 
-test('it gives null for hosts that name no imp', () => {
+test.each([
+  ['localhost:7080', 'a bare host with a port'],
+  ['imp', 'a single label'],
+  ['10.66.0.2:8080', 'an IPv4 address'],
+  ['[::1]:7080', 'an IPv6 address'],
+  ['9lives.example.com', 'a label that is no imp name'],
+])('it gives null for %s, %s', (host) => {
+  expect(parseHostName(host)).toBeNull();
+});
+
+test('it gives null when there is no host', () => {
   expect(parseHostName(null)).toBeNull();
-  expect(parseHostName('localhost:7080')).toBeNull();
-  expect(parseHostName('imp')).toBeNull();
-  expect(parseHostName('10.66.0.2:8080')).toBeNull();
-  expect(parseHostName('[::1]:7080')).toBeNull();
-  expect(parseHostName('9lives.example.com')).toBeNull();
 });

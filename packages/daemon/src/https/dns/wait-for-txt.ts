@@ -9,6 +9,12 @@ export interface WaitForTxtOptions {
 
   // a nameserver's addresses; the system resolver by default
   readonly resolveServer?: (hostname: string) => Promise<readonly string[]>;
+
+  // the clock the deadline is read from
+  readonly now?: () => number;
+
+  // waits out the interval between rounds
+  readonly wait?: (ms: number) => Promise<void>;
 }
 
 // Waits until every one of the zone's nameservers answers every value. A CA
@@ -23,7 +29,9 @@ export async function waitForTxt(
   const intervalMs = options.intervalMs ?? 5000;
   const readTxt = options.readTxt ?? readTxtFromServer;
   const resolveServer = options.resolveServer ?? resolveServerAddresses;
-  const deadline = Date.now() + timeoutMs;
+  const now = options.now ?? Date.now;
+  const wait = options.wait ?? Bun.sleep;
+  const deadline = now() + timeoutMs;
 
   const addresses = await Promise.all(nameservers.map((name) => resolveServer(name)));
 
@@ -40,13 +48,13 @@ export async function waitForTxt(
       return;
     }
 
-    if (Date.now() >= deadline) {
+    if (now() >= deadline) {
       throw new Error(
         `the TXT record ${fqdn} did not reach nameserver ${missing} within ${String(timeoutMs / 1000)}s`,
       );
     }
 
-    await Bun.sleep(intervalMs);
+    await wait(intervalMs);
   }
 }
 

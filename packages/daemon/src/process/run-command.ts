@@ -37,12 +37,14 @@ export async function runCommand(
   return { exitCode, stdout, stderr };
 }
 
-// Like runCommand, but throws with stderr on a non-zero exit.
+// Like runCommand, but throws with stderr on a non-zero exit. `run` runs the
+// command, runCommand by default.
 export async function runChecked(
   argv: readonly string[],
   options: CommandOptions = {},
+  run: typeof runCommand = runCommand,
 ): Promise<string> {
-  const result = await runCommand(argv, options);
+  const result = await run(argv, options);
 
   if (result.exitCode !== 0) {
     throw new Error(

@@ -1,14 +1,14 @@
 // impd's ACME issuer against Pebble, Let's Encrypt's test CA, in Docker:
 // `bun run test:pebble`. Plain `bun test` skips this file.
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { X509Certificate, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
-import { HttpResponse, http } from 'msw';
 import { startPebbleStack, stopPebbleStack } from '../../../../../test/e2e/lib/pebble';
+import { buildStubCloudflareApi } from '../../test-utils/build-stub-cloudflare-api';
 import { createChalltestsrvProvider } from '../dns/challtestsrv-provider';
 import { createCloudflareProvider } from '../dns/cloudflare-provider';
 import { createAcmeIssuer } from './acme-issuer';
@@ -17,7 +17,9 @@ import { createCertStore } from './cert-store';
 // A Pebble and challtestsrv of the test's own, under a second to start and
 // about a second to stop, and a cert store in a temp dir.
 async function setupTest() {
-  await using stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
 
   // per run and per test, so neither another run on this machine nor a stack
   // an earlier test left behind ever holds this test's container names
@@ -30,13 +32,11 @@ async function setupTest() {
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const owned = stack.move();
-
-  return { pebble, dir, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  return { pebble, dir };
 }
 
 test('it issues one certificate for the domain and its wildcard', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const issue = createAcmeIssuer({
     directoryUrl: ctx.pebble.directoryUrl,
@@ -51,7 +51,14 @@ test('it issues one certificate for the domain and its wildcard', async () => {
     poll: { backoffAttempts: 10, backoffMin: 50, backoffMax: 500 },
   });
 
+  const issueStarted = performance.now();
+
   const certificate = await issue('imp.test');
+
+  const issueMs = Math.round(performance.now() - issueStarted);
+
+  // the stack's own phases log at its start; this names the issue's share
+  console.error(`pebble: issue ${String(issueMs)} ms`);
 
   expect(new X509Certificate(certificate.chainPem).subjectAltName).toBe(
     'DNS:imp.test, DNS:*.imp.test',
@@ -63,7 +70,7 @@ test('it issues one certificate for the domain and its wildcard', async () => {
 });
 
 test('it renews with the account the stored key already has', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const issue = createAcmeIssuer({
     directoryUrl: ctx.pebble.directoryUrl,
@@ -93,7 +100,7 @@ test('it renews with the account the stored key already has', async () => {
 });
 
 test('it opens a new account and still issues when the account file is lost', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const first = createAcmeIssuer({
     directoryUrl: ctx.pebble.directoryUrl,
@@ -143,7 +150,7 @@ test('it opens a new account and still issues when the account file is lost', as
 });
 
 test('it rejects an untrusted ACME server in words, not as an axios crash', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const issue = createAcmeIssuer({
     directoryUrl: ctx.pebble.directoryUrl,
@@ -161,7 +168,7 @@ test('it rejects an untrusted ACME server in words, not as an axios crash', asyn
 });
 
 test('it rejects an ACME directory that answers with an error status', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
   const issue = createAcmeIssuer({
     directoryUrl: `${ctx.pebble.directoryUrl}-missing`,
@@ -179,16 +186,10 @@ test('it rejects an ACME directory that answers with an error status', async () 
 });
 
 test('it rejects with the DNS provider reason, and no token, when the provider refuses the token', async () => {
-  await using ctx = await setupTest();
+  const ctx = await setupTest();
 
-  server.use(
-    http.all('https://api.cloudflare.com/client/v4/*', () =>
-      HttpResponse.json(
-        { success: false, errors: [{ code: 9109, message: 'Invalid access token' }] },
-        { status: 403 },
-      ),
-    ),
-  );
+  // a stand-in that accepts no token refuses every call with Cloudflare's 403
+  server.use(...buildStubCloudflareApi({ tokens: [] }).handlers);
 
   const logs: string[] = [];
 

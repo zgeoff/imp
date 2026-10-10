@@ -58,6 +58,9 @@ type TunnelListen = Extract<TunnelClientMessage, { type: 'listen' }>;
 // open tunnels per imp id, shared by every tunnel socket; each reverse
 // forward relay counts as one
 export interface TunnelLimits {
+  // the most tunnels one imp may hold open
+  readonly max: number;
+
   // a release to call once, or null when the imp is at the limit
   readonly tryOpen: (impId: string) => (() => void) | null;
 }
@@ -66,6 +69,7 @@ export function createTunnelLimits(max = MAX_TUNNELS_PER_IMP): TunnelLimits {
   const counts = new Map<string, number>();
 
   return {
+    max,
     tryOpen: (impId) => {
       const count = counts.get(impId) ?? 0;
 
@@ -255,7 +259,7 @@ export function createTunnelSession(
 
   const buildLimitError = (name: string): ORPCError<'TUNNEL_LIMIT', unknown> =>
     new ORPCError('TUNNEL_LIMIT', {
-      message: `${name} has ${String(MAX_TUNNELS_PER_IMP)} tunnels open already`,
+      message: `${name} has ${String(limits.max)} ${limits.max === 1 ? 'tunnel' : 'tunnels'} open already`,
     });
 
   // `reserve` counts the tunnel, or throws why it may not open

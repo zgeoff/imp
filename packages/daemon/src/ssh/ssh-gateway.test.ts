@@ -1,54 +1,48 @@
-import { afterEach, expect, test } from 'bun:test';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { expect, onTestFinished, test } from 'bun:test';
+import { chmodSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
 import { Client, utils } from 'ssh2';
-import type { ClientChannel, ExecOptions } from 'ssh2';
+import type { PublicKeyAuthMethod } from 'ssh2';
 import { AgentError } from '../agent-client/agent-connection';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import { buildMovingError } from '../api-errors';
 import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
-import type { TokenStore } from '../auth/token-store';
-import { readRejection } from '../read-rejection';
+import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
+import { buildStubSshBackend } from '../test-utils/build-stub-ssh-backend';
 import { createTestDatabase } from '../test-utils/create-test-database';
+import { openSshChannel } from '../test-utils/open-ssh-channel';
+import { openSshClient } from '../test-utils/open-ssh-client';
+import { sendSshRequest } from '../test-utils/send-ssh-request';
+import { startStubSilentTcpProxy } from '../test-utils/start-stub-silent-tcp-proxy';
+import { startStubSshAgent } from '../test-utils/start-stub-ssh-agent';
 import { MAX_AGENT_CHANNELS } from './agent-forwarding';
 import { createAuthorizedKeys } from './authorized-keys';
-import { FAKE_IMP, createFakeSshBackend } from './fake-ssh-backend';
 import { createEd25519Key } from './host-key';
 import { createLoginKeys } from './login-keys';
-import { startSshGateway } from './ssh-gateway';
-import type { SshGateway } from './ssh-gateway';
+import { DEFAULT_LIMITS, startSshGateway } from './ssh-gateway';
+import type { SshGatewayDeps } from './ssh-gateway';
 
-const HOST_KEY = createEd25519Key().private;
-const USER_KEY = createEd25519Key();
-const OTHER_KEY = createEd25519Key();
-const REFUSED = 'All configured authentication methods failed';
-
-// RFC 4254 5.1 reason codes, as ssh2 sets them on a failed open
-const OPEN_FAILURE = { administrativelyProhibited: 1, connectFailed: 2 } as const;
-
-const encoder = new TextEncoder();
-
-const cleanups: (() => Promise<void> | void)[] = [];
-
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    await cleanup();
-  }
-});
-
-interface GatewayOptions {
+interface GatewayConfig {
   // false: as IMP_SSH_AUTHORIZED_KEYS=false
-  readonly fileKeys?: boolean;
+  readonly fileKeys: boolean;
 }
 
-// The gateway over a fake impd, with authorized_keys holding `keysText` and
-// a real token store, so a test can bind keys to tokens
-async function startTestGateway(keysText = `${USER_KEY.public}\n`, options: GatewayOptions = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-ssh-'));
+// The gateway on loopback over a stub impd and a real token store, with
+// authorized_keys in an owner-only temp dir. A test that sets its own limits
+// starts another gateway from `deps`.
+async function setupTest(config: Readonly<GatewayConfig>) {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-ssh-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  chmodSync(dir, 0o700);
+
   const keysPath = join(dir, 'authorized_keys');
   const logs: string[] = [];
 
@@ -56,10 +50,7 @@ async function startTestGateway(keysText = `${USER_KEY.public}\n`, options: Gate
     logs.push(message);
   };
 
-  chmodSync(dir, 0o700);
-  writeFileSync(keysPath, keysText, { mode: 0o600 });
-
-  const parts = createFakeSshBackend();
+  const ssh = buildStubSshBackend();
 
   const database = await createTestDatabase();
 
@@ -68,986 +59,2487 @@ async function startTestGateway(keysText = `${USER_KEY.public}\n`, options: Gate
 
   const tokens = await loadTokenStore({
     db: database.db,
+
+    // the store needs a root secret to load
     rootToken: 'root-secret',
     now: Date.now,
     onRemove: revocations.revoke,
     isFileKey: authorizedKeys.isListed,
   });
 
+  const deps: SshGatewayDeps = {
+    // the gateway cannot start without a host key
+    hostKey: createEd25519Key().private,
+    keys: createLoginKeys({
+      findBound: tokens.findSshKey,
+      file: config.fileKeys ? authorizedKeys : null,
+    }),
+    readRevocation: revocations.readSignal,
+    backend: ssh.backend,
+    log: writeLog,
+  };
+
+  const gateway = await startSshGateway(deps, 0, '127.0.0.1');
+
+  onTestFinished(() => gateway.stop());
+
+  return { ssh, gateway, deps, logs, keysPath, tokens, revocations };
+}
+
+test('it returns an exec command’s output and exit status', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'stdout', data: new TextEncoder().encode('hi\n') });
+    run.emit({ type: 'stderr', data: new TextEncoder().encode('err\n') });
+    run.emit({ type: 'exit', code: 3, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('echo hi; echo err >&2; exit 3', done);
+  });
+
+  const result = await opened.result;
+
+  expect(result).toStrictEqual({
+    stdout: 'hi\n',
+    stderr: 'err\n',
+    code: 3,
+    signal: null,
+  });
+});
+
+test('it runs an exec command with sh -c and no tty', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('echo hi', done);
+  });
+
+  await opened.result;
+
+  expect(ctx.ssh.execs[0]?.request).toMatchObject({
+    argv: ['/bin/sh', '-c', 'echo hi'],
+    tty: false,
+  });
+});
+
+test('it sets SSH_CONNECTION and SSH_CLIENT to the client’s and the gateway’s addresses', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('env', done);
+  });
+
+  await opened.result;
+
+  const port = String(ctx.gateway.port);
+
+  expect(ctx.ssh.execs[0]?.request.env).toIncludeAllMembers([
+    expect.stringMatching(
+      new RegExp(`^SSH_CONNECTION=127\\.0\\.0\\.1 \\d+ 127\\.0\\.0\\.1 ${port}$`, 'v'),
+    ),
+    expect.stringMatching(new RegExp(`^SSH_CLIENT=127\\.0\\.0\\.1 \\d+ ${port}$`, 'v')),
+  ]);
+});
+
+test('it counts a login as ssh activity on the imp until the client leaves', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const whileConnected = ctx.ssh.tracker.count(imp.id, 'ssh');
+
+  client.end();
+
+  await waitFor(() => {
+    expect(ctx.ssh.tracker.count(imp.id, 'ssh')).toBe(0);
+  });
+
+  expect(whileConnected).toBe(1);
+});
+
+test('it passes stdin to the program and closes it at the client’s EOF', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('cat', done);
+  });
+
+  opened.channel.end('some input');
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs[0]?.stdin).toStrictEqual(['some input', '<eof>']);
+  });
+});
+
+test('it refuses a login to an imp that does not exist', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const key = createEd25519Key();
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: 'nobody',
+    privateKey: key.private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+test('it refuses a key that authorized_keys does not list', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${createEd25519Key().public}\n`, { mode: 0o600 });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: createEd25519Key().private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+test('it never wakes the imp for a refused login', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${createEd25519Key().public}\n`, { mode: 0o600 });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: createEd25519Key().private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+  expect(ctx.ssh.stub.wakes).toBe(0);
+});
+
+test('it never counts a refused login as activity on the imp', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${createEd25519Key().public}\n`, { mode: 0o600 });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: createEd25519Key().private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+  expect(ctx.ssh.tracker.count(imp.id)).toBe(0);
+});
+
+test('it refuses a password login', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+
+  ctx.ssh.putImp(imp);
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    password: 'secret',
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+// the client offers a listed public key but signs with another private key
+test('it refuses a listed key whose signature does not verify', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const listed = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${listed.public}\n`, { mode: 0o600 });
+
+  const listedKey = utils.parseKey(listed.public);
+  const signer = utils.parseKey(createEd25519Key().private);
+
+  if (listedKey instanceof Error || signer instanceof Error) {
+    throw new TypeError('a generated key did not parse');
+  }
+
+  // ssh2 signs with the signer's private key and sends the listed blob
+  const forged = new Proxy(signer, {
+    get: (target, property, receiver): unknown =>
+      property === 'getPublicSSH'
+        ? () => listedKey.getPublicSSH()
+        : Reflect.get(target, property, receiver),
+  });
+
+  const method: PublicKeyAuthMethod = { type: 'publickey', username: imp.name, key: forged };
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    authHandler: [method],
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+  expect(ctx.ssh.stub.wakes).toBe(0);
+});
+
+test('it logs and refuses a login whose imp lookup fails', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.findError = new Error('database is locked');
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+  expect(ctx.logs).toContain('impd: ssh: login check failed: database is locked');
+});
+
+test('it keeps OpenSSH’s login limits and drops a silent client after about 45 s by default', () => {
+  expect(DEFAULT_LIMITS).toStrictEqual({
+    authTimeoutMs: 30_000,
+    maxUnauthenticated: 32,
+    maxAuthFailures: 6,
+    keepaliveIntervalMs: 15_000,
+    keepaliveCountMax: 3,
+  });
+});
+
+test('it drops a connection at once past 32 pending logins by default', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const pending = await Promise.all(
+    Array.from({ length: 32 }, async () => {
+      const greeted = Promise.withResolvers<void>();
+      const socket = createConnection({ host: '127.0.0.1', port: ctx.gateway.port });
+
+      onTestFinished(() => {
+        socket.destroy();
+      });
+
+      // the server's ident line shows the connection is pending
+      socket.once('data', () => {
+        greeted.resolve();
+      });
+
+      await greeted.promise;
+
+      return socket;
+    }),
+  );
+
+  const closed = Promise.withResolvers<void>();
+  const received: string[] = [];
+  const extra = createConnection({ host: '127.0.0.1', port: ctx.gateway.port });
+
+  onTestFinished(() => {
+    extra.destroy();
+  });
+
+  extra.on('error', () => {});
+
+  extra.on('data', (data: Buffer) => {
+    received.push(data.toString());
+  });
+
+  extra.once('close', closed.resolve);
+
+  await closed.promise;
+
+  expect(received).toStrictEqual([]);
+  expect(pending.filter((socket) => socket.destroyed)).toStrictEqual([]);
+});
+
+test('it drops a client that does not log in within the auth timeout', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
   const gateway = await startSshGateway(
-    {
-      hostKey: HOST_KEY,
-      keys: createLoginKeys({
-        findBound: tokens.findSshKey,
-        file: options.fileKeys === false ? null : authorizedKeys,
-      }),
-      readRevocation: revocations.readSignal,
-      backend: parts.backend,
-      log: writeLog,
-    },
+    { ...ctx.deps, limits: { authTimeoutMs: 50 } },
     0,
     '127.0.0.1',
   );
 
-  cleanups.push(async () => {
-    await gateway.stop();
-    await database[Symbol.asyncDispose]();
+  onTestFinished(() => gateway.stop());
 
-    rmSync(dir, { recursive: true, force: true });
+  const closed = Promise.withResolvers<void>();
+  const socket = createConnection({ host: '127.0.0.1', port: gateway.port });
+
+  onTestFinished(() => {
+    socket.destroy();
   });
 
-  return { ...parts, gateway, logs, keysPath, tokens, revocations };
-}
+  socket.on('error', () => {});
+  socket.once('close', closed.resolve);
 
-// `agent`: a socket path for the client's ssh-agent, which turns on
-// forwarding for every session, as `ssh -A`
-function openClient(
-  gateway: SshGateway,
-  username = FAKE_IMP.name,
-  privateKey = USER_KEY.private,
-  agent?: string,
-): Promise<Client> {
+  // reads the server's ident line, so the server's close reaches the socket
+  socket.resume();
+
+  await closed.promise;
+
+  expect(socket.destroyed).toBeTrue();
+});
+
+// the second connection's timeout drop shows the first one's timeout passed
+test('it frees the pending slot of a client that logs in, and keeps it past the auth timeout', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const gateway = await startSshGateway(
+    { ...ctx.deps, limits: { authTimeoutMs: 1000, maxUnauthenticated: 1 } },
+    0,
+    '127.0.0.1',
+  );
+
+  onTestFinished(() => gateway.stop());
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const greeted = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<void>();
+  const second = createConnection({ host: '127.0.0.1', port: gateway.port });
+
+  onTestFinished(() => {
+    second.destroy();
+  });
+
+  second.on('error', () => {});
+
+  second.once('data', () => {
+    greeted.resolve();
+  });
+
+  second.once('close', closed.resolve);
+
+  await greeted.promise;
+  await closed.promise;
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  const result = await opened.result;
+
+  expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0, signal: null });
+});
+
+test('it drops a connection at once while the pending logins are at the cap', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const gateway = await startSshGateway(
+    { ...ctx.deps, limits: { maxUnauthenticated: 1 } },
+    0,
+    '127.0.0.1',
+  );
+
+  onTestFinished(() => gateway.stop());
+
+  const greeted = Promise.withResolvers<void>();
+  const first = createConnection({ host: '127.0.0.1', port: gateway.port });
+
+  onTestFinished(() => {
+    first.destroy();
+  });
+
+  // the server's ident line shows the first connection is pending
+  first.once('data', () => {
+    greeted.resolve();
+  });
+
+  await greeted.promise;
+
+  const closed = Promise.withResolvers<void>();
+  const received: string[] = [];
+  const second = createConnection({ host: '127.0.0.1', port: gateway.port });
+
+  onTestFinished(() => {
+    second.destroy();
+  });
+
+  second.on('error', () => {});
+
+  second.on('data', (data: Buffer) => {
+    received.push(data.toString());
+  });
+
+  second.once('close', closed.resolve);
+
+  await closed.promise;
+
+  expect(received).toStrictEqual([]);
+  expect(first.destroyed).toBeFalse();
+});
+
+test('it drops a connection after the cap of rejected logins', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const gateway = await startSshGateway(
+    { ...ctx.deps, limits: { maxAuthFailures: 2 } },
+    0,
+    '127.0.0.1',
+  );
+
+  onTestFinished(() => gateway.stop());
+
+  const key = createEd25519Key();
+  const closed = Promise.withResolvers<void>();
+
+  // each attempt the client would make, sent only when the test says so
+  const attempts: (() => void)[] = [];
+
   const client = new Client();
 
-  cleanups.push(() => {
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  onTestFinished(() => {
     client.end();
   });
 
-  return new Promise((resolve, reject) => {
-    client.once('ready', () => {
-      resolve(client);
-    });
+  client.on('error', () => {});
+  client.once('close', closed.resolve);
 
-    // `on`: a refused client can emit a second error after the first
-    client.on('error', reject);
-
-    client.connect({
-      host: '127.0.0.1',
-      port: gateway.port,
-      username,
-      privateKey,
-
-      // ssh2 offers streamlocal only to a server named OpenSSH
-      strictVendor: false,
-      ...(agent !== undefined && { agent, agentForward: true }),
-    });
-  });
-}
-
-interface ChannelResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly code: number | null;
-  readonly signal: string | null;
-}
-
-const results = new WeakMap<ClientChannel, Promise<ChannelResult>>();
-
-function startCollecting(channel: ClientChannel): Promise<ChannelResult> {
-  const out: { stdout: string; stderr: string; code: number | null; signal: string | null } = {
-    stdout: '',
-    stderr: '',
-    code: null,
-    signal: null,
-  };
-
-  channel.on('data', (data: Buffer) => {
-    out.stdout += data.toString();
+  // a listed key for an imp that does not exist: each signed attempt costs
+  // the gateway one imp lookup, and is refused
+  client.connect({
+    host: '127.0.0.1',
+    port: gateway.port,
+    username: 'nowhere',
+    authHandler: (_methods, _partial, next) => {
+      attempts.push(() => {
+        next({ type: 'publickey', username: 'nowhere', key: key.private });
+      });
+    },
   });
 
-  channel.stderr.on('data', (data: Buffer) => {
-    out.stderr += data.toString();
+  const first = await waitFor(() => {
+    const [attempt] = attempts;
+
+    invariant(attempt);
+
+    return attempt;
   });
 
-  channel.on('exit', (code: number | null, signal?: string) => {
-    out.code = code;
-    out.signal = signal ?? null;
+  first();
+
+  const second = await waitFor(() => {
+    const [, attempt] = attempts;
+
+    invariant(attempt);
+
+    return attempt;
   });
 
-  return new Promise((resolve) => {
-    channel.on('close', () => {
-      resolve(out);
-    });
+  second();
+
+  await closed.promise;
+
+  expect(ctx.ssh.stub.lookups).toBe(2);
+});
+
+test('it drops a logged-in client that stops answering keepalives', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const gateway = await startSshGateway(
+    { ...ctx.deps, limits: { keepaliveIntervalMs: 20, keepaliveCountMax: 2 } },
+    0,
+    '127.0.0.1',
+  );
+
+  onTestFinished(() => gateway.stop());
+
+  const proxy = await startStubSilentTcpProxy(gateway.port);
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: proxy.port,
+    username: imp.name,
+    privateKey: key.private,
   });
-}
 
-// everything a channel printed, and how it exited
-function readResult(channel: ClientChannel): Promise<ChannelResult> {
-  const result = results.get(channel);
+  const closed = Promise.withResolvers<void>();
 
-  if (result === undefined) {
-    throw new Error('the channel was not opened with openChannel');
-  }
+  client.on('error', () => {});
+  client.once('close', closed.resolve);
+  proxy.silence();
 
-  return result;
-}
+  await closed.promise;
 
-type OpenCallback = (failure: Readonly<Error> | undefined, channel: ClientChannel) => void;
-
-// Opens a channel through one of ssh2's callback methods. Its output is
-// collected from the start: ssh2 emits `exit` once, and it can come in the
-// same packet as the open's answer, before a test could listen.
-function openChannel(open: (done: OpenCallback) => void): Promise<ClientChannel> {
-  return new Promise((resolve, reject) => {
-    open((failure, channel) => {
-      if (failure !== undefined) {
-        reject(failure);
-
-        return;
-      }
-
-      results.set(channel, startCollecting(channel));
-
-      resolve(channel);
-    });
+  await waitFor(() => {
+    expect(ctx.ssh.tracker.count(imp.id, 'ssh')).toBe(0);
   });
-}
 
-function openExecChannel(
-  client: Client,
-  command: string,
-  env: Readonly<Record<string, string>> = {},
-): Promise<ClientChannel> {
-  const options: ExecOptions = { env: { ...env } };
+  // the client's keepalive answers went nowhere
+  expect(proxy.readDropped()).toBeGreaterThan(0);
+});
 
-  return openChannel((done) => {
-    client.exec(command, options, done);
+test('it wakes the imp once for a login that opens no channel', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
   });
-}
 
-function openForward(client: Client, host: string, port: number): Promise<ClientChannel> {
-  return openChannel((done) => {
-    client.forwardOut('127.0.0.1', 50_000, host, port, done);
+  // the client's end reaches the gateway after any wake the login started
+  client.end();
+
+  await waitFor(() => {
+    expect(ctx.ssh.tracker.count(imp.id, 'ssh')).toBe(0);
   });
-}
 
-// a login the gateway refused
-async function assertRefused(login: Promise<Client>): Promise<void> {
-  const failure = await readRejection(login);
+  expect(ctx.ssh.stub.wakes).toBe(1);
+});
 
-  expect(failure).toMatchObject({ message: REFUSED });
-}
+test('it logs how long the wake of a login took', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-async function waitUntil(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
 
-  while (!check()) {
-    if (Date.now() > deadline) {
-      throw new Error('timed out');
-    }
+  ctx.ssh.putImp(imp);
 
-    await Bun.sleep(5);
-  }
-}
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-test('an exec runs the command with sh and returns its output and exit status', async () => {
-  const ctx = await startTestGateway();
+  ctx.ssh.stub.wokeMs = 840;
 
-  ctx.fake.onExec = (run) => {
-    run.emit({ type: 'stdout', data: encoder.encode('hi\n') });
-    run.emit({ type: 'stderr', data: encoder.encode('err\n') });
-    run.emit({ type: 'exit', code: 3, signal: 0 });
-  };
+  await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
-  const client = await openClient(ctx.gateway);
+  const logged = await waitFor(() => {
+    const line = ctx.logs.find((message) => message.includes('woke'));
 
-  expect(ctx.tracker.count(FAKE_IMP.id, 'ssh')).toBe(1);
+    invariant(line);
 
-  const channel = await openExecChannel(client, 'echo hi; echo err >&2; exit 3');
-  const result = await readResult(channel);
+    return line;
+  });
 
-  expect(result).toEqual({ stdout: 'hi\n', stderr: 'err\n', code: 3, signal: null });
+  expect(logged).toBe('impd: ssh: box woke in 840ms');
+});
 
-  const request = ctx.execs[0]?.request;
-  const sshConnection = request?.env?.find((entry) => entry.startsWith('SSH_CONNECTION='));
+test('it records activity on the imp once a login woke it', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  expect(request?.argv).toEqual(['/bin/sh', '-c', 'echo hi; echo err >&2; exit 3']);
-  expect(request?.tty).toBe(false);
-  expect(sshConnection).toMatch(/^SSH_CONNECTION=127\.0\.0\.1 \d+ 127\.0\.0\.1 \d+$/);
-  expect(sshConnection?.endsWith(` ${String(ctx.gateway.port)}`)).toBe(true);
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await waitFor(() => {
+    expect(ctx.ssh.activity).toHaveLength(1);
+  });
+
+  expect(ctx.ssh.activity).toStrictEqual(['box']);
+});
+
+// the idle timeout counts from the end of the connection
+test('it records activity on the imp again when the client leaves', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  // the wake's own record
+  await waitFor(() => {
+    expect(ctx.ssh.activity).toHaveLength(1);
+  });
 
   client.end();
 
-  await waitUntil(() => ctx.tracker.count(FAKE_IMP.id, 'ssh') === 0);
+  await waitFor(() => {
+    expect(ctx.ssh.activity).toHaveLength(2);
+  });
+
+  expect(ctx.ssh.activity).toStrictEqual(['box', 'box']);
 });
 
-test('stdin reaches the program, and the client EOF closes it', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-  const channel = await openExecChannel(client, 'cat');
+test('it answers a channel with the failed wake’s error and exit status 255', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  channel.end('some input');
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
 
-  await waitUntil(() => ctx.execs[0]?.stdin.at(-1) === '<eof>');
+  ctx.ssh.putImp(imp);
 
-  expect(ctx.execs[0]?.stdin.join('')).toBe('some input<eof>');
-});
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-test('an unknown user and an unknown key get the same refusal, and neither wakes the imp', async () => {
-  const ctx = await startTestGateway();
-
-  await assertRefused(openClient(ctx.gateway, 'nobody'));
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, OTHER_KEY.private));
-
-  expect(ctx.fake.wakes).toBe(0);
-  expect(ctx.tracker.count(FAKE_IMP.id)).toBe(0);
-});
-
-test('a login wakes the imp once, before any channel', async () => {
-  const ctx = await startTestGateway();
-
-  await openClient(ctx.gateway);
-  await waitUntil(() => ctx.fake.wakes === 1);
-});
-
-test('a failed wake reaches the channel as an error with exit status 255', async () => {
-  const ctx = await startTestGateway();
-
-  ctx.fake.wakeError = new ORPCError('RAM_BUDGET_EXCEEDED', {
+  ctx.ssh.stub.wakeError = new ORPCError('RAM_BUDGET_EXCEEDED', {
     message: 'no room for box under the RAM budget',
   });
 
-  const client = await openClient(ctx.gateway);
-  const channel = await openExecChannel(client, 'true');
-  const result = await readResult(channel);
-
-  expect(result.code).toBe(255);
-  expect(result.stderr).toBe('imp: RAM_BUDGET_EXCEEDED: no room for box under the RAM budget\n');
-  expect(ctx.execs).toHaveLength(0);
-});
-
-test('a moving imp answers the channel with MOVING and exit status 255', async () => {
-  const ctx = await startTestGateway();
-
-  ctx.fake.wakeError = buildMovingError(FAKE_IMP.name);
-
-  const client = await openClient(ctx.gateway);
-  const channel = await openExecChannel(client, 'true');
-  const result = await readResult(channel);
-
-  expect(result.code).toBe(255);
-  expect(result.stderr).toContain('imp: MOVING:');
-  expect(ctx.execs).toHaveLength(0);
-});
-
-test('a shell gets a pty with the size and TERM of the request, resizes and signals', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-
-  const window = { cols: 120, rows: 40, term: 'xterm-kitty' };
-
-  const channel = await openChannel((done) => {
-    client.shell(window, done);
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
   });
 
-  await waitUntil(() => ctx.execs.length === 1);
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
 
-  const [run] = ctx.execs;
+  const result = await opened.result;
 
-  expect(run?.request.tty).toBe(true);
-  expect(run?.request.argv.slice(0, 2)).toEqual(['/bin/sh', '-c']);
-  expect(run?.request).toMatchObject({ cols: 120, rows: 40 });
-  expect(run?.request.env).toContain('TERM=xterm-kitty');
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: RAM_BUDGET_EXCEEDED: no room for box under the RAM budget\n',
+    code: 255,
+    signal: null,
+  });
+});
 
-  channel.setWindow(50, 132, 0, 0);
-  channel.signal('INT');
+test('it runs no program when the wake fails', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await waitUntil(() => run?.resizes.includes('132x50') === true && run.signals.length === 1);
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  expect(run?.signals).toEqual([2]);
-  run?.emit({ type: 'exit', code: 130, signal: 2 });
+  ctx.ssh.putImp(imp);
 
-  const result = await readResult(channel);
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.wakeError = new ORPCError('RAM_BUDGET_EXCEEDED', { message: 'no room' });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  await opened.result;
+
+  expect(ctx.ssh.execs).toStrictEqual([]);
+});
+
+test('it answers a channel to a moving imp with MOVING and exit status 255', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.wakeError = buildMovingError(imp.name);
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  const result = await opened.result;
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: MOVING: box is moving between hosts; try again in 30 s\n',
+    code: 255,
+    signal: null,
+  });
+
+  expect(ctx.ssh.execs).toStrictEqual([]);
+});
+
+test('it gives a shell a pty with the size and TERM of the request', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await openSshChannel((done) => {
+    client.shell({ cols: 120, rows: 40, term: 'xterm-kitty' }, done);
+  });
+
+  const run = await waitFor(() => {
+    const [first] = ctx.ssh.execs;
+
+    invariant(first);
+
+    return first;
+  });
+
+  expect(run.request).toMatchObject({
+    argv: ['/bin/sh', '-c', expect.any(String)],
+    tty: true,
+    cols: 120,
+    rows: 40,
+  });
+
+  expect(run.request.env).toContain('TERM=xterm-kitty');
+});
+
+test('it passes a shell’s window change to the program', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.shell({ cols: 120, rows: 40, term: 'xterm' }, done);
+  });
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs).toHaveLength(1);
+  });
+
+  opened.channel.setWindow(50, 132, 0, 0);
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs[0]?.resizes).toStrictEqual(['132x50']);
+  });
+});
+
+// a window change sent after the input reaches the gateway after it, so the
+// resize shows the gateway has read the held input
+test('it holds a shell’s input until the program drained what came before', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+  const gate = Promise.withResolvers<void>();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.stdinGate = gate.promise;
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.shell({ cols: 120, rows: 40, term: 'xterm' }, done);
+  });
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs).toHaveLength(1);
+  });
+
+  opened.channel.write('first');
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs[0]?.stdin).toStrictEqual(['first']);
+  });
+
+  opened.channel.write('second');
+  opened.channel.setWindow(50, 132, 0, 0);
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs[0]?.resizes).toStrictEqual(['132x50']);
+  });
+
+  const heldStdin = [...(ctx.ssh.execs[0]?.stdin ?? [])];
+
+  gate.resolve();
+
+  await waitFor(() => {
+    expect(ctx.ssh.execs[0]?.stdin).toHaveLength(2);
+  });
+
+  expect(heldStdin).toStrictEqual(['first']);
+  expect(ctx.ssh.execs[0]?.stdin).toStrictEqual(['first', 'second']);
+});
+
+test('it passes a shell’s signal to the program and its signal exit back', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.shell({ cols: 120, rows: 40, term: 'xterm' }, done);
+  });
+
+  const run = await waitFor(() => {
+    const [first] = ctx.ssh.execs;
+
+    invariant(first);
+
+    return first;
+  });
+
+  opened.channel.signal('INT');
+
+  await waitFor(() => {
+    expect(run.signals).toStrictEqual([2]);
+  });
+
+  run.emit({ type: 'exit', code: 130, signal: 2 });
 
   // the wire says INT; ssh2's client adds the SIG
+  const result = await opened.result;
+
   expect(result.signal).toBe('SIGINT');
 });
 
 // OpenSSH sends 0x0 when its own stdin is not a terminal (`ssh -tt` in a
 // script); the agent then picks its default size
-test('a pty with no size leaves the size to the agent', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it leaves the size of a pty with no size to the agent', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await openChannel((done) => {
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await openSshChannel((done) => {
     client.exec('tty', { pty: { cols: 0, rows: 0, term: 'xterm' } }, done);
   });
 
-  await waitUntil(() => ctx.execs.length === 1);
+  const run = await waitFor(() => {
+    const [first] = ctx.ssh.execs;
 
-  expect(ctx.execs[0]?.request.tty).toBe(true);
-  expect(ctx.execs[0]?.request.cols).toBeUndefined();
-  expect(ctx.execs[0]?.request.rows).toBeUndefined();
+    invariant(first);
+
+    return first;
+  });
+
+  expect(run.request.tty).toBeTrue();
+  expect(run.request.cols).toBeUndefined();
+  expect(run.request.rows).toBeUndefined();
 });
 
 // ssh2's client fails the exec on a refused env request, so a refused name
 // is in the e2e suite, where OpenSSH ignores the refusal as it should
-test('LANG and LC_* reach the env', async () => {
-  const ctx = await startTestGateway();
+test('it passes LANG and LC_* to the program’s env', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  ctx.fake.onExec = (run) => {
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
     run.emit({ type: 'exit', code: 0, signal: 0 });
   };
 
-  const client = await openClient(ctx.gateway);
-  const channel = await openExecChannel(client, 'env', { LANG: 'C.UTF-8', LC_ALL: 'C' });
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
-  await readResult(channel);
+  const opened = await openSshChannel((done) => {
+    client.exec('env', { env: { LANG: 'C.UTF-8', LC_ALL: 'C' } }, done);
+  });
 
-  const env = ctx.execs[0]?.request.env ?? [];
+  await opened.result;
 
-  expect(env).toContain('LANG=C.UTF-8');
-  expect(env).toContain('LC_ALL=C');
+  expect(ctx.ssh.execs[0]?.request.env).toIncludeAllMembers(['LANG=C.UTF-8', 'LC_ALL=C']);
 });
 
-test('sftp runs the agent on the system drive, and an old agent gets told to restart the imp', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it runs sftp as the agent on the system drive', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  const first = await openChannel((done) => {
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await openSshChannel((done) => {
     client.subsys('sftp', done);
   });
 
-  await waitUntil(() => ctx.execs.length === 1);
+  const run = await waitFor(() => {
+    const [first] = ctx.ssh.execs;
 
-  expect(ctx.execs[0]?.request).toMatchObject({
-    argv: ['/run/imp/sys/imp-agent', 'sftp'],
-    tty: false,
+    invariant(first);
+
+    return first;
   });
 
-  expect(ctx.execs[0]?.feature).toBe('ssh');
-  ctx.execs[0]?.emit({ type: 'exit', code: 0, signal: 0 });
+  expect(run.request).toMatchObject({ argv: ['/run/imp/sys/imp-agent', 'sftp'], tty: false });
+  expect(run.feature).toBe('ssh');
+});
 
-  await readResult(first);
+test('it tells an sftp client of an outdated agent to restart the imp', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  ctx.fake.execError = buildAgentOutdatedError('ssh');
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  const second = await openChannel((done) => {
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.execError = buildAgentOutdatedError('ssh');
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
     client.subsys('sftp', done);
   });
 
-  const result = await readResult(second);
+  const result = await opened.result;
 
-  expect(result.code).toBe(255);
-
-  expect(result.stderr).toBe(
-    "imp: AGENT_OUTDATED: the imp's agent has no port forwarding or SFTP yet; stop and start the imp to update it\n",
-  );
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      "imp: AGENT_OUTDATED: the imp's agent has no port forwarding or SFTP yet; stop and start the imp to update it\n",
+    code: 255,
+    signal: null,
+  });
 });
 
-test('one connection carries several channels at once', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it carries several channels on one connection at once', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  const channels = await Promise.all(
-    ['one', 'two', 'three'].map((command) => openExecChannel(client, command)),
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await Promise.all(
+    ['one', 'two', 'three'].map((command) =>
+      openSshChannel((done) => {
+        client.exec(command, done);
+      }),
+    ),
   );
 
-  await waitUntil(() => ctx.execs.length === 3);
+  await waitFor(() => {
+    expect(ctx.ssh.execs).toHaveLength(3);
+  });
 
-  for (const run of ctx.execs) {
-    run.emit({ type: 'stdout', data: encoder.encode(run.request.argv[2] ?? '') });
+  // each program prints its own command, once all three run
+  for (const run of ctx.ssh.execs) {
+    run.emit({ type: 'stdout', data: new TextEncoder().encode(run.request.argv[2] ?? '') });
     run.emit({ type: 'exit', code: 0, signal: 0 });
   }
 
-  const finished = await Promise.all(channels.map((channel) => readResult(channel)));
+  const results = await Promise.all(opened.map((each) => each.result));
 
-  expect(finished.map((result) => result.stdout).toSorted()).toEqual(['one', 'three', 'two']);
+  expect(results.map((result) => result.stdout)).toIncludeSameMembers(['one', 'two', 'three']);
 });
 
-test('a forward to the loopback dials it in the guest, with a half-close each way', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test.each([
+  ['localhost', '127.0.0.1:8080'],
+  ['127.0.0.1', '127.0.0.1:8080'],
+  ['::1', '[::1]:8080'],
+])('it dials a forward to %s at %s in the guest', async (host, address) => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  const cases = [
-    ['localhost', '127.0.0.1:8080'],
-    ['127.0.0.1', '127.0.0.1:8080'],
-    ['::1', '[::1]:8080'],
-  ] as const;
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  for (const [host, address] of cases) {
-    const channel = await openForward(client, host, 8080);
+  ctx.ssh.putImp(imp);
 
-    channel.end('request');
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-    const result = await readResult(channel);
-
-    expect(result.stdout).toBe('got request');
-    expect(ctx.dials.at(-1)?.target).toEqual({ network: 'tcp', address });
-  }
-});
-
-test('a forward to any other host is administratively prohibited', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-
-  for (const host of ['10.66.0.1', 'example.com', '0.0.0.0', FAKE_IMP.ip]) {
-    const failure = await readRejection(openForward(client, host, 22));
-
-    expect(failure).toMatchObject({
-      reason: OPEN_FAILURE.administrativelyProhibited,
-    });
-  }
-
-  expect(ctx.dials).toHaveLength(0);
-});
-
-test('a refused dial fails the channel open as connect failed', async () => {
-  const ctx = await startTestGateway();
-
-  ctx.fake.dialError = new AgentError('DIAL_FAILED', 'connection refused');
-
-  const client = await openClient(ctx.gateway);
-  const failure = await readRejection(openForward(client, 'localhost', 9));
-
-  expect(failure).toMatchObject({
-    reason: OPEN_FAILURE.connectFailed,
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
   });
+
+  const opened = await openSshChannel((done) => {
+    client.forwardOut('127.0.0.1', 50_000, host, 8080, done);
+  });
+
+  opened.channel.end('request');
+
+  await opened.result;
+
+  expect(ctx.ssh.dials).toStrictEqual([
+    { target: { network: 'tcp', address }, kind: 'ssh', input: ['request'] },
+  ]);
 });
 
-test('a streamlocal forward dials the unix socket in the guest', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it relays a forward both ways, with a half-close from each side', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  const channel = await openChannel((done) => {
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.forwardOut('127.0.0.1', 50_000, 'localhost', 8080, done);
+  });
+
+  // the stub dial answers only after the client's half-close
+  opened.channel.end('request');
+
+  const result = await opened.result;
+
+  expect(result.stdout).toBe('got request');
+});
+
+test('it prohibits a forward to a host other than the guest’s loopback', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const forward = openSshChannel((done) => {
+    client.forwardOut('127.0.0.1', 50_000, imp.ip, 22, done);
+  });
+
+  // RFC 4254 5.1: administratively prohibited
+  expect(forward).rejects.toMatchObject({ reason: 1 });
+  expect(ctx.ssh.dials).toStrictEqual([]);
+});
+
+test('it fails the open of a forward whose dial is refused as connect failed', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.dialError = new AgentError('DIAL_FAILED', 'connection refused');
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const forward = openSshChannel((done) => {
+    client.forwardOut('127.0.0.1', 50_000, 'localhost', 9, done);
+  });
+
+  // RFC 4254 5.1: connect failed
+  expect(forward).rejects.toMatchObject({ reason: 2 });
+});
+
+test('it dials a streamlocal forward at the unix socket in the guest', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
     client.openssh_forwardOutStreamLocal('/run/app.sock', done);
   });
 
-  channel.end('ping');
+  opened.channel.end('ping');
 
-  const result = await readResult(channel);
+  const result = await opened.result;
 
   expect(result.stdout).toBe('got ping');
-  expect(ctx.dials[0]?.target).toEqual({ network: 'unix', address: '/run/app.sock' });
+  expect(ctx.ssh.dials[0]?.target).toStrictEqual({ network: 'unix', address: '/run/app.sock' });
 });
 
-test('a streamlocal forward to impd sockets under /run/imp is prohibited', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it prohibits a streamlocal forward to impd’s sockets under /run/imp', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  for (const path of [
-    '/run/imp/ssh-agent/ab/agent.sock',
-    '/run/./imp/ssh-agent/ab/agent.sock',
-    '/tmp/../run/imp/x.sock',
-    '//run/imp/x.sock',
-    'run/imp/x.sock',
-  ]) {
-    const failure = await readRejection(
-      openChannel((done) => {
-        client.openssh_forwardOutStreamLocal(path, done);
-      }),
-    );
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-    expect(failure).toMatchObject({ reason: OPEN_FAILURE.administrativelyProhibited });
-  }
+  ctx.ssh.putImp(imp);
 
-  expect(ctx.dials).toEqual([]);
-});
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-test('stop ends every connection', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-
-  const ended = new Promise<void>((resolve) => {
-    client.once('close', resolve);
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
   });
+
+  const forward = openSshChannel((done) => {
+    client.openssh_forwardOutStreamLocal('/run/imp/ssh-agent/ab/agent.sock', done);
+  });
+
+  expect(forward).rejects.toMatchObject({ reason: 1 });
+  expect(ctx.ssh.dials).toStrictEqual([]);
+});
+
+test('it ends every connection when it stops', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const closed = Promise.withResolvers<void>();
+
+  client.once('close', closed.resolve);
 
   await ctx.gateway.stop();
 
-  await ended;
-  await waitUntil(() => ctx.tracker.count(FAKE_IMP.id) === 0);
+  await closed.promise;
+
+  await waitFor(() => {
+    expect(ctx.ssh.tracker.count(imp.id)).toBe(0);
+  });
 });
 
-test('a key added to authorized_keys works on the next login, without a restart', async () => {
-  const ctx = await startTestGateway('');
+test('it logs in a key added to authorized_keys on the next login, without a restart', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await assertRefused(openClient(ctx.gateway));
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  // a new mtime, even on a coarse clock
-  await Bun.sleep(10);
+  ctx.ssh.putImp(imp);
 
-  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n`, { mode: 0o600 });
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
 
-  await openClient(ctx.gateway);
+  const [refused] = await Promise.allSettled([
+    openSshClient({
+      host: '127.0.0.1',
+      port: ctx.gateway.port,
+      username: imp.name,
+      privateKey: key.private,
+    }),
+  ]);
+
+  // an explicit new mtime, whatever the filesystem's clock granularity
+  const later = new Date(Date.now() + 60_000);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+  utimesSync(ctx.keysPath, later, later);
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const client = await login;
+
+  expect(refused).toMatchObject({
+    status: 'rejected',
+    reason: { message: 'All configured authentication methods failed' },
+  });
+
+  expect(client).toBeInstanceOf(Client);
 });
 
-test('a key file that others can write grants nothing', async () => {
-  const ctx = await startTestGateway();
+test('it refuses a key from an authorized_keys file that others can write', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
   chmodSync(ctx.keysPath, 0o666);
 
-  await assertRefused(openClient(ctx.gateway));
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
-  expect(ctx.logs.some((line) => line.includes('writable by group or others'))).toBe(true);
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+
+  expect(ctx.logs).toContain(
+    `impd: ssh: ${ctx.keysPath} is writable by group or others; no key can log in until it is not`,
+  );
 });
 
-// A stand-in for the user's ssh-agent on a unix socket: it answers each
-// request with `agent:<request>`, or holds every connection open.
-async function startFakeAgent(mode: 'answer' | 'hold' = 'answer'): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-agent-'));
-  const path = join(dir, 'agent.sock');
+test('it names the guest agent socket of ssh -A in a command’s SSH_AUTH_SOCK', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  const server = createServer((socket) => {
-    if (mode === 'answer') {
-      socket.on('data', (data: Buffer) => {
-        socket.write(`agent:${data.toString()}`);
-      });
-    }
-  });
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  await new Promise<void>((resolve) => {
-    server.listen(path, resolve);
-  });
+  const agent = await startStubSshAgent({ mode: 'answer' });
 
-  cleanups.push(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-    });
+  ctx.ssh.putImp(imp);
 
-    rmSync(dir, { recursive: true, force: true });
-  });
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-  return path;
-}
-
-type TestGateway = Awaited<ReturnType<typeof startTestGateway>>;
-
-// a gateway whose commands exit at once, and a client that forwards `agent`
-async function startForwarding(agent: string) {
-  const ctx = await startTestGateway();
-
-  ctx.fake.onExec = (run) => {
+  ctx.ssh.stub.onExec = (run) => {
     run.emit({ type: 'exit', code: 0, signal: 0 });
   };
 
-  const client = await openClient(ctx.gateway, FAKE_IMP.name, USER_KEY.private, agent);
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
 
-  return { ...ctx, client };
-}
+  const opened = await openSshChannel((done) => {
+    client.exec('ssh-add -l', done);
+  });
 
-async function runCommand(client: Client, command: string): Promise<ChannelResult> {
-  const channel = await openExecChannel(client, command);
+  await opened.result;
 
-  return readResult(channel);
-}
-
-function findAuthSock(execs: Readonly<TestGateway['execs']>, index: number) {
-  return execs[index]?.request.env?.find((entry) => entry.startsWith('SSH_AUTH_SOCK='));
-}
-
-const FIRST_SOCKET = 'SSH_AUTH_SOCK=/run/imp/ssh-agent/fake1/agent.sock';
-
-test('ssh -A gives the command a guest socket that reaches the client agent', async () => {
-  const agent = await startFakeAgent();
-  const ctx = await startForwarding(agent);
-
-  await runCommand(ctx.client, 'ssh-add -l');
-
-  expect(findAuthSock(ctx.execs, 0)).toBe(FIRST_SOCKET);
-
-  // a guest client's request goes to the client's agent, and the answer back
-  ctx.listeners[0]?.connect(1);
-
-  await waitUntil(() => ctx.accepts.length === 1);
-
-  ctx.accepts[0]?.send('list');
-
-  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'agent:list');
-
-  expect(ctx.accepts[0]).toMatchObject({ listener: 'fake1', id: 1 });
-
-  ctx.client.end();
-
-  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+  expect(ctx.ssh.execs[0]?.request.env).toContain(
+    'SSH_AUTH_SOCK=/run/imp/ssh-agent/stub1/agent.sock',
+  );
 });
 
-test('a connection without -A gets no socket, and SFTP never does', async () => {
-  const ctx = await startTestGateway();
+test('it closes the guest agent socket and runs without it when the client leaves while the guest makes it', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  ctx.fake.onExec = (run) => {
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+  const gate = Promise.withResolvers<void>();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.listenGate = gate.promise;
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  await openSshChannel((done) => {
+    client.exec('ssh-add -l', done);
+  });
+
+  await waitFor(() => {
+    expect(ctx.ssh.stub.listenCalls).toBe(1);
+  });
+
+  client.end();
+
+  await waitFor(() => {
+    expect(ctx.ssh.tracker.count(imp.id, 'ssh')).toBe(0);
+  });
+
+  gate.resolve();
+
+  const run = await waitFor(() => {
+    const [first] = ctx.ssh.execs;
+
+    invariant(first);
+
+    return first;
+  });
+
+  invariant(run.request.env);
+
+  expect(run.request.env.join('\n')).not.toInclude('SSH_AUTH_SOCK=');
+  expect(ctx.ssh.listeners[0]?.state.closed).toBeTrue();
+});
+
+test('it relays a guest client of the agent socket to the client’s agent and back', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
     run.emit({ type: 'exit', code: 0, signal: 0 });
   };
 
-  const plain = await openClient(ctx.gateway);
-
-  await runCommand(plain, 'true');
-
-  expect(findAuthSock(ctx.execs, 0)).toBeUndefined();
-
-  const agent = await startFakeAgent();
-  const forwarding = await openClient(ctx.gateway, FAKE_IMP.name, USER_KEY.private, agent);
-
-  await openChannel((done) => {
-    forwarding.subsys('sftp', done);
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
   });
 
-  await waitUntil(() => ctx.execs.length === 2);
+  const opened = await openSshChannel((done) => {
+    client.exec('ssh-add -l', done);
+  });
 
-  expect(findAuthSock(ctx.execs, 1)).toBeUndefined();
-  expect(ctx.listeners).toHaveLength(0);
+  await opened.result;
+
+  ctx.ssh.listeners[0]?.connect(1);
+
+  const accept = await waitFor(() => {
+    const [first] = ctx.ssh.accepts;
+
+    invariant(first);
+
+    return first;
+  });
+
+  accept.send('list');
+
+  await waitFor(() => {
+    expect(accept.input.join('')).toBe('agent:list');
+  });
+
+  expect(accept).toMatchObject({ listener: 'stub1', id: 1 });
 });
 
-test('sessions that start together share one guest socket', async () => {
-  const agent = await startFakeAgent();
-  const ctx = await startForwarding(agent);
+test('it closes the guest agent socket when the client leaves', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await Promise.all(['one', 'two', 'three'].map((command) => runCommand(ctx.client, command)));
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  const sockets = new Set([0, 1, 2].map((index) => findAuthSock(ctx.execs, index)));
+  const agent = await startStubSshAgent({ mode: 'answer' });
 
-  expect(ctx.listeners).toHaveLength(1);
-  expect(sockets).toEqual(new Set([FIRST_SOCKET]));
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('ssh-add -l', done);
+  });
+
+  await opened.result;
+
+  client.end();
+
+  await waitFor(() => {
+    expect(ctx.ssh.listeners[0]?.state.closed).toBeTrue();
+  });
 });
 
-test('a guest socket that ended, as after a forced sleep, is made again', async () => {
-  const agent = await startFakeAgent();
-  const ctx = await startForwarding(agent);
+test('it gives a connection without -A no agent socket', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await runCommand(ctx.client, 'one');
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  ctx.listeners[0]?.end();
+  ctx.ssh.putImp(imp);
 
-  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
-  await runCommand(ctx.client, 'two');
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-  expect(ctx.listeners).toHaveLength(2);
-  expect(findAuthSock(ctx.execs, 1)).toBe('SSH_AUTH_SOCK=/run/imp/ssh-agent/fake2/agent.sock');
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  await opened.result;
+
+  const env = ctx.ssh.execs[0]?.request.env;
+
+  invariant(env);
+
+  expect(env.join('\n')).not.toInclude('SSH_AUTH_SOCK=');
 });
 
-test('a session in a new VM, after a wake, gets a new socket at once', async () => {
-  const agent = await startFakeAgent();
-  const ctx = await startForwarding(agent);
+test('it gives sftp no agent socket, even with -A', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await runCommand(ctx.client, 'one');
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  // the old listener has not ended yet, as when impd learns of it late
-  ctx.fake.pid += 1;
+  const agent = await startStubSshAgent({ mode: 'answer' });
 
-  await runCommand(ctx.client, 'two');
+  ctx.ssh.putImp(imp);
 
-  expect(ctx.listeners.map((listener) => listener.state.closed)).toEqual([true, false]);
-  expect(findAuthSock(ctx.execs, 1)).toBe('SSH_AUTH_SOCK=/run/imp/ssh-agent/fake2/agent.sock');
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  await openSshChannel((done) => {
+    client.subsys('sftp', done);
+  });
+
+  const run = await waitFor(() => {
+    const [first] = ctx.ssh.execs;
+
+    invariant(first);
+
+    return first;
+  });
+
+  invariant(run.request.env);
+
+  expect(run.request.env.join('\n')).not.toInclude('SSH_AUTH_SOCK=');
+  expect(ctx.ssh.listeners).toStrictEqual([]);
 });
 
-test('a client that refuses the agent channel gets the guest client closed at once', async () => {
-  // ssh2 refuses the channel when it cannot reach its agent
-  const ctx = await startForwarding(join(tmpdir(), 'imp-no-such-agent.sock'));
+test('it shares one guest agent socket between sessions that start together', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-  await runCommand(ctx.client, 'ssh-add -l');
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-  ctx.listeners[0]?.connect(1);
+  const agent = await startStubSshAgent({ mode: 'answer' });
 
-  await waitUntil(() => ctx.accepts[0]?.state.closed === true);
+  ctx.ssh.putImp(imp);
 
-  expect(ctx.accepts[0]?.input).toEqual([]);
-  expect(ctx.logs.join('\n')).toContain('the client refused the agent channel');
-});
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
 
-test('agent channels stop at the cap; the guest clients past it are closed', async () => {
-  const agent = await startFakeAgent('hold');
-  const ctx = await startForwarding(agent);
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
 
-  await runCommand(ctx.client, 'flood');
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
 
-  const [listener] = ctx.listeners;
-
-  for (let id = 1; id <= MAX_AGENT_CHANNELS; id += 1) {
-    listener?.connect(id);
-  }
-
-  await waitUntil(() => ctx.accepts.length === MAX_AGENT_CHANNELS);
-
-  listener?.connect(MAX_AGENT_CHANNELS + 1);
-
-  await waitUntil(() => ctx.accepts.length === MAX_AGENT_CHANNELS + 1);
-
-  const closed = ctx.accepts.filter((accept) => accept.state.closed).map((accept) => accept.id);
-
-  expect(closed).toEqual([MAX_AGENT_CHANNELS + 1]);
-});
-
-test('a command runs without the socket when the imp cannot make one', async () => {
-  const agent = await startFakeAgent();
-  const ctx = await startForwarding(agent);
-
-  ctx.fake.listenError = buildAgentOutdatedError('agent-forwarding');
-
-  const result = await runCommand(ctx.client, 'git push');
-
-  expect(result.code).toBe(0);
-
-  expect(result.stderr).toBe(
-    "imp: no agent forwarding: AGENT_OUTDATED: the imp's agent has no ssh-agent forwarding yet; stop and start the imp to update it\n",
+  const opened = await Promise.all(
+    ['one', 'two', 'three'].map((command) =>
+      openSshChannel((done) => {
+        client.exec(command, done);
+      }),
+    ),
   );
 
-  expect(findAuthSock(ctx.execs, 0)).toBeUndefined();
+  await Promise.all(opened.map((each) => each.result));
 
-  // any failure, and the next session tries again
-  ctx.fake.listenError = new AgentError('INTERNAL', 'unknown user "dev"');
+  expect(ctx.ssh.listeners).toHaveLength(1);
 
-  const again = await runCommand(ctx.client, 'git push');
+  expect(ctx.ssh.execs).toSatisfyAll(
+    (run: (typeof ctx.ssh.execs)[number]) =>
+      run.request.env?.includes('SSH_AUTH_SOCK=/run/imp/ssh-agent/stub1/agent.sock') === true,
+  );
+});
 
-  expect(again.stderr).toBe('imp: no agent forwarding: INTERNAL: unknown user "dev"\n');
+test('it makes the guest agent socket again after it ended, as after a forced sleep', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const first = await openSshChannel((done) => {
+    client.exec('one', done);
+  });
+
+  await first.result;
+
+  ctx.ssh.listeners[0]?.end();
+
+  await waitFor(() => {
+    expect(ctx.ssh.listeners[0]?.state.closed).toBeTrue();
+  });
+
+  const second = await openSshChannel((done) => {
+    client.exec('two', done);
+  });
+
+  await second.result;
+
+  expect(ctx.ssh.execs[1]?.request.env).toContain(
+    'SSH_AUTH_SOCK=/run/imp/ssh-agent/stub2/agent.sock',
+  );
+});
+
+test('it gives a session in a new VM, after a wake, a new agent socket at once', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const first = await openSshChannel((done) => {
+    client.exec('one', done);
+  });
+
+  await first.result;
+
+  // a new VM; the old listener has not ended yet, as when impd learns of it late
+  ctx.ssh.putImp({ ...imp, pid: (imp.pid ?? 0) + 1 });
+
+  const second = await openSshChannel((done) => {
+    client.exec('two', done);
+  });
+
+  await second.result;
+
+  expect(ctx.ssh.listeners.map((listener) => listener.state.closed)).toStrictEqual([true, false]);
+
+  expect(ctx.ssh.execs[1]?.request.env).toContain(
+    'SSH_AUTH_SOCK=/run/imp/ssh-agent/stub2/agent.sock',
+  );
+});
+
+// ssh2 refuses the agent channel when it cannot reach its agent
+test('it closes a guest agent client at once when the client refuses the agent channel', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const dir = await mkdtemp(join(tmpdir(), 'imp-no-agent-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: join(dir, 'agent.sock'),
+    agentForward: true,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('ssh-add -l', done);
+  });
+
+  await opened.result;
+
+  ctx.ssh.listeners[0]?.connect(1);
+
+  await waitFor(() => {
+    expect(ctx.ssh.accepts[0]?.state.closed).toBeTrue();
+  });
+
+  expect(ctx.ssh.accepts[0]?.input).toStrictEqual([]);
+  expect(ctx.logs.join('\n')).toInclude('the client refused the agent channel');
+});
+
+test('it closes the guest agent clients past the cap of agent channels', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'hold' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('flood', done);
+  });
+
+  await opened.result;
+
+  const [listener] = ctx.ssh.listeners;
+
+  invariant(listener);
+
+  // fills the cap with held channels, then one more
+  for (let id = 1; id <= MAX_AGENT_CHANNELS; id += 1) {
+    listener.connect(id);
+  }
+
+  await waitFor(() => {
+    expect(ctx.ssh.accepts).toHaveLength(MAX_AGENT_CHANNELS);
+  });
+
+  listener.connect(MAX_AGENT_CHANNELS + 1);
+
+  await waitFor(() => {
+    expect(ctx.ssh.accepts).toHaveLength(MAX_AGENT_CHANNELS + 1);
+  });
+
+  const closed = ctx.ssh.accepts.filter((each) => each.state.closed).map((each) => each.id);
+
+  expect(closed).toStrictEqual([MAX_AGENT_CHANNELS + 1]);
+});
+
+test('it runs a command without the agent socket when the agent is outdated', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.listenError = buildAgentOutdatedError('agent-forwarding');
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('git push', done);
+  });
+
+  const result = await opened.result;
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      "imp: no agent forwarding: AGENT_OUTDATED: the imp's agent has no ssh-agent forwarding yet; stop and start the imp to update it\n",
+    code: 0,
+    signal: null,
+  });
+});
+
+test('it gives a command no agent socket when the agent is outdated', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.listenError = buildAgentOutdatedError('agent-forwarding');
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('git push', done);
+  });
+
+  await opened.result;
+
+  const env = ctx.ssh.execs[0]?.request.env;
+
+  invariant(env);
+
+  expect(env.join('\n')).not.toInclude('SSH_AUTH_SOCK=');
+});
+
+test('it tries the agent socket again for the next session after any failure', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  const agent = await startStubSshAgent({ mode: 'answer' });
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.listenError = buildAgentOutdatedError('agent-forwarding');
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+    agent: agent.path,
+    agentForward: true,
+  });
+
+  const first = await openSshChannel((done) => {
+    client.exec('git push', done);
+  });
+
+  await first.result;
+
+  ctx.ssh.stub.listenError = new AgentError('INTERNAL', 'unknown user "dev"');
+
+  const second = await openSshChannel((done) => {
+    client.exec('git push', done);
+  });
+
+  const result = await second.result;
+
+  expect(result.stderr).toBe('imp: no agent forwarding: INTERNAL: unknown user "dev"\n');
 });
 
 // keys bound to tokens (docs/guides/ssh.md#keys-bound-to-tokens)
 
-interface GatewayTest {
-  readonly tokens: Pick<TokenStore, 'remove' | 'removeKey'>;
-  readonly fingerprint: string;
-}
+test('it logs a key bound to a token in to its imps, as the token', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-function readPublicBlob(line: string): Buffer {
-  const parsed = utils.parseKey(line);
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  await ctx.tokens.create({ name: 'boxes', scope: 'exec', imps: ['bo*'], sshKeys: [key.public] });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  await opened.result;
+
+  expect(ctx.ssh.actors).toStrictEqual([{ kind: 'ssh', name: 'boxes' }]);
+});
+
+test('it refuses a key bound to dev-* on another imp before any imp lookup', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'], sshKeys: [key.public] });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+  expect(ctx.ssh.stub.lookups).toBe(0);
+  expect(ctx.ssh.stub.wakes).toBe(0);
+});
+
+test('it refuses a key on a read-only token as it refuses an unknown key', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'viewer', scope: 'read', imps: null, sshKeys: [key.public] });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+  expect(ctx.ssh.stub.wakes).toBe(0);
+  expect(ctx.ssh.tracker.count(imp.id)).toBe(0);
+});
+
+test('it logs a bound key that authorized_keys lists later in only as its token', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord({ name: 'box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'], sshKeys: [key.public] });
+
+  const later = new Date(Date.now() + 60_000);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+  utimesSync(ctx.keysPath, later, later);
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+test('it refuses a key once its binding is removed after its file line was', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord({ name: 'dev-box' });
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'] });
+
+  // the file held the key once; the binding comes after its line goes
+  const removed = new Date(Date.now() + 60_000);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+  utimesSync(ctx.keysPath, removed, removed);
+
+  const added = await ctx.tokens.addKey('dev', key.public);
+
+  // the binding alone logs the key in to its imp
+  const bound = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await ctx.tokens.removeKey('dev', added.fingerprint);
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(bound).toBeInstanceOf(Client);
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+test('it refuses a key whose binding was removed', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  const added = await ctx.tokens.addKey('ci', key.public);
+
+  const bound = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await ctx.tokens.removeKey('ci', added.fingerprint);
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(bound).toBeInstanceOf(Client);
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+test('it refuses a key from authorized_keys when the file is off', async () => {
+  const ctx = await setupTest({ fileKeys: false });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  expect(login).rejects.toThrowWithMessage(Error, 'All configured authentication methods failed');
+});
+
+test('it logs a bound key in while authorized_keys is off', async () => {
+  const ctx = await setupTest({ fileKeys: false });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [key.public] });
+
+  const login = openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const client = await login;
+
+  expect(client).toBeInstanceOf(Client);
+});
+
+test('it audits a key from authorized_keys as key and its comment', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public} me@laptop\n`, { mode: 0o600 });
+
+  ctx.ssh.stub.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const opened = await openSshChannel((done) => {
+    client.exec('true', done);
+  });
+
+  await opened.result;
+
+  expect(ctx.ssh.actors).toStrictEqual([{ kind: 'ssh', name: 'key me@laptop' }]);
+});
+
+test('it ends a live ssh connection when its token is removed', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [key.public] });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const closed = Promise.withResolvers<void>();
+
+  client.once('close', closed.resolve);
+
+  await ctx.tokens.remove('ci');
+
+  expect(closed.promise).resolves.toBeUndefined();
+});
+
+test('it ends a live ssh connection when its bound key is removed', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  const added = await ctx.tokens.addKey('ci', key.public);
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const closed = Promise.withResolvers<void>();
+
+  client.once('close', closed.resolve);
+
+  await ctx.tokens.removeKey('ci', added.fingerprint);
+
+  expect(closed.promise).resolves.toBeUndefined();
+});
+
+// the removal lands after the key was found, before the connection watches
+// for it
+test('it ends at once a login whose key was removed as it logged in', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, '', { mode: 0o600 });
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [key.public] });
+
+  const parsed = utils.parseKey(key.public);
 
   if (parsed instanceof Error) {
     throw parsed;
   }
 
-  return parsed.getPublicSSH();
-}
+  const keyId = ctx.tokens.findSshKey(parsed.getPublicSSH())?.keyId;
 
-const BOUND_KEY = createEd25519Key();
-const DEV_KEY = createEd25519Key();
-
-function waitForClose(client: Client): Promise<void> {
-  return new Promise((resolve) => {
-    client.once('close', () => {
-      resolve();
-    });
-  });
-}
-
-async function runTrue(client: Client): Promise<void> {
-  const channel = await openExecChannel(client, 'true');
-
-  await readResult(channel);
-}
-
-test('a key bound to a token logs in to its imps, as the token', async () => {
-  const ctx = await startTestGateway();
-
-  ctx.fake.onExec = (run) => {
-    run.emit({ type: 'exit', code: 0, signal: 0 });
-  };
-
-  await ctx.tokens.create({
-    name: 'boxes',
-    scope: 'exec',
-    imps: ['bo*'],
-    sshKeys: [BOUND_KEY.public],
-  });
-
-  const client = await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
-
-  await runTrue(client);
-
-  expect(ctx.actors).toEqual([{ kind: 'ssh', name: 'boxes' }]);
-});
-
-test('a key bound to dev-* is refused on another imp before any imp lookup', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({
-    name: 'dev',
-    scope: 'exec',
-    imps: ['dev-*'],
-    sshKeys: [DEV_KEY.public],
-  });
-
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
-
-  expect(ctx.fake.lookups).toBe(0);
-  expect(ctx.fake.wakes).toBe(0);
-});
-
-test('a key on a read-only token is refused as an unknown key is, and opens nothing', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({
-    name: 'viewer',
-    scope: 'read',
-    imps: null,
-    sshKeys: [BOUND_KEY.public],
-  });
-
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private));
-
-  expect(ctx.fake.wakes).toBe(0);
-  expect(ctx.tracker.count(FAKE_IMP.id)).toBe(0);
-});
-
-test('a key in authorized_keys does not bind, even while the file grants nothing', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
-
-  const inFile = await readRejection(ctx.tokens.addKey('ci', USER_KEY.public));
-
-  chmodSync(ctx.keysPath, 0o666);
-
-  const unsafeFile = await readRejection(ctx.tokens.addKey('ci', USER_KEY.public));
-
-  expect(inFile).toMatchObject({ code: 'CONFLICT' });
-  expect(unsafeFile).toMatchObject({ code: 'CONFLICT' });
-});
-
-// A binding next to a file line would hand the key every imp once removed:
-// the key must not fall back to the file's access.
-test('a bound key never falls back to its authorized_keys line when the binding goes', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({
-    name: 'dev',
-    scope: 'exec',
-    imps: ['dev-*'],
-    sshKeys: [DEV_KEY.public],
-  });
-
-  const added = ctx.tokens.list()[0]?.sshKeys[0]?.fingerprint ?? '';
-
-  // a new mtime, even on a coarse clock
-  await Bun.sleep(10);
-
-  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n${DEV_KEY.public}\n`, { mode: 0o600 });
-
-  const [unbind, remove] = await Promise.all([
-    readRejection(ctx.tokens.removeKey('dev', added)),
-    readRejection(ctx.tokens.remove('dev')),
-  ]);
-
-  expect(unbind).toMatchObject({ code: 'CONFLICT' });
-  expect(remove).toMatchObject({ code: 'CONFLICT' });
-
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
-
-  await Bun.sleep(10);
-
-  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n`, { mode: 0o600 });
-
-  await ctx.tokens.removeKey('dev', added);
-
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
-});
-
-test('an unbound key gets nothing back', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
-
-  const added = await ctx.tokens.addKey('ci', BOUND_KEY.public);
-
-  await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
-
-  await ctx.tokens.removeKey('ci', added.fingerprint);
-
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private));
-});
-
-test('a bound key added to authorized_keys later still logs in only as its token', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({
-    name: 'dev',
-    scope: 'exec',
-    imps: ['dev-*'],
-    sshKeys: [DEV_KEY.public],
-  });
-
-  // a new mtime, even on a coarse clock
-  await Bun.sleep(10);
-
-  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n${DEV_KEY.public}\n`, { mode: 0o600 });
-
-  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
-});
-
-test('with authorized_keys off, its keys log in nowhere and bound keys still do', async () => {
-  const ctx = await startTestGateway(`${USER_KEY.public}\n`, { fileKeys: false });
-
-  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [BOUND_KEY.public] });
-
-  await assertRefused(openClient(ctx.gateway));
-  await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
-});
-
-test('a key in authorized_keys is audited as key and its comment', async () => {
-  const ctx = await startTestGateway(`${USER_KEY.public} me@laptop\n`);
-
-  ctx.fake.onExec = (run) => {
-    run.emit({ type: 'exit', code: 0, signal: 0 });
-  };
-
-  const client = await openClient(ctx.gateway);
-
-  await runTrue(client);
-
-  expect(ctx.actors).toEqual([{ kind: 'ssh', name: 'key me@laptop' }]);
-});
-
-test.each([
-  ['the token', (ctx: GatewayTest) => ctx.tokens.remove('ci')],
-  ['the key', (ctx: GatewayTest) => ctx.tokens.removeKey('ci', ctx.fingerprint)],
-])('removing %s ends its live ssh connection', async (_what, remove) => {
-  const gateway = await startTestGateway();
-
-  await gateway.tokens.create({ name: 'ci', scope: 'exec', imps: null });
-
-  const added = await gateway.tokens.addKey('ci', BOUND_KEY.public);
-  const client = await openClient(gateway.gateway, FAKE_IMP.name, BOUND_KEY.private);
-
-  const closed = waitForClose(client);
-
-  await remove({ tokens: gateway.tokens, fingerprint: added.fingerprint });
-  await closed;
-});
-
-test('a login whose key was removed as it logged in ends at once', async () => {
-  const ctx = await startTestGateway();
-
-  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [BOUND_KEY.public] });
-
-  // the removal lands after the key was found, before the connection
-  // watches for it
-  const keyId = ctx.tokens.findSshKey(readPublicBlob(BOUND_KEY.public))?.keyId ?? '';
+  invariant(keyId);
 
   ctx.revocations.revoke(keyId);
 
-  const client = await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
-  await waitForClose(client);
+  const closed = Promise.withResolvers<void>();
+
+  client.once('close', closed.resolve);
+
+  expect(closed.promise).resolves.toBeUndefined();
 });
 
-// asks for a remote TCP forward, as `ssh -R`; the port the server bound
-function openRemoteForward(client: Client, bindAddr: string, port: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    client.forwardIn(bindAddr, port, (failure, bound) => {
-      if (failure === undefined) {
-        resolve(bound);
-      } else {
-        reject(new Error(String(failure)));
-      }
-    });
-  });
-}
+test('it listens for ssh -R 0 on the guest loopback at the port the agent picks', async () => {
+  const ctx = await setupTest({ fileKeys: true });
 
-function openSocketForward(client: Client, socketPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    client.openssh_forwardInStreamLocal(socketPath, (failure) => {
-      if (failure === undefined) {
-        resolve();
-      } else {
-        reject(new Error(String(failure)));
-      }
-    });
-  });
-}
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
 
-test('ssh -R 0 listens on the guest loopback and relays each client back', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const [bound] = await sendSshRequest<[number]>((done) => {
+    client.forwardIn('', 0, done);
+  });
+
+  expect(ctx.ssh.listeners[0]?.spec).toStrictEqual({ network: 'tcp', port: 0 });
+
+  // a remote forward's listener keeps no imp awake on its own
+  expect(ctx.ssh.listeners[0]?.kind).toBeNull();
+
+  // the stub agent picks 40000 plus its listener count
+  expect(bound).toBe(40_001);
+});
+
+test('it relays each guest client of ssh -R back to the client', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
   const reached: string[] = [];
 
@@ -1061,29 +2553,131 @@ test('ssh -R 0 listens on the guest loopback and relays each client back', async
     });
   });
 
-  const port = await openRemoteForward(client, '', 0);
+  await sendSshRequest<[number]>((done) => {
+    client.forwardIn('', 0, done);
+  });
 
-  expect(ctx.listeners[0]?.spec).toEqual({ network: 'tcp', port: 0 });
-  expect(port).toBe(40_001);
-  ctx.listeners[0]?.connect(1);
+  ctx.ssh.listeners[0]?.connect(1);
 
-  await waitUntil(() => ctx.accepts.length === 1);
+  const accept = await waitFor(() => {
+    const [first] = ctx.ssh.accepts;
 
-  ctx.accepts[0]?.send('hello');
+    invariant(first);
 
-  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'back:hello');
+    return first;
+  });
+
+  accept.send('hello');
+
+  await waitFor(() => {
+    expect(accept.input.join('')).toBe('back:hello');
+  });
 
   // the client matches the channel to its forward by the address it asked
-  expect(reached).toEqual([`:${String(port)}`]);
+  expect(reached).toStrictEqual([':40001']);
+});
+
+test('it relays a guest client’s answer of ssh -R after the client half-closes', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const received: string[] = [];
+
+  client.on('tcp connection', (_info, accept) => {
+    const channel = accept();
+
+    channel.on('data', (data: Buffer) => {
+      received.push(data.toString());
+    });
+
+    channel.write('request');
+    channel.end();
+  });
+
+  await sendSshRequest<[number]>((done) => {
+    client.forwardIn('', 0, done);
+  });
+
+  ctx.ssh.listeners[0]?.connect(1);
+
+  const accept = await waitFor(() => {
+    const [first] = ctx.ssh.accepts;
+
+    invariant(first);
+
+    expect(first.input).toContain('<eof>');
+
+    return first;
+  });
+
+  accept.send('answer');
+  accept.sendEof();
+
+  await waitFor(() => {
+    expect(received).not.toBeEmpty();
+  });
+
+  expect(received.join('')).toBe('answer');
+  expect(accept.input).toStrictEqual(['request', '<eof>']);
+});
+
+test('it closes the guest listener of ssh -R when the client leaves', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await sendSshRequest<[number]>((done) => {
+    client.forwardIn('', 0, done);
+  });
 
   client.end();
 
-  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+  await waitFor(() => {
+    expect(ctx.ssh.listeners[0]?.state.closed).toBeTrue();
+  });
 });
 
-test('ssh -R to a unix socket listens at that path as a streamlocal forward', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it listens for ssh -R to a unix socket at that path, and relays its clients', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
   const reached: string[] = [];
 
@@ -1097,87 +2691,203 @@ test('ssh -R to a unix socket listens at that path as a streamlocal forward', as
     });
   });
 
-  await openSocketForward(client, '/home/dev/.atc/atc.sock');
-
-  expect(ctx.listeners[0]?.spec).toEqual({ network: 'unix', path: '/home/dev/.atc/atc.sock' });
-  ctx.listeners[0]?.connect(1);
-
-  await waitUntil(() => ctx.accepts.length === 1);
-
-  ctx.accepts[0]?.send('report');
-
-  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'back:report');
-
-  expect(reached).toEqual(['/home/dev/.atc/atc.sock']);
-});
-
-test('ssh -R refuses another bind address and the agent sockets, and binds the rest to loopback', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-  const otherHost = await readRejection(openRemoteForward(client, '10.0.0.5', 8000));
-
-  const agentDir = await readRejection(
-    openSocketForward(client, '/run/imp/ssh-agent/x/agent.sock'),
-  );
-
-  const relative = await readRejection(openSocketForward(client, 'app.sock'));
-
-  for (const bindAddr of ['0.0.0.0', '*', 'localhost', '::']) {
-    await openRemoteForward(client, bindAddr, 9000);
-  }
-
-  expect(otherHost).toBeInstanceOf(Error);
-  expect(agentDir).toBeInstanceOf(Error);
-  expect(relative).toBeInstanceOf(Error);
-
-  expect(ctx.listeners.map((listener) => listener.spec)).toEqual(
-    Array.from({ length: 4 }, () => ({ network: 'tcp', port: 9000 })),
-  );
-});
-
-test('two requests for the same remote forward at once listen only once', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-
-  const settled = await Promise.allSettled([
-    openRemoteForward(client, 'localhost', 9000),
-    openRemoteForward(client, 'localhost', 9000),
-  ]);
-
-  expect(settled.map((result) => result.status).toSorted()).toEqual(['fulfilled', 'rejected']);
-  expect(ctx.listeners).toHaveLength(1);
-});
-
-test('a cancelled remote forward closes its guest listener', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
-
-  await openRemoteForward(client, 'localhost', 9000);
-
-  await new Promise<void>((resolve, reject) => {
-    client.unforwardIn('localhost', 9000, (failure) => {
-      if (failure === undefined) {
-        resolve();
-      } else {
-        reject(new Error(String(failure)));
-      }
-    });
+  await sendSshRequest((done) => {
+    client.openssh_forwardInStreamLocal('/home/dev/.atc/atc.sock', done);
   });
 
-  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+  ctx.ssh.listeners[0]?.connect(1);
+
+  const accept = await waitFor(() => {
+    const [first] = ctx.ssh.accepts;
+
+    invariant(first);
+
+    return first;
+  });
+
+  accept.send('report');
+
+  await waitFor(() => {
+    expect(accept.input.join('')).toBe('back:report');
+  });
+
+  expect(ctx.ssh.listeners[0]?.spec).toStrictEqual({
+    network: 'unix',
+    path: '/home/dev/.atc/atc.sock',
+  });
+
+  expect(reached).toStrictEqual(['/home/dev/.atc/atc.sock']);
 });
 
-test('a guest client the ssh client refuses is closed at once', async () => {
-  const ctx = await startTestGateway();
-  const client = await openClient(ctx.gateway);
+test('it refuses ssh -R on a bind address other than the loopback', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const forward = sendSshRequest<[number]>((done) => {
+    client.forwardIn('10.0.0.5', 8000, done);
+  });
+
+  expect(forward).rejects.toThrowWithMessage(Error, 'Unable to bind to 10.0.0.5:8000');
+  expect(ctx.ssh.listeners).toStrictEqual([]);
+});
+
+test.each([
+  ['the agent sockets', '/run/imp/ssh-agent/x/agent.sock'],
+  ['a relative path', 'app.sock'],
+])('it refuses ssh -R to a unix socket at %s', async (_label, socketPath) => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const forward = sendSshRequest((done) => {
+    client.openssh_forwardInStreamLocal(socketPath, done);
+  });
+
+  expect(forward).rejects.toThrowWithMessage(Error, `Unable to bind to ${socketPath}`);
+  expect(ctx.ssh.listeners).toStrictEqual([]);
+});
+
+test.each(['0.0.0.0', '*', 'localhost', '::'])(
+  'it binds ssh -R on %s to the guest loopback',
+  async (bindAddr) => {
+    const ctx = await setupTest({ fileKeys: true });
+
+    const imp = buildMockImpRecord();
+    const key = createEd25519Key();
+
+    ctx.ssh.putImp(imp);
+
+    writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+    const client = await openSshClient({
+      host: '127.0.0.1',
+      port: ctx.gateway.port,
+      username: imp.name,
+      privateKey: key.private,
+    });
+
+    await sendSshRequest<[number]>((done) => {
+      client.forwardIn(bindAddr, 9000, done);
+    });
+
+    expect(ctx.ssh.listeners.map((listener) => listener.spec)).toStrictEqual([
+      { network: 'tcp', port: 9000 },
+    ]);
+  },
+);
+
+test('it listens once for two requests for the same remote forward at once', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const settled = await Promise.allSettled(
+    [1, 2].map(() =>
+      sendSshRequest<[number]>((done) => {
+        client.forwardIn('localhost', 9000, done);
+      }),
+    ),
+  );
+
+  expect(settled.map((result) => result.status)).toIncludeSameMembers(['fulfilled', 'rejected']);
+  expect(ctx.ssh.listeners).toHaveLength(1);
+});
+
+test('it closes the guest listener of a cancelled remote forward', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  await sendSshRequest<[number]>((done) => {
+    client.forwardIn('localhost', 9000, done);
+  });
+
+  await sendSshRequest((done) => {
+    client.unforwardIn('localhost', 9000, done);
+  });
+
+  await waitFor(() => {
+    expect(ctx.ssh.listeners[0]?.state.closed).toBeTrue();
+  });
+});
+
+test('it closes a guest client of ssh -R at once when the ssh client refuses it', async () => {
+  const ctx = await setupTest({ fileKeys: true });
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: ctx.gateway.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
 
   client.on('tcp connection', (_info, _accept, reject) => {
     reject();
   });
 
-  await openRemoteForward(client, '', 9000);
+  await sendSshRequest<[number]>((done) => {
+    client.forwardIn('', 9000, done);
+  });
 
-  ctx.listeners[0]?.connect(1);
+  ctx.ssh.listeners[0]?.connect(1);
 
-  await waitUntil(() => ctx.accepts[0]?.state.closed === true);
+  await waitFor(() => {
+    expect(ctx.ssh.accepts[0]?.state.closed).toBeTrue();
+  });
 });

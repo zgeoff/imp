@@ -1,619 +1,1682 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ProxyListenOptions } from '../proxy/wake-proxy';
-import { readRejection } from '../read-rejection';
+import { invariant } from '@imp/test-utils/invariant';
+import { server } from '@imp/test-utils/mock-server';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { HttpResponse, http } from 'msw';
+import { buildMockCertificate } from '../test-utils/build-mock-certificate';
+import { buildStubCloudflareApi } from '../test-utils/build-stub-cloudflare-api';
+import { buildStubProxyListen } from '../test-utils/build-stub-proxy-listen';
+import { buildStubTickerTimer } from '../test-utils/build-stub-ticker-timer';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import type { Certificate } from './acme/cert-store';
 import { createCertStore } from './acme/cert-store';
 import { createCloudflareProvider } from './dns/cloudflare-provider';
-import { buildPublicOwner } from './dns/dns-provider';
-import type { DnsProvider } from './dns/dns-provider';
 import { createDnsToken } from './dns/dns-token';
-import type { HttpsConfig } from './https-config';
 import { createHttpsService } from './https-service';
-import { createTestCertificate } from './test-certificates';
 
-const DOMAIN = 'imp.test';
-const NAMES = [DOMAIN, `*.${DOMAIN}`];
+async function setupTest() {
+  const dir = await mkdtemp(join(tmpdir(), 'imp-https-'));
 
-// the address a test uses as the host's tailnet IP: any 127/8 address binds
-const TAILNET_IP = '127.0.0.2';
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
-interface ServiceTestOptions {
-  readonly issue: (domain: string) => Promise<Certificate>;
-  readonly dns?: DnsProvider;
-
-  // the host's tailnet IP; unset, the host is on no tailnet
-  readonly tailnetIp?: string;
-
-  // tailscale serve holds the HTTPS port
-  readonly serveHoldsHttps?: boolean;
-
-  // public mode at this IP, and the public imps
-  readonly publicIp?: string;
-  readonly publicImps?: readonly string[];
-
-  // how often the tailnet IP is read
-  readonly addressIntervalMs?: number;
-}
-
-function buildConfig(publicIp?: string): HttpsConfig {
-  const ports = findFreePorts(4);
+  const logs: string[] = [];
 
   return {
-    domain: DOMAIN,
-    httpsPort: ports.take(),
-    httpPort: ports.take(),
-    dns: { provider: 'cloudflare', token: { kind: 'value', value: 'unused' }, apiUrl: null },
-    acmeDirectory: 'https://acme.invalid/directory',
-    acmeEmail: null,
-    acmeCaFile: null,
-    public:
-      publicIp === undefined
-        ? null
-        : { ip: publicIp, httpsPort: ports.take(), httpPort: ports.take() },
-  };
-}
-
-// a stand-in for the wake proxy: answers every request with its own
-// listener's address
-function startPlainListener(options: ProxyListenOptions) {
-  return Bun.serve({
-    port: options.port,
-    ...(options.hostname !== undefined && { hostname: options.hostname }),
-    ...(options.tls !== undefined && { tls: options.tls }),
-    reusePort: true,
-    fetch: () => new Response(`served on ${options.hostname ?? ''}`),
-  });
-}
-
-// a DNS provider that keeps the A records it is given
-// the owner of imp.test's public records
-const PUBLIC_OWNER = buildPublicOwner(DOMAIN);
-
-// a DNS provider that keeps the A records it is given, and their owners;
-// a record seeded without an owner is the tailnet's
-function createRecordingDns(): {
-  readonly dns: DnsProvider;
-  readonly records: Map<string, string>;
-  readonly owners: Map<string, string>;
-} {
-  const records = new Map<string, string>();
-  const owners = new Map<string, string>();
-
-  const readOwner = (fqdn: string) => owners.get(fqdn) ?? 'managed by impd';
-
-  const dns: DnsProvider = {
-    addTxt: (fqdn, value) => Promise.resolve({ fqdn, value, id: value }),
-    removeTxt: () => Promise.resolve(),
-    waitForTxt: () => Promise.resolve(),
-    setA: (fqdn, ip, owner = 'managed by impd') => {
-      records.set(fqdn, ip);
-      owners.set(fqdn, owner);
-
-      return Promise.resolve();
-    },
-    listA: (domain, owner) => {
-      const found = [...records].filter(
-        ([fqdn]) => fqdn.endsWith(`.${domain}`) && readOwner(fqdn) === owner,
-      );
-
-      return Promise.resolve(new Map(found));
-    },
-    removeA: (fqdn, owner) => {
-      if (readOwner(fqdn) === owner) {
-        records.delete(fqdn);
-      }
-
-      return Promise.resolve();
-    },
-  };
-
-  return { dns, records, owners };
-}
-
-function setup(options: ServiceTestOptions) {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-https-'));
-  const config = buildConfig(options.publicIp);
-  const store = createCertStore(dir);
-  const logs: string[] = [];
-  const publicImps = [...(options.publicImps ?? [])];
-  const recording = createRecordingDns();
-  const tailnetIp = options.tailnetIp;
-  const servePorts = options.serveHoldsHttps === true ? [config.httpsPort] : [];
-
-  const service = createHttpsService({
-    config,
-    store,
-    issue: options.issue,
-    dns: options.dns ?? recording.dns,
-    proxy: { startListener: startPlainListener },
-    readTailscale:
-      tailnetIp === undefined
-        ? null
-        : () =>
-            Promise.resolve({
-              state: 'Running',
-              hostname: 'imp',
-              dnsName: null,
-              ip: tailnetIp,
-              ips: [tailnetIp],
-            }),
-    readServePorts: () => Promise.resolve(servePorts),
-    now: Date.now,
-    log: (message) => {
+    dir,
+    store: createCertStore(dir),
+    logs,
+    log: (message: string) => {
       logs.push(message);
     },
-    listPublicImps: () => Promise.resolve([...publicImps]),
-    findPublicImp: (name) => {
-      const found = publicImps.includes(name)
-        ? {
-            id: name,
-            state: 'running' as const,
-            stored: { auth: 'none' as const, user: null, hash: null },
-          }
-        : undefined;
-
-      return Promise.resolve(found);
-    },
-    publicAddress: '127.0.0.1',
-    ...(options.addressIntervalMs !== undefined && {
-      addressIntervalMs: options.addressIntervalMs,
-    }),
-  });
-
-  return {
-    config,
-    store,
-    logs,
-    records: recording.records,
-    owners: recording.owners,
-    publicImps,
-    service,
-    [Symbol.asyncDispose]: async () => {
-      await service.stop();
-
-      rmSync(dir, { recursive: true, force: true });
-    },
+    timer: buildStubTickerTimer(),
+    proxy: buildStubProxyListen(),
   };
 }
 
-async function readBody(address: string, port: number): Promise<string> {
-  const response = await fetch(`https://${address}:${String(port)}/`, {
-    headers: { host: DOMAIN },
-    tls: { rejectUnauthorized: false },
-    signal: AbortSignal.timeout(5000),
-  });
+test('it serves nothing until the first certificate arrives', async () => {
+  const ctx = await setupTest();
 
-  return response.text();
-}
+  const issued = Promise.withResolvers<Certificate>();
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
 
-async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 5000;
+  server.use(...api.handlers);
 
-  for (;;) {
-    const done = await check();
-
-    if (done) {
-      return;
-    }
-
-    if (Date.now() > deadline) {
-      throw new Error('timed out');
-    }
-
-    await Bun.sleep(10);
-  }
-}
-
-test('start returns at once and serves the certificate when it arrives', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
-
-  const gate = Promise.withResolvers<undefined>();
-
-  await using ctx = setup({
-    issue: async () => {
-      await gate.promise;
-
-      return fresh;
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
     },
+    store: ctx.store,
+    issue: () => issued.promise,
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
   });
 
-  ctx.service.start();
+  onTestFinished(() => service.stop());
 
-  const early = await readRejection(readBody('127.0.0.1', ctx.config.httpsPort));
+  onTestFinished(async () => {
+    const arrived = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
-  expect(early).not.toBeNull();
-
-  gate.resolve(undefined);
-
-  await waitFor(async () => {
-    const error = await readRejection(readBody('127.0.0.1', ctx.config.httpsPort));
-
-    return error === null;
+    issued.resolve(arrived);
   });
 
-  expect(ctx.logs.some((line) => line.includes('got a certificate for imp.test'))).toBe(true);
+  service.start();
+
+  expect(service.readPorts().tailnet).toStrictEqual({ https: null, http: null });
+});
+
+test('it serves the certificate on loopback once it arrives', async () => {
+  const ctx = await setupTest();
+
+  const issued = Promise.withResolvers<Certificate>();
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => issued.promise,
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  const arrived = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  issued.resolve(arrived);
+
+  const port = await waitFor(() => {
+    const https = service.readPorts().tailnet.https;
+
+    expect(https).toBeNumber();
+
+    return https;
+  });
+
+  const response = await fetch(`https://127.0.0.1:${String(port)}/`, {
+    headers: { host: 'imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body = await response.text();
+
+  expect(body).toBe('served on 127.0.0.1');
+});
+
+test('it logs the certificate it got', async () => {
+  const ctx = await setupTest();
+
+  const certificate = await buildMockCertificate({
+    names: ['imp.test', '*.imp.test'],
+    notBefore: new Date('2030-01-01T00:00:00Z'),
+    notAfter: new Date('2030-03-01T00:00:00Z'),
+  });
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.resolve(certificate),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: () => Date.parse('2030-01-02T00:00:00Z'),
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toContain(
+      'impd: https: got a certificate for imp.test, expiring 2030-03-01T00:00:00.000Z, in 0ms',
+    );
+  });
+});
+
+test('it says the domain answers only inside the host container when there is no tailnet', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
 
   expect(ctx.logs).toContain(
     'impd: https: no tailnet; https://<imp>.imp.test answers only inside the host container',
   );
 });
 
-test('an expired certificate on disk serves at start while renewal fails', async () => {
-  const expired = await createTestCertificate({
-    names: NAMES,
+test('it serves an expired certificate on disk at start while renewal fails', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const expired = await buildMockCertificate({
+    names: ['imp.test', '*.imp.test'],
     notBefore: new Date(Date.now() - 100 * 86_400_000),
     notAfter: new Date(Date.now() - 86_400_000),
   });
 
-  await using ctx = setup({ issue: () => Promise.reject(new Error('the CA is down')) });
-
   ctx.store.writeCertificate(expired);
-  ctx.service.start();
 
-  await waitFor(() => ctx.logs.some((line) => line.includes('the CA is down')));
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
 
-  const body = await readBody('127.0.0.1', ctx.config.httpsPort);
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('the CA is down'));
+  });
+
+  const response = await fetch(`https://127.0.0.1:${String(service.readPorts().tailnet.https)}/`, {
+    headers: { host: 'imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body = await response.text();
 
   expect(body).toBe('served on 127.0.0.1');
-  expect(ctx.logs.some((line) => line.includes('serving it until a renewal succeeds'))).toBe(true);
 });
 
-test('a bad DNS token leaves impd running and stays out of the log', async () => {
-  const token = 'cf-secret-token-value';
+test('it says it serves an expired certificate until a renewal succeeds', async () => {
+  const ctx = await setupTest();
 
-  const cloudflare = Bun.serve({
-    port: 0,
-    fetch: () =>
-      Response.json(
-        { success: false, errors: [{ code: 9109, message: 'Invalid access token' }] },
-        { status: 403 },
-      ),
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const expired = await buildMockCertificate({
+    names: ['imp.test', '*.imp.test'],
+    notBefore: new Date('2030-01-01T00:00:00Z'),
+    notAfter: new Date('2030-02-01T00:00:00Z'),
   });
 
-  const dns = createCloudflareProvider({
-    readToken: () => Promise.resolve(token),
-    apiUrl: `http://127.0.0.1:${String(cloudflare.port)}`,
-  });
+  ctx.store.writeCertificate(expired);
 
-  try {
-    // the issuer's first DNS step, as the ACME flow takes it
-    await using ctx = setup({
-      dns,
-      tailnetIp: TAILNET_IP,
-      issue: async (domain) => {
-        await dns.addTxt(`_acme-challenge.${domain}`, 'value');
-
-        throw new Error('unreachable');
-      },
-    });
-
-    ctx.service.start();
-
-    await waitFor(
-      () =>
-        ctx.logs.some((line) => line.includes('no certificate for')) &&
-        ctx.logs.some((line) => line.includes('cannot point')),
-    );
-
-    expect(ctx.logs.join('\n')).toContain('403 Invalid access token');
-    expect(ctx.logs.join('\n')).not.toContain(token);
-  } finally {
-    await cloudflare.stop(true);
-  }
-});
-
-test('with no DNS token, nothing serves on the HTTPS, redirect or public ports, not even plain HTTP', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-dns-token-'));
-  const tokenPath = join(dir, 'dns-api-token');
-  const calls: string[] = [];
-
-  const cloudflare = Bun.serve({
-    port: 0,
-    fetch: (request) => {
-      calls.push(request.url);
-
-      return Response.json({ success: true, errors: [], result: [] });
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
     },
-  });
-
-  const dnsToken = createDnsToken({ kind: 'file', path: tokenPath }, Date.now);
-
-  const dns = createCloudflareProvider({
-    readToken: dnsToken.read,
-    apiUrl: `http://127.0.0.1:${String(cloudflare.port)}`,
-  });
-
-  try {
-    await using ctx = setup({
-      dns,
-      tailnetIp: TAILNET_IP,
-      publicIp: '203.0.113.7',
-      publicImps: ['web'],
-      issue: async (domain) => {
-        await dns.addTxt(`_acme-challenge.${domain}`, 'value');
-
-        throw new Error('unreachable');
-      },
-    });
-
-    ctx.service.start();
-
-    await waitFor(
-      () =>
-        ctx.logs.some((line) => line.includes(`no certificate for imp.test: cannot read`)) &&
-        ctx.logs.some((line) => line.includes('cannot point')),
-    );
-
-    const publicPorts =
-      ctx.config.public === null ? [] : [ctx.config.public.httpsPort, ctx.config.public.httpPort];
-
-    const targets = [
-      ...[ctx.config.httpsPort, ctx.config.httpPort].flatMap((port) => [
-        ['127.0.0.1', port] as const,
-        [TAILNET_IP, port] as const,
-      ]),
-      ...publicPorts.map((port) => ['127.0.0.1', port] as const),
-    ];
-
-    for (const [address, port] of targets) {
-      for (const scheme of ['http', 'https']) {
-        const refused = await readRejection(
-          fetch(`${scheme}://${address}:${String(port)}/`, {
-            headers: { host: 'web.imp.test' },
-            tls: { rejectUnauthorized: false },
-            signal: AbortSignal.timeout(2000),
-          }),
-        );
-
-        expect(refused).not.toBeNull();
-      }
-    }
-
-    // no API call went out without a token, and the path, never a value,
-    // is in the log
-    expect(calls).toEqual([]);
-
-    expect(ctx.logs.join('\n')).toContain(
-      `cannot read the DNS API token from ${tokenPath}: ENOENT`,
-    );
-  } finally {
-    await cloudflare.stop(true);
-
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('a records failure that repeats is logged once, until it changes', async () => {
-  const recording = createRecordingDns();
-  const failure = { message: 'DNS down' as string | null };
-  let attempts = 0;
-
-  const dns: DnsProvider = {
-    ...recording.dns,
-    setA: async (fqdn, ip, owner) => {
-      attempts += 1;
-
-      if (failure.message !== null) {
-        throw new Error(failure.message);
-      }
-
-      await recording.dns.setA(fqdn, ip, owner);
-    },
-  };
-
-  await using ctx = setup({
-    dns,
-    tailnetIp: TAILNET_IP,
-    addressIntervalMs: 5,
+    store: ctx.store,
     issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: () => Date.parse('2030-03-01T00:00:00Z'),
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
   });
 
-  const readPointLogs = () => ctx.logs.filter((line) => line.includes('point'));
+  onTestFinished(() => service.stop());
 
-  ctx.service.start();
+  service.start();
 
-  await waitFor(() => attempts >= 5);
+  expect(ctx.logs).toContain(
+    'impd: https: the stored certificate expired 2030-02-01T00:00:00.000Z; serving it until a renewal succeeds',
+  );
+});
 
-  failure.message = 'DNS still down';
-  attempts = 0;
+test('it logs Cloudflare’s refusal of a bad DNS token', async () => {
+  const ctx = await setupTest();
 
-  await waitFor(() => attempts >= 5);
+  const api = buildStubCloudflareApi({ tokens: ['the-right-token'] });
 
-  failure.message = null;
+  server.use(...api.handlers);
 
-  await waitFor(() => recording.records.get(DOMAIN) === TAILNET_IP);
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
 
-  expect(readPointLogs()).toEqual([
-    `impd: https: cannot point imp.test at ${TAILNET_IP}: DNS down`,
-    `impd: https: cannot point imp.test at ${TAILNET_IP}: DNS still down`,
-    `impd: https: imp.test and *.imp.test point at ${TAILNET_IP}`,
+  const dns = createCloudflareProvider({ readToken: () => Promise.resolve('cf-secret-token') });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'x' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+
+    // the issuer's first DNS step, as the ACME flow takes it
+    issue: async (domain) => {
+      await dns.addTxt(`_acme-challenge.${domain}`, 'value');
+
+      throw new Error('the issuer went on past a refused DNS step');
+    },
+    dns,
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('cannot point'));
+  });
+
+  expect(ctx.logs.filter((line) => line.includes('cannot point'))).toStrictEqual([
+    'impd: https: cannot point imp.test at 127.0.0.2: Cloudflare GET /zones: 403 Invalid access token',
   ]);
 });
 
-test('the domain points at the tailnet IP, and the listeners bind it', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+test('it keeps a bad DNS token out of the log', async () => {
+  const ctx = await setupTest();
 
-  await using ctx = setup({ issue: () => Promise.resolve(fresh), tailnetIp: TAILNET_IP });
+  const api = buildStubCloudflareApi({ tokens: ['the-right-token'] });
 
-  ctx.store.writeCertificate(fresh);
-  ctx.service.start();
+  server.use(...api.handlers);
 
-  await waitFor(() => ctx.records.size === 2);
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
 
-  expect(Object.fromEntries(ctx.records)).toEqual({
-    'imp.test': TAILNET_IP,
-    '*.imp.test': TAILNET_IP,
+  const dns = createCloudflareProvider({ readToken: () => Promise.resolve('cf-secret-token') });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'x' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+
+    // the issuer's first DNS step, as the ACME flow takes it
+    issue: async (domain) => {
+      await dns.addTxt(`_acme-challenge.${domain}`, 'value');
+
+      throw new Error('the issuer went on past a refused DNS step');
+    },
+    dns,
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
   });
 
-  const body = await readBody(TAILNET_IP, ctx.config.httpsPort);
+  onTestFinished(() => service.stop());
 
-  expect(body).toBe(`served on ${TAILNET_IP}`);
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('cannot point'));
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('no certificate for'));
+  });
+
+  expect(ctx.logs).toSatisfyAll((line: string) => !line.includes('cf-secret-token'));
 });
 
-test('a public imp gets a record at the public IP, and loses it once it is not public', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+test('it serves nothing on any port without a DNS token file', async () => {
+  const ctx = await setupTest();
 
-  const publicIp = '203.0.113.7';
+  const tokenPath = join(ctx.dir, 'dns-api-token');
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
 
-  await using ctx = setup({
-    issue: () => Promise.resolve(fresh),
-    tailnetIp: TAILNET_IP,
-    publicIp,
-    publicImps: ['web'],
+  // fixed ports, so the test can knock on each one the service would open
+  const free = findFreePorts(4);
+  const httpsPort = free.take();
+  const httpPort = free.take();
+  const publicHttpsPort = free.take();
+  const publicHttpPort = free.take();
+
+  server.use(...api.handlers);
+
+  const dnsToken = createDnsToken({ kind: 'file', path: tokenPath }, Date.now);
+  const dns = createCloudflareProvider({ readToken: dnsToken.read });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort,
+      httpPort,
+      dns: { provider: 'cloudflare', token: { kind: 'file', path: tokenPath }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: publicHttpsPort, httpPort: publicHttpPort },
+    },
+    store: ctx.store,
+
+    // the issuer's first DNS step, as the ACME flow takes it
+    issue: async (domain) => {
+      await dns.addTxt(`_acme-challenge.${domain}`, 'value');
+
+      throw new Error('the issuer went on past a DNS step with no token');
+    },
+    dns,
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () =>
+      Promise.resolve({
+        id: 'i1',
+        state: 'running',
+        stored: { auth: 'none', user: null, hash: null },
+      }),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
   });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  // the renewal and address passes have both failed
+  await waitFor(() => {
+    invariant(ctx.logs.find((line) => line.includes('no certificate for imp.test')));
+    invariant(ctx.logs.find((line) => line.includes('cannot point')));
+  });
+
+  const knocks = await Promise.allSettled(
+    (
+      [
+        ['127.0.0.1', httpsPort],
+        ['127.0.0.2', httpsPort],
+        ['127.0.0.1', httpPort],
+        ['127.0.0.2', httpPort],
+        ['127.0.0.1', publicHttpsPort],
+        ['127.0.0.1', publicHttpPort],
+      ] as const
+    ).map(async ([hostname, port]) => {
+      const socket = await Bun.connect({ hostname, port, socket: { data: () => {} } });
+
+      socket.end();
+    }),
+  );
+
+  expect(service.readPorts()).toStrictEqual({
+    tailnet: { https: null, http: null },
+    public: { https: null, http: null },
+  });
+
+  expect(knocks).toMatchObject(
+    Array.from({ length: 6 }, () => ({ status: 'rejected', reason: { code: 'ECONNREFUSED' } })),
+  );
+});
+
+test('it sends Cloudflare no call without a DNS token file', async () => {
+  const ctx = await setupTest();
+
+  const tokenPath = join(ctx.dir, 'dns-api-token');
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const dnsToken = createDnsToken({ kind: 'file', path: tokenPath }, Date.now);
+  const dns = createCloudflareProvider({ readToken: dnsToken.read });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'file', path: tokenPath }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+
+    // the issuer's first DNS step, as the ACME flow takes it
+    issue: async (domain) => {
+      await dns.addTxt(`_acme-challenge.${domain}`, 'value');
+
+      throw new Error('the issuer went on past a DNS step with no token');
+    },
+    dns,
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('no certificate for imp.test'));
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('cannot point'));
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('public records'));
+  });
+
+  expect(api.requests).toStrictEqual([]);
+});
+
+test('it names the missing DNS token file in the log', async () => {
+  const ctx = await setupTest();
+
+  const tokenPath = join(ctx.dir, 'dns-api-token');
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const dnsToken = createDnsToken({ kind: 'file', path: tokenPath }, Date.now);
+  const dns = createCloudflareProvider({ readToken: dnsToken.read });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'file', path: tokenPath }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns,
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toContain(
+      `impd: https: cannot point imp.test at 127.0.0.2: cannot read the DNS API token from ${tokenPath}: ENOENT`,
+    );
+  });
+});
+
+test('it logs a records failure that repeats once, until it changes', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+  const failure: { message: string | null } = { message: 'DNS down' };
+
+  // Cloudflare fails each list of the zone's records while `failure` holds
+  // a message, then answers again
+  server.use(
+    http.get('https://api.cloudflare.com/client/v4/zones/:zoneId/dns_records', () =>
+      failure.message === null
+        ? undefined
+        : HttpResponse.json(
+            {
+              success: false,
+              errors: [{ code: 1000, message: failure.message }],
+              messages: [],
+              result: null,
+            },
+            { status: 500 },
+          ),
+    ),
+    ...api.handlers,
+  );
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('cannot point'));
+  });
+
+  await ctx.timer.fire('https addresses');
+
+  failure.message = 'DNS still down';
+
+  await ctx.timer.fire('https addresses');
+  await ctx.timer.fire('https addresses');
+
+  failure.message = null;
+
+  await ctx.timer.fire('https addresses');
+
+  expect(ctx.logs.filter((line) => line.includes('point'))).toStrictEqual([
+    'impd: https: cannot point imp.test at 127.0.0.2: Cloudflare GET /zones/z1/dns_records: 500 DNS down',
+    'impd: https: cannot point imp.test at 127.0.0.2: Cloudflare GET /zones/z1/dns_records: 500 DNS still down',
+    'impd: https: imp.test and *.imp.test point at 127.0.0.2',
+  ]);
+});
+
+test('it points the domain and its wildcard at the tailnet IP', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toContain('impd: https: imp.test and *.imp.test point at 127.0.0.2');
+  });
+
+  expect(
+    api.readRecords().map((record) => [record.name, record.type, record.content, record.comment]),
+  ).toIncludeSameMembers([
+    ['imp.test', 'A', '127.0.0.2', 'managed by impd'],
+    ['*.imp.test', 'A', '127.0.0.2', 'managed by impd'],
+  ]);
+});
+
+test('it serves the domain on the tailnet IP', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  ctx.store.writeCertificate(certificate);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.proxy.events).toContain('start 127.0.0.2');
+  });
+
+  const response = await fetch(`https://127.0.0.2:${String(service.readPorts().tailnet.https)}/`, {
+    headers: { host: 'imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body = await response.text();
+
+  expect(body).toBe('served on 127.0.0.2');
+});
+
+test('it keeps the public records in line with the public imps, and leaves the rest', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
 
   // one left by an imp that is gone, a deeper name impd never clears, and
   // the bare domain of an impd on dev.imp.test, which is not this impd's
-  ctx.records.set('old.imp.test', publicIp);
-  ctx.owners.set('old.imp.test', PUBLIC_OWNER);
-  ctx.records.set('a.b.imp.test', '198.51.100.1');
-  ctx.owners.set('a.b.imp.test', PUBLIC_OWNER);
-  ctx.records.set('dev.imp.test', '100.64.0.9');
-  ctx.store.writeCertificate(fresh);
-  ctx.service.start();
-
-  await waitFor(() => ctx.records.has('web.imp.test') && !ctx.records.has('old.imp.test'));
-
-  expect(Object.fromEntries(ctx.records)).toEqual({
-    'imp.test': TAILNET_IP,
-    '*.imp.test': TAILNET_IP,
-    'web.imp.test': publicIp,
-    'a.b.imp.test': '198.51.100.1',
-    'dev.imp.test': '100.64.0.9',
+  await api.records.create({
+    zone_id: 'z1',
+    name: 'old.imp.test',
+    content: '203.0.113.7',
+    comment: 'impd public imps of imp.test',
   });
 
-  expect(ctx.owners.get('web.imp.test')).toBe('impd public imps of imp.test');
+  await api.records.create({
+    zone_id: 'z1',
+    name: 'a.b.imp.test',
+    content: '198.51.100.1',
+    comment: 'impd public imps of imp.test',
+  });
 
-  // the public listener answers on its own port
-  const body = await readBody('127.0.0.1', ctx.config.public?.httpsPort ?? 0);
+  await api.records.create({
+    zone_id: 'z1',
+    name: 'dev.imp.test',
+    content: '100.64.0.9',
+    comment: 'managed by impd',
+  });
 
-  expect(body).toBe('served on 127.0.0.1');
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
 
-  ctx.publicImps.splice(0);
+  onTestFinished(() => service.stop());
 
-  await ctx.service.updatePublicRecords();
+  const status = await service.updatePublicRecords();
 
-  expect(ctx.records.has('web.imp.test')).toBe(false);
+  expect(status.isOk).toBeTrue();
+
+  expect(
+    api.readRecords().map((record) => [record.name, record.content, record.comment]),
+  ).toIncludeSameMembers([
+    ['a.b.imp.test', '198.51.100.1', 'impd public imps of imp.test'],
+    ['dev.imp.test', '100.64.0.9', 'managed by impd'],
+    ['web.imp.test', '203.0.113.7', 'impd public imps of imp.test'],
+  ]);
+});
+
+test('it removes the record of an imp that is no longer public, and says so', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  await api.records.create({
+    zone_id: 'z1',
+    name: 'web.imp.test',
+    content: '203.0.113.7',
+    comment: 'impd public imps of imp.test',
+  });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  await service.updatePublicRecords();
+
+  expect(api.readRecords()).toStrictEqual([]);
   expect(ctx.logs).toContain('impd: https: removed web.imp.test (no longer public)');
 });
 
-test('with public mode off, the public records impd left go', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+test('it serves the public listener on its own port', async () => {
+  const ctx = await setupTest();
 
-  await using ctx = setup({ issue: () => Promise.resolve(fresh), publicImps: ['web'] });
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
 
-  ctx.records.set('web.imp.test', '203.0.113.7');
-  ctx.owners.set('web.imp.test', PUBLIC_OWNER);
-  ctx.service.start();
+  server.use(...api.handlers);
 
-  await waitFor(() => !ctx.records.has('web.imp.test'));
-});
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
 
-test('a DNS failure on the public records is logged, and the next pass tries again', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
-  const recording = createRecordingDns();
-  let isDown = true;
-
-  await using ctx = setup({
-    issue: () => Promise.resolve(fresh),
-    dns: {
-      ...recording.dns,
-      listA: (domain, owner) =>
-        isDown ? Promise.reject(new Error('DNS API down')) : recording.dns.listA(domain, owner),
-    },
-    publicIp: '203.0.113.7',
-    publicImps: ['web'],
-  });
-
-  ctx.service.start();
-
-  await waitFor(() => ctx.logs.some((line) => line.includes('public records: DNS API down')));
-
-  expect(ctx.service.readRecordsStatus()).toMatchObject({ isOk: false, error: 'DNS API down' });
-
-  isDown = false;
-
-  const status = await ctx.service.updatePublicRecords();
-
-  expect(status).toMatchObject({ isOk: true, error: null });
-  expect(recording.records.get('web.imp.test')).toBe('203.0.113.7');
-});
-
-test('a tailscale serve on the HTTPS port is a warning', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
-
-  await using ctx = setup({
-    issue: () => Promise.resolve(fresh),
-    tailnetIp: TAILNET_IP,
-    serveHoldsHttps: true,
-  });
-
-  ctx.service.start();
-
-  await waitFor(() => ctx.logs.some((line) => line.includes('tailscale serve holds')));
-});
-
-test('a failed tailscale status keeps the tailnet listener and its connections', async () => {
-  const fresh = await createTestCertificate({ names: NAMES });
-
-  const answers: (string | null)[] = [TAILNET_IP, null, null, TAILNET_IP];
-  const events: string[] = [];
-  const dir = mkdtempSync(join(tmpdir(), 'imp-https-'));
-  const config = buildConfig();
-  const store = createCertStore(dir);
-
-  store.writeCertificate(fresh);
+  ctx.store.writeCertificate(certificate);
 
   const service = createHttpsService({
-    config,
-    store,
-    issue: () => Promise.resolve(fresh),
-    dns: createRecordingDns().dns,
-    proxy: {
-      startListener: (options) => {
-        const server = startPlainListener(options);
-
-        events.push(`start ${options.hostname ?? ''}`);
-
-        return {
-          stop: async (closeActiveConnections) => {
-            events.push(`stop ${options.hostname ?? ''}`);
-
-            await server.stop(closeActiveConnections);
-          },
-        };
-      },
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
     },
-    readTailscale: () => {
-      const ip = answers.length === 0 ? TAILNET_IP : (answers.shift() ?? null);
-      const ips = ip === null ? [] : [ip];
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
 
-      return Promise.resolve({ state: 'Running', hostname: 'imp', dnsName: null, ip, ips });
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  const ports = service.readPorts();
+
+  invariant(ports.public?.https);
+
+  const response = await fetch(`https://127.0.0.1:${String(ports.public.https)}/`, {
+    headers: { host: 'web.imp.test' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  expect(ports.public.https).not.toBe(ports.tailnet.https);
+
+  const body = await response.text();
+
+  expect(body).toBe('served on 127.0.0.1');
+});
+
+test('it takes the public records impd left when public mode is off', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  await api.records.create({
+    zone_id: 'z1',
+    name: 'web.imp.test',
+    content: '203.0.113.7',
+    comment: 'impd public imps of imp.test',
+  });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  await service.updatePublicRecords();
+
+  expect(api.readRecords()).toStrictEqual([]);
+});
+
+test('it logs a DNS failure on the public records', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(
+    http.get('https://api.cloudflare.com/client/v4/zones/:zoneId/dns_records', () =>
+      HttpResponse.json(
+        {
+          success: false,
+          errors: [{ code: 1000, message: 'DNS API down' }],
+          messages: [],
+          result: null,
+        },
+        { status: 500 },
+      ),
+    ),
+    ...api.handlers,
+  );
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  await service.updatePublicRecords();
+
+  expect(ctx.logs).toContain(
+    'impd: https: public records: Cloudflare GET /zones/z1/dns_records: 500 DNS API down',
+  );
+});
+
+test('it reports a failed pass over the public records', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(
+    http.get('https://api.cloudflare.com/client/v4/zones/:zoneId/dns_records', () =>
+      HttpResponse.json(
+        {
+          success: false,
+          errors: [{ code: 1000, message: 'DNS API down' }],
+          messages: [],
+          result: null,
+        },
+        { status: 500 },
+      ),
+    ),
+    ...api.handlers,
+  );
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: () => 1_800_000_000_000,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  await service.updatePublicRecords();
+
+  expect(service.readRecordsStatus()).toStrictEqual({
+    isOk: false,
+    error: 'Cloudflare GET /zones/z1/dns_records: 500 DNS API down',
+    at: 1_800_000_000_000,
+  });
+});
+
+test('it writes the public records on the pass after one that failed', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+  const outage = { isDown: true };
+
+  // Cloudflare fails each list of the zone's records until the outage ends
+  server.use(
+    http.get('https://api.cloudflare.com/client/v4/zones/:zoneId/dns_records', () =>
+      outage.isDown
+        ? HttpResponse.json(
+            {
+              success: false,
+              errors: [{ code: 1000, message: 'DNS API down' }],
+              messages: [],
+              result: null,
+            },
+            { status: 500 },
+          )
+        : undefined,
+    ),
+    ...api.handlers,
+  );
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: () => 1_800_000_000_000,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve(['web']),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  const failed = await service.updatePublicRecords();
+
+  outage.isDown = false;
+
+  const status = await service.updatePublicRecords();
+
+  expect(failed.isOk).toBeFalse();
+  expect(status).toStrictEqual({ isOk: true, error: null, at: 1_800_000_000_000 });
+
+  expect(api.readRecords().map((record) => [record.name, record.content])).toStrictEqual([
+    ['web.imp.test', '203.0.113.7'],
+  ]);
+});
+
+test('it warns that tailscale serve holds the tailnet HTTPS port', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 8443,
+      httpPort: 8080,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: () =>
+      Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip: '127.0.0.2',
+        ips: ['127.0.0.2'],
+      }),
+    readServePorts: () => Promise.resolve([8443]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toContain(
+      'impd: https: warning: tailscale serve holds tailnet port 8443, so impd never sees that traffic; remove it with `tailscale serve --https=8443 off` or `tailscale serve reset`',
+    );
+  });
+});
+
+test('it keeps the tailnet listener and its connections when a tailscale status fails', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+  const answers: (string | null)[] = ['127.0.0.2', null, null, '127.0.0.2'];
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const certificate = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  ctx.store.writeCertificate(certificate);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+
+    // the tailnet IP, then two failed reads, then the IP again
+    readTailscale: () => {
+      const ip = answers.shift() ?? null;
+
+      return Promise.resolve({
+        state: 'Running',
+        hostname: 'imp',
+        dnsName: null,
+        ip,
+        ips: ip === null ? [] : [ip],
+      });
     },
     readServePorts: () => Promise.resolve([]),
     now: Date.now,
-    log: () => {},
-    addressIntervalMs: 5,
+    log: ctx.log,
     listPublicImps: () => Promise.resolve([]),
     findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
   });
 
-  try {
-    service.start();
+  onTestFinished(() => service.stop());
 
-    await waitFor(() => answers.length === 0);
+  service.start();
 
-    await Bun.sleep(20);
+  await waitFor(() => {
+    expect(ctx.proxy.events).toContain('start 127.0.0.2');
+  });
 
-    expect(events.filter((event) => event.endsWith(TAILNET_IP))).toEqual([`start ${TAILNET_IP}`]);
-  } finally {
-    await service.stop();
+  await ctx.timer.fire('https addresses');
+  await ctx.timer.fire('https addresses');
+  await ctx.timer.fire('https addresses');
 
-    rmSync(dir, { recursive: true, force: true });
-  }
+  expect(answers).toStrictEqual([]);
+
+  expect(ctx.proxy.events.filter((event) => event.endsWith('127.0.0.2'))).toStrictEqual([
+    'start 127.0.0.2',
+  ]);
+});
+
+test('it logs an address pass that fails', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: () => Promise.reject(new Error('tailscaled is not running')),
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await waitFor(() => {
+    expect(ctx.logs).toContain('impd: https: addresses: tailscaled is not running');
+  });
+});
+
+test('it runs renewal and the public records every 10 minutes, and the addresses every 30 seconds', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  expect(ctx.timer.readDelays()).toStrictEqual({
+    'https renewal': 600_000,
+    'https public records': 600_000,
+    'https addresses': 30_000,
+  });
+});
+
+test('it asks for a certificate again on each renewal tick', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+  const asked: string[] = [];
+  const clock = { now: Date.parse('2030-01-10T00:00:00Z') };
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: (domain) => {
+      asked.push(domain);
+
+      return Promise.reject(new Error('the CA is down'));
+    },
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: () => clock.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  // the first pass runs at start, before any tick
+  await waitFor(() => {
+    invariant(asked[0], 'no first renewal yet');
+  });
+
+  // past any backoff the failed first pass set: the longest is a day
+  clock.now += 2 * 86_400_000;
+
+  await ctx.timer.fire('https renewal');
+
+  expect(asked).toStrictEqual(['imp.test', 'imp.test']);
+});
+
+test('it writes the public records again on each public records tick', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+  const publicImps: string[] = [];
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'imp.test' });
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: { ip: '203.0.113.7', httpsPort: 0, httpPort: 0 },
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([...publicImps]),
+    findPublicImp: () => Promise.resolve(undefined),
+    publicAddress: '127.0.0.1',
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  // the first pass runs at start, with no imp public yet
+  await waitFor(() => {
+    invariant(service.readRecordsStatus(), 'no first records pass yet');
+  });
+
+  publicImps.push('web');
+
+  await ctx.timer.fire('https public records');
+
+  expect(
+    api.readRecords().map((record) => [record.name, record.content, record.comment]),
+  ).toStrictEqual([['web.imp.test', '203.0.113.7', 'impd public imps of imp.test']]);
+});
+
+test('it cancels every pending tick when it stops', async () => {
+  const ctx = await setupTest();
+
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => Promise.reject(new Error('the CA is down')),
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  const delaysBefore = ctx.timer.readDelays();
+
+  await service.stop();
+
+  expect(Object.keys(delaysBefore)).toIncludeSameMembers([
+    'https renewal',
+    'https public records',
+    'https addresses',
+  ]);
+
+  expect(ctx.timer.readDelays()).toStrictEqual({});
+});
+
+test('it starts no listener for a certificate that arrives after it stopped', async () => {
+  const ctx = await setupTest();
+
+  const issued = Promise.withResolvers<Certificate>();
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  const service = createHttpsService({
+    config: {
+      domain: 'imp.test',
+      httpsPort: 0,
+      httpPort: 0,
+      dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
+      acmeDirectory: 'https://acme.invalid/directory',
+      acmeEmail: null,
+      acmeCaFile: null,
+      public: null,
+    },
+    store: ctx.store,
+    issue: () => issued.promise,
+    dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
+    proxy: ctx.proxy,
+    readTailscale: null,
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: ctx.log,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
+    timer: ctx.timer.timer,
+  });
+
+  onTestFinished(() => service.stop());
+
+  service.start();
+
+  await service.stop();
+
+  const arrived = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
+
+  issued.resolve(arrived);
+
+  await waitFor(() => {
+    expect(ctx.logs).toSatisfyAny((line: string) => line.includes('got a certificate'));
+  });
+
+  expect(ctx.proxy.events).toStrictEqual([]);
 });

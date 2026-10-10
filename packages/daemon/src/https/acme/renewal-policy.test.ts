@@ -1,82 +1,119 @@
 import { expect, test } from 'bun:test';
-import { planRenewal, readBackoffMs } from './renewal-policy';
+import { listCertificateNames, planRenewal, readBackoffMs } from './renewal-policy';
 
-const DAY = 86_400_000;
-const DOMAIN = 'imp.example.com';
-const NAMES = ['imp.example.com', '*.imp.example.com'];
-const ISSUED = Date.UTC(2026, 0, 1);
-const NO_ATTEMPTS = { failures: 0, lastAttemptAt: null, lastError: null };
-
-function buildInfo(names: readonly string[] = NAMES) {
-  return { notBefore: new Date(ISSUED), notAfter: new Date(ISSUED + 90 * DAY), names };
-}
-
-test('a fresh certificate for both names is kept', () => {
+test('it keeps a certificate for both names a third of the way short of expiry', () => {
   expect(
     planRenewal({
-      info: buildInfo(),
-      domain: DOMAIN,
-      attempts: NO_ATTEMPTS,
-      now: ISSUED + 59 * DAY,
+      info: {
+        notBefore: new Date('2026-01-01T00:00:00Z'),
+        notAfter: new Date('2026-04-01T00:00:00Z'),
+        names: ['imp.example.com', '*.imp.example.com'],
+      },
+      domain: 'imp.example.com',
+      attempts: { failures: 0, lastAttemptAt: null, lastError: null },
+      now: Date.parse('2026-03-01T00:00:00Z'),
     }),
-  ).toEqual({ kind: 'keep' });
+  ).toStrictEqual({ kind: 'keep' });
 });
 
-test('a certificate two thirds through its life is renewed', () => {
-  const decision = planRenewal({
-    info: buildInfo(),
-    domain: DOMAIN,
-    attempts: NO_ATTEMPTS,
-    now: ISSUED + 61 * DAY,
-  });
-
-  expect(decision.kind).toBe('issue');
-});
-
-test('no certificate, a missing name or an expired one is issued', () => {
-  const now = ISSUED + DAY;
-
-  expect(planRenewal({ info: null, domain: DOMAIN, attempts: NO_ATTEMPTS, now })).toEqual({
+test('it renews a certificate two thirds through its life, naming its expiry', () => {
+  expect(
+    planRenewal({
+      info: {
+        notBefore: new Date('2026-01-01T00:00:00Z'),
+        notAfter: new Date('2026-04-01T00:00:00Z'),
+        names: ['imp.example.com', '*.imp.example.com'],
+      },
+      domain: 'imp.example.com',
+      attempts: { failures: 0, lastAttemptAt: null, lastError: null },
+      now: Date.parse('2026-03-02T00:00:00Z'),
+    }),
+  ).toStrictEqual({
     kind: 'issue',
-    reason: 'there is no certificate',
+    reason: 'the certificate expires 2026-04-01T00:00:00.000Z',
   });
-
-  expect(
-    planRenewal({
-      info: buildInfo(['imp.example.com']),
-      domain: DOMAIN,
-      attempts: NO_ATTEMPTS,
-      now,
-    }),
-  ).toEqual({ kind: 'issue', reason: 'the certificate does not cover *.imp.example.com' });
-
-  expect(
-    planRenewal({
-      info: buildInfo(),
-      domain: DOMAIN,
-      attempts: NO_ATTEMPTS,
-      now: ISSUED + 91 * DAY,
-    }),
-  ).toEqual({ kind: 'issue', reason: 'the certificate has expired' });
 });
 
-test('failed attempts back off, doubling up to a day', () => {
-  expect([0, 1, 2, 3, 10].map((failures) => readBackoffMs(failures) / 60_000)).toEqual([
-    0, 15, 30, 60, 1440,
-  ]);
-
-  const lastAttemptAt = ISSUED;
-  const attempts = { failures: 2, lastAttemptAt, lastError: 'boom' };
-
+test('it issues a certificate when there is none', () => {
   expect(
-    planRenewal({ info: null, domain: DOMAIN, attempts, now: lastAttemptAt + 29 * 60_000 }),
-  ).toEqual({
+    planRenewal({
+      info: null,
+      domain: 'imp.example.com',
+      attempts: { failures: 0, lastAttemptAt: null, lastError: null },
+      now: Date.parse('2026-01-02T00:00:00Z'),
+    }),
+  ).toStrictEqual({ kind: 'issue', reason: 'there is no certificate' });
+});
+
+test('it issues a certificate when the one on disk misses a name', () => {
+  expect(
+    planRenewal({
+      info: {
+        notBefore: new Date('2026-01-01T00:00:00Z'),
+        notAfter: new Date('2026-04-01T00:00:00Z'),
+        names: ['imp.example.com'],
+      },
+      domain: 'imp.example.com',
+      attempts: { failures: 0, lastAttemptAt: null, lastError: null },
+      now: Date.parse('2026-01-02T00:00:00Z'),
+    }),
+  ).toStrictEqual({ kind: 'issue', reason: 'the certificate does not cover *.imp.example.com' });
+});
+
+test('it issues a certificate when the one on disk has expired', () => {
+  expect(
+    planRenewal({
+      info: {
+        notBefore: new Date('2026-01-01T00:00:00Z'),
+        notAfter: new Date('2026-04-01T00:00:00Z'),
+        names: ['imp.example.com', '*.imp.example.com'],
+      },
+      domain: 'imp.example.com',
+      attempts: { failures: 0, lastAttemptAt: null, lastError: null },
+      now: Date.parse('2026-04-02T00:00:00Z'),
+    }),
+  ).toStrictEqual({ kind: 'issue', reason: 'the certificate has expired' });
+});
+
+test.each([
+  [0, 0],
+  [1, 15],
+  [2, 30],
+  [3, 60],
+  [10, 1440],
+])('it backs off %d failed attempts by %d minutes', (failures, minutes) => {
+  expect(readBackoffMs(failures)).toBe(minutes * 60_000);
+});
+
+test('it waits out the backoff after failed attempts, with the reason', () => {
+  expect(
+    planRenewal({
+      info: null,
+      domain: 'imp.example.com',
+      attempts: { failures: 2, lastAttemptAt: Date.parse('2026-01-01T00:00:00Z'), lastError: 'x' },
+      now: Date.parse('2026-01-01T00:29:00Z'),
+    }),
+  ).toStrictEqual({
     kind: 'wait',
     reason: 'there is no certificate',
-    until: lastAttemptAt + 30 * 60_000,
+    until: Date.parse('2026-01-01T00:30:00Z'),
   });
+});
 
+test('it issues again once the backoff has passed', () => {
   expect(
-    planRenewal({ info: null, domain: DOMAIN, attempts, now: lastAttemptAt + 30 * 60_000 }).kind,
-  ).toBe('issue');
+    planRenewal({
+      info: null,
+      domain: 'imp.example.com',
+      attempts: { failures: 2, lastAttemptAt: Date.parse('2026-01-01T00:00:00Z'), lastError: 'x' },
+      now: Date.parse('2026-01-01T00:30:00Z'),
+    }),
+  ).toStrictEqual({ kind: 'issue', reason: 'there is no certificate' });
+});
+
+test('it names the domain and its wildcard for one certificate', () => {
+  expect(listCertificateNames('imp.example.com')).toStrictEqual([
+    'imp.example.com',
+    '*.imp.example.com',
+  ]);
 });

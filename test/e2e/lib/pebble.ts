@@ -38,9 +38,18 @@ function buildNames(prefix: string) {
 }
 
 // Starts Pebble and challtestsrv on a network of their own, named after the
-// prefix, with their ports published on loopback.
+// prefix, with their ports published on loopback, and returns once both
+// answer. It logs how long each phase took, so a slow start names its phase.
 export async function startPebbleStack(prefix: string): Promise<PebbleEndpoints> {
   const names = buildNames(prefix);
+  const started = performance.now();
+  const timings: string[] = [];
+
+  const writePhaseTiming = (phase: string): void => {
+    const elapsedMs = Math.round(performance.now() - started);
+
+    timings.push(`${phase} ${String(elapsedMs)} ms`);
+  };
 
   await stopPebbleStack(prefix);
 
@@ -106,15 +115,49 @@ export async function startPebbleStack(prefix: string): Promise<PebbleEndpoints>
     names.minicaFile,
   ]);
 
+  writePhaseTiming('containers started');
+
   const endpoints = await readPebbleEndpoints(prefix);
 
-  await waitFor('Pebble to answer', async () => {
-    const response = await fetch(endpoints.directoryUrl, { tls: { ca: endpoints.minicaPem } });
+  await waitFor(
+    'Pebble to answer',
+    async () => {
+      // a fetch that hangs fails this attempt, so the next one runs
+      const response = await fetch(endpoints.directoryUrl, {
+        tls: { ca: endpoints.minicaPem },
+        signal: AbortSignal.timeout(1000),
+      });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${String(response.status)}`);
-    }
-  });
+      if (!response.ok) {
+        throw new Error(`HTTP ${String(response.status)}`);
+      }
+    },
+    { intervalMs: 50 },
+  );
+
+  writePhaseTiming('Pebble ready');
+
+  // an issuance sets its TXT record through this API first: a call that
+  // reaches the published port before challtestsrv listens stalls or fails
+  await waitFor(
+    'challtestsrv to answer',
+    async () => {
+      const response = await fetch(new URL('/clear-txt', endpoints.challtestsrvUrl), {
+        method: 'POST',
+        body: JSON.stringify({ host: 'startup-probe.invalid.' }),
+        signal: AbortSignal.timeout(1000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${String(response.status)}`);
+      }
+    },
+    { intervalMs: 50 },
+  );
+
+  writePhaseTiming('challtestsrv ready');
+
+  console.error(`pebble ${prefix}: ${timings.join(', ')}`);
 
   return endpoints;
 }
@@ -151,8 +194,10 @@ const PUBLIC_IP = '203.0.113.7';
 // the public listener's port inside the host container (IMP_PUBLIC_HTTPS_PORT)
 export const PUBLIC_HTTPS_PORT = 7443;
 
-export function buildPebbleEnv(): Readonly<Record<string, string>> {
-  const names = buildNames(instance.container);
+export function buildPebbleEnv(
+  container: string = instance.container,
+): Readonly<Record<string, string>> {
+  const names = buildNames(container);
 
   return {
     IMP_DEV_NETWORK: names.network,
@@ -208,6 +253,12 @@ export async function writePebbleRoot(): Promise<string> {
 async function readPublishedPort(container: string, port: number): Promise<string> {
   const out = await runChecked(['docker', 'port', container, `${String(port)}/tcp`]);
 
+  return parsePublishedPort(container, port, out);
+}
+
+// The host port in `docker port`'s output, one `<address>:<port>` line per
+// binding; the first line's port when there are several
+export function parsePublishedPort(container: string, port: number, out: string): string {
   const published = /:(?<port>\d+)\s*$/m.exec(out.trim())?.groups?.['port'];
 
   if (published === undefined) {

@@ -1,34 +1,22 @@
-import { expect, test } from 'bun:test';
-import type { GuestListener } from '../agent-client/listener-stream';
+import { expect, mock, test } from 'bun:test';
+import { buildStubGuestListener } from '../test-utils/build-stub-guest-listener';
 import { runGuestListener } from './run-guest-listener';
 
-function buildListener(ids: readonly number[]): GuestListener {
-  return {
-    path: null,
-    port: 9000,
-    id: 'ab',
-    async *connections() {
-      for (const id of ids) {
-        await Bun.sleep(1);
-
-        yield id;
-      }
-    },
-    close: () => {},
-  };
-}
-
-test('clients past the cap are refused, and the rest delivered', async () => {
+test('it delivers clients until the forward is full and refuses the rest', async () => {
+  const guest = buildStubGuestListener('ab', { network: 'tcp', port: 9000 });
   const delivered: number[] = [];
   const refused: number[] = [];
-  const state = { open: 0 };
 
-  await runGuestListener(buildListener([1, 2, 3, 4]), {
+  guest.connect(1);
+  guest.connect(2);
+  guest.connect(3);
+  guest.connect(4);
+  guest.end();
+
+  await runGuestListener(guest.listener, {
     // each relay stays open
     deliver: (id) => {
       delivered.push(id);
-
-      state.open += 1;
 
       return new Promise(() => {});
     },
@@ -37,9 +25,22 @@ test('clients past the cap are refused, and the rest delivered', async () => {
 
       return Promise.resolve();
     },
-    isFull: () => state.open >= 2,
+    isFull: () => delivered.length >= 2,
   });
 
-  expect(delivered).toEqual([1, 2]);
-  expect(refused).toEqual([3, 4]);
+  expect(delivered).toStrictEqual([1, 2]);
+  expect(refused).toStrictEqual([3, 4]);
+});
+
+test('it settles once the guest listener ends, with no client handed on', async () => {
+  const guest = buildStubGuestListener('ab', { network: 'tcp', port: 9000 });
+  const deliver = mock(() => Promise.resolve());
+  const refuse = mock(() => Promise.resolve());
+
+  guest.end();
+
+  await runGuestListener(guest.listener, { deliver, refuse, isFull: () => false });
+
+  expect(deliver).not.toHaveBeenCalled();
+  expect(refuse).not.toHaveBeenCalled();
 });

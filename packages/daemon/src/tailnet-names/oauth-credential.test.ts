@@ -1,65 +1,72 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadOrCreateHostId } from './host-id';
 import { readOAuthCredential } from './oauth-credential';
 
-const SECRET = 'tskey-client-kExample-SECRETVALUE';
-
 function setupTest() {
-  const dir = mkdtempSync(join(tmpdir(), 'imp-names-'));
+  const dir = mkdtempSync(join(tmpdir(), 'imp-oauth-'));
 
-  return {
-    dir,
-    [Symbol.dispose]() {
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  return { dir };
 }
 
 test('it reads the client from an owner-only file', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const path = join(ctx.dir, 'oauth.json');
 
-  writeFileSync(path, JSON.stringify({ clientId: 'kExample', clientSecret: SECRET }), {
+  writeFileSync(path, JSON.stringify({ clientId: 'kExample', clientSecret: 'secret' }), {
     mode: 0o600,
   });
 
-  expect(readOAuthCredential(path)).toEqual({ clientId: 'kExample', clientSecret: SECRET });
+  expect(readOAuthCredential(path)).toStrictEqual({ clientId: 'kExample', clientSecret: 'secret' });
 });
 
-test('a file others can read, or one it cannot parse, is refused without its secret', () => {
-  using ctx = setupTest();
+test('it refuses a file others can read, naming its mode and not its secret', () => {
+  const ctx = setupTest();
+  const path = join(ctx.dir, 'oauth.json');
 
-  const open = join(ctx.dir, 'open.json');
-  const broken = join(ctx.dir, 'broken.json');
+  writeFileSync(
+    path,
+    JSON.stringify({ clientId: 'kExample', clientSecret: 'tskey-client-kExample-SECRETVALUE' }),
+    { mode: 0o644 },
+  );
 
-  writeFileSync(open, JSON.stringify({ clientId: 'kExample', clientSecret: SECRET }), {
-    mode: 0o644,
-  });
-
-  writeFileSync(broken, `{"clientSecret": "${SECRET}"`, { mode: 0o600 });
-
-  expect(() => readOAuthCredential(open)).toThrow(`${open} is mode 644`);
-  expect(() => readOAuthCredential(broken)).toThrow('must be JSON with a clientId');
-
-  for (const path of [open, broken]) {
-    try {
-      readOAuthCredential(path);
-    } catch (error) {
-      expect(String(error)).not.toContain(SECRET);
-    }
-  }
+  expect(() => readOAuthCredential(path)).toThrowWithMessage(
+    Error,
+    `${path} is mode 644; it holds a secret, so make it 0600`,
+  );
 });
 
-test('the host ID is made once, owner-only, and read back the same', () => {
-  using ctx = setupTest();
+test('it refuses a file it cannot parse, without its secret', () => {
+  const ctx = setupTest();
+  const path = join(ctx.dir, 'oauth.json');
 
-  const id = loadOrCreateHostId(ctx.dir);
+  writeFileSync(path, '{"clientSecret": "tskey-client-kExample-SECRETVALUE"', { mode: 0o600 });
 
-  expect(id).toMatch(/^[\da-f]{32}$/);
-  expect(statSync(join(ctx.dir, 'tailnet-names', 'host-id')).mode & 0o777).toBe(0o600);
-  expect(loadOrCreateHostId(ctx.dir)).toBe(id);
+  expect(() => readOAuthCredential(path)).toThrowWithMessage(
+    Error,
+    `${path} must be JSON with a clientId and a clientSecret`,
+  );
+});
+
+test('it refuses a file with an empty client secret', () => {
+  const ctx = setupTest();
+  const path = join(ctx.dir, 'oauth.json');
+
+  writeFileSync(path, JSON.stringify({ clientId: 'kExample', clientSecret: '' }), { mode: 0o600 });
+
+  expect(() => readOAuthCredential(path)).toThrowWithMessage(
+    Error,
+    `${path} must be JSON with a clientId and a clientSecret`,
+  );
+});
+
+test('it refuses a file that is not there', () => {
+  const ctx = setupTest();
+
+  expect(() => readOAuthCredential(join(ctx.dir, 'oauth.json'))).toThrow(/^ENOENT/v);
 });

@@ -1,8 +1,12 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { chmodSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { createSecret, findSecret } from '../db/secrets';
 import { removeTokenRecord, writeTokenRecord } from '../db/tokens';
-import { formatKeyFingerprint } from '../ssh/authorized-keys';
+import { createAuthorizedKeys, formatKeyFingerprint } from '../ssh/authorized-keys';
 import { createEd25519Key } from '../ssh/host-key';
 import { buildMockTokenRecord } from '../test-utils/build-mock-token-record';
 import { buildMockTokenSshKeyRecord } from '../test-utils/build-mock-token-ssh-key-record';
@@ -479,6 +483,36 @@ test('#addKey refuses a key authorized_keys lists', async () => {
   await tokens.create({ name: 'b', scope: 'read', imps: null });
 
   expect(tokens.addKey('b', line)).rejects.toMatchObject({
+    code: 'CONFLICT',
+    message: `key ${formatKeyFingerprint(blob)} is in authorized_keys, where it has every imp; delete that line, then bind it`,
+  });
+});
+
+test('#addKey refuses a key that a group-writable authorized_keys lists', async () => {
+  const ctx = await setupTest();
+  const dir = await mkdtemp(join(tmpdir(), 'imp-tokens-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const keysPath = join(dir, 'authorized_keys');
+  const key = createEd25519Key();
+  const blob = Buffer.from(key.public.split(' ')[1] ?? '', 'base64');
+
+  writeFileSync(keysPath, `${key.public}\n`);
+  chmodSync(keysPath, 0o666);
+
+  // the file grants no login at this mode, but still lists the key
+  const tokens = await loadTokenStore({
+    db: ctx.db,
+    rootToken: 'root-secret',
+    now: Date.now,
+    onRemove: () => {},
+    isFileKey: createAuthorizedKeys(keysPath, () => {}).isListed,
+  });
+
+  await tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  expect(tokens.addKey('ci', key.public)).rejects.toMatchObject({
     code: 'CONFLICT',
     message: `key ${formatKeyFingerprint(blob)} is in authorized_keys, where it has every imp; delete that line, then bind it`,
   });

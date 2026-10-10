@@ -1,7 +1,7 @@
 import type { PublicImp } from '../db/exposure';
 import { createSemaphore } from '../imps/semaphore';
 import type { TailscaleStatus } from '../net/tailscale-status';
-import type { Ticker } from '../process/ticker';
+import type { Ticker, TickerTimer } from '../process/ticker';
 import { startTicker } from '../process/ticker';
 import { readErrorMessage } from '../read-error-message';
 import type { IssueCertificate } from './acme/acme-issuer';
@@ -40,7 +40,18 @@ export interface HttpsService {
 
   // the last pass, or null before the first
   readonly readRecordsStatus: () => RecordsStatus | null;
+
+  // the ports the tailnet and public listeners hold; null while none does
+  readonly readPorts: () => {
+    readonly tailnet: HttpsPorts;
+    readonly public: HttpsPorts | null;
+  };
   readonly stop: () => Promise<void>;
+}
+
+interface HttpsPorts {
+  readonly https: number | null;
+  readonly http: number | null;
 }
 
 interface HttpsServiceDeps {
@@ -61,8 +72,9 @@ interface HttpsServiceDeps {
   readonly listPublicImps: () => Promise<readonly string[]>;
   readonly findPublicImp: (name: string) => Promise<PublicImp | undefined>;
 
-  // how often the tailnet IP is read; 30 s unless a test is in a hurry
-  readonly addressIntervalMs?: number;
+  // where the renewal, records and address passes wait out their intervals:
+  // the runtime's timers unless a test steps them by hand
+  readonly timer?: TickerTimer;
 
   // where the public listeners bind; every address unless a test says
   readonly publicAddress?: string;
@@ -132,6 +144,13 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
   };
 
   const tickers: Ticker[] = [];
+
+  const startTask = (
+    label: string,
+    intervalMs: number,
+    task: () => Promise<void>,
+    taskLog: (message: string) => void,
+  ): Ticker => startTicker(label, intervalMs, task, taskLog, deps.timer);
 
   const runRenewal = async (): Promise<void> => {
     const certificate = await certs.renew();
@@ -266,6 +285,10 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
   return {
     updatePublicRecords,
     readRecordsStatus: () => recordsStatus,
+    readPorts: () => ({
+      tailnet: listeners.readPorts(),
+      public: publicListeners?.readPorts() ?? null,
+    }),
     start: () => {
       const certificate = certs.load();
 
@@ -287,10 +310,10 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
       void updatePublicRecords();
 
       tickers.push(
-        startTicker('https renewal', RENEW_INTERVAL_MS, runRenewal, log),
+        startTask('https renewal', RENEW_INTERVAL_MS, runRenewal, log),
 
         // as often as renewal: a record changed by hand comes back in time
-        startTicker(
+        startTask(
           'https public records',
           RENEW_INTERVAL_MS,
           async () => {
@@ -298,12 +321,7 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
           },
           log,
         ),
-        startTicker(
-          'https addresses',
-          deps.addressIntervalMs ?? ADDRESS_INTERVAL_MS,
-          updateAddresses,
-          log,
-        ),
+        startTask('https addresses', ADDRESS_INTERVAL_MS, updateAddresses, log),
       );
     },
     stop: async () => {

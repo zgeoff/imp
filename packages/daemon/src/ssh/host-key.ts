@@ -33,10 +33,18 @@ export function loadOrCreateHostKey(sshDir: string): string {
 // 256), and that key does not parse; such a key is made again
 const MAX_KEY_ATTEMPTS = 16;
 
-// an ed25519 key pair in OpenSSH format that ssh2 can read back
-export function createEd25519Key(): { readonly private: string; readonly public: string } {
+interface KeyPair {
+  readonly private: string;
+  readonly public: string;
+}
+
+// an ed25519 key pair in OpenSSH format that ssh2 can read back; `generate`
+// is ssh2's generator outside tests
+export function createEd25519Key(
+  generate: () => KeyPair = () => utils.generateKeyPairSync('ed25519'),
+): KeyPair {
   for (let attempt = 0; attempt < MAX_KEY_ATTEMPTS; attempt += 1) {
-    const pair = utils.generateKeyPairSync('ed25519');
+    const pair = generate();
 
     if (!(utils.parseKey(pair.private) instanceof Error)) {
       return pair;

@@ -45,6 +45,13 @@ interface WakeProxyDeps {
   readonly imps: Pick<ImpRuntime, 'requireRunning' | 'tracker' | 'recordActivity'>;
   readonly log: (message: string) => void;
   readonly peers: ForwardedPeers;
+
+  // the Host-routed port and each slot's port; the config's unless a test
+  // asks for any free one (0)
+  readonly ports?: { readonly proxy: number; readonly slot: (slot: number) => number };
+
+  // how long an upstream WebSocket may take to open; 10 s by default
+  readonly upstreamSocketTimeoutMs?: number;
 }
 
 // Where a request goes: an imp, which it wakes, impd's own API, nowhere,
@@ -94,6 +101,12 @@ export interface WakeProxy {
   // one listener per imp on portBase + slot; call after a create or destroy
   readonly syncListeners: () => Promise<void>;
 
+  // the port the Host-routed listener holds
+  readonly port: number;
+
+  // the port of an imp's own listener, or null while it has none
+  readonly readImpPort: (impId: string) => number | null;
+
   // another listener with the same proxy behind it; the caller stops it
   readonly startListener: (options: ProxyListenOptions) => ProxyServer;
   readonly stop: () => Promise<void>;
@@ -106,6 +119,12 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   const listeners = new Map<string, { readonly slot: number; readonly server: ProxyServer }>();
   const failedSlots = new Set<number>();
 
+  const ports = deps.ports ?? {
+    proxy: deps.config.proxyPort,
+    slot: (slot: number) => deriveSlotAddress(slot, deps.config).tailnetPort,
+  };
+
+  const upstreamSocketTimeoutMs = deps.upstreamSocketTimeoutMs ?? UPSTREAM_SOCKET_TIMEOUT_MS;
   const syncSlot = createSemaphore(1);
 
   const websocket: WebSocketHandler<SocketData> = {
@@ -331,7 +350,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const pending: (string | ArrayBuffer)[] = [];
 
     try {
-      upstream = await openUpstreamSocket(target, protocols, headers);
+      upstream = await openUpstreamSocket(target, protocols, headers, upstreamSocketTimeoutMs);
     } catch (error) {
       release();
 
@@ -380,7 +399,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   const hint = `Use http://<imp>.imp.localhost:${String(deps.config.proxyPort)}/.`;
 
   const main = startListener({
-    port: deps.config.proxyPort,
+    port: ports.proxy,
     route: (request) => {
       const name = parseHostName(request.headers.get('host'));
 
@@ -420,7 +439,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
           continue;
         }
 
-        const port = deriveSlotAddress(imp.slot, deps.config).tailnetPort;
+        const port = ports.slot(imp.slot);
 
         try {
           const route: ProxyRoute = { kind: 'imp', name: imp.name };
@@ -445,6 +464,8 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
 
   return {
     syncListeners: runListenerSync,
+    port: main.port ?? ports.proxy,
+    readImpPort: (impId) => listeners.get(impId)?.server.port ?? null,
     startListener,
     stop: async () => {
       await Promise.all([
@@ -541,6 +562,7 @@ function openUpstreamSocket(
   target: string,
   protocols: readonly string[],
   headers: Readonly<Headers>,
+  timeoutMs: number,
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(target, {
@@ -554,7 +576,7 @@ function openUpstreamSocket(
       socket.close();
 
       reject(new Error('timed out'));
-    }, UPSTREAM_SOCKET_TIMEOUT_MS);
+    }, timeoutMs);
 
     socket.addEventListener('open', () => {
       clearTimeout(timer);
