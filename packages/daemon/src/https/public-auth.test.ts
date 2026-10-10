@@ -12,8 +12,9 @@ test('#createCredential makes a different credential each time', () => {
 });
 
 test('#buildCredentialHash keeps the sha256 of the credential, not the credential', () => {
+  // the sha256 of the credential in base64url, as `openssl dgst -sha256` gives it
   expect(buildCredentialHash('a:password:with:colons')).toBe(
-    new Bun.CryptoHasher('sha256').update('a:password:with:colons').digest('base64url'),
+    'Kxv9fUjDPFSK2V8fCksiazKmCViVet1wbpXvRf0AkUc',
   );
 });
 

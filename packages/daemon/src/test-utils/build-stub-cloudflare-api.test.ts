@@ -46,6 +46,55 @@ test('it refuses a token it does not accept with Cloudflare’s 403', async () =
   });
 });
 
+test('it lists only the zones in a token’s scope', async () => {
+  const api = buildStubCloudflareApi({
+    tokens: ['cf-token', 'cf-other'],
+    zonesOf: { 'cf-token': ['z1'], 'cf-other': ['z2'] },
+  });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'example.com', name_servers: ['ns1.test'] });
+  await api.zones.create({ id: 'z2', name: 'example.com', name_servers: ['ns2.test'] });
+
+  const response = await fetch('https://api.cloudflare.com/client/v4/zones?name=example.com', {
+    headers: { authorization: 'Bearer cf-other' },
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
+    success: true,
+    errors: [],
+    messages: [],
+    result: [{ id: 'z2', name: 'example.com', name_servers: ['ns2.test'] }],
+    result_info: { page: 1, per_page: 20, count: 1, total_pages: 1 },
+  });
+});
+
+test('it refuses a token the records of a zone outside its scope with Cloudflare’s 403', async () => {
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'], zonesOf: { 'cf-token': ['z1'] } });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z2', name: 'other.com' });
+
+  const response = await fetch('https://api.cloudflare.com/client/v4/zones/z2/dns_records', {
+    headers: { authorization: 'Bearer cf-token' },
+  });
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(403);
+
+  expect(body).toStrictEqual({
+    success: false,
+    errors: [{ code: 10_000, message: 'Authentication error' }],
+    messages: [],
+    result: null,
+  });
+});
+
 test('it creates a record and answers it with the fields left out filled', async () => {
   const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
 
@@ -294,6 +343,41 @@ test('it answers Cloudflare’s 404 for a delete of a record it does not hold', 
     messages: [],
     result: null,
   });
+});
+
+test('it refuses a token an overwrite in a zone outside its scope, and keeps the record', async () => {
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'], zonesOf: { 'cf-token': ['z1'] } });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z2', name: 'other.com' });
+  await api.records.create({ id: 'r1', zone_id: 'z2', content: '192.0.2.1' });
+
+  const response = await fetch('https://api.cloudflare.com/client/v4/zones/z2/dns_records/r1', {
+    method: 'PUT',
+    headers: { authorization: 'Bearer cf-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'A', name: 'a.other.com', content: '192.0.2.2' }),
+  });
+
+  expect(response.status).toBe(403);
+  expect(api.readRecords()[0]?.content).toBe('192.0.2.1');
+});
+
+test('it refuses a token a delete in a zone outside its scope, and keeps the record', async () => {
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'], zonesOf: { 'cf-token': ['z1'] } });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z2', name: 'other.com' });
+  await api.records.create({ id: 'r1', zone_id: 'z2' });
+
+  const response = await fetch('https://api.cloudflare.com/client/v4/zones/z2/dns_records/r1', {
+    method: 'DELETE',
+    headers: { authorization: 'Bearer cf-token' },
+  });
+
+  expect(response.status).toBe(403);
+  expect(api.readRecords()).toHaveLength(1);
 });
 
 test('it records each call with its path and token', async () => {

@@ -366,8 +366,18 @@ test('it replaces a certificate for another domain', async () => {
 
   const log = mock<(message: string) => void>();
 
-  const fresh = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
-  const other = await buildMockCertificate({ names: ['other.test', '*.other.test'] });
+  const fresh = await buildMockCertificate({
+    names: ['imp.test', '*.imp.test'],
+    notBefore: new Date('2030-01-10T00:00:00Z'),
+    notAfter: new Date('2030-04-10T00:00:00Z'),
+  });
+
+  // still valid for months at the manager's now: only its names are wrong
+  const other = await buildMockCertificate({
+    names: ['other.test', '*.other.test'],
+    notBefore: new Date('2030-01-01T00:00:00Z'),
+    notAfter: new Date('2030-04-01T00:00:00Z'),
+  });
 
   ctx.store.writeCertificate(other);
 
@@ -375,7 +385,7 @@ test('it replaces a certificate for another domain', async () => {
     domain: 'imp.test',
     store: ctx.store,
     issue: () => Promise.resolve(fresh),
-    now: () => Date.now(),
+    now: () => Date.parse('2030-01-10T00:00:00Z'),
     log,
   });
 

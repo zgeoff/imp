@@ -76,6 +76,74 @@ test('it waits for nothing before a TXT value counts as set', async () => {
   await expect(provider.waitForTxt('_acme-challenge.imp.test', ['v'])).toResolve();
 });
 
+test('it adds an A record through the management API, with the name fully qualified', async () => {
+  const received = mock<(path: string, body: unknown) => void>();
+
+  server.use(
+    http.post('http://challtestsrv.test:8055/:command', async (info) => {
+      const body: unknown = await info.request.json();
+
+      received(new URL(info.request.url).pathname, body);
+
+      return new HttpResponse(null, { status: 200 });
+    }),
+  );
+
+  const provider = createChalltestsrvProvider('http://challtestsrv.test:8055');
+
+  await provider.setA('web.pub.imp.test', '203.0.113.7');
+
+  expect(received).toHaveBeenCalledExactlyOnceWith('/add-a', {
+    host: 'web.pub.imp.test.',
+    addresses: ['203.0.113.7'],
+  });
+});
+
+test('it rejects an A record the management API refuses, and lists no record for it', async () => {
+  server.use(
+    http.post('http://challtestsrv.test:8055/add-a', () => new HttpResponse(null, { status: 500 })),
+  );
+
+  const provider = createChalltestsrvProvider('http://challtestsrv.test:8055');
+
+  const [refused] = await Promise.allSettled([
+    provider.setA('web.pub.imp.test', '203.0.113.7', 'owner-a'),
+  ]);
+
+  const listed = await provider.listA('pub.imp.test', 'owner-a');
+
+  expect(refused).toStrictEqual({
+    status: 'rejected',
+    reason: new Error('challtestsrv /add-a: 500'),
+  });
+
+  expect(listed).toStrictEqual(new Map());
+});
+
+test('it keeps listing an A record whose clear the management API refuses', async () => {
+  server.use(
+    http.post('http://challtestsrv.test:8055/add-a', () => new HttpResponse(null, { status: 200 })),
+    http.post(
+      'http://challtestsrv.test:8055/clear-a',
+      () => new HttpResponse(null, { status: 500 }),
+    ),
+  );
+
+  const provider = createChalltestsrvProvider('http://challtestsrv.test:8055');
+
+  await provider.setA('web.pub.imp.test', '203.0.113.7', 'owner-a');
+
+  const [refused] = await Promise.allSettled([provider.removeA('web.pub.imp.test', 'owner-a')]);
+  const listed = await provider.listA('pub.imp.test', 'owner-a');
+
+  expect(refused).toStrictEqual({
+    status: 'rejected',
+    reason: new Error('challtestsrv /clear-a: 500'),
+  });
+
+  expect(listed).toStrictEqual(new Map([['web.pub.imp.test', '203.0.113.7']]));
+});
+
 test('it lists the A records it wrote with this owner under the domain', async () => {
   server.use(
     http.post('http://challtestsrv.test:8055/add-a', () => new HttpResponse(null, { status: 200 })),
@@ -110,7 +178,10 @@ test('it removes an A record it wrote with this owner', async () => {
   await provider.setA('web.pub.imp.test', '203.0.113.7', 'owner-a');
   await provider.removeA('web.pub.imp.test', 'owner-a');
 
-  expect(received).toHaveBeenLastCalledWith('/clear-a', { host: 'web.pub.imp.test.' });
+  expect(received.mock.calls).toStrictEqual([
+    ['/add-a', { host: 'web.pub.imp.test.', addresses: ['203.0.113.7'] }],
+    ['/clear-a', { host: 'web.pub.imp.test.' }],
+  ]);
 });
 
 test('it never removes an A record of another owner', async () => {

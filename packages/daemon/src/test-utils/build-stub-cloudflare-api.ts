@@ -73,6 +73,11 @@ interface StubCloudflareOptions {
 
   // false leaves result_info off a list's answer
   readonly hasResultInfo?: boolean;
+
+  // the ids of the zones each token's scope holds; a token left out sees
+  // every zone. Cloudflare lists only those zones to it, and refuses it the
+  // records of any other.
+  readonly zonesOf?: Readonly<Record<string, readonly string[]>>;
 }
 
 interface ApiError {
@@ -122,6 +127,11 @@ function toAnswer(record: StubRecord): CloudflareRecord {
   };
 }
 
+// the bearer token a call came with, or '' for none
+function readToken(request: Request): string {
+  return request.headers.get('authorization')?.replace(/^Bearer /v, '') ?? '';
+}
+
 async function readRecordBody(request: Request) {
   const json: unknown = await request.json().catch(() => null);
 
@@ -144,7 +154,7 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
   const checkToken = (request: Request): Response | null => {
     const url = new URL(request.url);
 
-    const token = request.headers.get('authorization')?.replace(/^Bearer /v, '') ?? '';
+    const token = readToken(request);
 
     requests.push({
       method: request.method,
@@ -159,8 +169,24 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
     return null;
   };
 
-  const hasZone = (zoneId: string): boolean =>
-    zones.findFirst((query) => query.where({ id: zoneId })) !== undefined;
+  const canSee = (request: Request, zoneId: string): boolean => {
+    const scope = options.zonesOf?.[readToken(request)];
+
+    return scope === undefined || scope.includes(zoneId);
+  };
+
+  // a zone outside the token's scope gets Cloudflare's authentication error
+  const checkZone = (request: Request, zoneId: string): Response | null => {
+    if (!canSee(request, zoneId)) {
+      return buildFailure(403, { code: 10_000, message: 'Authentication error' });
+    }
+
+    if (zones.findFirst((query) => query.where({ id: zoneId })) === undefined) {
+      return buildMissingZone(zoneId);
+    }
+
+    return null;
+  };
 
   const handlers = [
     http.get(`${CLOUDFLARE_API}/zones`, (info) => {
@@ -174,7 +200,7 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
 
       const found = zones
         .findMany()
-        .filter((zone) => name === null || zone.name === name)
+        .filter((zone) => (name === null || zone.name === name) && canSee(info.request, zone.id))
         .map((zone): CloudflareZone => ({
           id: zone.id,
           name: zone.name,
@@ -193,9 +219,10 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
       }
 
       const zoneId = String(info.params['zoneId']);
+      const zoneRefusal = checkZone(info.request, zoneId);
 
-      if (!hasZone(zoneId)) {
-        return buildMissingZone(zoneId);
+      if (zoneRefusal !== null) {
+        return zoneRefusal;
       }
 
       const search = new URL(info.request.url).searchParams;
@@ -240,9 +267,10 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
       }
 
       const zoneId = String(info.params['zoneId']);
+      const zoneRefusal = checkZone(info.request, zoneId);
 
-      if (!hasZone(zoneId)) {
-        return buildMissingZone(zoneId);
+      if (zoneRefusal !== null) {
+        return zoneRefusal;
       }
 
       const body = await readRecordBody(info.request);
@@ -263,6 +291,10 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
       }
 
       const where = { zone_id: String(info.params['zoneId']), id: String(info.params['recordId']) };
+
+      if (!canSee(info.request, where.zone_id)) {
+        return buildFailure(403, { code: 10_000, message: 'Authentication error' });
+      }
 
       if (records.findFirst((query) => query.where(where)) === undefined) {
         return buildMissingRecord();
@@ -298,6 +330,11 @@ export function buildStubCloudflareApi(options: Readonly<StubCloudflareOptions>)
       }
 
       const where = { zone_id: String(info.params['zoneId']), id: String(info.params['recordId']) };
+
+      if (!canSee(info.request, where.zone_id)) {
+        return buildFailure(403, { code: 10_000, message: 'Authentication error' });
+      }
+
       const deleted = records.delete((query) => query.where(where));
 
       if (deleted === undefined) {

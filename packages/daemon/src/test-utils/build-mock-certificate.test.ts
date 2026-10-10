@@ -9,6 +9,11 @@ test('it builds a default certificate', async () => {
     keyPem: expect.toStartWith('-----BEGIN PRIVATE KEY-----'),
     chainPem: expect.toStartWith('-----BEGIN CERTIFICATE-----'),
   });
+
+  // the key is the certificate's own
+  expect(
+    new X509Certificate(certificate.chainPem).checkPrivateKey(createPrivateKey(certificate.keyPem)),
+  ).toBeTrue();
 });
 
 test('it signs the default certificate for one name, valid from a minute ago for a day', async () => {
@@ -21,14 +26,6 @@ test('it signs the default certificate for one name, valid from a minute ago for
   expect(parsed.subjectAltName).toMatch(/^DNS:[^,]+$/v);
   expect(parsed.validFromDate.getTime()).toBeWithin(before - 61_000, Date.now() - 59_000);
   expect(parsed.validToDate.getTime() - parsed.validFromDate.getTime()).toBe(86_400_000);
-});
-
-test('it pairs the certificate with its own private key', async () => {
-  const certificate = await buildMockCertificate();
-
-  const parsed = new X509Certificate(certificate.chainPem);
-
-  expect(parsed.checkPrivateKey(createPrivateKey(certificate.keyPem))).toBeTrue();
 });
 
 test('it applies overrides on top of the defaults', async () => {

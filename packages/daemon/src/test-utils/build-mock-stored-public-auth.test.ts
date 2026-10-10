@@ -10,8 +10,9 @@ test('it builds a default stored public auth', () => {
 });
 
 test('it applies overrides on top of the defaults', () => {
-  expect(buildMockStoredPublicAuth({ auth: 'token', user: null })).toMatchObject({
+  expect(buildMockStoredPublicAuth({ auth: 'token', user: null })).toStrictEqual({
     auth: 'token',
     user: null,
+    hash: expect.toSatisfy((hash: string) => /^[\w\-]{43}$/v.test(hash)),
   });
 });

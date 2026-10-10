@@ -339,8 +339,16 @@ test('it hands the dashboard session to the API on the bare domain', async () =>
 
   const body: unknown = await response.json();
 
-  expect(body).toMatchObject({
+  expect(body).toStrictEqual({
+    path: '/',
+    proto: 'https',
+    host: 'imp.test',
     cookie: 'a=1; __Host-imp_session=v1.2.secret; imp_session=v1.2.plain',
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: 'imp.test',
   });
 });
 
@@ -379,7 +387,17 @@ test('it never hands the dashboard session to an imp', async () => {
 
   const body: unknown = await response.json();
 
-  expect(body).toMatchObject({ host: 'web.imp.test', cookie: 'a=1' });
+  expect(body).toStrictEqual({
+    path: '/',
+    proto: 'https',
+    host: 'web.imp.test',
+    cookie: 'a=1',
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: 'web.imp.test',
+  });
 });
 
 test('it redirects plain http on the domain to https on its port', async () => {
@@ -1090,7 +1108,17 @@ test('it serves a token imp given its token, without passing the token on', asyn
 
   const body: unknown = await response.json();
 
-  expect(body).toMatchObject({ host: 'web.imp.test', authorization: null });
+  expect(body).toStrictEqual({
+    path: '/',
+    proto: 'https',
+    host: 'web.imp.test',
+    cookie: null,
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: 'web.imp.test',
+  });
 });
 
 test.each([
@@ -1177,7 +1205,17 @@ test('it serves a basic auth imp given its user and password, without passing th
 
   const body: unknown = await response.json();
 
-  expect(body).toMatchObject({ authorization: null });
+  expect(body).toStrictEqual({
+    path: '/',
+    proto: 'https',
+    host: 'web.imp.test',
+    cookie: null,
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: 'web.imp.test',
+  });
 });
 
 test('it takes no open slot and no wake for plain http on the public listener', async () => {
@@ -1320,12 +1358,16 @@ test('it replaces a public client’s forwarding headers with its own', async ()
 
   const body: unknown = await response.json();
 
-  expect(body).toMatchObject({
+  expect(body).toStrictEqual({
+    path: '/',
+    proto: 'https',
+    host: 'web.imp.test',
+    cookie: null,
+    authorization: null,
     forwardedFor: '127.0.0.1',
     forwarded: null,
     realIp: null,
     forwardedHost: 'web.imp.test',
-    proto: 'https',
   });
 });
 

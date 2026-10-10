@@ -191,6 +191,41 @@ test('it leaves its own A record unwritten when it already holds the address', a
   expect(api.requests.map((request) => request.method)).toStrictEqual(['GET', 'GET', 'GET']);
 });
 
+test('it turns proxying off on its own A record that already holds the address', async () => {
+  const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'example.com' });
+
+  await api.records.create({
+    id: 'r1',
+    zone_id: 'z1',
+    type: 'A',
+    name: 'imp.example.com',
+    content: '100.64.0.7',
+    proxied: true,
+    comment: 'managed by impd',
+  });
+
+  const provider = createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') });
+
+  await provider.setA('imp.example.com', '100.64.0.7');
+
+  expect(api.readRecords()).toStrictEqual([
+    {
+      id: 'r1',
+      zone_id: 'z1',
+      type: 'A',
+      name: 'imp.example.com',
+      content: '100.64.0.7',
+      ttl: 300,
+      proxied: false,
+      comment: 'managed by impd',
+    },
+  ]);
+});
+
 test('it never replaces an address record it did not make, and names it', async () => {
   const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
 
@@ -513,6 +548,44 @@ test('it reads the token at each request, and finds the zone again with a new on
 
   expect(after.filter((request) => request.path === '/zones?name=example.com')).toHaveLength(1);
   expect(api.readRecords().map((record) => record.content)).toStrictEqual(['100.64.0.9']);
+});
+
+// a new token from another account sees its own example.com zone; the call
+// that first reads it still holds the old zone, and fails
+test('it writes to the zone a new token sees after one refused call on the old zone', async () => {
+  const api = buildStubCloudflareApi({
+    tokens: ['cf-token', 'cf-rotated'],
+    zonesOf: { 'cf-token': ['z1'], 'cf-rotated': ['z2'] },
+  });
+
+  const current = { token: 'cf-token' };
+
+  server.use(...api.handlers);
+
+  await api.zones.create({ id: 'z1', name: 'example.com' });
+  await api.zones.create({ id: 'z2', name: 'example.com' });
+
+  const provider = createCloudflareProvider({ readToken: () => Promise.resolve(current.token) });
+
+  await provider.setA('rotate.example.com', '100.64.0.7');
+
+  current.token = 'cf-rotated';
+
+  const [refused] = await Promise.allSettled([provider.setA('rotate.example.com', '100.64.0.8')]);
+
+  await provider.setA('rotate.example.com', '100.64.0.9');
+
+  expect(refused).toStrictEqual({
+    status: 'rejected',
+    reason: new Error('Cloudflare GET /zones/z1/dns_records: 403 Authentication error'),
+  });
+
+  expect(
+    api.readRecords().map((record) => ({ zone: record.zone_id, content: record.content })),
+  ).toStrictEqual([
+    { zone: 'z1', content: '100.64.0.7' },
+    { zone: 'z2', content: '100.64.0.9' },
+  ]);
 });
 
 test('it fails before any call when the token cannot be read', async () => {

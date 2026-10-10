@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
-import { HttpResponse, http } from 'msw';
 import { startPebbleStack, stopPebbleStack } from '../../../../../test/e2e/lib/pebble';
+import { buildStubCloudflareApi } from '../../test-utils/build-stub-cloudflare-api';
 import { createChalltestsrvProvider } from '../dns/challtestsrv-provider';
 import { createCloudflareProvider } from '../dns/cloudflare-provider';
 import { createAcmeIssuer } from './acme-issuer';
@@ -188,14 +188,8 @@ test('it rejects an ACME directory that answers with an error status', async () 
 test('it rejects with the DNS provider reason, and no token, when the provider refuses the token', async () => {
   const ctx = await setupTest();
 
-  server.use(
-    http.all('https://api.cloudflare.com/client/v4/*', () =>
-      HttpResponse.json(
-        { success: false, errors: [{ code: 9109, message: 'Invalid access token' }] },
-        { status: 403 },
-      ),
-    ),
-  );
+  // a stand-in that accepts no token refuses every call with Cloudflare's 403
+  server.use(...buildStubCloudflareApi({ tokens: [] }).handlers);
 
   const logs: string[] = [];
 
