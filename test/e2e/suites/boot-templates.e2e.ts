@@ -36,10 +36,10 @@ test('it makes the template of a shape on its second boot and restores it as imp
   const ctx = await setupTest();
 
   const image = resolveImageName('e2e-ws');
-  const first = `${ctx.prefix}a`;
-  const spare = `${ctx.prefix}x`;
-  const second = `${ctx.prefix}b`;
-  const third = `${ctx.prefix}c`;
+  const first = `${ctx.prefix}make-a`;
+  const spare = `${ctx.prefix}make-x`;
+  const second = `${ctx.prefix}make-b`;
+  const third = `${ctx.prefix}make-c`;
 
   const started = new Date();
 
@@ -118,10 +118,10 @@ test('it keys TCP with its own secret in each restored imp', async () => {
   const ctx = await setupTest();
 
   const image = resolveImageName('e2e-ws');
-  const first = `${ctx.prefix}a`;
-  const spare = `${ctx.prefix}x`;
-  const second = `${ctx.prefix}b`;
-  const third = `${ctx.prefix}c`;
+  const first = `${ctx.prefix}isn-a`;
+  const spare = `${ctx.prefix}isn-x`;
+  const second = `${ctx.prefix}isn-b`;
+  const third = `${ctx.prefix}isn-c`;
 
   // the shape's template goes after the imps that boot it
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
@@ -167,10 +167,10 @@ test('it records each restored boot as its own cold boot, again after a restart 
   const ctx = await setupTest();
 
   const image = resolveImageName('e2e-ws');
-  const first = `${ctx.prefix}a`;
-  const spare = `${ctx.prefix}x`;
-  const second = `${ctx.prefix}b`;
-  const third = `${ctx.prefix}c`;
+  const first = `${ctx.prefix}cold-a`;
+  const spare = `${ctx.prefix}cold-x`;
+  const second = `${ctx.prefix}cold-b`;
+  const third = `${ctx.prefix}cold-c`;
 
   // the shape's template goes after the imps that boot it
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
@@ -225,9 +225,9 @@ test('it sleeps and wakes a restored imp like any other', async () => {
   const ctx = await setupTest();
 
   const image = resolveImageName('e2e-ws');
-  const first = `${ctx.prefix}a`;
-  const spare = `${ctx.prefix}x`;
-  const second = `${ctx.prefix}b`;
+  const first = `${ctx.prefix}sleep-a`;
+  const spare = `${ctx.prefix}sleep-x`;
+  const second = `${ctx.prefix}sleep-b`;
 
   const started = new Date();
 
@@ -269,8 +269,8 @@ test('it times imp new from a template: the wall time and its spans', async () =
   const ctx = await setupTest();
 
   const image = resolveImageName('e2e-ws');
-  const first = `${ctx.prefix}a`;
-  const spare = `${ctx.prefix}x`;
+  const first = `${ctx.prefix}time-a`;
+  const spare = `${ctx.prefix}time-x`;
   const walls: number[] = [];
   const spans: Record<string, number[]> = {};
 
@@ -292,7 +292,7 @@ test('it times imp new from a template: the wall time and its spans', async () =
 
   // ten creates, one after another, each removed before the next
   for (let index = 0; index < 10; index += 1) {
-    const name = `${ctx.prefix}t${String(index)}`;
+    const name = `${ctx.prefix}time-${String(index)}`;
 
     const created = new Date();
 

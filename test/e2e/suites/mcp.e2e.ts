@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { countGuestSleeps } from '../lib/guest-processes';
-import { createInstanceClient } from '../lib/imp-cli';
+import { createInstanceClient, findImp } from '../lib/imp-cli';
 import { startHttpMcpSession, startMcpSession } from '../lib/mcp';
 import { readToolData } from '../lib/mcp-result';
 import { registerRemoval } from '../lib/register-removal';
@@ -35,6 +35,13 @@ test('it boots an imp inside the prefix with imp_create, and refuses one outside
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}tiny`;
+  const other = 'e2e-other-stdio';
+
+  // the outside name must be free, so the cleanup below takes only what this
+  // test made
+  const taken = await findImp(other);
+
+  expect(taken).toBeUndefined();
 
   const created = await ctx.session.runTool('imp_create', {
     name,
@@ -44,10 +51,12 @@ test('it boots an imp inside the prefix with imp_create, and refuses one outside
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  const outside = await ctx.session.runTool('imp_create', { name: 'e2e-other' });
+  const outside = await ctx.session.runTool('imp_create', { name: other });
 
-  // an imp a regressed refusal would leave behind
-  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, 'e2e-other'));
+  // only a create that went through, a regressed refusal, made an imp
+  registerRemoval(ctx.stack, config.keep || outside.isError, () =>
+    removeImpIfPresent(ctx.client, other),
+  );
 
   expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
   expect(outside.isError).toBeTrue();
@@ -58,10 +67,10 @@ test.each([
   ['coreutils', {}],
 ])(
   'it round-trips a file through an odd path with %s, and a write keeps the mode of the file it replaces',
-  async (_tools, image) => {
+  async (tools, image) => {
     const ctx = await setupTest();
 
-    const name = `${ctx.prefix}files`;
+    const name = `${ctx.prefix}files-${tools.toLowerCase()}`;
 
     // a leading dash and spaces in each part, and shell syntax that stays text
     const path = '/root/-odd dir/-a file $(x).txt';
@@ -108,10 +117,10 @@ test.each([
 test.each([
   ['BusyBox', { image: resolveImageName('e2e-tiny') }],
   ['coreutils', {}],
-])('it writes through a symlink and refuses a directory with %s', async (_tools, image) => {
+])('it writes through a symlink and refuses a directory with %s', async (tools, image) => {
   const ctx = await setupTest();
 
-  const name = `${ctx.prefix}link`;
+  const name = `${ctx.prefix}link-${tools.toLowerCase()}`;
 
   const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
 
@@ -188,10 +197,10 @@ test.each([
   ['coreutils', {}],
 ])(
   'it kills the whole process group on a timeout with %s, a nohup child that ignores SIGTERM included',
-  async (_tools, image) => {
+  async (tools, image) => {
     const ctx = await setupTest();
 
-    const name = `${ctx.prefix}group`;
+    const name = `${ctx.prefix}group-${tools.toLowerCase()}`;
 
     const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
 
@@ -216,10 +225,10 @@ test.each([
   ['coreutils', {}],
 ])(
   'it kills a child that left the process group with setsid on a timeout with %s',
-  async (_tools, image) => {
+  async (tools, image) => {
     const ctx = await setupTest();
 
-    const name = `${ctx.prefix}setsid`;
+    const name = `${ctx.prefix}setsid-${tools.toLowerCase()}`;
 
     const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
 
@@ -269,6 +278,13 @@ test('it runs a 15 s command over HTTP for a token held to the prefix, and refus
 
   const name = `${ctx.prefix}http`;
   const tokenName = `${ctx.prefix}agent`;
+  const other = 'e2e-other-http';
+
+  // the outside name must be free, so the cleanup below takes only what this
+  // test made
+  const taken = await findImp(other);
+
+  expect(taken).toBeUndefined();
 
   const created = await ctx.session.runTool('imp_create', {
     name,
@@ -309,10 +325,12 @@ test('it runs a 15 s command over HTTP for a token held to the prefix, and refus
     `mcp http: a 15 s exec answered after ${seconds.toFixed(1)} s, ${String(agent.readKeepalives())} keepalives`,
   );
 
-  const outside = await agent.runTool('imp_create', { name: 'e2e-other' });
+  const outside = await agent.runTool('imp_create', { name: other });
 
-  // an imp a regressed refusal would leave behind
-  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, 'e2e-other'));
+  // only a create that went through, a regressed refusal, made an imp
+  registerRemoval(ctx.stack, config.keep || outside.isError, () =>
+    removeImpIfPresent(ctx.client, other),
+  );
 
   const ended = await agent.close();
 

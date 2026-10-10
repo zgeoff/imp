@@ -210,8 +210,8 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
 test('it restores a point that survived the scheduled forget and prune, and finds none before it', async () => {
   const ctx = await setupTest();
 
-  const idle = `${ctx.prefix}idle`;
-  const survivor = `${ctx.prefix}idle2`;
+  const idle = `${ctx.prefix}prune-idle`;
+  const survivor = `${ctx.prefix}prune-kept`;
 
   // in-test, not suite settings: impd sets up its repository at start, and
   // each test brings its own
@@ -266,7 +266,7 @@ test('it restores a point that survived the scheduled forget and prune, and find
     'restore',
     idle,
     '--as',
-    `${ctx.prefix}idle9`,
+    `${ctx.prefix}prune-early`,
     '--at',
     early,
   ]);
@@ -280,8 +280,8 @@ test('it restores a point that survived the scheduled forget and prune, and find
 test('it restores past a stale lock in the repository, and fails the check loudly on a corrupted pack', async () => {
   const ctx = await setupTest();
 
-  const idle = `${ctx.prefix}idle`;
-  const unlocked = `${ctx.prefix}idle3`;
+  const idle = `${ctx.prefix}lock-idle`;
+  const unlocked = `${ctx.prefix}lock-kept`;
 
   // in-test, not suite settings: impd sets up its repository at start, and
   // each test brings its own

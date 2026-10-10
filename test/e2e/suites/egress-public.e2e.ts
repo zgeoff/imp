@@ -118,7 +118,7 @@ test('it lets an open imp reach each private listener, before and after a public
 test.skipIf(tailnetIp === null)('it refuses a public imp the host’s tailnet address', async () => {
   const ctx = await setupTest();
 
-  const pub = `${ctx.prefix}pub`;
+  const pub = `${ctx.prefix}tail-pub`;
 
   await runImp(
     'new',
@@ -143,8 +143,8 @@ test.skipIf(tailnetIp === null)('it refuses a public imp the host’s tailnet ad
 test('it lets a public imp fetch from the internet, and removes a private address from its DNS answers', async () => {
   const ctx = await setupTest();
 
-  const open = `${ctx.prefix}open`;
-  const pub = `${ctx.prefix}pub`;
+  const open = `${ctx.prefix}dns-open`;
+  const pub = `${ctx.prefix}dns-pub`;
 
   await runImp('new', open, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 

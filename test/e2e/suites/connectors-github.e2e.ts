@@ -44,7 +44,7 @@ test('it takes a secret on stdin, never shows it back, gives a granted guest the
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}a`;
-  const secret = `${ctx.prefix}gh`;
+  const secret = `${ctx.prefix}gh-revoke`;
   const token = `e2e-${randomUUID()}`;
 
   const upstream = await startStubUpstream(ctx.gateway, token);
@@ -149,7 +149,7 @@ test('it pushes a git pack over 1 MB through the broker with Basic auth', async 
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}push`;
-  const secret = `${ctx.prefix}gh`;
+  const secret = `${ctx.prefix}gh-push`;
   const token = `e2e-${randomUUID()}`;
 
   const upstream = await startStubUpstream(ctx.gateway, token);
@@ -216,7 +216,7 @@ test('it tunnels hosts without a grant, and lets nothing inside be reached', asy
 
   const name = `${ctx.prefix}tun`;
   const neighbour = `${ctx.prefix}next`;
-  const secret = `${ctx.prefix}gh`;
+  const secret = `${ctx.prefix}gh-tunnel`;
   const token = `e2e-${randomUUID()}`;
 
   const upstream = await startStubUpstream(ctx.gateway, token);
@@ -281,7 +281,7 @@ test('it leaves no secret in the memory of a slept guest, which still gets the b
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}mem`;
-  const secret = `${ctx.prefix}gh`;
+  const secret = `${ctx.prefix}gh-memory`;
   const token = `e2e-${randomUUID()}`;
 
   const upstream = await startStubUpstream(ctx.gateway, token);
@@ -334,7 +334,7 @@ test('it refuses an exec that requires the broker when the CA bundle step failed
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}ca`;
-  const secret = `${ctx.prefix}gh`;
+  const secret = `${ctx.prefix}gh-ca`;
   const token = `e2e-${randomUUID()}`;
 
   const upstream = await startStubUpstream(ctx.gateway, token);

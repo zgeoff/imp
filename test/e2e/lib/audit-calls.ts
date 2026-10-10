@@ -5,7 +5,13 @@ import { runImp } from './imp-cli';
 // them.
 
 const AuditCallsSchema = z.array(
-  z.object({ at: z.string(), procedure: z.string(), actor: z.string() }),
+  z.object({
+    at: z.string(),
+    procedure: z.string(),
+    actor: z.string(),
+    outcome: z.string(),
+    durationMs: z.number(),
+  }),
 );
 
 export type AuditCall = z.infer<typeof AuditCallsSchema>[number];
@@ -14,17 +20,27 @@ export function parseAuditCalls(json: string): AuditCall[] {
   return AuditCallsSchema.parse(JSON.parse(json));
 }
 
-// The rows a journey added since `before`: an instance keeps an earlier
-// run's rows for the same name, so the journey compares against them, not
-// against a clock. Throws when the earlier rows changed.
+// The rows ahead of the newest row from before, not a clock's: a read holds
+// at most its limit of rows, so new rows push old ones out of `after`.
 export function pickNewCalls(
   after: readonly AuditCall[],
   before: readonly AuditCall[],
 ): AuditCall[] {
-  const added = after.length - before.length;
-  const kept = after.slice(Math.max(added, 0));
+  const [newest] = before;
 
-  if (added < 0 || JSON.stringify(kept) !== JSON.stringify(before)) {
+  if (newest === undefined) {
+    return [...after];
+  }
+
+  const added = after.findIndex((call) => JSON.stringify(call) === JSON.stringify(newest));
+
+  if (added === -1) {
+    throw new Error(`the newest audit row from before is gone: ${JSON.stringify(newest)}`);
+  }
+
+  const kept = after.slice(added);
+
+  if (JSON.stringify(kept) !== JSON.stringify(before.slice(0, kept.length))) {
     throw new Error(`the audit rows from before changed: ${JSON.stringify(kept)}`);
   }
 

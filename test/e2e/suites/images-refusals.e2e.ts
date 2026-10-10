@@ -136,22 +136,24 @@ test('it refuses a FROM image from the host’s own registry under the proxy’s
 // and a listener on the host's loopback, which the test owns, sees nothing;
 // {url} and {port} stand for that listener's
 test.each([
-  ['a plain URL', 'ADD {url} /probe', 'ADD {url} is refused'],
-  ['a URL in the JSON form', 'ADD ["{url}", "/probe"]', 'ADD {url} is refused'],
+  ['a plain URL', 'plain', 'ADD {url} /probe', 'ADD {url} is refused'],
+  ['a URL in the JSON form', 'json', 'ADD ["{url}", "/probe"]', 'ADD {url} is refused'],
   [
     'a URL with a quoted scheme',
+    'quoted',
     'ADD h"ttp:"//127.0.0.1:{port}/probe /probe',
     'an ambiguous form: the ADD source',
   ],
   [
     'a git address',
+    'git',
     'ADD git@127.0.0.1:org/repo.git /src',
     'ADD git@127.0.0.1:org/repo.git is refused',
   ],
-])('it refuses an ADD from %s, unseen by its listener', async (_label, line, refusal) => {
+])('it refuses an ADD from %s, unseen by its listener', async (_label, tag, line, refusal) => {
   const ctx = await setupTest();
 
-  const name = `${ctx.prefix}addurl`;
+  const name = `${ctx.prefix}add-${tag}`;
   const requests: string[] = [];
 
   const listener = Bun.serve({
