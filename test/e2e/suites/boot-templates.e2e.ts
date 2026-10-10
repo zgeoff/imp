@@ -1,5 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import {
+  checkShapeTemplateAbsent,
   readIsnSecret,
   readMac,
   readSessionOutput,
@@ -123,7 +124,10 @@ test('it keys TCP with its own secret in each restored imp', async () => {
   const second = `${ctx.prefix}isn-b`;
   const third = `${ctx.prefix}isn-c`;
 
-  // the shape's template goes after the imps that boot it
+  // the shape's template must be this test's own build, and goes after the
+  // imps that boot it
+  await checkShapeTemplateAbsent(288);
+
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
@@ -172,7 +176,10 @@ test('it records each restored boot as its own cold boot, again after a restart 
   const second = `${ctx.prefix}cold-b`;
   const third = `${ctx.prefix}cold-c`;
 
-  // the shape's template goes after the imps that boot it
+  // the shape's template must be this test's own build, and goes after the
+  // imps that boot it
+  await checkShapeTemplateAbsent(288);
+
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
@@ -231,7 +238,10 @@ test('it sleeps and wakes a restored imp like any other', async () => {
 
   const started = new Date();
 
-  // the shape's template goes after the imps that boot it
+  // the shape's template must be this test's own build, and goes after the
+  // imps that boot it
+  await checkShapeTemplateAbsent(288);
+
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
@@ -274,7 +284,10 @@ test('it times imp new from a template: the wall time and its spans', async () =
   const walls: number[] = [];
   const spans: Record<string, number[]> = {};
 
-  // the shape's template goes after the imps that boot it
+  // the shape's template must be this test's own build, and goes after the
+  // imps that boot it
+  await checkShapeTemplateAbsent(288);
+
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
 
   await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');

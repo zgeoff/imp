@@ -13,6 +13,16 @@ export function parseTemplateKeys(listing: string): string[] {
     .filter((key) => key !== undefined);
 }
 
+// Throws when a template of the memory size is there before a journey's
+// first boot: the journey builds its own, so one there would serve it.
+export function checkNoShapeTemplate(memoryMib: number, keys: readonly string[]): void {
+  if (keys.length > 0) {
+    throw new Error(
+      `a boot template of ${String(memoryMib)} MiB is already there (${keys.join(', ')}); a run with --keep leaves one, so remove it first`,
+    );
+  }
+}
+
 // Thin glue over the host container and live guests for the boot-templates
 // suite below.
 
@@ -55,6 +65,12 @@ export async function readShapeTemplateKeys(memoryMib: number): Promise<string[]
   ]);
 
   return parseTemplateKeys(found.stdout);
+}
+
+export async function checkShapeTemplateAbsent(memoryMib: number): Promise<void> {
+  const keys = await readShapeTemplateKeys(memoryMib);
+
+  checkNoShapeTemplate(memoryMib, keys);
 }
 
 // until impd holds a boot template of the memory size; its key
