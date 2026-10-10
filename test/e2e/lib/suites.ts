@@ -71,7 +71,12 @@ export const SUITES: readonly Suite[] = [
 
   // root in the container reaches Docker only through imp-docker-proxy; it
   // stops and starts the proxy
-  { name: 'socket', prefix: 'e2e-sock-', images: ['e2e-tiny'] },
+  {
+    name: 'socket',
+    prefix: 'e2e-sock-',
+    images: ['e2e-tiny'],
+    journeys: ['socket-refusals', 'socket-builds', 'socket-proxy-stopped'],
+  },
 
   // a second instance beside the run's: over a Docker network, then over
   // the tailnet; each reboots the instance onto the network and back

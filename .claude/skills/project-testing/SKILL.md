@@ -232,9 +232,20 @@ some that the agent's dial completed but the server never accepted; the guest ke
 `Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
 `the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
 `nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
-`templates`, `offsets` and the four `proxy-*` files work this way. The other suite files still read
-their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
-rely on the harness's reset after them.
+`templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent` and
+`reverse` work this way. The other suite files still read their prefix through `setupSuite` in
+`test/e2e/lib/setup-suite.ts`, which registers no hooks, and rely on the harness's reset after them.
+
+Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
+`<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`
+(`buildHostModeProxyArgv` in `test/e2e/lib/host-mode-proxy.ts`), and removes both when it ends. A
+unix socket path holds 107 bytes, which a worktree's `.cache/e2e/ssh-*` dir can pass, so `ssh-agent`
+keeps its ssh control and forward sockets in a `mkdtemp` dir under `TMPDIR`. A journey that checks
+something keeps an imp awake past the idle timeout waits with `waitAwakePastIdle`
+(`test/e2e/lib/awake-past-idle.ts`): the idle loop moves an imp's `lastActiveAt` to its tick only
+while something keeps the imp awake, so a running imp whose `lastActiveAt` reaches the idle timeout
+past the release has stayed awake that long. The wait polls `imp ls`, which records no activity, so
+the journey must not exec in the imp during it.
 
 A journey file also runs alone against an instance that is up:
 `bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`. Nothing then resets the

@@ -68,6 +68,65 @@ export async function startProxy(name: string, ...specs: readonly string[]): Pro
   };
 }
 
+// where each reverse forward listens in the imp, in the order `imp proxy
+// --reverse` printed them: a path, or a port
+export function parseReverseForwards(stdout: string): string[] {
+  return [...stdout.matchAll(/^forwarding [^:]+:(?<guest>\S+) ->/gmv)].map(
+    (match) => match.groups?.['guest'] ?? '',
+  );
+}
+
+export interface RunningReverse {
+  // where each forward listens in the imp, in order
+  readonly guests: readonly string[];
+  readonly readStderr: () => string;
+  readonly stop: () => Promise<number>;
+}
+
+// `imp proxy <name> --reverse <spec>...`, once it printed a line for each
+export async function startReverse(
+  name: string,
+  ...specs: readonly string[]
+): Promise<RunningReverse> {
+  const proc = await startImp(['proxy', name, ...specs.flatMap((spec) => ['--reverse', spec])]);
+
+  const stderr = { text: '' };
+  const stdout = { text: '' };
+
+  void collectOutput(proc.stderr, stderr);
+  void collectOutput(proc.stdout, stdout);
+
+  const guests = await waitFor('imp proxy --reverse to listen', () => {
+    const found = parseReverseForwards(stdout.text);
+
+    if (found.length < specs.length) {
+      throw new Error(`imp proxy printed ${stdout.text}${stderr.text}`);
+    }
+
+    return found;
+  });
+
+  return {
+    guests,
+    readStderr: () => stderr.text,
+    stop: () => {
+      proc.kill('SIGINT');
+
+      return proc.exited;
+    },
+  };
+}
+
+// Collects a stream as text while it runs, such as the log of an ssh that
+// keeps going; read() gives what arrived so far.
+export function collectText(stream: ReadableStream<Uint8Array>): { readonly read: () => string } {
+  const sink = { text: '' };
+
+  void collectOutput(stream, sink);
+
+  return { read: () => sink.text };
+}
+
 // sends `body`, half-closes, and resolves with the reply once the far end
 // closed
 export function sendRequest(port: number, body: string): Promise<string> {

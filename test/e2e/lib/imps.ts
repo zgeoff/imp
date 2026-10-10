@@ -43,6 +43,21 @@ export function readGuestFile(name: string, path: string): Promise<string> {
   return runShellInImp(name, `cat ${path} 2>/dev/null || echo none`);
 }
 
+// waits until nothing is at `path` in the imp, such as a socket a forward or
+// a connection made and must remove once it ends
+export async function waitForGuestPathGone(name: string, path: string): Promise<void> {
+  await waitFor(`${path} to go`, async () => {
+    const state = await runShellInImp(
+      name,
+      `if [ -e '${path}' ]; then echo there; else echo gone; fi`,
+    );
+
+    if (state !== 'gone') {
+      throw new Error(`${path} is still there`);
+    }
+  });
+}
+
 export interface GuestIdentity {
   readonly machineId: string;
 
