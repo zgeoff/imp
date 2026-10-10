@@ -200,19 +200,21 @@ image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in co
 test runs them on a real pool.
 
 The baseline reset, `resetBaseline` in `test/e2e/lib/reset-baseline.ts`, takes impd's client
-(`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It removes
-every imp named with one, and with it the imp's checkpoints, leases and the grants it holds; then
-the networks, secrets, OAuth clients, tokens, and images and templates named with one; then
-`<IMP_DEV_DATA>/broker-test-upstreams.json`. A fixture image (`e2e-<fixture>-<hash>`) carries no
-suite prefix and stays. A removal impd refuses, such as an image another imp boots, rejects the
-reset. `reset-baseline.test.ts` boots impd's real app (`createImpd` on the stub VMM) in process,
-makes each of those kinds, resets, and reads every list back before and after; it also checks that
-an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) and an unprefixed OAuth client
-stay, and that it removes an imp a failed boot left in `error`. Sessions and services are not
-proven: making either needs a guest agent, which the stub VMM has no stand-in for. What the reset
-does not cover: the instance's own settings (the reboot after a failure restores those), the `moves`
-suites' second host (`removeMoveLeftovers` at the end of a run that includes them), and a registry
-container or SSH key a suite file made.
+(`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It first ends
+the move of each such imp that a failed move left marked (`moves.abort`), since impd refuses to
+remove a marked imp with `MOVING`; an abort that cannot reach the move's target rejects the reset.
+It then removes every imp named with one, and with it the imp's checkpoints, leases and the grants
+it holds; then the networks, secrets, OAuth clients, tokens, and images and templates named with
+one; then `<IMP_DEV_DATA>/broker-test-upstreams.json`. A fixture image (`e2e-<fixture>-<hash>`)
+carries no suite prefix and stays. A removal impd refuses, such as an image another imp boots,
+rejects the reset. `reset-baseline.test.ts` boots impd's real app (`createImpd` on the stub VMM) in
+process, makes each of those kinds, resets, and reads every list back before and after; it also
+checks that an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) and an unprefixed
+OAuth client stay, and that it removes an imp a failed boot left in `error`. Sessions and services
+are not proven: making either needs a guest agent, which the stub VMM has no stand-in for. What the
+reset does not cover: the instance's own settings (the reboot after a failure restores those), the
+`moves` suites' second host (`removeMoveLeftovers` at the end of a run that includes them), and a
+registry container or SSH key a suite file made.
 
 A journey file releases what it makes itself, in the order the scenario needs: its `setupTest()`
 creates one `AsyncDisposableStack`, registers `onTestFinished(() => stack.disposeAsync())`, and
