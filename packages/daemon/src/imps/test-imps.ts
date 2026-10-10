@@ -448,7 +448,19 @@ export async function createImpTest(
   const startImpd = (identity: HostIdentity = host.identity) => {
     host.identity = identity;
 
-    return startGovernedImps(config, deps, governedParts, identity, fake.startGeneration());
+    const started = startGovernedImps(
+      config,
+      deps,
+      governedParts,
+      identity,
+      fake.startGeneration(),
+    );
+
+    // as main.ts stops them: a template build still running would write
+    // into the data dir after its removal
+    stack.defer(() => started.imps.bootTemplates?.stop());
+
+    return started;
   };
 
   const governed = startImpd();

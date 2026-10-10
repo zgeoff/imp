@@ -160,6 +160,45 @@ test('#createImpTest has its data dir removed by the stack after a setup step th
   expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);
 });
 
+test('#createImpTest finishes a running template build before it removes its data dir', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const logs: string[] = [];
+
+  const harness = await createImpTest(stack, {
+    env: { IMP_BOOT_TEMPLATES: 'true' },
+    onLog: (message) => {
+      logs.push(message);
+    },
+  });
+
+  await harness.createTestImage('ubuntu');
+
+  const held = harness.fake.hold('template');
+
+  // the first release once the stack unwinds; the harness's own wait
+  // for the build comes after it
+  stack.defer(() => {
+    held.release();
+  });
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await held.reached;
+
+  await stack.disposeAsync();
+
+  const builtAt = logs.findIndex((line) => /^impd: boot template \w+ built in/u.test(line));
+
+  expect(builtAt).toBeGreaterThanOrEqual(0);
+  expect(builtAt).toBeLessThan(logs.indexOf('test harness: database closed'));
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
 test('#buildTestApp serves the API over the harness', async () => {
   const ctx = await setupImpTest();
 

@@ -49,7 +49,7 @@ async function setupTest(
 
   invariant(templates, 'IMP_BOOT_TEMPLATES is on, but impd has no templates');
 
-  return { ...harness, client: buildTestApp(harness, harness).client, templates, disk };
+  return { ...harness, client: buildTestApp(harness, harness).client, templates, disk, stack };
 }
 
 test('it boots the kernel for the first boot of a shape and builds no template', async () => {
@@ -321,7 +321,8 @@ test('it never waits for the template build of a shape with no template yet', as
 
   const held = ctx.fake.hold('template');
 
-  onTestFinished(() => {
+  // released before the harness stops its templates, which waits for this build
+  ctx.stack.defer(() => {
     held.release();
   });
 
