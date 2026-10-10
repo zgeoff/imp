@@ -188,9 +188,10 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    once the instance's reset is done, it resets the fixture (`resetBaseline` on B with the suite's
    prefix, which ends any move a journey left first); and after the reboot back it stops it. A
    fixture that will not start fails the suite with no journey; one whose reset fails goes down and
-   up anew and fails the suite; one that cannot come back runs no more of the suite's journeys; one
-   that will not stop fails the suite. An interrupt skips the fixture's reset and still stops it,
-   and `--keep` skips the reset only.
+   up anew and fails the suite, and since B's stop takes A off its network, the next journey first
+   reboots onto the suite's settings again; one that cannot come back runs no more of the suite's
+   journeys; one that will not stop fails the suite. An interrupt skips the fixture's reset and
+   still stops it, and `--keep` skips the reset only.
 
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
@@ -266,12 +267,13 @@ Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
 `<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`
 (`buildHostModeProxyArgv` in `test/e2e/lib/host-mode-proxy.ts`), and removes both when it ends. A
 unix socket path holds 107 bytes, which a worktree's `.cache/e2e/ssh-*` dir can pass, so `ssh-agent`
-keeps its ssh control and forward sockets in a `mkdtemp` dir under `TMPDIR`. A journey that checks
-something keeps an imp awake past the idle timeout waits with `waitAwakePastIdle`
-(`test/e2e/lib/awake-past-idle.ts`): the idle loop moves an imp's `lastActiveAt` to its tick only
-while something keeps the imp awake, so a running imp whose `lastActiveAt` reaches the idle timeout
-past the release has stayed awake that long. The wait polls `imp ls`, which records no activity, so
-the journey must not exec in the imp during it.
+keeps its ssh control and forward sockets, and `ssh` its forward sockets, in a `mkdtemp` dir under
+`TMPDIR`, and `startLocalSshAgent` (`test/e2e/lib/ssh.ts`) makes its agent's socket in one of its
+own there, which its dispose removes. A journey that checks something keeps an imp awake past the
+idle timeout waits with `waitAwakePastIdle` (`test/e2e/lib/awake-past-idle.ts`): the idle loop moves
+an imp's `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
+`lastActiveAt` reaches the idle timeout past the release has stayed awake that long. The wait polls
+`imp ls`, which records no activity, so the journey must not exec in the imp during it.
 
 A journey file also runs alone against an instance that is up:
 `bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep-memory.e2e.ts`. Nothing then resets

@@ -31,7 +31,7 @@ async function setupTest() {
 test('it prints a made read token once, lists it without its secret, and lets it list imps but not exec, stop or make tokens', async () => {
   const ctx = await setupTest();
 
-  const dev = `${ctx.prefix}dev`;
+  const dev = `${ctx.prefix}read-dev`;
   const reader = `${ctx.prefix}reader`;
 
   await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
@@ -100,8 +100,8 @@ test('it prints a made read token once, lists it without its secret, and lets it
 test('it lets an exec token limited to dev-* run in its imp and not touch another, names it in the audit, and refuses it once removed', async () => {
   const ctx = await setupTest();
 
-  const dev = `${ctx.prefix}dev`;
-  const other = `${ctx.prefix}other`;
+  const dev = `${ctx.prefix}exec-dev`;
+  const other = `${ctx.prefix}exec-other`;
   const devExec = `${ctx.prefix}dev-exec`;
 
   await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
@@ -180,8 +180,8 @@ test('it lets an exec token limited to dev-* run in its imp and not touch anothe
 test('it lets a token for dev-* that may grant one secret grant it there and nothing more, through a sleep', async () => {
   const ctx = await setupTest();
 
-  const dev = `${ctx.prefix}dev`;
-  const other = `${ctx.prefix}other`;
+  const dev = `${ctx.prefix}grant-dev`;
+  const other = `${ctx.prefix}grant-other`;
   const granter = `${ctx.prefix}granter`;
   const gh = `${ctx.prefix}gh`;
 
@@ -280,8 +280,8 @@ test('it lets a token for dev-* that may grant one secret grant it there and not
 test('it lets an ssh key bound to a dev-* exec token log in to its imp and no other, names it in the audit, and lets it in nowhere once unbound', async () => {
   const ctx = await setupTest();
 
-  const dev = `${ctx.prefix}dev`;
-  const other = `${ctx.prefix}other`;
+  const dev = `${ctx.prefix}key-dev`;
+  const other = `${ctx.prefix}key-other`;
   const sshDev = `${ctx.prefix}ssh-dev`;
 
   // an ssh Host alias whose key authorized_keys does not list
@@ -360,7 +360,7 @@ test('it lets an ssh key bound to a dev-* exec token log in to its imp and no ot
 test('it opens no ssh session for a key bound to a read token', async () => {
   const ctx = await setupTest();
 
-  const dev = `${ctx.prefix}dev`;
+  const dev = `${ctx.prefix}read-key-dev`;
   const sshReader = `${ctx.prefix}ssh-reader`;
 
   // an ssh Host alias whose key authorized_keys does not list

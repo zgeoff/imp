@@ -1,6 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFreePorts } from '../../../packages/daemon/src/test-utils/find-free-ports';
 import { config } from '../lib/config';
@@ -31,7 +33,13 @@ async function setupTest() {
 
   stack.defer(() => ssh.cleanup());
 
-  return { prefix: readSuitePrefix('ssh'), stack, client, ssh };
+  // ssh's forward sockets: a unix socket path holds 107 bytes, which a
+  // worktree's .cache can pass
+  const sockets = await mkdtemp(join(tmpdir(), 'imp-ssh-'));
+
+  stack.defer(() => rm(sockets, { recursive: true, force: true }));
+
+  return { prefix: readSuitePrefix('ssh'), stack, client, ssh, sockets };
 }
 
 test('it runs a command over ssh and returns its output, stderr, exit status and connection', async () => {
@@ -148,7 +156,7 @@ test('it carries a local forward to a port in the imp', async () => {
 
   // a unix socket on this side, so no free port has to be guessed; the
   // gateway sees the same direct-tcpip channel to localhost:8080
-  const local = join(ctx.ssh.dir, 'forward.sock');
+  const local = join(ctx.sockets, 'forward.sock');
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
@@ -226,7 +234,7 @@ test('it refuses a forward to anything but the imp', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}refuse`;
-  const local = join(ctx.ssh.dir, 'refused.sock');
+  const local = join(ctx.sockets, 'refused.sock');
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 

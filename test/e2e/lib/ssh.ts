@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandResult } from './instance';
 import { REPO_ROOT, instance, runChecked, runCommand, runInContainer } from './instance';
@@ -238,12 +239,15 @@ export interface LocalSshAgent extends AsyncDisposable {
 // ends, even without afterAll, the pipe closes and the agent goes with it.
 const AGENT_WRAPPER = 'ssh-agent -D -a "$1" & agent=$!; cat >/dev/null; kill "$agent"';
 
-// `label` names the socket, the key file and the key's comment
+// `label` names the socket, the key file and the key's comment. The socket
+// sits in a dir of its own under TMPDIR: a unix socket path holds 107
+// bytes, which the client's dir in a worktree's .cache can pass.
 export async function startLocalSshAgent(
   client: SshClient,
   label = 'laptop',
 ): Promise<LocalSshAgent> {
-  const socket = join(client.dir, `${label}.sock`);
+  const sockets = mkdtempSync(join(tmpdir(), 'imp-agent-'));
+  const socket = join(sockets, `${label}.sock`);
   const keyPath = join(client.dir, `${label}-key`);
 
   const publicKey = await createKey(keyPath, `imp-e2e-${label}`);
@@ -265,6 +269,8 @@ export async function startLocalSshAgent(
       await agent.stdin.end();
 
       await agent.exited;
+
+      rmSync(sockets, { recursive: true, force: true });
     },
   };
 }

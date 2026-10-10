@@ -1408,6 +1408,54 @@ test('#runSuites makes a suite’s fixture anew when its reset fails, runs on, a
   expect(outcome.results.map((result) => result.passed)).toStrictEqual([false]);
 });
 
+test('#runSuites reboots onto a suite’s settings again before the next journey once its fixture is made anew', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['moves-cold', 'moves-abort'],
+    keep: false,
+    settingsOf: () => ({ IMP_DEV_NETWORK: 'e2e-mv' }),
+    fixturesOf: () => ['host-b'],
+    resetFixture: (fixture) => {
+      ctx.steps.push(`reset ${fixture}`);
+
+      return ctx.steps.filter((step) => step === 'reset host-b').length === 1
+        ? Promise.reject(new Error('MOVING e2e-mv-cold is moving between hosts'))
+        : Promise.resolve();
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'reboot onto {"IMP_DEV_NETWORK":"e2e-mv"}',
+    'run moves-cold',
+    'reset e2e-moves-',
+    'reset host-b',
+    'log the moves-cold journey left host-b dirty: MOVING e2e-mv-cold is moving between hosts',
+    'stop host-b',
+    'start host-b',
+    'reboot onto {"IMP_DEV_NETWORK":"e2e-mv"}',
+    'run moves-abort',
+    'reset e2e-moves-',
+    'reset host-b',
+    'reboot',
+    'stop host-b',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([false]);
+});
+
 test('#runSuites runs no more of a suite whose fixture cannot be made anew, stops it, and runs on', async () => {
   const ctx = setupTest();
 

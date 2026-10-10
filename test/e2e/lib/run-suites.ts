@@ -167,6 +167,13 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
       const fixtureReset =
         deps.keep || deps.isInterrupted() ? 'reset' : await resetFixtures(deps, journey, fixtures);
 
+      // a fixture made anew may reboot the instance off the suite's settings,
+      // as host B's stop takes A off its network, so the next journey reboots
+      // onto them first
+      if (fixtureReset !== 'reset') {
+        isOnSettings = false;
+      }
+
       isPassed &&= verdict.isPassed && verdict.isClean && isRestored && fixtureReset === 'reset';
 
       if (stoppedBecause !== null || fixtureReset === 'lost') {
