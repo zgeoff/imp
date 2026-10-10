@@ -61,9 +61,12 @@ export function pickOne<T>(random: () => number, items: readonly T[]): T {
 export function planChaosRound(random: () => number, names: readonly string[]): ChaosRound {
   const held: ChaosStep = { op: 'exec', name: pickOne(random, names) };
 
-  const others = Array.from({ length: Math.floor(random() * 3) }, () => ({
+  // a stop or sleep of the held exec's imp would end it before the fault
+  const rest = names.filter((name) => name !== held.name);
+
+  const others = Array.from({ length: rest.length === 0 ? 0 : Math.floor(random() * 3) }, () => ({
     op: pickOne<ChaosOp>(random, ['sleep', 'wake', 'exec', 'stop-start']),
-    name: pickOne(random, names),
+    name: pickOne(random, rest),
   }));
 
   const fault = pickOne<ChaosFault>(random, ['impd', 'impd', 'firecracker', 'container']);

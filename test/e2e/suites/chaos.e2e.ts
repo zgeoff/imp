@@ -100,7 +100,8 @@ test('it keeps every imp valid, with its disk and the memory no kill could take,
 
     const idsByName = new Map(rows.map((row) => [row.name, row.id]));
 
-    const plan = planChaosRound(random, names);
+    // an imp in error takes no exec to hold across the fault
+    const plan = planChaosRound(random, live);
     const steps = plan.steps.map((step) => `${step.op} ${step.name}`).join(', ');
 
     console.log(

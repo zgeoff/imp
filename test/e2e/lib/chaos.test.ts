@@ -42,16 +42,30 @@ test('#planChaosRound plans a held exec, the other steps, the fault and the dela
     steps: [
       { op: 'exec', name: 'e2e-chaos-b' },
       { op: 'wake', name: 'e2e-chaos-a' },
-      { op: 'stop-start', name: 'e2e-chaos-b' },
+      { op: 'stop-start', name: 'e2e-chaos-a' },
     ],
     fault: 'impd',
     delayMs: 1200,
   });
 });
 
+test('#planChaosRound keeps the other steps off the held exec’s imp', () => {
+  expect(planChaosRound(() => 0.9999, ['e2e-chaos-a', 'e2e-chaos-b']).steps).toStrictEqual([
+    { op: 'exec', name: 'e2e-chaos-b' },
+    { op: 'stop-start', name: 'e2e-chaos-a' },
+    { op: 'stop-start', name: 'e2e-chaos-a' },
+  ]);
+});
+
+test('#planChaosRound plans only the held exec when one imp is left', () => {
+  expect(planChaosRound(() => 0.9999, ['e2e-chaos-a']).steps).toStrictEqual([
+    { op: 'exec', name: 'e2e-chaos-a' },
+  ]);
+});
+
 test('#planChaosRound holds its exec past the latest fault offset', () => {
   expect(CHAOS_EXEC_S * 1000).toBeGreaterThan(
-    planChaosRound(() => 0.9999, ['e2e-chaos-a']).delayMs,
+    planChaosRound(() => 0.9999, ['e2e-chaos-a', 'e2e-chaos-b']).delayMs,
   );
 });
 
