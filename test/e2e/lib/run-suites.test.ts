@@ -1178,6 +1178,40 @@ test('#runSuites makes the instance anew and reboots onto the suite’s settings
   ]);
 });
 
+test('#runSuites reboots back off the settings of a kept scale when an interrupt comes before restart, and runs no restart', async () => {
+  const ctx = setupTest();
+  const signals = { isInterrupted: false };
+
+  const result = await runSuites({
+    ...ctx.recorders,
+    names: ['scale', 'restart'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'scale' ? { IMP_IDLE_TIMEOUT_S: '600' } : null),
+    isInterrupted: () => signals.isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+    onSuiteEnd: () => {
+      // the signal lands once scale has passed
+      signals.isInterrupted = true;
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_IDLE_TIMEOUT_S":"600"}',
+    'run scale',
+    'reboot',
+  ]);
+
+  expect(result.stoppedBecause).toBe('interrupted');
+});
+
 test('#runSuites reboots back off the settings of scale kept for restart after restart fails, and fails restart', async () => {
   const ctx = setupTest();
 

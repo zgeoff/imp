@@ -175,12 +175,13 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    last journey, a failure or an interrupt it reboots back onto the run's settings, under `--keep`
    too. A passing `scale` with `restart` after it is the exception: the instance stays on scale's
    settings, so `restart` re-adopts the fleet still running under scale's 600 s idle timeout (a
-   reboot would sleep every VM), and the reboot back comes after `restart`'s last journey. A read
-   that throws fails the suite with no reboot and no journey; a reboot onto the settings that fails
-   runs no more of its journeys, fails the suite and still reboots back; a reboot back that fails
-   fails the suite and makes the instance anew, unless the run was interrupted, and the run stops if
-   that fails. A suite without `settings` never reboots a passing run, so a `--reuse` instance keeps
-   its own settings until a suite with `settings` or a failure reboots it onto the run's.
+   reboot would sleep every VM), and the reboot back comes after `restart`'s last journey, or at
+   once when an interrupt stops the run before `restart`. A read that throws fails the suite with no
+   reboot and no journey; a reboot onto the settings that fails runs no more of its journeys, fails
+   the suite and still reboots back; a reboot back that fails fails the suite and makes the instance
+   anew, unless the run was interrupted, and the run stops if that fails. A suite without `settings`
+   never reboots a passing run, so a `--reuse` instance keeps its own settings until a suite with
+   `settings` or a failure reboots it onto the run's.
 
    A suite's `fixtures` name what runs beside the instance for all its journeys: `host-b`, the moves
    suites' second instance on a Docker network, or `host-b-tailnet`, the same on the tailnet under

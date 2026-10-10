@@ -78,6 +78,11 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
   for (const name of deps.names) {
     if (deps.isInterrupted()) {
+      // restart will not run to reboot off the settings a kept scale left
+      if (isCarriedOffRunSettings) {
+        await resetRunSettings(deps, 'scale');
+      }
+
       return { results, stoppedBecause: 'interrupted' };
     }
 
