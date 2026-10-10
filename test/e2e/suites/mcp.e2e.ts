@@ -53,10 +53,9 @@ test('it boots an imp inside the prefix with imp_create, and refuses one outside
 
   const outside = await ctx.session.runTool('imp_create', { name: other });
 
-  // only a create that went through, a regressed refusal, made an imp
-  registerRemoval(ctx.stack, config.keep || outside.isError, () =>
-    removeImpIfPresent(ctx.client, other),
-  );
+  // a regressed refusal, or a create that failed after its insert, leaves an
+  // imp; the removal passes over a name that was never made
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
 
   expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
   expect(outside.isError).toBeTrue();
@@ -327,10 +326,9 @@ test('it runs a 15 s command over HTTP for a token held to the prefix, and refus
 
   const outside = await agent.runTool('imp_create', { name: other });
 
-  // only a create that went through, a regressed refusal, made an imp
-  registerRemoval(ctx.stack, config.keep || outside.isError, () =>
-    removeImpIfPresent(ctx.client, other),
-  );
+  // a regressed refusal, or a create that failed after its insert, leaves an
+  // imp; the removal passes over a name that was never made
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
 
   const ended = await agent.close();
 

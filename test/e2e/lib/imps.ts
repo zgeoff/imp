@@ -2,7 +2,7 @@ import { listImps, runImp, runInImp, runShellInImp, tryImp } from './imp-cli';
 import { waitFor } from './wait-for';
 
 // ignores imps already gone
-export async function removeImps(...names: readonly string[]): Promise<void> {
+async function removeImps(...names: readonly string[]): Promise<void> {
   for (const name of names) {
     await tryImp(['rm', name]);
   }
@@ -10,15 +10,6 @@ export async function removeImps(...names: readonly string[]): Promise<void> {
 
 export async function waitForExec(name: string, timeoutMs = 60_000): Promise<void> {
   await waitFor(`${name} to accept exec`, () => runInImp(name, 'true'), { timeoutMs });
-}
-
-// `imp new NAME ARGS...`, then waits until exec works; returns what it printed
-export async function createImp(name: string, ...args: readonly string[]): Promise<string> {
-  const out = await runImp('new', name, ...args);
-
-  await waitForExec(name);
-
-  return out;
 }
 
 // keeps the imp awake, so the short idle timeout does not sleep it between steps
