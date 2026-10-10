@@ -1,253 +1,323 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
-import * as z from 'zod';
+import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
+import { listAuditCalls } from '../lib/audit';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { runImp, tryImp } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import { createInstanceClient, runImp, runImpWith, tryImp } from '../lib/imp-cli';
+import { waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import {
+  removeImpIfPresent,
+  removeSecretIfPresent,
+  removeTokenIfPresent,
+} from '../lib/reset-baseline';
 import { runSsh, setupKeyClient } from '../lib/ssh';
-import type { KeyClient } from '../lib/ssh';
+import { readSuitePrefix } from '../lib/suites';
 
 // Scoped tokens (docs/guides/tokens.md): what a read token and an exec
 // token limited to some imps may do, through the CLI as a user runs it.
 
-const prefix = setupSuite('tokens');
-const dev = `${prefix}dev`;
-const other = `${prefix}other`;
+// one stack for every release, so a token goes before the imps it names
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// token names, made and removed by this suite
-const READER = `${prefix}reader`;
-const DEV_EXEC = `${prefix}dev-exec`;
-const SSH_DEV = `${prefix}ssh-dev`;
-const SSH_READER = `${prefix}ssh-reader`;
-const GRANTER = `${prefix}granter`;
+  onTestFinished(() => stack.disposeAsync());
 
-// a secret the granter may grant, with a synthetic value
-const GH = `${prefix}gh`;
-const GH_VALUE = 'ghp_synthetic126e2e0123456789';
+  const client = await createInstanceClient();
 
-// ssh Host aliases, one key each, that authorized_keys does not list
-const DEV_KEY_HOST = 'imp-e2e-dev-key';
-const READ_KEY_HOST = 'imp-e2e-read-key';
-
-const CallSchema = z.object({
-  procedure: z.string(),
-  actor: z.string(),
-  actorName: z.string().optional(),
-  outcome: z.string(),
-});
-
-const secrets = new Map<string, string>();
-
-let keys: KeyClient;
-
-// `imp token new`, which prints the secret alone on stdout
-async function makeToken(name: string, ...args: readonly string[]): Promise<string> {
-  await tryImp(['token', 'rm', name]);
-
-  const stdout = await runImp('token', 'new', name, ...args);
-
-  const secret = stdout.trim();
-
-  secrets.set(name, secret);
-
-  return secret;
+  return { prefix: readSuitePrefix('tokens'), stack, client };
 }
 
-beforeAll(async () => {
-  const image = resolveImageName('e2e-tiny');
+test('it prints a made read token once, lists it without its secret, and lets it list imps but not exec, stop or make tokens', async () => {
+  const ctx = await setupTest();
 
-  await createImp(dev, '--image', image, '--memory', '256');
-  await createImp(other, '--image', image, '--memory', '256');
+  const dev = `${ctx.prefix}dev`;
+  const reader = `${ctx.prefix}reader`;
 
-  keys = await setupKeyClient([DEV_KEY_HOST, READ_KEY_HOST]);
-}, 120_000);
+  await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-afterAll(async () => {
-  for (const name of secrets.keys()) {
-    await tryImp(['token', 'rm', name]);
-  }
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, dev));
 
-  await tryImp(['secret', 'rm', GH]);
+  await waitForExec(dev);
 
-  await keys.cleanup();
-});
+  // `imp token new` prints the secret alone on stdout
+  const made = await runImp('token', 'new', reader, '--scope', 'read');
 
-function readKeyPath(alias: string): string {
-  return keys.publicKeyPaths.get(alias) ?? '';
-}
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, reader));
 
-// `ssh <imp>@<alias> echo in`
-function runSshAs(alias: string, imp: string) {
-  return runSsh(keys, imp, ['echo', 'in'], { host: alias });
-}
+  const secret = made.trim();
 
-test('a made token prints once and lists without its secret', async () => {
-  const secret = await makeToken(READER, '--scope', 'read');
+  expect(secret).toMatch(/^imp_[\w\-]+\.[\w\-]+$/v);
 
-  expect(secret).toMatch(/^imp_[\w-]+\.[\w-]+$/);
+  const [, secretPart] = secret.split('.');
 
-  const listed = await runImp('token', 'ls');
+  invariant(secretPart);
+
+  const tokens = await runImp('token', 'ls');
   const whoami = await tryImp(['token', 'whoami'], { token: secret });
-
-  expect(listed).toContain(READER);
-  expect(listed).not.toContain(secret.split('.')[1] ?? 'none');
-  expect(whoami.stdout.trim()).toBe(`token ${READER}: read on every imp`);
-});
-
-test('a read token lists imps but cannot exec, stop or make tokens', async () => {
-  const secret = secrets.get(READER) ?? '';
-
   const listed = await tryImp(['ls'], { token: secret });
   const exec = await tryImp(['exec', dev, '--', 'true'], { token: secret });
   const stop = await tryImp(['stop', dev], { token: secret });
-  const token = await tryImp(['token', 'new', `${prefix}x`, '--scope', 'read'], { token: secret });
 
+  const token = await tryImp(['token', 'new', `${ctx.prefix}x`, '--scope', 'read'], {
+    token: secret,
+  });
+
+  expect(tokens).toContain(reader);
+  expect(tokens).not.toContain(secretPart);
+  expect(whoami.stdout).toBe(`token ${reader}: read on every imp\n`);
   expect(listed.exitCode).toBe(0);
   expect(listed.stdout).toContain(dev);
-
-  for (const refused of [exec, stop, token]) {
-    expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr).toContain('FORBIDDEN');
-  }
+  expect(exec.exitCode).toBe(255);
+  expect(exec.stderr).toContain('FORBIDDEN');
+  expect(stop.exitCode).toBe(1);
+  expect(stop.stderr).toContain('FORBIDDEN');
+  expect(token.exitCode).toBe(1);
+  expect(token.stderr).toContain('FORBIDDEN');
 });
 
-test('an exec token limited to dev-* runs in its imp and cannot touch another', async () => {
-  const secret = await makeToken(DEV_EXEC, '--scope', 'exec', '--imps', `${prefix}dev*`);
+test('it lets an exec token limited to dev-* run in its imp and not touch another, names it in the audit, and refuses it once removed', async () => {
+  const ctx = await setupTest();
+
+  const dev = `${ctx.prefix}dev`;
+  const other = `${ctx.prefix}other`;
+  const devExec = `${ctx.prefix}dev-exec`;
+
+  await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, dev));
+
+  await runImp('new', other, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
+
+  await waitForExec(dev);
+  await waitForExec(other);
+
+  const made = await runImp('token', 'new', devExec, '--scope', 'exec', '--imps', `${dev}*`);
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, devExec));
+
+  const secret = made.trim();
+
   const own = await tryImp(['exec', dev, '--', 'echo', 'hi'], { token: secret });
   const otherExec = await tryImp(['exec', other, '--', 'true'], { token: secret });
   const otherStop = await tryImp(['stop', other], { token: secret });
   const otherProxy = await tryImp(['proxy', other, '0:8080'], { token: secret });
   const listed = await tryImp(['ls'], { token: secret });
 
-  expect(own.exitCode).toBe(0);
-  expect(own.stdout.trim()).toBe('hi');
-
-  for (const refused of [otherExec, otherStop, otherProxy]) {
-    expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr).toContain('FORBIDDEN');
-  }
-
+  expect(own).toStrictEqual({ exitCode: 0, stdout: 'hi\n', stderr: '' });
+  expect(otherExec.exitCode).toBe(255);
+  expect(otherExec.stderr).toContain('FORBIDDEN');
+  expect(otherStop.exitCode).toBe(1);
+  expect(otherStop.stderr).toContain('FORBIDDEN');
+  expect(otherProxy.exitCode).toBe(1);
+  expect(otherProxy.stderr).toContain('FORBIDDEN');
   expect(listed.stdout).toContain(dev);
   expect(listed.stdout).not.toContain(other);
-});
 
-test('a token for dev-* that may grant one secret grants it there, and nothing more', async () => {
-  await tryImp(['secret', 'rm', GH]);
+  // the audit log names the token behind each call
+  const calls = await listAuditCalls(other);
 
-  const added = await tryImp(['secret', 'add', GH, '--kind', 'github'], {
-    stdin: `${GH_VALUE}\n`,
+  expect(calls.find((call) => call.procedure === 'imps.stop')).toMatchObject({
+    actor: 'token',
+    actorName: devExec,
+    outcome: 'FORBIDDEN',
   });
 
-  expect(added.exitCode).toBe(0);
+  // a removed token is refused at once
+  await runImp('token', 'rm', devExec);
 
-  const secret = await makeToken(
-    GRANTER,
+  const after = await tryImp(['ls'], { token: secret });
+
+  expect(after.exitCode).toBe(1);
+});
+
+test('it lets a token for dev-* that may grant one secret grant it there and nothing more, through a sleep', async () => {
+  const ctx = await setupTest();
+
+  const dev = `${ctx.prefix}dev`;
+  const other = `${ctx.prefix}other`;
+  const granter = `${ctx.prefix}granter`;
+  const gh = `${ctx.prefix}gh`;
+
+  // a synthetic value, which no output may show
+  const ghValue = 'ghp_synthetic126e2e0123456789';
+
+  await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, dev));
+
+  await runImp('new', other, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
+
+  await waitForExec(dev);
+  await waitForExec(other);
+
+  const added = await runImpWith(
+    { stdin: `${ghValue}\n` },
+    'secret',
+    'add',
+    gh,
+    '--kind',
+    'github',
+  );
+
+  registerRemoval(ctx.stack, config.keep, () => removeSecretIfPresent(ctx.client, gh));
+
+  const made = await runImp(
+    'token',
+    'new',
+    granter,
     '--scope',
     'manage',
     '--imps',
-    `${prefix}dev*`,
+    `${dev}*`,
     '--grantable',
-    GH,
+    gh,
   );
 
-  const granted = await tryImp(['grant', dev, GH], { token: secret });
-  const otherImp = await tryImp(['grant', other, GH], { token: secret });
-  const fork = await tryImp(['fork', dev, `${prefix}dev-copy`], { token: secret });
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, granter));
+
+  const secret = made.trim();
+
+  const granted = await tryImp(['grant', dev, gh], { token: secret });
+  const otherImp = await tryImp(['grant', other, gh], { token: secret });
+
+  // the fork's name matches dev-*, so only the missing scope refuses it
+  const fork = await tryImp(['fork', dev, `${dev}-copy`], { token: secret });
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, `${dev}-copy`));
+
   const whoami = await tryImp(['token', 'whoami'], { token: secret });
 
   expect(granted.exitCode).toBe(0);
-  expect(whoami.stdout.trim()).toBe(`token ${GRANTER}: manage on ${prefix}dev*; may grant ${GH}`);
-
-  for (const refused of [otherImp, fork]) {
-    expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr).toContain('FORBIDDEN');
-  }
+  expect(whoami.stdout).toBe(`token ${granter}: manage on ${dev}*; may grant ${gh}\n`);
+  expect(otherImp.exitCode).toBe(1);
+  expect(otherImp.stderr).toContain('FORBIDDEN');
+  expect(fork.exitCode).toBe(1);
+  expect(fork.stderr).toContain('FORBIDDEN');
 
   // the grant stays through a sleep and a wake
   await runImp('sleep', dev);
   await runImp('wake', dev);
 
   const kept = await tryImp(['grants', dev], { token: secret });
-  const revoked = await tryImp(['revoke', dev, GH], { token: secret });
-  const listed = await runImp('token', 'ls');
+  const revoked = await tryImp(['revoke', dev, gh], { token: secret });
+  const tokens = await runImp('token', 'ls');
 
-  expect(kept.stdout).toContain(GH);
+  expect(kept.stdout).toContain(gh);
   expect(revoked.exitCode).toBe(0);
-  expect(listed).toContain(GH);
-  expect([added.stdout, kept.stdout, listed, whoami.stdout].join('\n')).not.toContain(GH_VALUE);
+  expect(tokens).toContain(gh);
+  expect(added).not.toContain(ghValue);
+  expect(kept.stdout).not.toContain(ghValue);
+  expect(tokens).not.toContain(ghValue);
+  expect(whoami.stdout).not.toContain(ghValue);
 });
 
-test('the audit log names the token behind each call', async () => {
-  const stdout = await runImp('audit', '--kind', 'api', other, '--json');
+test('it lets an ssh key bound to a dev-* exec token log in to its imp and no other, names it in the audit, and lets it in nowhere once unbound', async () => {
+  const ctx = await setupTest();
 
-  const calls = z.array(CallSchema).parse(JSON.parse(stdout));
-  const refusedStop = calls.find((call) => call.procedure === 'imps.stop');
+  const dev = `${ctx.prefix}dev`;
+  const other = `${ctx.prefix}other`;
+  const sshDev = `${ctx.prefix}ssh-dev`;
 
-  expect(refusedStop).toMatchObject({
-    actor: 'token',
-    actorName: DEV_EXEC,
-    outcome: 'FORBIDDEN',
-  });
-});
+  // an ssh Host alias whose key authorized_keys does not list
+  const keyHost = 'imp-e2e-dev-key';
 
-test('a removed token is refused at once', async () => {
-  const secret = secrets.get(DEV_EXEC) ?? '';
+  await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  await runImp('token', 'rm', DEV_EXEC);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, dev));
 
-  const after = await tryImp(['ls'], { token: secret });
+  await runImp('new', other, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  secrets.delete(DEV_EXEC);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
 
-  expect(after.exitCode).not.toBe(0);
-});
+  await waitForExec(dev);
+  await waitForExec(other);
 
-test('an ssh key bound to a dev-* exec token logs in to its imp and no other', async () => {
-  await makeToken(
-    SSH_DEV,
+  const keys = await setupKeyClient([keyHost]);
+
+  ctx.stack.defer(() => keys.cleanup());
+
+  const keyPath = keys.publicKeyPaths.get(keyHost);
+
+  invariant(keyPath);
+
+  await runImp(
+    'token',
+    'new',
+    sshDev,
     '--scope',
     'exec',
     '--imps',
-    `${prefix}dev*`,
+    `${dev}*`,
     '--ssh-key',
-    readKeyPath(DEV_KEY_HOST),
+    keyPath,
   );
 
-  const own = await runSshAs(DEV_KEY_HOST, dev);
-  const refused = await runSshAs(DEV_KEY_HOST, other);
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, sshDev));
+
+  const own = await runSsh(keys, dev, ['echo', 'in'], { host: keyHost });
+  const refused = await runSsh(keys, other, ['echo', 'in'], { host: keyHost });
 
   expect(own.exitCode).toBe(0);
-  expect(own.stdout.trim()).toBe('in');
+  expect(own.stdout).toBe('in\n');
   expect(refused.exitCode).toBe(255);
   expect(refused.stderr).toContain('Permission denied');
+
+  // the audit log names the token behind the login
+  const calls = await listAuditCalls(dev);
+
+  expect(calls.find((call) => call.actorName === sshDev)).toMatchObject({
+    actor: 'ssh',
+    outcome: 'ok',
+  });
+
+  // an unbound key logs in nowhere
+  const bound = await runImp('token', 'key', 'ls', sshDev);
+
+  const [fingerprint] = bound.split(' ');
+
+  invariant(fingerprint);
+
+  await runImp('token', 'key', 'rm', sshDev, fingerprint);
+
+  const unbound = await runSsh(keys, dev, ['echo', 'in'], { host: keyHost });
+
+  expect(unbound.exitCode).toBe(255);
 });
 
-test('an ssh key bound to a read token opens no session', async () => {
-  await makeToken(SSH_READER, '--scope', 'read', '--ssh-key', readKeyPath(READ_KEY_HOST));
+test('it opens no ssh session for a key bound to a read token', async () => {
+  const ctx = await setupTest();
 
-  const refused = await runSshAs(READ_KEY_HOST, dev);
+  const dev = `${ctx.prefix}dev`;
+  const sshReader = `${ctx.prefix}ssh-reader`;
+
+  // an ssh Host alias whose key authorized_keys does not list
+  const keyHost = 'imp-e2e-read-key';
+
+  await runImp('new', dev, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, dev));
+
+  await waitForExec(dev);
+
+  const keys = await setupKeyClient([keyHost]);
+
+  ctx.stack.defer(() => keys.cleanup());
+
+  const keyPath = keys.publicKeyPaths.get(keyHost);
+
+  invariant(keyPath);
+
+  await runImp('token', 'new', sshReader, '--scope', 'read', '--ssh-key', keyPath);
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, sshReader));
+
+  const refused = await runSsh(keys, dev, ['echo', 'in'], { host: keyHost });
 
   expect(refused.exitCode).toBe(255);
   expect(refused.stderr).toContain('Permission denied');
-});
-
-test('the audit log names the token behind an ssh login', async () => {
-  const stdout = await runImp('audit', '--kind', 'api', dev, '--json');
-
-  const calls = z.array(CallSchema).parse(JSON.parse(stdout));
-  const login = calls.find((call) => call.actorName === SSH_DEV);
-
-  expect(login).toMatchObject({ actor: 'ssh', outcome: 'ok' });
-});
-
-test('an unbound key logs in nowhere', async () => {
-  const listed = await runImp('token', 'key', 'ls', SSH_DEV);
-
-  const fingerprint = listed.split(' ')[0] ?? '';
-
-  await runImp('token', 'key', 'rm', SSH_DEV, fingerprint);
-
-  const refused = await runSshAs(DEV_KEY_HOST, dev);
-
-  expect(refused.exitCode).toBe(255);
 });
