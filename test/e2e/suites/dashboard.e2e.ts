@@ -1,45 +1,43 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { join } from 'node:path';
 import { resolveImageName } from '../lib/fixtures';
 import { readImpEnv } from '../lib/imp-cli';
-import { REPO_ROOT, runCommand } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import { REPO_ROOT, runChecked } from '../lib/instance';
+import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-const prefix = setupSuite('dashboard');
-const DASHBOARD_DIR = join(REPO_ROOT, 'packages', 'dashboard');
+// packages/dashboard/e2e drives the dashboard in a browser. Its imps carry
+// the suite's prefix; it removes them, and the harness's reset takes what a
+// failed run leaves.
 
-// scripts/dev.sh serves packages/dashboard/dist, which impd reads per request
-test('the dashboard builds', async () => {
-  const built = await runCommand(['bun', 'run', '--cwd', DASHBOARD_DIR, 'build']);
+test('it logs in, creates, opens a console, sleeps and destroys an imp, and logs out in a browser against impd', async () => {
+  const dashboardDir = join(REPO_ROOT, 'packages', 'dashboard');
 
-  expect(built.exitCode, built.stderr).toBe(0);
-}, 120_000);
+  // scripts/dev.sh serves packages/dashboard/dist, which impd reads per request
+  await runChecked(['bun', 'run', '--cwd', dashboardDir, 'build']);
 
-// the headless shell of the Chromium that the locked Playwright pins; a no-op
-// when the cache has it
-test('Playwright has its browser', async () => {
-  const installed = await runCommand(['bun', 'run', '--cwd', DASHBOARD_DIR, 'e2e:install']);
+  // the headless shell of the Chromium that the locked Playwright pins; a
+  // no-op when the cache has it
+  await runChecked(['bun', 'run', '--cwd', dashboardDir, 'e2e:install']);
 
-  expect(installed.exitCode, installed.stderr).toBe(0);
-}, 300_000);
-
-// packages/dashboard/e2e: log in, create, console, sleep, destroy, log out
-test('the dashboard works in a browser against impd', async () => {
   const impEnv = await readImpEnv();
 
   const startedAt = performance.now();
 
   const proc = Bun.spawn(['bun', 'run', 'e2e'], {
-    cwd: DASHBOARD_DIR,
+    cwd: dashboardDir,
     stdout: 'inherit',
     stderr: 'inherit',
     env: {
       ...process.env,
       ...impEnv,
-      E2E_IMP_PREFIX: prefix,
+      E2E_IMP_PREFIX: readSuitePrefix('dashboard'),
       E2E_IMP_IMAGE: resolveImageName('e2e-tiny'),
     },
+  });
+
+  onTestFinished(() => {
+    proc.kill();
   });
 
   const exitCode = await proc.exited;
@@ -47,4 +45,4 @@ test('the dashboard works in a browser against impd', async () => {
   writeMetric('dashboardBrowserMs', Math.round(performance.now() - startedAt));
 
   expect(exitCode).toBe(0);
-}, 300_000);
+}, 720_000);

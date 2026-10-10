@@ -1,67 +1,76 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { requireImp, runInImp, runShellInImp, tryImp } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
+import {
+  createInstanceClient,
+  requireImp,
+  runImp,
+  runInImp,
+  runShellInImp,
+  tryImp,
+} from '../lib/imp-cli';
+import { waitForExec } from '../lib/imps';
 import { REPO_ROOT, runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 
 // `imp cp` (docs/guides/cp.md) on the e2e-git image, whose USER is `dev`, not
 // root: what a copy makes belongs to the owner of the directory it lands in
 // unless --owner says otherwise.
 
-const prefix = setupSuite('cp');
-const name = `${prefix}a`;
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// big enough that the upload stops at the stdin window many times
-const BIG_BYTES = 48 * 1_048_576;
-let local: string;
-let bigHash: string;
+  onTestFinished(() => stack.disposeAsync());
 
-function buildHash(data: Uint8Array): string {
-  return createHash('sha256').update(data).digest('hex');
+  const client = await createInstanceClient();
+
+  await mkdir(join(REPO_ROOT, '.cache', 'e2e'), { recursive: true });
+
+  const local = await mkdtemp(join(REPO_ROOT, '.cache', 'e2e', 'cp-'));
+
+  stack.defer(() => rm(local, { recursive: true, force: true }));
+
+  return { prefix: readSuitePrefix('cp'), stack, client, local };
 }
 
-beforeAll(async () => {
-  mkdirSync(join(REPO_ROOT, '.cache', 'e2e'), { recursive: true });
+test('it copies a directory into a root-owned path as root with its modes, and back out whole with its modes and symlink', async () => {
+  const ctx = await setupTest();
 
-  local = mkdtempSync(join(REPO_ROOT, '.cache', 'e2e', 'cp-'));
+  const name = `${ctx.prefix}rt`;
+  const app = join(ctx.local, 'app');
 
-  const app = join(local, 'app');
+  // 48 MiB: big enough that the upload stops at the stdin window many times
+  const big = randomBytes(48 * 1_048_576);
+  const bigHash = createHash('sha256').update(big).digest('hex');
 
-  mkdirSync(join(app, 'bin'), { recursive: true, mode: 0o750 });
-  writeFileSync(join(app, 'bin', 'run'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
-  writeFileSync(join(app, 'notes with spaces.txt'), 'hello', { mode: 0o600 });
-  symlinkSync('bin/run', join(app, 'link'));
+  await mkdir(join(app, 'bin'), { recursive: true, mode: 0o750 });
+  await writeFile(join(app, 'bin', 'run'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
+  await writeFile(join(app, 'notes with spaces.txt'), 'hello', { mode: 0o600 });
+  await symlink('bin/run', join(app, 'link'));
+  await writeFile(join(app, 'big.bin'), big);
+  await runImp('new', name, '--image', resolveImageName('e2e-git'), '--memory', '256');
 
-  const big = randomBytes(BIG_BYTES);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  bigHash = buildHash(big);
+  await waitForExec(name);
 
-  writeFileSync(join(app, 'big.bin'), big);
+  const copiedIn = await tryImp(['cp', app, `${name}:/srv`]);
 
-  await createImp(name, '--image', resolveImageName('e2e-git'), '--memory', '256');
-}, 120_000);
-
-afterAll(() => {
-  rmSync(local, { recursive: true, force: true });
-});
-
-test('a directory goes into a root-owned path, owned by root, modes kept', async () => {
-  const result = await tryImp(['cp', join(local, 'app'), `${name}:/srv`]);
-
-  expect(result).toMatchObject({ exitCode: 0 });
+  expect(copiedIn.exitCode, copiedIn.stderr).toBe(0);
 
   const listed = await runInImp(
     name,
@@ -88,24 +97,65 @@ test('a directory goes into a root-owned path, owned by root, modes kept', async
       'ran',
     ].join('\n'),
   );
+
+  const back = join(ctx.local, 'back');
+
+  await mkdir(back);
+
+  const copiedOut = await tryImp(['cp', `${name}:/srv/app`, back]);
+
+  expect(copiedOut.exitCode, copiedOut.stderr).toBe(0);
+
+  const backBig = await readFile(join(back, 'app', 'big.bin'));
+  const notesStat = await lstat(join(back, 'app', 'notes with spaces.txt'));
+  const binStat = await lstat(join(back, 'app', 'bin'));
+  const link = await readlink(join(back, 'app', 'link'));
+
+  expect(createHash('sha256').update(backBig).digest('hex')).toBe(bigHash);
+  expect(notesStat.mode & 0o777).toBe(0o600);
+  expect(binStat.mode & 0o777).toBe(0o750);
+  expect(link).toBe('bin/run');
 });
 
-test('a copy into the home belongs to the image user', async () => {
-  const notes = join(local, 'app', 'notes with spaces.txt');
+test('it gives a copy into the home to the image user', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}home`;
+  const notes = join(ctx.local, 'notes with spaces.txt');
+
+  await writeFile(notes, 'hello', { mode: 0o600 });
+  await runImp('new', name, '--image', resolveImageName('e2e-git'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
 
   const result = await tryImp(['cp', notes, `${name}:/home/dev`]);
 
-  expect(result.exitCode).toBe(0);
+  expect(result.exitCode, result.stderr).toBe(0);
 
   const listed = await runInImp(name, 'stat', '-c', '%U %G', '/home/dev/notes with spaces.txt');
 
   expect(listed).toBe('dev dev');
 });
 
-test('--owner sets the owner, and a relative path lands in the home', async () => {
-  const result = await tryImp(['cp', '--owner', 'root', join(local, 'app', 'bin'), `${name}:work`]);
+test('it gives a copy the --owner it names, and lands a relative path in the home', async () => {
+  const ctx = await setupTest();
 
-  expect(result.exitCode).toBe(0);
+  const name = `${ctx.prefix}own`;
+  const bin = join(ctx.local, 'bin');
+
+  await mkdir(bin, { mode: 0o750 });
+  await writeFile(join(bin, 'run'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
+  await runImp('new', name, '--image', resolveImageName('e2e-git'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  const result = await tryImp(['cp', '--owner', 'root', bin, `${name}:work`]);
+
+  expect(result.exitCode, result.stderr).toBe(0);
 
   const listed = await runShellInImp(
     name,
@@ -115,67 +165,81 @@ test('--owner sets the owner, and a relative path lands in the home', async () =
   expect(listed).toBe('/home/dev/work root\n/home/dev/work/run root');
 });
 
-test('a copy out of the imp comes back whole, modes and symlink kept', async () => {
-  const back = join(local, 'back');
-
-  mkdirSync(back);
-
-  const result = await tryImp(['cp', `${name}:/srv/app`, back]);
-
-  expect(result).toMatchObject({ exitCode: 0 });
-
-  const backBig = readFileSync(join(back, 'app', 'big.bin'));
-
-  expect(buildHash(backBig)).toBe(bigHash);
-  expect(lstatSync(join(back, 'app', 'notes with spaces.txt')).mode & 0o777).toBe(0o600);
-  expect(lstatSync(join(back, 'app', 'bin')).mode & 0o777).toBe(0o750);
-  expect(readlinkSync(join(back, 'app', 'link'))).toBe('bin/run');
-});
-
 // a guest process puts a symlink where the copy's top lands; the copy, as
 // root, must not write through it
-test('a symlink in the imp is not written through', async () => {
+test('it refuses to write through a symlink in the imp', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}trap`;
+  const trap = join(ctx.local, 'trap');
+
+  await mkdir(trap);
+  await writeFile(join(trap, 'planted'), 'x');
+  await runImp('new', name, '--image', resolveImageName('e2e-git'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
   await runShellInImp(name, 'ln -s /etc /home/dev/trap');
 
-  mkdirSync(join(local, 'trap'));
-  writeFileSync(join(local, 'trap', 'planted'), 'x');
-
-  const result = await tryImp(['cp', join(local, 'trap'), `${name}:/home/dev`]);
+  const result = await tryImp(['cp', trap, `${name}:/home/dev`]);
 
   const planted = await runShellInImp(
     name,
     'if [ -e /etc/planted ]; then echo there; else echo gone; fi',
   );
 
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toContain('under a symlink');
+  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
+  expect(result.stderr).toInclude('under a symlink');
   expect(planted).toBe('gone');
 });
 
-test('a path that is not there fails with the reason', async () => {
-  const result = await tryImp(['cp', `${name}:/no/such`, local]);
+test('it fails with the path when the path is not in the imp', async () => {
+  const ctx = await setupTest();
 
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toContain('/no/such');
+  const name = `${ctx.prefix}miss`;
+
+  await runImp('new', name, '--image', resolveImageName('e2e-git'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  const result = await tryImp(['cp', `${name}:/no/such`, ctx.local]);
+
+  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
+  expect(result.stderr).toInclude('/no/such');
 });
 
-test('an imp whose agent predates imp cp gets AGENT_OUTDATED', async () => {
-  const imp = await requireImp(name);
+test('it refuses with AGENT_OUTDATED an imp whose agent predates imp cp', async () => {
+  const ctx = await setupTest();
 
-  const file = `/var/lib/imp/imps/${imp.id}/vm.json`;
+  const name = `${ctx.prefix}old`;
+  const file = join(ctx.local, 'file.txt');
+
+  await writeFile(file, 'x');
+  await runImp('new', name, '--image', resolveImageName('e2e-git'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  const row = await requireImp(name);
+
+  const identity = `/var/lib/imp/imps/${row.id}/vm.json`;
 
   await runInContainer([
     'sh',
     '-c',
-    `cp ${file} ${file}.e2e && sed -i 's/"agentVersion": "[^"]*"/"agentVersion": "0.6.0"/' ${file}`,
+    `cp ${identity} ${identity}.e2e && sed -i 's/"agentVersion": "[^"]*"/"agentVersion": "0.6.0"/' ${identity}`,
   ]);
 
-  try {
-    const result = await tryImp(['cp', join(local, 'trap'), `${name}:/tmp`]);
+  ctx.stack.defer(async () => {
+    await runInContainer(['mv', `${identity}.e2e`, identity]);
+  });
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('AGENT_OUTDATED');
-  } finally {
-    await runInContainer(['mv', `${file}.e2e`, file]);
-  }
+  const result = await tryImp(['cp', file, `${name}:/tmp`]);
+
+  expect(result).toMatchObject({ exitCode: 1, stdout: '' });
+  expect(result.stderr).toInclude('AGENT_OUTDATED');
 });

@@ -32,9 +32,19 @@ export interface Suite {
 // (results.json `section1` is lifecycle), and restart runs after scale so it
 // re-adopts a full house.
 export const SUITES: readonly Suite[] = [
-  { name: 'lifecycle', prefix: 'e2e-life-', images: [] },
+  {
+    name: 'lifecycle',
+    prefix: 'e2e-life-',
+    images: [],
+    journeys: ['lifecycle', 'lifecycle-events'],
+  },
   { name: 'docker', prefix: 'e2e-dock-', images: ['base'] },
-  { name: 'images', prefix: 'e2e-img-', images: ['base'] },
+  {
+    name: 'images',
+    prefix: 'e2e-img-',
+    images: ['base'],
+    journeys: ['images-build', 'images-refusals', 'images-isolation'],
+  },
 
   // a registry on the host's loopback; skips unless its name resolves there,
   // as CI's /etc/hosts makes it

@@ -1,9 +1,9 @@
-import { expect, test } from 'bun:test';
-import * as z from 'zod';
+import { expect, onTestFinished, test } from 'bun:test';
 import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import {
+  createInstanceClient,
   parseImp,
   readImpUrls,
   readInfo,
@@ -12,115 +12,38 @@ import {
   runImp,
   runInImp,
   runShellInImp,
-  startImp,
   tryImp,
 } from '../lib/imp-cli';
-import { createImp, removeImps } from '../lib/imps';
+import { waitForExec } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
-import { waitFor } from '../lib/wait-for';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-const prefix = setupSuite('lifecycle');
-const name = `${prefix}a`;
-const eventsName = `${prefix}ev`;
-const anchorName = `${prefix}anchor`;
+// An imp of the default image through its life: create, exec, console,
+// network, stop and start, rm. Each test boots its own; the event stream is
+// in lifecycle-events.
 
-const EventLineSchema = z.object({
-  ev: z.string(),
-  reason: z.string().optional(),
-  name: z.string().optional(),
-  imp: z.object({ name: z.string(), state: z.string() }).optional(),
-});
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// each change the events test makes, with the state after it
-const EV_CHANGES = [
-  { line: 'ImpAdded created', state: 'creating' },
-  { line: 'ImpChanged booted', state: 'running' },
-  { line: 'ImpChanged slept', state: 'sleeping' },
-  { line: 'ImpChanged woke', state: 'running' },
-  { line: 'ImpRemoved', state: null },
-] as const;
+  onTestFinished(() => stack.disposeAsync());
 
-// Each line `imp events` prints, as `name ev reason`, to `onLine` as it comes;
-// a snapshot line ends with the imp's state. The governor's decisions are
-// left out, since they depend on what else is awake.
-async function collectEvents(
-  stdout: ReadableStream<Uint8Array>,
-  onLine: (line: string) => void,
-): Promise<void> {
-  const decoder = new TextDecoder();
+  const client = await createInstanceClient();
 
-  let buffered = '';
-
-  for await (const chunk of stdout) {
-    buffered += decoder.decode(chunk, { stream: true });
-
-    const lines = buffered.split('\n');
-
-    buffered = lines.pop() ?? '';
-
-    for (const line of lines) {
-      const event = EventLineSchema.parse(JSON.parse(line));
-
-      if (event.ev !== 'GovernorDecision') {
-        const words = [
-          event.imp?.name ?? event.name,
-          event.ev,
-          event.reason,
-          event.reason === 'snapshot' ? event.imp?.state : undefined,
-        ];
-
-        onLine(words.filter((word) => word !== undefined).join(' '));
-      }
-    }
-  }
+  return { prefix: readSuitePrefix('lifecycle'), stack, client };
 }
 
-// A stream that ends reconnects to a snapshot, which stands for the changes
-// it missed, up to the first that reaches its state; one that comes again
-// right after the snapshot counts once.
-function buildEvChanges(lines: readonly string[]): string[] {
-  const filled: string[] = [];
-  let isAfterSnapshot = false;
+test('it boots the default image on imp new and answers the first exec within the limit', async () => {
+  const ctx = await setupTest();
 
-  for (const line of lines) {
-    const state = /^ImpAdded snapshot (?<state>\w+)$/.exec(line)?.groups?.['state'];
-
-    if (state === undefined) {
-      if (!isAfterSnapshot || filled.at(-1) !== line) {
-        filled.push(line);
-      }
-
-      isAfterSnapshot = false;
-      continue;
-    }
-
-    const next = filled.length;
-
-    const reached = EV_CHANGES.findIndex(
-      (change, index) => index >= next - 1 && change.state === state,
-    );
-
-    // a state no change reaches stays, so the comparison shows it
-    if (reached === -1) {
-      filled.push(line);
-    }
-
-    for (const change of EV_CHANGES.slice(next, reached + 1)) {
-      filled.push(change.line);
-    }
-
-    isAfterSnapshot = true;
-  }
-
-  return filled;
-}
-
-test('imp new boots the default image and the first exec answers within the limit', async () => {
+  const name = `${ctx.prefix}a`;
   const started = Date.now();
 
   const out = await runImp('new', name, '--json');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await runInImp(name, 'true');
 
@@ -145,41 +68,62 @@ test('imp new boots the default image and the first exec answers within the limi
   expect(info.impCount).toBeGreaterThanOrEqual(1);
 });
 
-test('exec passes stdout, stdin, stderr and exit codes through', async () => {
+test('it passes stdout, stdin, stderr and exit codes through exec', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}io`;
+
+  await runImp('new', name);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
   const echoed = await runInImp(name, 'echo', 'hello-stdout');
-
-  expect(echoed).toBe('hello-stdout');
-
   const stdin = await tryImp(['exec', name, '--', 'cat'], { stdin: 'hello stdin\n' });
-
-  expect(stdin.stdout).toBe('hello stdin\n');
 
   const lines = Array.from({ length: 20_000 }, (_, index) => String(index + 1)).join('\n');
 
   const large = await tryImp(['exec', name, '--', 'wc', '-l'], { stdin: `${lines}\n` });
-
-  expect(large.stdout.trim()).toBe('20000');
-
   const failed = await tryImp(['exec', name, '--', 'sh', '-c', 'echo to-stderr >&2; exit 7']);
-
-  expect(failed).toMatchObject({ exitCode: 7, stdout: '', stderr: 'to-stderr\n' });
-
   const signalled = await tryImp(['exec', name, '--', 'sh', '-c', 'kill -TERM $$']);
-
-  expect(signalled.exitCode).toBe(143);
-
   const missing = await tryImp(['exec', name, '--', '/no/such/binary']);
 
+  expect(echoed).toBe('hello-stdout');
+  expect(stdin).toStrictEqual({ exitCode: 0, stdout: 'hello stdin\n', stderr: '' });
+  expect(large).toStrictEqual({ exitCode: 0, stdout: '20000\n', stderr: '' });
+  expect(failed).toStrictEqual({ exitCode: 7, stdout: '', stderr: 'to-stderr\n' });
+  expect(signalled.exitCode).toBe(143);
   expect(missing.exitCode).toBe(127);
 });
 
-test('exec -t runs the command on a pseudo-terminal', async () => {
+test('it runs exec -t on a pseudo-terminal', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}tty`;
+
+  await runImp('new', name);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
   const out = await runImp('exec', '-t', name, '--', 'sh', '-c', 'tty; stty size');
 
   expect(out.replaceAll('\r', '')).toMatch(/^\/dev\/pts\/\d+\n\d+ \d+\n$/);
 });
 
-test('console runs commands in a shell and returns its exit code', async () => {
+test('it runs commands in a console shell and returns its exit code', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}con`;
+
+  await runImp('new', name);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
   const session = await runConsole(name, [
     { after: null, line: 'echo console-$((40 + 2))' },
     { after: 'console-42', line: 'exit 5' },
@@ -189,7 +133,17 @@ test('console runs commands in a shell and returns its exit code', async () => {
   expect(session.exitCode).toBe(5);
 });
 
-test('the guest resolves names and reaches the internet', async () => {
+test('it resolves names and reaches the internet from the guest', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}net`;
+
+  await runImp('new', name);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
   // bash's /dev/tcp: the default image may have no HTTP client
   const request = String.raw`printf "HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n" >&3`;
 
@@ -203,7 +157,16 @@ test('the guest resolves names and reaches the internet', async () => {
   expect(status).toMatch(/^HTTP\/1\.[01] 200 /);
 });
 
-test('stop keeps the disk, exec boots a stopped imp and /run starts empty', async () => {
+test('it keeps the disk through a stop, boots a stopped imp on exec with an empty /run, and again on start', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}stop`;
+
+  await runImp('new', name);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
   await runShellInImp(name, `echo ${name}-data > /root/persist && touch /run/stale && sync`);
   await runImp('stop', name);
 
@@ -229,83 +192,36 @@ test('stop keeps the disk, exec boots a stopped imp and /run starts empty', asyn
 
   const restarted = await runInImp(name, 'cat', '/root/persist');
 
-  expect(restarted).toBe(`${name}-data`);
+  writeMetric('startPlusExecMs', Date.now() - started);
 
-  console.log(`    start + exec: ${String(Date.now() - started)} ms`);
+  expect(restarted).toBe(`${name}-data`);
 });
 
-test('rm removes the imp and its network device', async () => {
+test('it removes the imp and its network device on rm', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}rm`;
+
+  await runImp('new', name);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
   const row = await requireImp(name);
 
-  await removeImps(name);
+  const device = `imp${String(row.slot)}`;
+
+  await runImp('rm', name);
 
   const listed = await runImp('ls');
-  const tap = await runInContainer(['ip', 'link', 'show', `imp${String(row.slot)}`]);
+  const tap = await runInContainer(['ip', 'link', 'show', device]);
 
-  expect(listed.split('\n').some((line) => line.startsWith(`${name} `))).toBeFalse();
-  expect(tap.exitCode).not.toBe(0);
-});
+  expect(listed).not.toMatch(new RegExp(`^${name} `, 'm'));
 
-test('imp events streams a create, sleep, wake and rm, and the api audit log has them', async () => {
-  // an imp already there, whose snapshot line says the stream is open
-  await createImp(anchorName, '--memory', '512');
-
-  const events = await startImp(['events']);
-
-  const seen: string[] = [];
-
-  const collecting = collectEvents(events.stdout, (line) => {
-    seen.push(line);
+  expect(tap).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `Device "${device}" does not exist.\n`,
   });
-
-  try {
-    await waitFor('the snapshot from imp events', () => {
-      expect(seen).toContain(`${anchorName} ImpAdded snapshot running`);
-    });
-
-    await runImp('new', eventsName, '--memory', '512');
-    await runImp('sleep', eventsName);
-    await runImp('wake', eventsName);
-    await runImp('rm', eventsName);
-
-    await waitFor('the rm in imp events', () => {
-      expect(seen).toContain(`${eventsName} ImpRemoved`);
-    });
-  } finally {
-    events.kill();
-
-    await collecting;
-    await removeImps(anchorName);
-  }
-
-  // a reconnect says why on stderr
-  const warnings = await new Response(events.stderr).text();
-
-  if (warnings !== '') {
-    console.warn(warnings.trimEnd());
-  }
-
-  const evLines = seen
-    .filter((line) => line.startsWith(`${eventsName} `))
-    .map((line) => line.slice(eventsName.length + 1));
-
-  expect(buildEvChanges(evLines)).toEqual(EV_CHANGES.map((change) => change.line));
-
-  const audit = await runImp('audit', eventsName, '--kind', 'api', '--json');
-
-  const calls = z
-    .array(z.object({ procedure: z.string(), actor: z.string() }))
-    .parse(JSON.parse(audit))
-
-    // newest first; a reused dev instance keeps the rows of earlier runs
-    .slice(0, 4);
-
-  expect(calls.map((call) => call.procedure)).toEqual([
-    'imps.destroy',
-    'imps.wake',
-    'imps.sleep',
-    'imps.create',
-  ]);
-
-  expect(calls.every((call) => call.actor === 'token')).toBeTrue();
 });
