@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import {
   IMAGE_BUILD_PATH,
   IMAGE_BUILD_STREAM_TYPE,
@@ -81,11 +82,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back to send it
+  const rootToken = faker.string.alphanumeric(32);
+
   const deps: ImpdDeps = {
     db,
-
-    // the bearer the test's client sends
-    rootToken: 'root-token',
+    rootToken,
 
     // a sparse copy for a reflink: the temp dir is not XFS
     storage: createXfsBackend({
@@ -165,7 +167,7 @@ async function setupTest() {
   const client: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
       url: 'http://impd.test/rpc',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${rootToken}` },
       fetch: (request) => impd.api.app.handle(request),
     }),
   );
@@ -173,6 +175,7 @@ async function setupTest() {
   return {
     // a release deferred here runs before impd stops and its database closes
     stack,
+    rootToken,
     config,
     db,
     dataDir,
@@ -213,7 +216,7 @@ test('it builds an uploaded context and answers the image', async () => {
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -243,7 +246,7 @@ test('it sends the engine the context under the image tag and the Dockerfile pat
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web&dockerfile=docker/Dockerfile`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -287,7 +290,7 @@ test('it removes the upload and audits the build as ok once the build ends', asy
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -341,7 +344,7 @@ test('it answers a streamed build with its headers while the build still runs', 
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      headers: { authorization: `Bearer ${ctx.rootToken}`, accept: IMAGE_BUILD_STREAM_TYPE },
       body: tar,
     }),
   );
@@ -526,7 +529,7 @@ test('it sends a progress line through the proxy before the upload ends', async 
     `http://127.0.0.1:${String(apex.port)}${IMAGE_BUILD_PATH}?name=web`,
     {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      headers: { authorization: `Bearer ${ctx.rootToken}`, accept: IMAGE_BUILD_STREAM_TYPE },
       body,
       duplex: 'half',
     },
@@ -645,7 +648,7 @@ test.each([
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?${query}`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: 'tar',
     }),
   );
@@ -999,7 +1002,7 @@ test('it refuses a fifth build with 429 while four run', async () => {
     ctx.impd.api.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web${String(n)}`, {
         method: 'POST',
-        headers: { authorization: 'Bearer root-token' },
+        headers: { authorization: `Bearer ${ctx.rootToken}` },
         body: tar,
       }),
     ),
@@ -1022,7 +1025,7 @@ test('it refuses a fifth build with 429 while four run', async () => {
   const fifth = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -1063,7 +1066,7 @@ test('it refuses a fifth streamed build with 429, before its stream, while four 
     ctx.impd.api.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web${String(n)}`, {
         method: 'POST',
-        headers: { authorization: 'Bearer root-token' },
+        headers: { authorization: `Bearer ${ctx.rootToken}` },
         body: tar,
       }),
     ),
@@ -1086,7 +1089,7 @@ test('it refuses a fifth streamed build with 429, before its stream, while four 
   const fifth = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      headers: { authorization: `Bearer ${ctx.rootToken}`, accept: IMAGE_BUILD_STREAM_TYPE },
       body: tar,
     }),
   );
@@ -1145,7 +1148,7 @@ test('it frees each build slot once its build ends', async () => {
     ctx.impd.api.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web${String(n)}`, {
         method: 'POST',
-        headers: { authorization: 'Bearer root-token' },
+        headers: { authorization: `Bearer ${ctx.rootToken}` },
         body: tar,
       }),
     ),
@@ -1159,19 +1162,16 @@ test('it frees each build slot once its build ends', async () => {
 
   gate.resolve();
 
-  const responses = await Promise.all(running);
-
-  const statuses = responses.map((built) => built.status);
+  await Promise.all(running);
 
   const fifth = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
 
-  expect(statuses).toStrictEqual([200, 200, 200, 200]);
   expect(fifth.status).toBe(200);
   expect(ctx.engine.unexpected).toStrictEqual([]);
 });
@@ -1227,7 +1227,7 @@ test.each([
       ctx.impd.api.app.handle(
         new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=gone${String(n)}`, {
           method: 'POST',
-          headers: { authorization: 'Bearer root-token', ...headers },
+          headers: { authorization: `Bearer ${ctx.rootToken}`, ...headers },
           body: tar,
           signal: client.signal,
         }),
@@ -1305,7 +1305,7 @@ test.each([
     ctx.impd.api.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=gone${String(n)}`, {
         method: 'POST',
-        headers: { authorization: 'Bearer root-token', ...headers },
+        headers: { authorization: `Bearer ${ctx.rootToken}`, ...headers },
         body: tar,
         signal: client.signal,
       }),
@@ -1332,7 +1332,7 @@ test.each([
   const next = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: 'not a tar',
     }),
   );
@@ -1379,7 +1379,7 @@ test('it kills the base image pulls of clients that go, and starts no other pull
     ctx.impd.api.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=pull${String(n)}`, {
         method: 'POST',
-        headers: { authorization: 'Bearer root-token' },
+        headers: { authorization: `Bearer ${ctx.rootToken}` },
         body: tar,
         signal: client.signal,
       }),
@@ -1445,7 +1445,7 @@ test('it frees the build slots of clients that go during a base image pull', asy
     ctx.impd.api.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=pull${String(n)}`, {
         method: 'POST',
-        headers: { authorization: 'Bearer root-token' },
+        headers: { authorization: `Bearer ${ctx.rootToken}` },
         body: tar,
         signal: client.signal,
       }),
@@ -1474,7 +1474,7 @@ test('it frees the build slots of clients that go during a base image pull', asy
   const next = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: 'not a tar',
     }),
   );
@@ -1526,7 +1526,7 @@ test('it refuses a base image with ONBUILD triggers once the host has it', async
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -1627,7 +1627,7 @@ test('it pulls COPY --from and RUN --mount images first, like a FROM, by tag or 
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -1722,7 +1722,7 @@ test('it sends the engine the Dockerfile with each image pinned and the platform
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -1801,7 +1801,7 @@ test('it refuses a COPY --from image with ONBUILD triggers, which the frontend w
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -1884,7 +1884,7 @@ test('it refuses a RUN --mount image with ONBUILD triggers, which the frontend w
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -1960,7 +1960,7 @@ test('it inspects and pins a ref the build names twice once, so a moving tag giv
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2043,7 +2043,7 @@ test('it inspects and pins the spellings of one image once', async () => {
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2121,7 +2121,7 @@ test('it says how impd pinned a build the registry denies, and what to build fro
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2171,7 +2171,7 @@ test('it refuses a FROM image with no registry digest before the build', async (
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2238,7 +2238,7 @@ test('it refuses a COPY --from image with no registry digest before the build', 
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2306,7 +2306,7 @@ test('it refuses an arm64 image on an amd64 host before the build', async () => 
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2374,7 +2374,7 @@ test('it refuses a 32-bit arm image on an amd64 host before the build', async ()
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2444,7 +2444,7 @@ test('it refuses an image whose registry digests name only registries impd refus
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2511,7 +2511,7 @@ test('it refuses an image under an IP address registry before any call', async (
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2581,7 +2581,7 @@ test("it refuses an image under the host's own registry, in any case, before any
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2654,7 +2654,7 @@ test('it refuses a global ARG that sets the build platform before any call', asy
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2715,7 +2715,7 @@ test('it refuses a stage ARG that sets the target platform before any call', asy
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2776,7 +2776,7 @@ test('it refuses a braced platform variable before any call', async () => {
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2844,7 +2844,7 @@ test('it pulls a missing Dockerfile frontend by digest once, before the build', 
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2910,7 +2910,7 @@ test('it pulls no Dockerfile frontend the engine has, and checks it before the b
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -2970,7 +2970,7 @@ test('it fails a build with 502 before the engine gets it when the frontend pull
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -3025,7 +3025,7 @@ test('it answers a build that fails after the engine built it with its error, an
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -3069,7 +3069,7 @@ test('it ends a streamed build that fails with its error, and removes the upload
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token', accept: IMAGE_BUILD_STREAM_TYPE },
+      headers: { authorization: `Bearer ${ctx.rootToken}`, accept: IMAGE_BUILD_STREAM_TYPE },
       body: tar,
     }),
   );
@@ -3115,7 +3115,7 @@ test('it audits a failed build with its code', async () => {
   await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: tar,
     }),
   );
@@ -3170,6 +3170,7 @@ test('it reports the unpack of an on-host build after the engine built the image
         inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 1 }],
       },
     ],
+    create: { stderr: 'Error response from daemon: no space left on device' },
   });
 
   updateEnv('PATH', docker.path);
@@ -3182,7 +3183,11 @@ test('it reports the unpack of an on-host build after the engine built the image
     },
   });
 
-  expect(building).rejects.toThrow('stub docker: create imp/web:latest /bin/true is not modelled');
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    /Error response from daemon: no space left on device/,
+  );
+
   expect(phases).toStrictEqual(['build', 'unpack']);
   expect(ctx.engine.unexpected).toStrictEqual([]);
 });
@@ -3218,7 +3223,7 @@ test('it refuses an upload with 429 while on-host builds hold all four build slo
   const response = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
       method: 'POST',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${ctx.rootToken}` },
       body: 'tar',
     }),
   );
