@@ -227,6 +227,10 @@ test('it keeps no log of a session started without log, and log-rm deletes the l
   expect(logs.map((log) => log.session)).toStrictEqual(['out']);
   expect(removed).toBe(`deleted 1 session logs of ${name}\n`);
   expect(after).toStrictEqual([]);
-  expect(missing.exitCode).toBe(1);
-  expect(missing.stderr).toContain('no log of session out');
+
+  expect(missing).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('no log of session out'),
+  });
 });

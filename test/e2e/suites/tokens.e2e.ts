@@ -65,15 +65,36 @@ test('it prints a made read token once, lists it without its secret, and lets it
 
   expect(tokens).toContain(reader);
   expect(tokens).not.toContain(secretPart);
-  expect(whoami.stdout).toBe(`token ${reader}: read on every imp\n`);
-  expect(listed.exitCode).toBe(0);
-  expect(listed.stdout).toContain(dev);
-  expect(exec.exitCode).toBe(255);
-  expect(exec.stderr).toContain('FORBIDDEN');
-  expect(stop.exitCode).toBe(1);
-  expect(stop.stderr).toContain('FORBIDDEN');
-  expect(token.exitCode).toBe(1);
-  expect(token.stderr).toContain('FORBIDDEN');
+
+  expect(whoami).toStrictEqual({
+    exitCode: 0,
+    stdout: `token ${reader}: read on every imp\n`,
+    stderr: '',
+  });
+
+  expect(listed).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toInclude(dev),
+    stderr: '',
+  });
+
+  expect(exec).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
+
+  expect(stop).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
+
+  expect(token).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
 });
 
 test('it lets an exec token limited to dev-* run in its imp and not touch another, names it in the audit, and refuses it once removed', async () => {
@@ -107,13 +128,31 @@ test('it lets an exec token limited to dev-* run in its imp and not touch anothe
   const listed = await tryImp(['ls'], { token: secret });
 
   expect(own).toStrictEqual({ exitCode: 0, stdout: 'hi\n', stderr: '' });
-  expect(otherExec.exitCode).toBe(255);
-  expect(otherExec.stderr).toContain('FORBIDDEN');
-  expect(otherStop.exitCode).toBe(1);
-  expect(otherStop.stderr).toContain('FORBIDDEN');
-  expect(otherProxy.exitCode).toBe(1);
-  expect(otherProxy.stderr).toContain('FORBIDDEN');
-  expect(listed.stdout).toContain(dev);
+
+  expect(otherExec).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
+
+  expect(otherStop).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
+
+  expect(otherProxy).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
+
+  expect(listed).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toInclude(dev),
+    stderr: '',
+  });
+
   expect(listed.stdout).not.toContain(other);
 
   // the audit log names the token behind each call
@@ -130,7 +169,12 @@ test('it lets an exec token limited to dev-* run in its imp and not touch anothe
 
   const after = await tryImp(['ls'], { token: secret });
 
-  expect(after.exitCode).toBe(1);
+  expect(after).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'imp: unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>\n',
+  });
 });
 
 test('it lets a token for dev-* that may grant one secret grant it there and nothing more, through a sleep', async () => {
@@ -193,11 +237,24 @@ test('it lets a token for dev-* that may grant one secret grant it there and not
   const whoami = await tryImp(['token', 'whoami'], { token: secret });
 
   expect(granted.exitCode).toBe(0);
-  expect(whoami.stdout).toBe(`token ${granter}: manage on ${dev}*; may grant ${gh}\n`);
-  expect(otherImp.exitCode).toBe(1);
-  expect(otherImp.stderr).toContain('FORBIDDEN');
-  expect(fork.exitCode).toBe(1);
-  expect(fork.stderr).toContain('FORBIDDEN');
+
+  expect(whoami).toStrictEqual({
+    exitCode: 0,
+    stdout: `token ${granter}: manage on ${dev}*; may grant ${gh}\n`,
+    stderr: '',
+  });
+
+  expect(otherImp).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
+
+  expect(fork).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('FORBIDDEN'),
+  });
 
   // the grant stays through a sleep and a wake
   await runImp('sleep', dev);
@@ -207,13 +264,17 @@ test('it lets a token for dev-* that may grant one secret grant it there and not
   const revoked = await tryImp(['revoke', dev, gh], { token: secret });
   const tokens = await runImp('token', 'ls');
 
-  expect(kept.stdout).toContain(gh);
+  expect(kept).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toInclude(gh),
+    stderr: '',
+  });
+
   expect(revoked.exitCode).toBe(0);
   expect(tokens).toContain(gh);
   expect(added).not.toContain(ghValue);
   expect(kept.stdout).not.toContain(ghValue);
   expect(tokens).not.toContain(ghValue);
-  expect(whoami.stdout).not.toContain(ghValue);
 });
 
 test('it lets an ssh key bound to a dev-* exec token log in to its imp and no other, names it in the audit, and lets it in nowhere once unbound', async () => {
@@ -262,10 +323,13 @@ test('it lets an ssh key bound to a dev-* exec token log in to its imp and no ot
   const own = await runSsh(keys, dev, ['echo', 'in'], { host: keyHost });
   const refused = await runSsh(keys, other, ['echo', 'in'], { host: keyHost });
 
-  expect(own.exitCode).toBe(0);
-  expect(own.stdout).toBe('in\n');
-  expect(refused.exitCode).toBe(255);
-  expect(refused.stderr).toContain('Permission denied');
+  expect(own).toStrictEqual({ exitCode: 0, stdout: 'in\n', stderr: '' });
+
+  expect(refused).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('Permission denied'),
+  });
 
   // the audit log names the token behind the login
   const calls = await listAuditCalls(dev);
@@ -286,7 +350,11 @@ test('it lets an ssh key bound to a dev-* exec token log in to its imp and no ot
 
   const unbound = await runSsh(keys, dev, ['echo', 'in'], { host: keyHost });
 
-  expect(unbound.exitCode).toBe(255);
+  expect(unbound).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('Permission denied'),
+  });
 });
 
 test('it opens no ssh session for a key bound to a read token', async () => {
@@ -318,6 +386,9 @@ test('it opens no ssh session for a key bound to a read token', async () => {
 
   const refused = await runSsh(keys, dev, ['echo', 'in'], { host: keyHost });
 
-  expect(refused.exitCode).toBe(255);
-  expect(refused.stderr).toContain('Permission denied');
+  expect(refused).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('Permission denied'),
+  });
 });

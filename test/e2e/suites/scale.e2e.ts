@@ -240,8 +240,12 @@ test(`it keeps ${String(config.scaleCount)} imps inside the RAM budget, sleeps t
 
   const leftBehind = await findImp(huge);
 
-  expect(rejected.exitCode).toBe(1);
-  expect(rejected.stderr).toContain('RAM_BUDGET_EXCEEDED');
+  expect(rejected).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('RAM_BUDGET_EXCEEDED'),
+  });
+
   expect(leftBehind).toBeUndefined();
 
   // An imp that fits the budget but not its boot reserve (a share of its
@@ -289,8 +293,12 @@ test(`it keeps ${String(config.scaleCount)} imps inside the RAM budget, sleeps t
   console.log(`    a ${String(tightMemory)} MiB imp with ${String(inUse)} MiB in use: refused`);
 
   expect(tightMemory).toBeLessThanOrEqual(config.ramBudgetMib);
-  expect(tightRejected.exitCode).toBe(1);
-  expect(tightRejected.stderr).toContain('RAM_BUDGET_EXCEEDED');
+
+  expect(tightRejected).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('RAM_BUDGET_EXCEEDED'),
+  });
 
   // a breach the released holds start shows once an enforce sleep was due;
   // then sample until no overshoot is open, so the final check judges a

@@ -45,10 +45,18 @@ test('it wakes a sleeping imp on ssh but not on a refused login, and keeps it aw
   const unknownKey = await runSsh(ctx.ssh, name, ['true'], { host: SSH_HOST_OTHER_KEY });
   const afterRefusals = await readState(name);
 
-  expect(unknownUser.exitCode).toBe(255);
-  expect(unknownUser.stderr).toContain('Permission denied (publickey)');
-  expect(unknownKey.exitCode).toBe(255);
-  expect(unknownKey.stderr).toContain('Permission denied (publickey)');
+  expect(unknownUser).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('Permission denied (publickey)'),
+  });
+
+  expect(unknownKey).toStrictEqual({
+    exitCode: 255,
+    stdout: '',
+    stderr: expect.toInclude('Permission denied (publickey)'),
+  });
+
   expect(afterRefusals).toBe('sleeping');
 
   // a login wakes it

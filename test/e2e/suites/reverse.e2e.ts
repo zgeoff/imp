@@ -59,12 +59,23 @@ test('it refuses a forward it cannot open at once, and says why', async () => {
   const low = await tryImp(['proxy', name, '--reverse', '80:9']);
   const ours = await tryImp(['proxy', name, '--reverse', '/run/imp/x.sock:9']);
 
-  expect(missing.exitCode).toBe(1);
-  expect(missing.stderr).toContain('the directory /nope does not exist in the imp');
-  expect(low.exitCode).toBe(1);
-  expect(low.stderr).toContain('port 80 needs root in the imp; pick a port above 1023');
-  expect(ours.exitCode).toBe(1);
-  expect(ours.stderr).toContain("leads to the agent's own sockets");
+  expect(missing).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('the directory /nope does not exist in the imp'),
+  });
+
+  expect(low).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('port 80 needs root in the imp; pick a port above 1023'),
+  });
+
+  expect(ours).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude("leads to the agent's own sockets"),
+  });
 });
 
 test('it lets a process in the imp reach a unix socket and a port on this machine', async () => {

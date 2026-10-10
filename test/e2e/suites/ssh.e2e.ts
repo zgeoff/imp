@@ -131,8 +131,13 @@ test('it copies a file both ways with scp, and serves sftp without an sftp-serve
   expect(up.exitCode).toBe(0);
   expect(down.exitCode).toBe(0);
   expect(readFileSync(back).equals(blob)).toBeTrue();
-  expect(sftp.exitCode).toBe(0);
-  expect(sftp.stdout).toContain(String(blob.byteLength));
+
+  expect(sftp).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toInclude(String(blob.byteLength)),
+    stderr: expect.toBeString(),
+  });
+
   expect(listed).toBe('/tmp/sftp-dir');
 });
 
@@ -353,9 +358,11 @@ test('it gives an imp with a grant the broker variables over ssh', async () => {
 
   const result = await runSsh(ctx.ssh, name, ['echo "$HTTPS_PROXY"; echo "$GH_TOKEN"']);
 
-  const [proxy, token] = result.stdout.split('\n');
-
-  expect(result.exitCode).toBe(0);
-  expect(proxy).toMatch(/^http:\/\/[\d.]+:\d+$/);
-  expect(token).toBe('imp-broker-placeholder');
+  expect(result).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toSatisfy((text: string) =>
+      /^http:\/\/[\d.]+:\d+\nimp-broker-placeholder\n$/v.test(text),
+    ),
+    stderr: expect.toBeString(),
+  });
 });

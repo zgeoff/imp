@@ -15,20 +15,24 @@ test('it gives the dev container no docker.sock of the host, and the proxy as it
   expect(version.exitCode).toBe(0);
 });
 
+// docker run exits 125 when the daemon refuses, the other commands 1
 test.each([
-  ['docker run --rm busybox true'],
-  ['docker create --privileged busybox /bin/true'],
-  ['docker create -v /:/host busybox /bin/true'],
-  ['docker create --network host busybox /bin/true'],
-  ['docker create --pid host busybox /bin/true'],
-  ['docker create --cap-add SYS_ADMIN busybox /bin/true'],
-  ['docker create --device /dev/kvm busybox /bin/true'],
-  ['docker create --volumes-from imp-host busybox /bin/true'],
-])('it refuses a container that could reach the host: %s', async (script) => {
+  ['docker run --rm busybox true', 125],
+  ['docker create --privileged busybox /bin/true', 1],
+  ['docker create -v /:/host busybox /bin/true', 1],
+  ['docker create --network host busybox /bin/true', 1],
+  ['docker create --pid host busybox /bin/true', 1],
+  ['docker create --cap-add SYS_ADMIN busybox /bin/true', 1],
+  ['docker create --device /dev/kvm busybox /bin/true', 1],
+  ['docker create --volumes-from imp-host busybox /bin/true', 1],
+])('it refuses a container that could reach the host: %s', async (script, exitCode) => {
   const result = await runInContainer(['sh', '-c', script]);
 
-  expect(result.exitCode).not.toBe(0);
-  expect(result.stderr).toContain('imp-docker-proxy:');
+  expect(result).toStrictEqual({
+    exitCode,
+    stdout: '',
+    stderr: expect.toInclude('imp-docker-proxy:'),
+  });
 });
 
 test.each([
@@ -40,8 +44,11 @@ test.each([
 ])('it refuses %s, a call impd never makes', async (script) => {
   const result = await runInContainer(['sh', '-c', script]);
 
-  expect(result.exitCode).not.toBe(0);
-  expect(result.stderr).toContain('is not a call impd makes');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('is not a call impd makes'),
+  });
 });
 
 test('it refuses an export or rm of a container the proxy did not create', async () => {
@@ -58,10 +65,18 @@ test('it refuses an export or rm of a container the proxy did not create', async
   const removed = await runInContainer(['sh', '-c', `docker rm -f ${outsider}`]);
   const state = await runChecked(['docker', 'inspect', '-f', '{{.State.Status}}', outsider]);
 
-  expect(exported.exitCode).not.toBe(0);
-  expect(exported.stderr).toContain('was not created by this proxy');
-  expect(removed.exitCode).not.toBe(0);
-  expect(removed.stderr).toContain('was not created by this proxy');
+  expect(exported).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('was not created by this proxy'),
+  });
+
+  expect(removed).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('was not created by this proxy'),
+  });
+
   expect(state.trim()).toBe('created');
 });
 
@@ -94,6 +109,9 @@ test("it refuses a pull of the host's repository, so its tag cannot move", async
 
   const result = await runInContainer(['sh', '-c', `docker pull ${hostRepo}:e2e-socket`]);
 
-  expect(result.exitCode).not.toBe(0);
-  expect(result.stderr).toContain('imp-host runs from');
+  expect(result).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('imp-host runs from'),
+  });
 });

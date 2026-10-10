@@ -79,8 +79,11 @@ test('it lets the imps on a network reach and name each other past their policie
   // a join that puts a box imp next to an open one warns
   const joined = await tryImp(['net', 'join', lab, db]);
 
-  expect(joined.exitCode).toBe(0);
-  expect(joined.stderr).toContain(`warning: ${db} is box, but ${web} on ${lab} is open`);
+  expect(joined).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toBeString(),
+    stderr: expect.toInclude(`warning: ${db} is box, but ${web} on ${lab} is open`),
+  });
 
   const webRow = await requireImp(web);
   const dbRow = await requireImp(db);

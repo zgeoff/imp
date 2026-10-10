@@ -77,9 +77,13 @@ test('it lists the laptop key over ssh -A, from a socket only the image user own
     { env: { SSH_AUTH_SOCK: ctx.laptop.socket } },
   );
 
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain('imp-e2e-laptop (ED25519)');
-  expect(result.stdout).toContain('dev 600\ndev 700\n');
+  expect(result).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toSatisfy((text: string) =>
+      /imp-e2e-laptop \(ED25519\)\n(?:.*\n)*dev 600\ndev 700\n$/v.test(text),
+    ),
+    stderr: expect.toBeString(),
+  });
 });
 
 // the git server runs on this machine; the imp reaches it through NAT
@@ -415,8 +419,11 @@ test('it never lets the key reach the imp: not its disk, not its slept memory', 
     { env: { SSH_AUTH_SOCK: ctx.laptop.socket } },
   );
 
-  expect(signed.exitCode).toBe(0);
-  expect(signed.stdout).toStartWith('-----BEGIN SSH SIGNATURE-----\n');
+  expect(signed).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toStartWith('-----BEGIN SSH SIGNATURE-----\n'),
+    stderr: expect.toBeString(),
+  });
 
   const imp = await requireImp(name);
 

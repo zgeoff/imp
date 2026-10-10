@@ -170,8 +170,12 @@ test('it runs an added service through logs, a restart, a sleep, a reboot and a 
   expect(files).toBe('');
   expect(response.ok).toBe(false);
   expect(kept).toContain('url:/');
-  expect(again.exitCode).toBe(1);
-  expect(again.stderr).toContain('not found');
+
+  expect(again).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude('not found'),
+  });
 });
 
 test('it waits out a sleep in a log follow without waking the imp, and prints each line once', async () => {
