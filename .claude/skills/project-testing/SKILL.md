@@ -258,8 +258,9 @@ files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files, 
 `registry`, `scale`, `tailscale` and the two moves suites take their impd settings from the suite's
 `settings`, and the moves journeys read their host B from the harness's fixture with `readMoveHosts`
 (step 5); each makes and removes its own imps on both hosts. A journey that reboots the instance
-onto settings only it needs, as `tailscale-names` does, sets them with `updateEnv` and defers a
-reboot back, which runs after the preload has restored the env. The other suite files still read
+onto settings only it needs, as `tailscale-names` does, passes them over its suite's own
+(`readSuiteSettings` in `suites.ts`) to `runDevScript('reboot', …)`, and defers a reboot back onto
+the suite's settings, so the journeys after it still run on them. The other suite files still read
 their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
 rely on the harness's reset after them.
 

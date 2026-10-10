@@ -242,6 +242,21 @@ export function readSuitePrefix(name: string): string {
   return suite.prefix;
 }
 
+// the impd settings a suite's journeys run on for `target`, null for the
+// run's own
+export function readSuiteSettings(
+  name: string,
+  target: Readonly<DevInstance>,
+): Readonly<Record<string, string>> | null {
+  const suite = SUITES.find((candidate) => candidate.name === name);
+
+  if (suite === undefined) {
+    throw new Error(`no suite named ${name}`);
+  }
+
+  return suite.settings?.(target) ?? null;
+}
+
 // generous: a journey's own waits fail long before this
 const JOURNEY_TIMEOUT_MS = 3_600_000;
 

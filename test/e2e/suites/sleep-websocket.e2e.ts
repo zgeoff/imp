@@ -52,8 +52,8 @@ test('it relays text and binary both ways, with an early message and a subprotoc
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
-  await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
 
+  const page = await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
   const ws = await openProxySocket(name, ['e2e.v1', 'e2e.v2']);
 
   ctx.stack.defer(() => {
@@ -73,6 +73,7 @@ test('it relays text and binary both ways, with an early message and a subprotoc
 
   await ws.closed;
 
+  expect(page).toBe('e2e-ws-ok');
   expect(ws.socket.protocol).toBe('e2e.v1');
   expect(greeting).toBe('hello');
   expect(text).toBe('echo hello');
@@ -91,8 +92,8 @@ test('it carries close codes and reasons across the proxy both ways', async () =
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
-  await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
 
+  const page = await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
   const fromServer = await openProxySocket(name);
 
   ctx.stack.defer(() => {
@@ -127,6 +128,7 @@ test('it carries close codes and reasons across the proxy both ways', async () =
     return last;
   });
 
+  expect(page).toBe('e2e-ws-ok');
   expect(serverClose).toStrictEqual({ code: 4001, reason: 'server-bye' });
   expect(seen).toBe('4002 client-bye');
 });
@@ -141,8 +143,8 @@ test("it relays WebSockets on the imp's own port too", async () => {
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
-  await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
 
+  const page = await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
   const row = await requireImp(name);
   const ws = await openImpPortSocket(row.slot);
 
@@ -157,6 +159,7 @@ test("it relays WebSockets on the imp's own port too", async () => {
 
   await ws.closed;
 
+  expect(page).toBe('e2e-ws-ok');
   expect(greeting).toBe('hello');
   expect(text).toBe('echo by port');
 });
@@ -171,7 +174,8 @@ test('it keeps an imp awake while a WebSocket is open, and wakes it on an upgrad
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
   await waitForExec(name);
-  await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
+
+  const page = await waitFor(`${name} to serve HTTP`, () => getThroughProxy(name));
 
   // an open WebSocket keeps it awake, and it sleeps once the socket closes
   const held = await openProxySocket(name);
@@ -219,6 +223,7 @@ test('it keeps an imp awake while a WebSocket is open, and wakes it on an upgrad
 
   await woken.closed;
 
+  expect(page).toBe('e2e-ws-ok');
   expect(greeting).toBe('hello');
   expect(text).toBe('echo woken');
   expect(state).toBe('running');

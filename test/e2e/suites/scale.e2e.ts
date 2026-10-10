@@ -249,15 +249,15 @@ test(`it keeps ${String(config.scaleCount)} imps inside the RAM budget, sleeps t
     .filter((row) => row.name.startsWith(ctx.prefix) && row.state === 'running')
     .map((row) => row.name);
 
+  // each hold's release deferred as soon as it is taken, so a later hold that
+  // fails still lets the earlier ones go
   for (const name of held) {
     await runImp('hold', name, '10m');
-  }
 
-  ctx.stack.defer(async () => {
-    for (const name of held) {
+    ctx.stack.defer(async () => {
       await tryImp(['hold', name, '0']);
-    }
-  });
+    });
+  }
 
   const info = await readInfo();
 

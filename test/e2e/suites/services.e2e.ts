@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy, sendProxyRequest } from '../lib/http';
@@ -240,8 +241,10 @@ test('it waits out a sleep in a log follow without waking the imp, and prints ea
     }
   });
 
-  // the follow has taken the end, and waits on the imp's state instead of
-  // reading again, which would wake it
+  // a dwell whose length is the contract (decision 5): a read after impd's
+  // 5 s FOLLOW_RECHECK_MS (services/service-api.ts) would wake the imp by 6 s
+  await Bun.sleep(6000);
+
   const waiting = await requireImp(name);
 
   const saidBeforeWake = stderr.read();
@@ -255,9 +258,12 @@ test('it waits out a sleep in a log follow without waking the imp, and prints ea
     }
   });
 
+  invariant(slept.resources);
+  invariant(waiting.resources);
+
   expect(slept.state).toBe('sleeping');
   expect(waiting.state).toBe('sleeping');
-  expect(waiting.resources?.wakeCount).toBe(slept.resources?.wakeCount);
+  expect(waiting.resources.wakeCount).toBe(slept.resources.wakeCount);
   expect(saidBeforeWake).not.toContain(`${name} runs again`);
   expect(stderr.read()).toContain(`${name} runs again`);
   expect(stdout.read().split(`url:${marker}`)).toHaveLength(2);

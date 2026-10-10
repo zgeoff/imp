@@ -1,6 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { createServer } from 'node:net';
 import { dirname } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -167,8 +168,10 @@ test('it listens again at the same path once the imp wakes, without waking it', 
     }
   });
 
-  // the CLI has taken the end, and waits on the imp's state instead of
-  // opening the forward again, which would wake it
+  // a dwell whose length is the contract (decision 5): a reopen after the
+  // CLI's 2 s RETRY_MS (cli/src/reverse-client.ts) would wake the imp by 3 s
+  await Bun.sleep(3000);
+
   const waiting = await requireImp(name);
 
   const saidBeforeWake = reverse.readStderr();
@@ -186,9 +189,12 @@ test('it listens again at the same path once the imp wakes, without waking it', 
 
   const listed = await runShellInImp(name, `SSH_AUTH_SOCK='${socket}' ssh-add -l 2>&1`);
 
+  invariant(slept.resources);
+  invariant(waiting.resources);
+
   expect(slept.state).toBe('sleeping');
   expect(waiting.state).toBe('sleeping');
-  expect(waiting.resources?.wakeCount).toBe(slept.resources?.wakeCount);
+  expect(waiting.resources.wakeCount).toBe(slept.resources.wakeCount);
   expect(saidBeforeWake).not.toContain(' again\n');
   expect(listed).toContain('imp-e2e-laptop (ED25519)');
 });

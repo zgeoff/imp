@@ -1,13 +1,12 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { updateEnv } from '@imp/test-utils/update-env';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, createInstanceClient, readImpUrls, readInfo, runImp } from '../lib/imp-cli';
 import { waitForExec } from '../lib/imps';
-import { runDevScript } from '../lib/instance';
+import { instance, runDevScript } from '../lib/instance';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
-import { readSuitePrefix } from '../lib/suites';
+import { readSuitePrefix, readSuiteSettings } from '../lib/suites';
 import {
   isTailnetReady,
   readLocalTailscaleStatus,
@@ -20,7 +19,7 @@ import { waitFor } from '../lib/wait-for';
 // Per-imp tailnet names need an OAuth client with the services scope and the
 // tailnet policy for tag:imp-svc (docs/guides/tailscale.md#per-imp-names).
 
-// one stack for every release, so the reboot back to the run's settings
+// one stack for every release, so the reboot back to the suite's settings
 // runs once the imp is gone
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -53,14 +52,19 @@ test.skipIf(!namesReady)(
 
     const named = `${ctx.prefix}n`;
 
-    // a prefix of its own, so no device or real service shares the name; the
-    // reboot back runs after the preload has restored the env
-    updateEnv('IMP_TAILNET_NAMES', '1');
-    updateEnv('IMP_TAILNET_NAME_PREFIX', 'e2e-');
+    // the suite's settings both ways, so the journeys after this one still
+    // run on them
+    const settings = readSuiteSettings('tailscale', instance);
 
-    ctx.stack.defer(() => runDevScript('reboot'));
+    ctx.stack.defer(() => runDevScript('reboot', instance, { ...settings }));
 
-    await runDevScript('reboot');
+    // a prefix of its own, so no device or real service shares the name
+    await runDevScript('reboot', instance, {
+      ...settings,
+      IMP_TAILNET_NAMES: '1',
+      IMP_TAILNET_NAME_PREFIX: 'e2e-',
+    });
+
     await waitForTailnetIp();
     await runImp('new', named, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
 

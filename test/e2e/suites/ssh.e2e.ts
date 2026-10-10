@@ -149,13 +149,48 @@ test('it copies a file both ways with scp, and serves sftp without an sftp-serve
   expect(listed).toBe('/tmp/sftp-dir');
 });
 
-test('it carries a local forward to a port in the imp', async () => {
+test('it carries a local forward from a TCP port to a port in the imp', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}fwdtcp`;
+
+  // a port no other picker hands out, and ExitOnForwardFailure fails the
+  // test should anything else bind it first
+  const port = findFreePorts(1).take();
+
+  await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+
+  const forward = startSsh(ctx.ssh, [
+    '-N',
+    '-o',
+    'ExitOnForwardFailure=yes',
+    '-L',
+    `${String(port)}:localhost:8080`,
+    `${name}@${SSH_HOST}`,
+  ]);
+
+  ctx.stack.defer(() => forward.stop());
+
+  const body = await waitFor('the forward to answer', async () => {
+    const response = await fetch(`http://127.0.0.1:${String(port)}/`);
+
+    return response.text();
+  });
+
+  expect(body).toBe('e2e-tiny-ok\n');
+});
+
+test('it carries a local forward from a unix socket to a port in the imp', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}fwd`;
 
-  // a unix socket on this side, so no free port has to be guessed; the
-  // gateway sees the same direct-tcpip channel to localhost:8080
+  // the gateway sees the same direct-tcpip channel to localhost:8080 as
+  // from a TCP port
   const local = join(ctx.sockets, 'forward.sock');
 
   await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');

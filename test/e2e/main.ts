@@ -30,7 +30,13 @@ import { resetBaseline } from './lib/reset-baseline';
 import { runSuite, stopSuiteGroup } from './lib/run-suite';
 import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
-import { FAST_GROUPS, SUITES, buildJourneyArgv, listJourneys } from './lib/suites';
+import {
+  FAST_GROUPS,
+  SUITES,
+  buildJourneyArgv,
+  listJourneys,
+  readSuiteSettings,
+} from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
 import { resolveWipeTarget } from './lib/wipe-target';
 import type { WipeTarget } from './lib/wipe-target';
@@ -535,8 +541,7 @@ async function main(): Promise<number> {
       checkJourney: (suite, journey) =>
         checkNoBootFallbacks(suite, startedAt.get(journey) ?? new Date()),
       reset: resetSuites,
-      settingsOf: (name) =>
-        SUITES.find((suite) => suite.name === name)?.settings?.(instance) ?? null,
+      settingsOf: (name) => readSuiteSettings(name, instance),
       rebootOnto: (settings) => runDevScript('reboot', instance, settings),
       reboot: () => runDevScript('reboot'),
       fixturesOf: (name) => SUITES.find((suite) => suite.name === name)?.fixtures ?? [],
