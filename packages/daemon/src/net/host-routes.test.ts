@@ -66,7 +66,10 @@ test('it reads the connected IPv4 prefixes from the host routes and addresses', 
 });
 
 test('it fails the connected prefix read when ip fails', () => {
-  const ip = buildStubIpCommand({ failures: { 'ip -4 -o addr': 'Cannot open netlink socket' } });
+  const ip = buildStubIpCommand({
+    outputs: { 'ip -4 route show': '172.17.0.0/16 dev eth0 proto kernel scope link\n' },
+    failures: { 'ip -4 -o addr': 'Cannot open netlink socket' },
+  });
 
   expect(readConnectedPrefixes4(ip.runChecked)).rejects.toThrowWithMessage(
     Error,

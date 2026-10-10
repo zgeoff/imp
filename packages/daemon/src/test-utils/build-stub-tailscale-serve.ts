@@ -1,3 +1,4 @@
+import { runChecked } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 
 // one Tailscale Service's serve config: the target behind each port
@@ -11,9 +12,9 @@ interface StubTailscaleServeOptions {
   readonly tailnet?: string;
 }
 
-// The `tailscale serve` CLI over one node's serve config: `status --json`
-// (empty while nothing is served), `--service=<svc> --http|--https=<port>
-// <target>` and `clear <svc>`; any other argv exits 1.
+// The `tailscale serve` CLI: `status --json`, `--service=<svc>
+// --http|--https=<port> <target>` and `clear <svc>`; any other argv exits 1.
+// Status is tailscale's ipn.ServeConfig as runServeStatus indents it.
 export function buildStubTailscaleServe(options: Readonly<StubTailscaleServeOptions> = {}) {
   const tailnet = options.tailnet ?? 'tail1234.ts.net';
 
@@ -26,10 +27,6 @@ export function buildStubTailscaleServe(options: Readonly<StubTailscaleServeOpti
   const failures: string[] = [];
 
   const renderStatus = (): string => {
-    if (nodePorts.size === 0 && services.size === 0) {
-      return '';
-    }
-
     const tcp = Object.fromEntries([...nodePorts].map((port) => [String(port), { HTTPS: true }]));
 
     const rendered = Object.fromEntries(
@@ -56,10 +53,12 @@ export function buildStubTailscaleServe(options: Readonly<StubTailscaleServeOpti
       }),
     );
 
-    return JSON.stringify({
+    const status = {
       ...(nodePorts.size > 0 && { TCP: tcp }),
       ...(services.size > 0 && { Services: rendered }),
-    });
+    };
+
+    return `${JSON.stringify(status, null, 2)}\n`;
   };
 
   const runServe = (argv: readonly string[]): CommandResult => {
@@ -116,18 +115,8 @@ export function buildStubTailscaleServe(options: Readonly<StubTailscaleServeOpti
     run,
     calls,
 
-    // throws with stderr on a non-zero exit, as runChecked does
-    runChecked: async (argv: readonly string[]): Promise<string> => {
-      const result = await run(argv);
-
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `${argv.join(' ')} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-        );
-      }
-
-      return result.stdout;
-    },
+    // the real runChecked over `run`
+    runChecked: (argv: readonly string[]): Promise<string> => runChecked(argv, {}, run),
 
     // a node-level port serve holds, outside any service
     holdPort: (port: number): void => {

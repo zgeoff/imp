@@ -15,6 +15,10 @@ test('it gives a /16 16384 slots', () => {
   expect(countSlots(parseSubnet('10.66.0.0/16'))).toBe(16_384);
 });
 
+test('it gives a /24 64 slots', () => {
+  expect(countSlots(parseSubnet('10.66.0.0/24'))).toBe(64);
+});
+
 test('it addresses slot 0 at the start of the subnet', () => {
   const plan = { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 };
 

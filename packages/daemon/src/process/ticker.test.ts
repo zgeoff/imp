@@ -1,5 +1,4 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
 import { buildStubTickerTimer } from '../test-utils/build-stub-ticker-timer';
 import { startTicker } from './ticker';
 
@@ -114,33 +113,62 @@ test('it waits for a running task when stopped', async () => {
   );
 
   const fired = stub.fire('sweep');
+  const stopping = ticker.stop();
+
+  // a stop that did not wait for the task would be settled already
+  const statusWhileHeld = Bun.peek.status(stopping);
 
   const stopped = (async () => {
-    await ticker.stop();
+    await stopping;
 
     steps.push('stopped');
   })();
-
-  // every pending callback runs first, so a stop that did not wait ends here
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 
   steps.push('released');
   release.resolve();
 
   await Promise.all([fired, stopped]);
 
+  expect(statusWhileHeld).toBe('pending');
   expect(steps).toStrictEqual(['started', 'released', 'finished', 'stopped']);
 });
 
+test('it schedules no next run for a task that ends after the stop', async () => {
+  const stub = buildStubTickerTimer();
+  const release = Promise.withResolvers<void>();
+
+  const ticker = startTicker(
+    'sweep',
+    30_000,
+    () => release.promise,
+    () => {},
+    stub.timer,
+  );
+
+  const fired = stub.fire('sweep');
+  const stopping = ticker.stop();
+
+  release.resolve();
+
+  await Promise.all([fired, stopping]);
+
+  expect(stub.readDelays()).toStrictEqual({});
+});
+
 test('it runs on the runtime timers by default', async () => {
-  const task = mock(() => Promise.resolve());
+  const ran = Promise.withResolvers<void>();
+
+  const task = mock(() => {
+    ran.resolve();
+
+    return Promise.resolve();
+  });
+
   const ticker = startTicker('sweep', 1, task, () => {});
 
   onTestFinished(() => ticker.stop());
 
-  await waitFor(() => {
-    expect(task).toHaveBeenCalled();
-  });
+  await ran.promise;
+
+  expect(task).toHaveBeenCalled();
 });

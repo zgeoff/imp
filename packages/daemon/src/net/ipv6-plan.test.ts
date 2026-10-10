@@ -235,9 +235,22 @@ test('it turns IPv6 off when the NAT66 table cannot be written', async () => {
 
   expect(plan).toBeNull();
 
-  expect(deps.runNft).toHaveBeenLastCalledWith(
-    'table ip6 imp_nat66 {}\ndelete table ip6 imp_nat66\n',
-  );
+  expect(deps.runNft.mock.calls).toStrictEqual([
+    [
+      [
+        'table ip6 imp_nat66 {}',
+        'delete table ip6 imp_nat66',
+        'table ip6 imp_nat66 {',
+        '  chain postrouting {',
+        '    type nat hook postrouting priority srcnat; policy accept;',
+        '    oifname "eth0" ip6 saddr fd12:3456:789a::/64 masquerade',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+    ],
+    ['table ip6 imp_nat66 {}\ndelete table ip6 imp_nat66\n'],
+  ]);
 
   expect(deps.log).toHaveBeenCalledExactlyOnceWith(
     'impd: ipv6: off (NAT66: Operation not supported)',
@@ -297,6 +310,9 @@ test('it names the missing raw rule once the filter rules are in place', async (
         '-A FORWARD -o imp+ -j DROP',
         '-A FORWARD -i imp+ -j DROP',
       ].join('\n'),
+
+      // a raw table with only its default policies
+      'ip6tables -w -t raw -S': '-P PREROUTING ACCEPT\n-P OUTPUT ACCEPT\n',
     },
   });
 
@@ -397,7 +413,7 @@ test('it reads the device of the first IPv6 default route', async () => {
 });
 
 test('it reads no IPv6 default route when there is none', async () => {
-  const ip = buildStubIpCommand();
+  const ip = buildStubIpCommand({ outputs: { 'ip -6 route show default': '' } });
 
   const dev = await readIpv6DefaultRoute(ip.run);
 

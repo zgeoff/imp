@@ -35,7 +35,11 @@ test('it sends the token it was given as a bearer token', async () => {
 
   await api.listServices();
 
-  expect(stub.requests.at(-1)?.authorization).toMatch(/^Bearer tskey-api-\w+$/v);
+  const [token] = stub.readIssuedTokens();
+
+  invariant(token);
+
+  expect(stub.requests.at(-1)?.authorization).toBe(`Bearer ${token}`);
 });
 
 test('it keeps one token for calls before its last minute', async () => {
@@ -143,7 +147,7 @@ test('it lists no services when the API answers a null list', async () => {
   expect(listed).toStrictEqual([]);
 });
 
-test('it writes a service under its encoded name', async () => {
+test('it stores the service it writes', async () => {
   const stub = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
 
   server.use(...stub.handlers);
@@ -326,10 +330,11 @@ test('it asks for a new token on the call after a 401', async () => {
 
   stub.revokeTokens();
 
-  const refused = await Promise.allSettled([api.listServices()]);
+  // the fault: the call with the revoked token is refused and drops it
+  const [refused] = await Promise.allSettled([api.listServices()]);
   const listed = await api.listServices();
 
-  expect(refused).toMatchObject([{ status: 'rejected', reason: { status: 401 } }]);
+  expect(refused).toMatchObject({ status: 'rejected', reason: { status: 401 } });
   expect(listed).toStrictEqual([]);
   expect(stub.requests.filter((request) => request.path === '/oauth/token')).toHaveLength(2);
 });

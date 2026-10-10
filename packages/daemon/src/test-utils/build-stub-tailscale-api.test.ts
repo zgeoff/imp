@@ -30,6 +30,28 @@ test('it hands an access token to its client by client credentials', async () =>
   });
 });
 
+test('it lists each access token it handed out', async () => {
+  const api = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...api.handlers);
+
+  const response = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'services',
+    }),
+  });
+
+  const answer: unknown = await response.json();
+
+  const token = z.object({ access_token: z.string() }).parse(answer).access_token;
+
+  expect(api.readIssuedTokens()).toStrictEqual([token]);
+});
+
 test('it refuses a token to another client with a 401', async () => {
   const api = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
 
@@ -130,7 +152,48 @@ test('it lists the stored services as vipServices', async () => {
   });
 });
 
-test('it stores a service a PUT writes under its encoded name', async () => {
+test('it answers a PUT with the service it wrote over the one under its encoded name', async () => {
+  const api = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...api.handlers);
+
+  await api.services.create({
+    name: 'svc:box',
+    comment: 'old',
+    ports: ['tcp:443'],
+    tags: ['tag:old'],
+  });
+
+  const issued = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'services',
+    }),
+  });
+
+  const answer: unknown = await issued.json();
+
+  const token = z.object({ access_token: z.string() }).parse(answer).access_token;
+
+  const response = await fetch('https://api.tailscale.com/api/v2/tailnet/-/services/svc%3Abox', {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'svc:box', comment: 'c', ports: ['tcp:80'], tags: [] }),
+  });
+
+  const body: unknown = await response.json();
+
+  const stored: unknown[] = api.services.all();
+
+  expect(response.status).toBe(200);
+  expect(body).toStrictEqual({ name: 'svc:box', comment: 'c', ports: ['tcp:80'], tags: [] });
+  expect(stored).toStrictEqual([{ name: 'svc:box', comment: 'c', ports: ['tcp:80'], tags: [] }]);
+});
+
+test('it answers 400 to a PUT whose body is not JSON, and stores nothing', async () => {
   const api = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
 
   server.use(...api.handlers);
@@ -141,6 +204,7 @@ test('it stores a service a PUT writes under its encoded name', async () => {
       client_id: 'kExample',
       client_secret: 'secret',
       grant_type: 'client_credentials',
+      scope: 'services',
     }),
   });
 
@@ -148,15 +212,185 @@ test('it stores a service a PUT writes under its encoded name', async () => {
 
   const token = z.object({ access_token: z.string() }).parse(answer).access_token;
 
-  await fetch('https://api.tailscale.com/api/v2/tailnet/-/services/svc%3Abox', {
+  const response = await fetch('https://api.tailscale.com/api/v2/tailnet/-/services/svc%3Abox', {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: '{"name": "svc:box",',
+  });
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(400);
+  expect(body).toStrictEqual({ message: 'invalid service definition' });
+  expect(api.services.count()).toBe(0);
+});
+
+test('it answers 400 to a PUT that leaves out a field, rather than fill it in', async () => {
+  const api = buildStubTailscaleApi({ client: { clientId: 'kExample', clientSecret: 'secret' } });
+
+  server.use(...api.handlers);
+
+  const issued = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'services',
+    }),
+  });
+
+  const answer: unknown = await issued.json();
+
+  const token = z.object({ access_token: z.string() }).parse(answer).access_token;
+
+  const response = await fetch('https://api.tailscale.com/api/v2/tailnet/-/services/svc%3Abox', {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'svc:box', ports: ['tcp:80'], tags: [] }),
+  });
+
+  expect(response.status).toBe(400);
+  expect(api.services.count()).toBe(0);
+});
+
+test('it answers 403 to a write with a token scoped to read services', async () => {
+  const api = buildStubTailscaleApi({
+    client: { clientId: 'kExample', clientSecret: 'secret', scopes: ['services:read'] },
+  });
+
+  server.use(...api.handlers);
+
+  const issued = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'services:read',
+    }),
+  });
+
+  const answer: unknown = await issued.json();
+
+  const token = z.object({ access_token: z.string() }).parse(answer).access_token;
+
+  const response = await fetch('https://api.tailscale.com/api/v2/tailnet/-/services/svc%3Abox', {
     method: 'PUT',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'svc:box', comment: 'c', ports: ['tcp:80'], tags: [] }),
   });
 
-  const stored: unknown[] = api.services.all();
+  const body: unknown = await response.json();
 
-  expect(stored).toStrictEqual([{ name: 'svc:box', comment: 'c', ports: ['tcp:80'], tags: [] }]);
+  expect(response.status).toBe(403);
+  expect(body).toStrictEqual({ message: 'insufficient scope' });
+  expect(api.services.count()).toBe(0);
+});
+
+test('it lets a token scoped to read services list them', async () => {
+  const api = buildStubTailscaleApi({
+    client: { clientId: 'kExample', clientSecret: 'secret', scopes: ['services:read'] },
+  });
+
+  server.use(...api.handlers);
+
+  const issued = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'services:read',
+    }),
+  });
+
+  const answer: unknown = await issued.json();
+
+  const token = z.object({ access_token: z.string() }).parse(answer).access_token;
+
+  const response = await fetch('https://api.tailscale.com/api/v2/tailnet/-/services', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+
+  expect(response.status).toBe(200);
+});
+
+test('it answers 403 to a services call with a token of another scope', async () => {
+  const api = buildStubTailscaleApi({
+    client: { clientId: 'kExample', clientSecret: 'secret', scopes: ['devices:core'] },
+  });
+
+  server.use(...api.handlers);
+
+  const issued = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'devices:core',
+    }),
+  });
+
+  const answer: unknown = await issued.json();
+
+  const token = z.object({ access_token: z.string() }).parse(answer).access_token;
+
+  const response = await fetch('https://api.tailscale.com/api/v2/tailnet/-/services', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+
+  expect(response.status).toBe(403);
+});
+
+test('it answers 400 to a token request for a scope the client was not granted', async () => {
+  const api = buildStubTailscaleApi({
+    client: { clientId: 'kExample', clientSecret: 'secret', scopes: ['services:read'] },
+  });
+
+  server.use(...api.handlers);
+
+  const response = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+      scope: 'services',
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(400);
+  expect(body).toStrictEqual({ message: 'invalid scope' });
+});
+
+test('it grants a token asked for with no scope every scope of its client', async () => {
+  const api = buildStubTailscaleApi({
+    client: { clientId: 'kExample', clientSecret: 'secret', scopes: ['services', 'dns:read'] },
+  });
+
+  server.use(...api.handlers);
+
+  const response = await fetch('https://api.tailscale.com/api/v2/oauth/token', {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: 'kExample',
+      client_secret: 'secret',
+      grant_type: 'client_credentials',
+    }),
+  });
+
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
+    access_token: expect.toStartWith('tskey-api-'),
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: 'services dns:read',
+  });
 });
 
 test('it answers 404 with a message to a read of a service it does not hold', async () => {

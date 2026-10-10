@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test';
 import { buildStubTailscaleServe } from './build-stub-tailscale-serve';
 
-test('it prints nothing for serve status while nothing is served', async () => {
+test('it prints an empty serve config while nothing is served', async () => {
   const serve = buildStubTailscaleServe();
 
   const result = await serve.run(['tailscale', 'serve', 'status', '--json']);
 
   expect(result).toStrictEqual({
     exitCode: 0,
-    stdout: '',
+    stdout: '{}\n',
     stderr: '',
   });
 });
@@ -42,17 +42,17 @@ test('it drops a service from the status once it is cleared', async () => {
 
   const status = await serve.runChecked(['tailscale', 'serve', 'status', '--json']);
 
-  expect(status).toBe('');
+  expect(status).toBe('{}\n');
 });
 
-test('it lists node-level ports it holds under TCP', async () => {
+test('it lists node-level ports it holds under TCP, indented as the CLI prints it', async () => {
   const serve = buildStubTailscaleServe();
 
   serve.holdPort(443);
 
   const status = await serve.runChecked(['tailscale', 'serve', 'status', '--json']);
 
-  expect(status).toBe('{"TCP":{"443":{"HTTPS":true}}}');
+  expect(status).toBe('{\n  "TCP": {\n    "443": {\n      "HTTPS": true\n    }\n  }\n}\n');
 });
 
 test('it exits 1 for a command it does not model', async () => {

@@ -5,7 +5,15 @@ import { parsePrefix64 } from './addressing6';
 import { createTapDevices } from './tap-devices';
 
 test('it creates the tap with the host end of the slot /30', async () => {
-  const ip = buildStubIpCommand();
+  // a kernel with IPv6 gives each new tap these keys at their defaults
+  const ip = buildStubIpCommand({
+    sysctls: {
+      'net.ipv6.conf.imp1.accept_ra': '1',
+      'net.ipv6.conf.imp1.accept_redirects': '1',
+      'net.ipv6.conf.imp1.disable_ipv6': '0',
+    },
+  });
+
   const address = deriveSlotAddress(1, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
 
   await createTapDevices(ip.run, () => null).setupTap(address);
@@ -23,7 +31,14 @@ test('it creates the tap with the host end of the slot /30', async () => {
 });
 
 test('it gives an IPv6 tap fe80::1 without DAD and a route to the /128, with RAs off first', async () => {
-  const ip = buildStubIpCommand();
+  // a container that starts its taps with IPv6 off
+  const ip = buildStubIpCommand({
+    sysctls: {
+      'net.ipv6.conf.imp1.accept_ra': '1',
+      'net.ipv6.conf.imp1.accept_redirects': '1',
+      'net.ipv6.conf.imp1.disable_ipv6': '1',
+    },
+  });
 
   const address = deriveSlotAddress(1, {
     subnet: parseSubnet('10.66.0.0/16'),
@@ -47,6 +62,8 @@ test('it gives an IPv6 tap fe80::1 without DAD and a route to the /128, with RAs
     'ip link set imp1 up',
     'ip -6 route replace fd12:3456:789a::a42:6/128 dev imp1',
   ]);
+
+  expect(ip.readSysctl('net.ipv6.conf.imp1.disable_ipv6')).toBe('0');
 });
 
 test('it only reads a key that already holds its value, so a read-only /proc/sys works', async () => {
@@ -81,7 +98,11 @@ test('it only reads a key that already holds its value, so a read-only /proc/sys
 });
 
 test('it fails on a sysctl key it cannot write', () => {
-  const ip = buildStubIpCommand({ failures: { 'sysctl -qw': 'sysctl: permission denied on key' } });
+  const ip = buildStubIpCommand({
+    failures: { 'sysctl -qw': 'sysctl: permission denied on key' },
+    sysctls: { 'net.ipv6.conf.imp1.accept_ra': '1' },
+  });
+
   const address = deriveSlotAddress(1, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
 
   expect(createTapDevices(ip.run, () => null).setupTap(address)).rejects.toThrowWithMessage(
@@ -90,18 +111,23 @@ test('it fails on a sysctl key it cannot write', () => {
   );
 });
 
+// the stub has no sysctl keys, as a kernel without IPv6
 test('it skips a sysctl key a kernel without IPv6 does not have', async () => {
-  const ip = buildStubIpCommand({
-    failures: {
-      'sysctl -qw': 'sysctl: cannot stat /proc/sys/net/ipv6/conf/imp1/accept_ra: No such file',
-    },
-  });
-
+  const ip = buildStubIpCommand();
   const address = deriveSlotAddress(1, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
 
   await createTapDevices(ip.run, () => null).setupTap(address);
 
-  expect(ip.calls.at(-1)).toBe('ip link set imp1 up');
+  expect(ip.calls).toStrictEqual([
+    'ip tuntap add imp1 mode tap',
+    'ip link set imp1 address 06:01:0a:42:00:05',
+    'ip addr add 10.66.0.5/30 dev imp1',
+    'sysctl -n net.ipv6.conf.imp1.accept_ra',
+    'sysctl -qw net.ipv6.conf.imp1.accept_ra=0',
+    'sysctl -n net.ipv6.conf.imp1.accept_redirects',
+    'sysctl -qw net.ipv6.conf.imp1.accept_redirects=0',
+    'ip link set imp1 up',
+  ]);
 });
 
 test('it treats an existing tap and address as done, and leaves the MAC its guest knows', async () => {
@@ -109,6 +135,10 @@ test('it treats an existing tap and address as done, and leaves the MAC its gues
     failures: {
       'ip tuntap': 'ioctl(TUNSETIFF): Device or resource busy',
       'ip addr': 'Error: ipv4: Address already assigned.',
+    },
+    sysctls: {
+      'net.ipv6.conf.imp1.accept_ra': '1',
+      'net.ipv6.conf.imp1.accept_redirects': '1',
     },
   });
 

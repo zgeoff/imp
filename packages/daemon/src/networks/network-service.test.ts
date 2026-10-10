@@ -317,7 +317,11 @@ test('it takes a deleted network’s set out of the table', async () => {
   await ctx.client.imps.create({ name: 'web', networks: ['lab'] });
   await ctx.client.networks.delete({ name: 'lab' });
 
-  expect(ctx.nft.scripts.at(-1)).not.toInclude('@net0');
+  const script = ctx.nft.scripts.at(-1);
+
+  invariant(script);
+
+  expect(script).not.toInclude('@net0');
 });
 
 test('it leaves no imp when a create names a network that does not exist', async () => {
@@ -337,7 +341,7 @@ test('it leaves no imp when a create names a network that does not exist', async
   expect(imps.map((imp) => imp.name)).toStrictEqual(['web']);
 });
 
-test('it refuses a create on a network to a token limited to other imps', async () => {
+test('it refuses a create on a network to a token limited to some imps, even for an imp it may touch', async () => {
   const ctx = await setupTest();
 
   await ctx.client.networks.create({ name: 'lab' });
@@ -361,7 +365,7 @@ test('it refuses a create on a network to a token limited to other imps', async 
   expect(imps).toStrictEqual([]);
 });
 
-test('it refuses a join to a token limited to other imps', async () => {
+test('it refuses a join to a token limited to some imps, even for an imp it may touch', async () => {
   const ctx = await setupTest();
 
   await ctx.client.networks.create({ name: 'lab' });
@@ -607,6 +611,38 @@ test('it has no warnings for an imp on a network of one policy', async () => {
   const warnings = await ctx.client.networks.warnings({ name: 'db' });
 
   expect(warnings).toStrictEqual([]);
+});
+
+test('it warns an imp whose policy change mixes its network with an open one', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.networks.create({ name: 'lab' });
+  await ctx.client.imps.create({ name: 'web', networks: ['lab'] });
+  await ctx.client.imps.create({ name: 'db', networks: ['lab'] });
+  await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'none', allow: [] } });
+
+  const warnings = await ctx.client.networks.warnings({ name: 'db' });
+
+  expect(warnings).toStrictEqual([
+    'db is none, but web on lab is open and can relay for it: a public, box or none imp trusts its open peers',
+  ]);
+});
+
+test('it warns once for each of the networks a policy change mixes', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.networks.create({ name: 'lab' });
+  await ctx.client.networks.create({ name: 'ops' });
+  await ctx.client.imps.create({ name: 'web', networks: ['lab', 'ops'] });
+  await ctx.client.imps.create({ name: 'db', networks: ['lab', 'ops'] });
+  await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'box', allow: [] } });
+
+  const warnings = await ctx.client.networks.warnings({ name: 'db' });
+
+  expect(warnings).toStrictEqual([
+    'db is box, but web on lab is open and can relay for it: a public, box or none imp trusts its open peers',
+    'db is box, but web on ops is open and can relay for it: a public, box or none imp trusts its open peers',
+  ]);
 });
 
 test('it refuses warnings for an imp that does not exist with NOT_FOUND', async () => {

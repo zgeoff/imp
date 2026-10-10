@@ -261,6 +261,29 @@ test('it serves each imp’s service to the imp’s own port', async () => {
   ]);
 });
 
+test('it writes the service before it serves it', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
+
+  // the serve calls made when the write arrives
+  const servedAtWrite = mock<(calls: readonly (readonly string[])[]) => void>();
+
+  server.use(
+    http.put('https://api.tailscale.com/api/v2/tailnet/-/services/:name', () => {
+      servedAtWrite([...ctx.tailscale.calls]);
+    }),
+  );
+
+  const names = createTailnetNames({ ...ctx.namesDeps, hostId: 'host-a' });
+
+  await names.runSync();
+
+  expect(servedAtWrite).toHaveBeenCalledExactlyOnceWith([
+    ['tailscale', 'serve', 'status', '--json'],
+  ]);
+});
+
 test('it gives a live name its https URL on the tailnet', async () => {
   const ctx = await setupTest();
 
@@ -442,6 +465,20 @@ test('it clears a destroyed imp’s serve config, then deletes its service', asy
   expect(ctx.tailscaleApi.services.count()).toBe(0);
 });
 
+test('it counts no live name once its imp is destroyed', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
+
+  const names = createTailnetNames({ ...ctx.namesDeps, hostId: 'host-a' });
+
+  await names.runSync();
+  await ctx.client.imps.destroy({ name: 'box' });
+  await names.runSync();
+
+  expect(names.readStatus()).toStrictEqual({ live: 0, failed: [] });
+});
+
 test('it logs the removal of a service no imp has', async () => {
   const ctx = await setupTest();
 
@@ -502,6 +539,37 @@ test('it keeps a moving imp’s service while the move sends', async () => {
   await names.runSync();
 
   expect(ctx.tailscaleApi.services.count()).toBe(1);
+});
+
+test('it neither writes nor clears a moving imp’s service while the move sends', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box' });
+
+  const imp = await findImpByName(ctx.db, 'box');
+
+  invariant(imp);
+
+  const names = createTailnetNames({ ...ctx.namesDeps, hostId: 'host-a' });
+
+  await names.runSync();
+
+  await updateImpMove(ctx.db, imp.id, 'sending');
+
+  const requestsBefore = ctx.tailscaleApi.requests.length;
+  const servedBefore = ctx.tailscale.calls.length;
+
+  await names.runSync();
+
+  expect(
+    ctx.tailscaleApi.requests
+      .slice(requestsBefore)
+      .map((request) => `${request.method} ${request.path}`),
+  ).toStrictEqual(['GET /tailnet/-/services']);
+
+  expect(ctx.tailscale.calls.slice(servedBefore)).toStrictEqual([
+    ['tailscale', 'serve', 'status', '--json'],
+  ]);
 });
 
 test('it removes a moved imp’s service once the target holds a verified copy', async () => {
@@ -713,13 +781,16 @@ test('it shows no service URL before the name is live', async () => {
   await ctx.client.imps.create({ name: 'box' });
 
   // with no OAuth client file, impd's sync cannot claim the name
-  await waitFor(() => {
-    expect(ctx.impdLogs).toSatisfyAny((line: string) =>
-      line.startsWith('impd: tailnet names: box: ENOENT'),
-    );
+  const failure = await waitFor(() => {
+    const line = ctx.impdLogs.find((each) => each.startsWith('impd: tailnet names: box: '));
+
+    invariant(line);
+
+    return line;
   });
 
   const urls = await ctx.client.imps.url({ name: 'box' });
 
+  expect(failure).toStartWith('impd: tailnet names: box: ENOENT');
   expect(urls.service).toBeNull();
 });
