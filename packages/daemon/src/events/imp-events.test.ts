@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ImpContract } from '@imp/api';
+import type { ImpContract, ImpEvent } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
@@ -16,6 +16,7 @@ import type { ImpdDeps } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { subscribeImpWrites } from '../db/imp-write-feed';
+import type { ImpWrite } from '../db/imp-write-feed';
 import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
@@ -182,9 +183,7 @@ test('it sends the snapshot, then each change with its reason', async () => {
   await ctx.client.imps.destroy({ name: 'dev' });
 
   await waitFor(() => {
-    if (!stream.items.some((event) => event.ev === 'ImpRemoved')) {
-      throw new Error('no ImpRemoved yet');
-    }
+    expect(stream.items).toPartiallyContain({ ev: 'ImpRemoved' });
   });
 
   controller.abort();
@@ -250,7 +249,8 @@ test('it counts a young guest’s wait before a sleep in the slept event’s pre
 
   const slept = await waitFor(() => {
     const found = stream.items.find(
-      (event) => event.ev === 'ImpChanged' && event.reason === 'slept',
+      (event): event is Extract<ImpEvent, { ev: 'ImpChanged' }> =>
+        event.ev === 'ImpChanged' && event.reason === 'slept',
     );
 
     invariant(found, 'no slept event yet');
@@ -260,9 +260,12 @@ test('it counts a young guest’s wait before a sleep in the slept event’s pre
 
   controller.abort();
 
-  expect(slept).toMatchObject({
-    detail: { prepareMs: expect.toSatisfy((ms: number) => ms >= 200) },
-  });
+  const prepareMs = slept.detail?.prepareMs;
+
+  invariant(prepareMs);
+
+  expect(prepareMs).toBeGreaterThanOrEqual(200);
+  expect(slept.detail?.durationMs).toBeLessThan(prepareMs);
 });
 
 test('it sends a repaired event when a check finds an imp’s VM gone', async () => {
@@ -326,15 +329,12 @@ test('it reports an adopted change when a restarted impd adopts a running VM', a
 
   await ctx.client.imps.create({ name: 'alive', image: 'ubuntu' });
 
-  // the restarted impd adopts during its boot, before a stream on it could
-  // open, and the first impd's runner no longer answers once it is replaced:
-  // the write each impd's publisher turns into the event is what shows
-  const changes: string[] = [];
+  // the restarted impd adopts during its boot, before anything could listen
+  // on its event bus: the write its publisher turns into the event shows it
+  const writes: ImpWrite[] = [];
 
   const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
-    if (write.kind === 'changed') {
-      changes.push(`${write.reason} ${write.imp.name}`);
-    }
+    writes.push(write);
   });
 
   onTestFinished(unsubscribe);
@@ -355,7 +355,31 @@ test('it reports an adopted change when a restarted impd adopts a running VM', a
     restarted.diskUsage.stop();
   });
 
-  expect(changes).toContain('adopted alive');
+  const bootChanges = writes
+    .filter((write) => write.kind === 'changed')
+    .map((write) => `${write.reason} ${write.imp.name}`);
+
+  const events: ImpEvent[] = [];
+
+  onTestFinished(
+    restarted.imps.events.subscribe((event) => {
+      events.push(event);
+    }),
+  );
+
+  // each reconcile reports a VM it finds still running to the event bus
+  await restarted.imps.reconcileImps();
+
+  const adopted = await waitFor(() => {
+    const found = events.find((event) => event.ev === 'ImpChanged' && event.reason === 'adopted');
+
+    invariant(found, 'no adopted event yet');
+
+    return found;
+  });
+
+  expect(bootChanges).toContain('adopted alive');
+  expect(adopted).toMatchObject({ imp: { name: 'alive', state: 'running' } });
 });
 
 test('it puts a secret’s value in no event and no audit row', async () => {
@@ -387,9 +411,7 @@ test('it puts a secret’s value in no event and no audit row', async () => {
   await ctx.client.imps.sleep({ name: 'dev' });
 
   await waitFor(() => {
-    if (!stream.items.some((event) => event.ev === 'ImpChanged' && event.reason === 'slept')) {
-      throw new Error('no slept event yet');
-    }
+    expect(stream.items).toPartiallyContain({ ev: 'ImpChanged', reason: 'slept' });
   });
 
   controller.abort();
@@ -398,9 +420,7 @@ test('it puts a secret’s value in no event and no audit row', async () => {
   const calls = await waitFor(async () => {
     const listed = await listApiCalls(ctx.db, null, 100, null);
 
-    if (listed.length < 4) {
-      throw new Error(`${String(listed.length)} audit rows`);
-    }
+    expect(listed).toHaveLength(4);
 
     return listed;
   });
@@ -521,9 +541,7 @@ test('it ends a dashboard stream at any logout, and leaves a token’s stream op
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
   await waitFor(() => {
-    if (!tokenStream.items.some((event) => event.ev === 'ImpAdded')) {
-      throw new Error('no ImpAdded yet');
-    }
+    expect(tokenStream.items).toPartiallyContain({ ev: 'ImpAdded' });
   });
 
   controller.abort();
@@ -569,16 +587,31 @@ test('it records a dashboard session’s calls in the audit log as the dashboard
   const calls = await waitFor(async () => {
     const listed = await listApiCalls(ctx.db, null, 100, null);
 
-    if (listed.length < 2) {
-      throw new Error(`${String(listed.length)} audit rows`);
-    }
+    expect(listed).toHaveLength(2);
 
     return listed;
   });
 
-  expect(calls).toMatchObject([
-    { procedure: 'imps.stop', actor: 'dashboard' },
-    { procedure: 'imps.create', actor: 'token' },
+  // impd's clock is frozen, so every call takes 0 ms at the same time
+  expect(calls).toStrictEqual([
+    {
+      procedure: 'imps.stop',
+      imp: 'dev',
+      actor: 'dashboard',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
+    {
+      procedure: 'imps.create',
+      imp: 'dev',
+      actor: 'token',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
   ]);
 });
 
@@ -602,18 +635,14 @@ test('it drops an event that fails the schema and goes on', async () => {
   ctx.impd.imps.events.publish(good);
 
   await waitFor(() => {
-    if (stream.items.length === 0) {
-      throw new Error('no event yet');
-    }
+    expect(stream.items).not.toBeEmpty();
   });
 
   // a stream that ended at the bad event would never send this one
   ctx.impd.imps.events.publish(after);
 
   await waitFor(() => {
-    if (stream.items.length < 2) {
-      throw new Error('one event so far');
-    }
+    expect(stream.items).toHaveLength(2);
   });
 
   controller.abort();
@@ -655,18 +684,14 @@ test('it drops a snapshot imp that fails the schema and goes on', async () => {
   const later = buildMockGovernorDecision({ name: 'later' });
 
   await waitFor(() => {
-    if (stream.items.length === 0) {
-      throw new Error('no snapshot yet');
-    }
+    expect(stream.items).not.toBeEmpty();
   });
 
   // a stream that ended at the bad imp would never send this one
   ctx.impd.imps.events.publish(later);
 
   await waitFor(() => {
-    if (stream.items.length < 2) {
-      throw new Error('one event so far');
-    }
+    expect(stream.items).toHaveLength(2);
   });
 
   controller.abort();

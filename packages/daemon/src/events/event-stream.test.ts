@@ -176,7 +176,7 @@ test('it ends at its end time and lets go of the bus', async () => {
   expect(timers.readPendingMs()).toStrictEqual([]);
 });
 
-test('it stays open after the snapshot until a 30-day end, past the longest timer', async () => {
+test('it stays open when the longest timer fires short of a 30-day end, and waits out the rest', async () => {
   const bus = createEventBus();
 
   const controller = new AbortController();
@@ -184,18 +184,24 @@ test('it stays open after the snapshot until a 30-day end, past the longest time
   const timers = buildStubTimers();
   const snapshot = buildMockGovernorDecision();
   const later = buildMockGovernorDecision();
+  const clock = { at: Date.UTC(2026, 9, 2, 12) };
 
   const stream = openEventStream({
     bus,
     readSnapshot: () => Promise.resolve([snapshot]),
     signal: controller.signal,
     endsAt: Date.UTC(2026, 9, 2, 12) + 30 * 86_400_000,
-    now: () => Date.UTC(2026, 9, 2, 12),
+    now: () => clock.at,
     startTimer: timers.startTimer,
   });
 
   const first = await stream.next();
 
+  const clampedMs = timers.readPendingMs();
+
+  clock.at = Date.UTC(2026, 9, 2, 12) + 2 ** 31 - 1;
+
+  timers.firePending();
   bus.publish(later);
 
   const second = await stream.next();
@@ -205,8 +211,41 @@ test('it stays open after the snapshot until a 30-day end, past the longest time
   controller.abort();
 
   expect(first).toStrictEqual({ done: false, value: snapshot });
-  expect(second).toStrictEqual({ done: false, value: later });
 
   // setTimeout's longest delay: a longer one would fire at once
-  expect(pendingMs).toStrictEqual([2 ** 31 - 1]);
+  expect(clampedMs).toStrictEqual([2 ** 31 - 1]);
+  expect(second).toStrictEqual({ done: false, value: later });
+
+  // 30 days (2_592_000_000 ms) less the longest delay already waited
+  expect(pendingMs).toStrictEqual([444_516_353]);
+});
+
+test('it ends at a 30-day end once the timer after the longest one fires', async () => {
+  const bus = createEventBus();
+  const timers = buildStubTimers();
+  const snapshot = buildMockGovernorDecision();
+  const clock = { at: Date.UTC(2026, 9, 2, 12) };
+
+  const stream = openEventStream({
+    bus,
+    readSnapshot: () => Promise.resolve([snapshot]),
+    endsAt: Date.UTC(2026, 9, 2, 12) + 30 * 86_400_000,
+    now: () => clock.at,
+    startTimer: timers.startTimer,
+  });
+
+  await stream.next();
+
+  clock.at = Date.UTC(2026, 9, 2, 12) + 2 ** 31 - 1;
+
+  timers.firePending();
+
+  clock.at = Date.UTC(2026, 9, 2, 12) + 30 * 86_400_000;
+
+  timers.firePending();
+
+  const last = await stream.next();
+
+  expect(last).toStrictEqual({ done: true, value: undefined });
+  expect(timers.readPendingMs()).toStrictEqual([]);
 });

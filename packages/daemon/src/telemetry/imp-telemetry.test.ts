@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { EVENT_VERSION, ImpStateSchema } from '@imp/api';
+import { EVENT_VERSION } from '@imp/api';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { invariant } from '@imp/test-utils/invariant';
 import { spanExporter } from '@imp/test-utils/register-tracing';
@@ -244,16 +244,13 @@ test('it reads the imps by state into imp.imps', async () => {
 
   stop();
 
-  expect(points).toHaveLength(ImpStateSchema.options.length);
-
-  expect(points).toIncludeAllMembers([
-    { attributes: { state: 'sleeping' }, value: 3 },
+  expect(points).toStrictEqual([
+    { attributes: { state: 'creating' }, value: 0 },
     { attributes: { state: 'running' }, value: 0 },
+    { attributes: { state: 'sleeping' }, value: 3 },
+    { attributes: { state: 'stopped' }, value: 0 },
+    { attributes: { state: 'error' }, value: 0 },
   ]);
-
-  const others = points.filter((point) => point.attributes['state'] !== 'sleeping');
-
-  expect(others.map((point) => point.value)).toSatisfyAll((value: unknown) => value === 0);
 });
 
 test('it reads the RAM in use into imp.ram.used', async () => {

@@ -28,7 +28,11 @@ test('it reads no points for a metric nothing recorded', async () => {
 });
 
 test('it throws when another meter provider is registered', () => {
-  metrics.setGlobalMeterProvider(new MeterProvider());
+  const other = new MeterProvider();
+
+  onTestFinished(() => other.shutdown());
+
+  metrics.setGlobalMeterProvider(other);
 
   onTestFinished(() => {
     metrics.disable();
@@ -43,16 +47,24 @@ test('it throws when another meter provider is registered', () => {
 test('it unregisters the provider when the test ends', () => {
   startInMemoryMetrics();
 
-  onTestFinished(() => {
+  onTestFinished(async () => {
+    const next = new MeterProvider();
+
     // the API takes a new global provider only once the last one is gone
-    const isRegistered = metrics.setGlobalMeterProvider(new MeterProvider());
+    const isRegistered = metrics.setGlobalMeterProvider(next);
 
     metrics.disable();
+
+    await next.shutdown();
 
     expect(isRegistered).toBe(true);
   });
 
-  const isTakenOver = metrics.setGlobalMeterProvider(new MeterProvider());
+  const intruder = new MeterProvider();
+
+  onTestFinished(() => intruder.shutdown());
+
+  const isTakenOver = metrics.setGlobalMeterProvider(intruder);
 
   expect(isTakenOver).toBe(false);
 });

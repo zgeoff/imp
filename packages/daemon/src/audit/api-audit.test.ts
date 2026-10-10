@@ -5,6 +5,24 @@ import { listApiCalls } from '../db/api-audit';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createApiAudit, readImpName, withAuditedOpen } from './api-audit';
 
+async function setupTest() {
+  const database = await createTestDatabase();
+
+  // the audit's clock, which a test sets to the time it needs
+  const clock = { at: 0 };
+  const logs: string[] = [];
+
+  const audit = createApiAudit({
+    db: database.db,
+    now: () => clock.at,
+    log: (line) => {
+      logs.push(line);
+    },
+  });
+
+  return { db: database.db, clock, logs, audit };
+}
+
 test.each([
   ['imps.stop', { name: 'dev' }, {}, 'dev'],
   ['checkpoints.create', { name: 'dev', label: 'before' }, {}, 'dev'],
@@ -23,12 +41,12 @@ test.each([
 );
 
 test('#withAuditedOpen records an open that succeeds as ok, with its duration', async () => {
-  const ctx = await createTestDatabase();
+  const ctx = await setupTest();
 
-  const audit = createApiAudit({ db: ctx.db, now: () => 1000, log: () => {} });
+  ctx.clock.at = 1000;
 
   const opened = await withAuditedOpen(
-    audit,
+    ctx.audit,
     {
       procedure: 'ssh',
       actor: { kind: 'ssh', name: 'laptop' },
@@ -64,14 +82,12 @@ test('#withAuditedOpen records an open that succeeds as ok, with its duration', 
 });
 
 test('#withAuditedOpen records the code of a refused open and rethrows its error', async () => {
-  const ctx = await createTestDatabase();
-
-  const audit = createApiAudit({ db: ctx.db, now: () => 1000, log: () => {} });
+  const ctx = await setupTest();
 
   const refusal = new ORPCError('INVALID_STATE', { message: 'dev is stopped' });
 
   const opening = withAuditedOpen(
-    audit,
+    ctx.audit,
     { procedure: 'ssh', actor: { kind: 'ssh', name: 'laptop' }, impName: 'dev', startedAt: 990 },
     () => Promise.reject(refusal),
   );
@@ -90,12 +106,10 @@ test('#withAuditedOpen records the code of a refused open and rethrows its error
 });
 
 test('#withAuditedOpen records an open that throws a plain error as INTERNAL_SERVER_ERROR', async () => {
-  const ctx = await createTestDatabase();
-
-  const audit = createApiAudit({ db: ctx.db, now: () => 1000, log: () => {} });
+  const ctx = await setupTest();
 
   const opening = withAuditedOpen(
-    audit,
+    ctx.audit,
     { procedure: 'exec', actor: { kind: 'token', name: 'ci' }, impName: 'dev', startedAt: 990 },
     () => Promise.reject(new Error('socket closed')),
   );
@@ -114,11 +128,11 @@ test('#withAuditedOpen records an open that throws a plain error as INTERNAL_SER
 });
 
 test('#createApiAudit records a call that started after the clock reads as taking 0 ms', async () => {
-  const ctx = await createTestDatabase();
+  const ctx = await setupTest();
 
-  const audit = createApiAudit({ db: ctx.db, now: () => 1000, log: () => {} });
+  ctx.clock.at = 1000;
 
-  audit.record(
+  ctx.audit.record(
     {
       procedure: 'imps.stop',
       actor: { kind: 'token', name: 'root' },
@@ -140,29 +154,19 @@ test('#createApiAudit records a call that started after the clock reads as takin
 });
 
 test('#createApiAudit logs a row it could not write', async () => {
-  const ctx = await createTestDatabase();
-
-  const logs: string[] = [];
-
-  const audit = createApiAudit({
-    db: ctx.db,
-    now: () => 1000,
-    log: (line) => {
-      logs.push(line);
-    },
-  });
+  const ctx = await setupTest();
 
   await ctx.db.schema.dropTable('api_audit').execute();
 
-  audit.record(
+  ctx.audit.record(
     { procedure: 'ssh', actor: { kind: 'ssh', name: 'laptop' }, impName: 'dev', startedAt: 990 },
     null,
   );
 
   await waitFor(() => {
-    expect(logs).not.toBeEmpty();
+    expect(ctx.logs).not.toBeEmpty();
   });
 
-  expect(logs).toHaveLength(1);
-  expect(logs[0]).toMatch(/^impd: audit: ssh: .*api_audit/);
+  expect(ctx.logs).toHaveLength(1);
+  expect(ctx.logs[0]).toMatch(/^impd: audit: ssh: .*api_audit/);
 });
