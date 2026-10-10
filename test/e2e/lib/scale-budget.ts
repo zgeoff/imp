@@ -12,7 +12,7 @@ import { waitFor } from './wait-for';
 
 // The sampler's rate: how often the monitor reads impd's RAM figure and
 // Firecracker's memory, which sets how finely an overshoot is timed.
-export const BUDGET_SAMPLE_MS = 500;
+const BUDGET_SAMPLE_MS = 500;
 
 export interface BudgetSample {
   // ms since the epoch, taken before the reads, so an overshoot never looks
