@@ -109,7 +109,8 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
         isOnSettings = await runRebootOnto(deps, name, ownSettings);
 
-        if (!isOnSettings) {
+        // a signal during the reboot finds no journey to stop, so none starts
+        if (!isOnSettings || deps.isInterrupted()) {
           isPassed = false;
           break;
         }

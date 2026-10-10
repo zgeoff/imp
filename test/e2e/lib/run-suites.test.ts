@@ -807,6 +807,42 @@ test('#runSuites reboots back onto the run’s settings after an interrupt stops
   });
 });
 
+test('#runSuites starts no journey after an interrupt during the reboot onto a suite’s settings, reboots back, and fails the suite', async () => {
+  const ctx = setupTest();
+  let isInterrupted = false;
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    rebootOnto: (settings) => {
+      ctx.steps.push(`reboot onto ${JSON.stringify(settings)}`);
+
+      isInterrupted = true;
+
+      return Promise.resolve();
+    },
+    isInterrupted: () => isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual(['reboot onto {"IMP_DOMAIN":"e2e.test"}', 'reboot']);
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'https', passed: false, ms: 0 }],
+    stoppedBecause: 'interrupted',
+  });
+});
+
 test('#runSuites fails a suite whose reboot onto its settings throws, runs none of its journeys, reboots back, and runs on', async () => {
   const ctx = setupTest();
 
