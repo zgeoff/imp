@@ -1,5 +1,9 @@
-# Git hooks. pre-commit fixes staged files only (fast); pre-push gates the
-# whole tree so config drift affecting unstaged files is caught before CI.
+# Git hooks. pre-commit fixes staged files only (fast); pre-push comes from
+# the shared baseline, which runs its jobs one at a time and lints and tests
+# only what the branch changes. CI runs every whole-tree check.
+
+extends:
+  - .lefthook/pre-push-baseline.yml
 
 pre-commit:
   piped: true
@@ -26,21 +30,11 @@ commit-msg:
     - name: commitlint
       run: node_modules/.bin/commitlint --edit {1}
 
+# imp's own pre-push jobs; they run before the baseline's
 pre-push:
-  parallel: true
   jobs:
-    - name: format:check
-      run: bun run format:check
-    - name: lint
-      run: bun run lint
     - name: lint:docs
       run: bun run lint:docs
     # needs shellcheck on PATH, the version CI pins (0.11.0)
     - name: lint:shell
       run: bun run lint:shell
-    - name: typecheck
-      run: bun run typecheck
-    - name: deadcode
-      run: bun run deadcode
-    - name: test
-      run: bun test
