@@ -91,8 +91,9 @@ anything the test registers after calling it. These utils register their own: `s
 the SQLite handle itself, since Kysely closes a driver only after a query started it),
 `buildQueryGate` (it releases a held select), `findFreePorts` (it releases its port claims),
 `startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
-`startStubSshAgent`, `openSshClient` (it ends the client), `setupImpTest`, `setupMoveHosts`,
-`startStubFirecrackerApi`, `startStubFirecrackerProcess` and `startStubFirecracker`.
+`startStubSshAgent`, `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
+`setupImpTest`, `setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess` and
+`startStubFirecracker`.
 
 `setupImpTest` and `createTestDatabase` still carry a transitional `[Symbol.asyncDispose]`, for area
 branches that hold them with `await using`; a later GEO-135 PR removes it once those branches land.
