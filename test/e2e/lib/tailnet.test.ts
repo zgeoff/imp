@@ -3,6 +3,7 @@ import {
   findServiceUrl,
   findTailnetNode,
   isTailnetReady,
+  parseSelfTags,
   parseTailscaleStatus,
   requireTailnetReady,
 } from './tailnet';
@@ -51,6 +52,19 @@ test('#requireTailnetReady fails with what the suite lacks while this machine is
     Error,
     'tailscale needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth) and this machine on the tailnet',
   );
+});
+
+test('#parseSelfTags reads the tags the node joined with', () => {
+  const stdout = JSON.stringify({
+    BackendState: 'Running',
+    Self: { HostName: 'imp', Tags: ['tag:imp-e2e'] },
+  });
+
+  expect(parseSelfTags(stdout)).toStrictEqual(['tag:imp-e2e']);
+});
+
+test('#parseSelfTags reads a node without tags as none', () => {
+  expect(parseSelfTags(JSON.stringify({ Self: { HostName: 'imp' } }))).toStrictEqual([]);
 });
 
 test('#parseTailscaleStatus reads the backend state and the peers', () => {

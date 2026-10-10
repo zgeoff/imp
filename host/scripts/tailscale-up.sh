@@ -5,7 +5,9 @@
 # (deploy/bootstrap.sh blanks it). Only when the saved node does not reach
 # Running (logged out, or deleted by the control plane after a long time
 # offline: NeedsLogin) does it join again, with the key if there is one.
-# With neither state nor key it does nothing.
+# With neither state nor key it does nothing. A saved node that holds other
+# tags than IMP_TAILSCALE_TAGS asks for joins again with the key, or fails
+# without one: an e2e node must never stay on a saved tag:imp identity.
 #
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)
 #      IMP_TAILSCALE_AUTHKEY_FILE  a file that holds the key instead (the NixOS module
@@ -21,6 +23,8 @@ set -euo pipefail
 hostname=${IMP_TAILSCALE_HOSTNAME:-imp}
 state_dir=${IMP_TAILSCALE_STATE_DIR:-/var/lib/imp/tailscale}
 sock=/var/run/tailscale/tailscaled.sock
+# a test points this at its own file
+resolv_conf=${IMP_RESOLV_CONF:-/etc/resolv.conf}
 
 key_file=${IMP_TAILSCALE_AUTHKEY_FILE:-}
 # A missing bind-mount source makes docker create an empty directory there.
@@ -51,11 +55,11 @@ backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq 
 # Docker's embedded DNS, 127.0.0.11, which forwards from the host's network
 # namespace ("ExtServers: [host(...)]"), so our tailscaled never sees those
 # lookups and nothing needs changing.
-if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' /etc/resolv.conf; then
+if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' "$resolv_conf"; then
   dns=${IMP_DNS:-1.1.1.1,8.8.8.8}
   # Commas are the impd form; spaces still work.
   read -ra resolvers <<<"${dns//,/ }"
-  printf 'nameserver %s\n' "${resolvers[@]}" >/etc/resolv.conf
+  printf 'nameserver %s\n' "${resolvers[@]}" >"$resolv_conf"
   echo "tailscale-up: resolv.conf pointed into the tailnet; now ${resolvers[*]}"
 fi
 
@@ -86,8 +90,30 @@ for _ in $(seq 50); do
   case $(backend) in NoState | "") sleep 0.1 ;; *) break ;; esac
 done
 
+# tags_differ: IMP_TAILSCALE_TAGS names tags, and the running node holds
+# others; sets saved_tags and wanted_tags
+tags_differ() {
+  [ -n "${IMP_TAILSCALE_TAGS:-}" ] || return 1
+  saved_tags=$(ts status --json | jq -r '(.Self.Tags // []) | sort | join(",")')
+  wanted_tags=$(tr ',' '\n' <<<"$IMP_TAILSCALE_TAGS" | sed '/^$/d' | LC_ALL=C sort | paste -sd, -)
+  [ "$saved_tags" != "$wanted_tags" ]
+}
+
+# retag: the running node holds other tags than asked for. Join again with
+# the key, which tailscale needs a new login for, or fail without one.
+retag() {
+  if [ -z "$has_key" ]; then
+    echo "tailscale-up: the saved node holds ${saved_tags:-no tags}, not $wanted_tags; give an auth key to join again" >&2
+    exit 1
+  fi
+  echo "tailscale-up: the saved node holds ${saved_tags:-no tags}, not $wanted_tags; joining again with the key"
+  want_up=1
+  reauth=(--force-reauth)
+}
+
 # join: log in with the key. The key goes through a file so it never shows
 # in argv (ps, /proc).
+reauth=()
 join() {
   local auth=$key_file rc=0
   if [ -z "$auth" ]; then
@@ -95,7 +121,7 @@ join() {
     chmod 0600 "$auth"
     printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
   fi
-  ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
+  ts up --reset "${reauth[@]}" --auth-key="file:$auth" --hostname="$hostname" \
     --advertise-tags="${IMP_TAILSCALE_TAGS:-tag:imp}" --accept-dns=false --timeout=60s || rc=$?
   [ -n "$key_file" ] || rm -f "$auth"
   if [ "$rc" != 0 ]; then
@@ -149,6 +175,9 @@ if [ -n "$has_state" ]; then
     if [ -n "$has_key" ] && [ "$(ts status --json | jq -r '.Self.HostName')" != "$hostname" ]; then
       want_up=1
     fi
+    if tags_differ; then
+      retag
+    fi
   elif needs_login "$state"; then
     if [ -z "$has_key" ]; then
       echo "tailscale-up: the saved node state is $state, not Running; give an auth key to join again" >&2
@@ -167,6 +196,9 @@ elif [ "$(backend)" = Running ] \
   && [ "$(ts status --json | jq -r '.Self.HostName')" = "$hostname" ]; then
   # a second run while tailscaled is up (state in memory)
   want_up=0
+  if tags_differ; then
+    retag
+  fi
 fi
 
 if [ $want_up = 1 ]; then

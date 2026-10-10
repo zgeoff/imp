@@ -18,6 +18,16 @@ const TailscaleStatusSchema = z.object({
 
 export type TailscaleStatus = z.infer<typeof TailscaleStatusSchema>;
 
+const SelfSchema = z.object({ Tags: z.array(z.string()).default([]) });
+const SelfTagsSchema = z.object({ Self: SelfSchema });
+
+// the tags a node joined with, from its own `tailscale status --json`
+export function parseSelfTags(stdout: string): string[] {
+  const json: unknown = JSON.parse(stdout);
+
+  return SelfTagsSchema.parse(json).Self.Tags;
+}
+
 // a peer as `tailscale status --json` lists it
 export interface TailnetPeer {
   readonly DNSName: string;

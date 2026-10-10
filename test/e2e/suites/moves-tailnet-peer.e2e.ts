@@ -9,7 +9,7 @@ import { HOST_B, readMoveHosts, readMoveOptions } from '../lib/move-hosts';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
-import { waitForTailnetIp } from '../lib/tailnet';
+import { parseSelfTags, waitForTailnetIp } from '../lib/tailnet';
 import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
@@ -57,6 +57,14 @@ test.skipIf(!hasKey && !config.acceptance)(
     expect(ipA).toStartWith('100.');
     expect(ipB).toStartWith('100.');
     expect(ipB).not.toBe(ipA);
+
+    const statusA = await runInContainer(['tailscale', 'status', '--json']);
+    const statusB = await runInContainer(['tailscale', 'status', '--json'], hosts.b);
+
+    // both join as the e2e tag, which the tailnet policy keeps away from
+    // tag:imp's live impd
+    expect(parseSelfTags(statusA.stdout)).toStrictEqual(['tag:imp-e2e']);
+    expect(parseSelfTags(statusB.stdout)).toStrictEqual(['tag:imp-e2e']);
 
     // tag:imp-e2e nodes see each other only with the policy's tag:imp-e2e
     // to tag:imp-e2e:7070 grant
