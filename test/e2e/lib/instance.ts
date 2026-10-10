@@ -255,6 +255,20 @@ export async function checkFirecrackerRunning(id: string): Promise<boolean> {
   return result.exitCode === 0;
 }
 
+// SIGKILL to the imp's Firecracker, as a crash would end it; throws when
+// none runs
+export async function stopFirecrackerHard(id: string): Promise<void> {
+  const found = await runInContainer(['pgrep', '-f', `firecracker.*imps/${id}/`]);
+
+  const pids = found.stdout.split('\n').filter((pid) => pid !== '');
+
+  if (pids.length === 0) {
+    throw new Error(`no firecracker for imp ${id}`);
+  }
+
+  await runChecked(['docker', 'exec', instance.container, 'kill', '-9', ...pids]);
+}
+
 // null between an old impd exiting and the new one starting
 export async function findImpdPid(): Promise<string | null> {
   const result = await runInContainer(['pgrep', '-f', 'bun .*/daemon/src/main.ts']);

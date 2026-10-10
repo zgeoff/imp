@@ -40,18 +40,80 @@ test('it resets each suite’s prefix after the suite passes', async () => {
     ...ctx.recorders,
     names: ['sleep', 'jail'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
       return Promise.resolve(0);
     },
   });
 
   expect(ctx.steps).toStrictEqual(['run sleep', 'reset e2e-sleep-', 'run jail', 'reset e2e-jail-']);
+});
+
+test('it resets the suite’s prefix after each of its journeys', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['proxy'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
+    keep: false,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'run proxy-refusals',
+    'reset e2e-proxy-',
+    'run proxy-forwards',
+    'reset e2e-proxy-',
+  ]);
+
+  expect(outcome.results).toStrictEqual([{ name: 'proxy', passed: true, ms: 0 }]);
+});
+
+test('it reboots and resets after a journey that fails, runs the next on the baseline, and fails the suite', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['proxy'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
+    keep: false,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      const exitCode = journey === 'proxy-refusals' ? 1 : 0;
+
+      return Promise.resolve(exitCode);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'run proxy-refusals',
+    'reboot',
+    'reset e2e-proxy-',
+    'run proxy-forwards',
+    'reset e2e-proxy-',
+  ]);
+
+  expect(outcome.results).toStrictEqual([{ name: 'proxy', passed: false, ms: 0 }]);
 });
 
 test('it reboots the instance before the reset after a suite that fails', async () => {
@@ -61,11 +123,12 @@ test('it reboots the instance before the reset after a suite that fails', async 
     ...ctx.recorders,
     names: ['sleep'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(1),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(1),
   });
 
   expect(ctx.steps).toStrictEqual(['reboot', 'reset e2e-sleep-']);
@@ -79,12 +142,13 @@ test('it skips the reboot and the next suite once the run is interrupted', async
     ...ctx.recorders,
     names: ['sleep', 'jail'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => isInterrupted,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
       isInterrupted = true;
 
@@ -96,6 +160,36 @@ test('it skips the reboot and the next suite once the run is interrupted', async
   expect(outcome.stoppedBecause).toBe('interrupted');
 });
 
+test('it resets after the journey an interrupt stopped, runs no more of its suite, and fails it', async () => {
+  const ctx = setupTest();
+  let isInterrupted = false;
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['proxy'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
+    keep: false,
+    isInterrupted: () => isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      isInterrupted = true;
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual(['run proxy-refusals', 'reset e2e-proxy-']);
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'proxy', passed: false, ms: 0 }],
+    stoppedBecause: 'interrupted',
+  });
+});
+
 test('it reports an interrupt that comes after the last suite', async () => {
   const ctx = setupTest();
   let isInterrupted = false;
@@ -104,11 +198,12 @@ test('it reports an interrupt that comes after the last suite', async () => {
     ...ctx.recorders,
     names: ['sleep'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => isInterrupted,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(0),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(0),
     reset: () => {
       isInterrupted = true;
 
@@ -130,12 +225,13 @@ test('it neither makes the instance anew nor runs on when a reset fails after an
     ...ctx.recorders,
     names: ['sleep', 'jail'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => isInterrupted,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
       isInterrupted = true;
 
@@ -146,7 +242,7 @@ test('it neither makes the instance anew nor runs on when a reset fails after an
 
   expect(ctx.steps).toStrictEqual([
     'run sleep',
-    'log the sleep suite left the baseline dirty: impd is down',
+    'log the sleep journey left the baseline dirty: impd is down',
   ]);
 
   expect(outcome).toStrictEqual({
@@ -162,11 +258,12 @@ test('it leaves scale’s imps for restart, whose reset takes them', async () =>
     ...ctx.recorders,
     names: ['scale', 'restart', 'tailscale'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(0),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(0),
   });
 
   expect(ctx.steps).toStrictEqual(['reset e2e-restart-,e2e-scale-', 'reset e2e-tailscale-']);
@@ -179,14 +276,15 @@ test('it neither reboots nor resets after scale fails when restart runs next', a
     ...ctx.recorders,
     names: ['scale', 'restart'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
-      const exitCode = name === 'scale' ? 1 : 0;
+      const exitCode = journey === 'scale' ? 1 : 0;
 
       return Promise.resolve(exitCode);
     },
@@ -203,28 +301,30 @@ test('it resets scale after it when restart is not in the run', async () => {
     ...ctx.recorders,
     names: ['scale'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(0),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(0),
   });
 
   expect(ctx.steps).toStrictEqual(['reset e2e-scale-']);
 });
 
-test('it leaves what each suite made with --keep', async () => {
+test('it leaves what each journey left with --keep', async () => {
   const ctx = setupTest();
 
   await runSuites({
     ...ctx.recorders,
     names: ['sleep'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: true,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(1),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(1),
   });
 
   expect(ctx.steps).toBeEmpty();
@@ -237,12 +337,13 @@ test('it makes the instance anew and runs on when the reset fails', async () => 
     ...ctx.recorders,
     names: ['sleep', 'jail'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
       return Promise.resolve(0);
     },
@@ -258,13 +359,50 @@ test('it makes the instance anew and runs on when the reset fails', async () => 
   expect(ctx.steps).toStrictEqual([
     'run sleep',
     'reset e2e-sleep-',
-    'log the sleep suite left the baseline dirty: CONFLICT',
+    'log the sleep journey left the baseline dirty: CONFLICT',
     'recreate',
     'run jail',
     'reset e2e-jail-',
   ]);
 
   expect(outcome.results.map((result) => result.passed)).toStrictEqual([false, true]);
+});
+
+test('it makes the instance anew before the next journey of a suite when a reset fails', async () => {
+  const ctx = setupTest();
+  let resets = 0;
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['proxy'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
+    keep: false,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+    reset: (prefixes) => {
+      ctx.steps.push(`reset ${prefixes.join(',')}`);
+
+      resets += 1;
+
+      return resets === 1 ? Promise.reject(new Error('CONFLICT')) : Promise.resolve();
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'run proxy-refusals',
+    'reset e2e-proxy-',
+    'log the proxy-refusals journey left the baseline dirty: CONFLICT',
+    'recreate',
+    'run proxy-forwards',
+    'reset e2e-proxy-',
+  ]);
 });
 
 test('it makes the instance anew when the reboot after a failure throws', async () => {
@@ -274,16 +412,17 @@ test('it makes the instance anew when the reboot after a failure throws', async 
     ...ctx.recorders,
     names: ['sleep'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(1),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(1),
     reboot: () => Promise.reject(new Error('dev.sh reboot exited 1')),
   });
 
   expect(ctx.steps).toStrictEqual([
-    'log the sleep suite left the baseline dirty: dev.sh reboot exited 1',
+    'log the sleep journey left the baseline dirty: dev.sh reboot exited 1',
     'recreate',
   ]);
 });
@@ -295,12 +434,13 @@ test('it stops the run when the instance cannot be made anew', async () => {
     ...ctx.recorders,
     names: ['sleep', 'jail'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
       return Promise.resolve(0);
     },
@@ -310,7 +450,7 @@ test('it stops the run when the instance cannot be made anew', async () => {
 
   expect(ctx.steps).toStrictEqual([
     'run sleep',
-    'log the sleep suite left the baseline dirty: impd is down',
+    'log the sleep journey left the baseline dirty: impd is down',
   ]);
 
   expect(outcome.stoppedBecause).toBe(
@@ -325,20 +465,21 @@ test('it fails a suite that throws, restores the baseline, and runs on', async (
     ...ctx.recorders,
     names: ['sleep', 'jail'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: (name) => {
-      ctx.steps.push(`run ${name}`);
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
 
-      return name === 'sleep' ? Promise.reject(new Error('spawn ENOENT')) : Promise.resolve(0);
+      return journey === 'sleep' ? Promise.reject(new Error('spawn ENOENT')) : Promise.resolve(0);
     },
   });
 
   expect(ctx.steps).toStrictEqual([
     'run sleep',
-    'log the sleep suite could not run: spawn ENOENT',
+    'log the sleep journey could not run: spawn ENOENT',
     'reboot',
     'reset e2e-sleep-',
     'run jail',
@@ -361,12 +502,13 @@ test('it fails a suite whose checks throw, and runs on', async () => {
     ...ctx.recorders,
     names: ['chaos', 'sleep'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    runSuite: () => Promise.resolve(0),
-    checkSuite: (name) =>
-      name === 'chaos' ? Promise.reject(new Error('no impd log')) : Promise.resolve(true),
+    runJourney: () => Promise.resolve(0),
+    checkJourney: (suite) =>
+      suite === 'chaos' ? Promise.reject(new Error('no impd log')) : Promise.resolve(true),
   });
 
   expect(outcome.results.map((result) => result.passed)).toStrictEqual([false, true]);
@@ -379,36 +521,70 @@ test('it fails a suite whose checks fail', async () => {
     ...ctx.recorders,
     names: ['chaos'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    runSuite: () => Promise.resolve(0),
-    checkSuite: () => Promise.resolve(false),
+    runJourney: () => Promise.resolve(0),
+    checkJourney: () => Promise.resolve(false),
   });
 
   expect(outcome.results).toStrictEqual([{ name: 'chaos', passed: false, ms: 0 }]);
 });
 
-test('it times each suite from its start to the end of its reset', async () => {
+test('it checks each journey under its suite’s name', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['proxy'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
+    keep: false,
+    isInterrupted: () => false,
+    now: () => 0,
+    runJourney: () => Promise.resolve(0),
+    checkJourney: (suite, journey) => {
+      ctx.steps.push(`check ${suite} ${journey}`);
+
+      return Promise.resolve(true);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'check proxy proxy-refusals',
+    'reset e2e-proxy-',
+    'check proxy proxy-forwards',
+    'reset e2e-proxy-',
+  ]);
+});
+
+test('it times each suite from its start to the end of its last reset', async () => {
   const ctx = setupTest();
   let clock = 1000;
 
   const outcome = await runSuites({
     ...ctx.recorders,
-    names: ['sleep'],
+    names: ['proxy'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
     isInterrupted: () => false,
     now: () => clock,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => {
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => {
       clock += 250;
 
       return Promise.resolve(0);
     },
+    reset: () => {
+      clock += 10;
+
+      return Promise.resolve();
+    },
   });
 
-  expect(outcome.results).toStrictEqual([{ name: 'sleep', passed: true, ms: 250 }]);
+  expect(outcome.results).toStrictEqual([{ name: 'proxy', passed: true, ms: 520 }]);
 });
 
 test('it reports each suite as it starts and ends', async () => {
@@ -418,11 +594,12 @@ test('it reports each suite as it starts and ends', async () => {
     ...ctx.recorders,
     names: ['sleep'],
     prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
     keep: false,
     isInterrupted: () => false,
     now: () => 0,
-    checkSuite: () => Promise.resolve(true),
-    runSuite: () => Promise.resolve(0),
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(0),
     onSuiteStart: (name) => {
       ctx.steps.push(`start ${name}`);
     },

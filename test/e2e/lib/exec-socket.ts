@@ -171,3 +171,28 @@ export function requireOutput(opened: Readonly<SessionSocket>): SessionOutput {
 
   return opened.first.output;
 }
+
+// what a refused open carries: the imp's boot and state when impd knows
+// them, and its cold boots, newest first
+const SessionErrorDataSchema = z
+  .object({
+    bootId: z.string().optional(),
+    state: z.string().optional(),
+    coldBoots: z.array(ColdBootSchema).readonly(),
+  })
+  .readonly();
+
+export interface SessionError {
+  readonly code: string | undefined;
+  readonly data: z.infer<typeof SessionErrorDataSchema>;
+}
+
+// the error a test expects an open to fail with; throws with the first
+// message otherwise
+export function requireSessionError(opened: Readonly<SessionSocket>): SessionError {
+  if (opened.first.type !== 'error') {
+    throw new Error(`expected an error, got ${JSON.stringify(opened.first)}`);
+  }
+
+  return { code: opened.first.code, data: SessionErrorDataSchema.parse(opened.first.data) };
+}

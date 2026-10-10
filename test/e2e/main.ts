@@ -29,7 +29,7 @@ import { resetBaseline } from './lib/reset-baseline';
 import { runSuite, stopSuiteGroup } from './lib/run-suite';
 import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
-import { FAST_GROUPS, SUITES, buildSuiteArgv } from './lib/suites';
+import { FAST_GROUPS, SUITES, buildJourneyArgv, listJourneys } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
 import { resolveWipeTarget } from './lib/wipe-target';
 import type { WipeTarget } from './lib/wipe-target';
@@ -280,9 +280,9 @@ async function resetSuites(prefixes: readonly string[]): Promise<void> {
   });
 }
 
-async function runSuiteProcess(name: string, args: HarnessArgs): Promise<number> {
+async function runJourneyProcess(journey: string, args: HarnessArgs): Promise<number> {
   const exitCode = await runSuite({
-    argv: buildSuiteArgv(process.execPath, name),
+    argv: buildJourneyArgv(process.execPath, journey),
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -506,9 +506,19 @@ async function main(): Promise<number> {
       names: args.suites,
       prefixOf: (name) =>
         SUITES.find((suite) => suite.name === name)?.prefix ?? `${PREFIX}${name}-`,
+      journeysOf: (name) => {
+        const suite = SUITES.find((candidate) => candidate.name === name);
+
+        return suite === undefined ? [name] : listJourneys(suite);
+      },
       keep: args.keep,
-      runSuite: (name) => runSuiteProcess(name, args),
-      checkSuite: (name) => checkNoBootFallbacks(name, startedAt.get(name) ?? new Date()),
+      runJourney: (journey) => {
+        startedAt.set(journey, new Date());
+
+        return runJourneyProcess(journey, args);
+      },
+      checkJourney: (suite, journey) =>
+        checkNoBootFallbacks(suite, startedAt.get(journey) ?? new Date()),
       reset: resetSuites,
       reboot: () => runDevScript('reboot'),
 
@@ -521,7 +531,6 @@ async function main(): Promise<number> {
       isInterrupted: () => interrupted,
       now: Date.now,
       onSuiteStart: (name) => {
-        startedAt.set(name, new Date());
         console.log(`== [${String(findSuiteIndex(name))}] ${name}`);
       },
       onSuiteEnd: (result) => {

@@ -16,7 +16,7 @@ import { createXfsBackend } from '../../../packages/daemon/src/storage/xfs-backe
 import { buildStubCpuCgroups } from '../../../packages/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../../../packages/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '../../../packages/daemon/src/test-utils/find-free-ports';
-import { resetBaseline } from './reset-baseline';
+import { removeImageIfPresent, removeImpIfPresent, resetBaseline } from './reset-baseline';
 
 // impd's real app on the stub VMM, as the dev instance runs it, with the
 // in-process client the reset drives
@@ -146,10 +146,10 @@ async function setupTest() {
     sizeBytes: 6,
   });
 
-  return { client, db, dataDir };
+  return { client, db, dataDir, vmm, impd };
 }
 
-test('it removes the imps a journey named with its prefix, with their checkpoints and leases', async () => {
+test('#resetBaseline removes the imps a journey named with its prefix, with their checkpoints and leases', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'e2e-x-dev' });
   const checkpoint = await ctx.client.checkpoints.create({ name: 'e2e-x-dev', label: 'cp1' });
@@ -183,7 +183,7 @@ test('it removes the imps a journey named with its prefix, with their checkpoint
   expect(existsSync(checkpointDisk)).toBeFalse();
 });
 
-test('it removes the networks a journey named with its prefix', async () => {
+test('#resetBaseline removes the networks a journey named with its prefix', async () => {
   const ctx = await setupTest();
 
   await ctx.client.networks.create({ name: 'e2e-x-lab' });
@@ -198,7 +198,7 @@ test('it removes the networks a journey named with its prefix', async () => {
   expect(after).toBeEmpty();
 });
 
-test('it removes the secrets a journey named with its prefix, and their grants to other imps', async () => {
+test('#resetBaseline removes the secrets a journey named with its prefix, and their grants to other imps', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
@@ -219,7 +219,7 @@ test('it removes the secrets a journey named with its prefix, and their grants t
   expect(grants).toBeEmpty();
 });
 
-test('it removes a prefixed imp together with the grants it holds', async () => {
+test('#resetBaseline removes a prefixed imp together with the grants it holds', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'e2e-x-dev' });
@@ -236,7 +236,7 @@ test('it removes a prefixed imp together with the grants it holds', async () => 
   expect(secrets.map((secret) => secret.imps)).toStrictEqual([[]]);
 });
 
-test('it removes the tokens a journey named with its prefix', async () => {
+test('#resetBaseline removes the tokens a journey named with its prefix', async () => {
   const ctx = await setupTest();
 
   await ctx.client.tokens.create({ name: 'e2e-x-reader', scope: 'read' });
@@ -251,7 +251,7 @@ test('it removes the tokens a journey named with its prefix', async () => {
   expect(after).toBeEmpty();
 });
 
-test('it removes the OAuth clients a journey named with its prefix', async () => {
+test('#resetBaseline removes the OAuth clients a journey named with its prefix', async () => {
   const ctx = await setupTest();
 
   await ctx.client.oauth.clients.add({
@@ -269,7 +269,7 @@ test('it removes the OAuth clients a journey named with its prefix', async () =>
   expect(after).toBeEmpty();
 });
 
-test('it removes the images a journey named with its prefix, after the imps that boot them', async () => {
+test('#resetBaseline removes the images a journey named with its prefix, after the imps that boot them', async () => {
   const ctx = await setupTest();
 
   await Bun.write(join(ctx.dataDir, 'images', 'e2e-x-img', 'rootfs.ext4'), 'rootfs');
@@ -293,7 +293,7 @@ test('it removes the images a journey named with its prefix, after the imps that
   expect(after.map((image) => image.name)).toStrictEqual(['ubuntu']);
 });
 
-test('it removes the templates a journey made from its imps', async () => {
+test('#resetBaseline removes the templates a journey made from its imps', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'e2e-x-dev' });
@@ -309,7 +309,7 @@ test('it removes the templates a journey made from its imps', async () => {
   expect(after.map((image) => image.name)).toStrictEqual(['ubuntu']);
 });
 
-test('it removes the broker test upstreams file a journey wrote', async () => {
+test('#resetBaseline removes the broker test upstreams file a journey wrote', async () => {
   const ctx = await setupTest();
 
   const upstreams = join(ctx.dataDir, 'broker-test-upstreams.json');
@@ -324,7 +324,7 @@ test('it removes the broker test upstreams file a journey wrote', async () => {
   expect(existsSync(upstreams)).toBeFalse();
 });
 
-test('it removes what any of several prefixes names', async () => {
+test('#resetBaseline removes what any of several prefixes names', async () => {
   const ctx = await setupTest();
 
   await ctx.client.networks.create({ name: 'e2e-x-lab' });
@@ -344,7 +344,7 @@ test('it removes what any of several prefixes names', async () => {
   expect(after).toBeEmpty();
 });
 
-test('it never removes what another owner named, a near-miss prefix included', async () => {
+test('#resetBaseline never removes what another owner named, a near-miss prefix included', async () => {
   const ctx = await setupTest();
 
   for (const name of ['e2e-tiny-0123abcd', 'e2e-xy-img']) {
@@ -406,7 +406,7 @@ test('it never removes what another owner named, a near-miss prefix included', a
   expect(after).toStrictEqual(before);
 });
 
-test('it fails when impd refuses to remove what the prefix names', async () => {
+test('#resetBaseline fails when impd refuses to remove what the prefix names', async () => {
   const ctx = await setupTest();
 
   await Bun.write(join(ctx.dataDir, 'images', 'e2e-x-img', 'rootfs.ext4'), 'rootfs');
@@ -423,4 +423,86 @@ test('it fails when impd refuses to remove what the prefix names', async () => {
   expect(
     resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir }),
   ).rejects.toMatchObject({ code: 'CONFLICT' });
+});
+
+test('#resetBaseline removes an imp that a failed boot left in error', async () => {
+  const ctx = await setupTest();
+
+  ctx.vmm.queue('boot', 'fail');
+
+  await expect(ctx.client.imps.create({ name: 'e2e-x-dev' })).toReject();
+
+  const before = await ctx.client.imps.list();
+
+  await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
+
+  const after = await ctx.client.imps.list();
+
+  expect(before.map((imp) => [imp.name, imp.state])).toStrictEqual([['e2e-x-dev', 'error']]);
+  expect(after).toBeEmpty();
+});
+
+test('#removeImpIfPresent removes the imp it names', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+
+  await removeImpIfPresent(ctx.client, 'e2e-x-dev');
+
+  const imps = await ctx.client.imps.list();
+
+  expect(imps).toBeEmpty();
+});
+
+test('#removeImpIfPresent passes over an imp that is already gone', async () => {
+  const ctx = await setupTest();
+
+  await expect(removeImpIfPresent(ctx.client, 'e2e-x-dev')).toResolve();
+});
+
+test('#removeImpIfPresent fails when impd refuses the removal', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+
+  const stranger = createImpClient({
+    url: 'http://impd.test',
+    token: 'not-a-token',
+    fetch: (request) => ctx.impd.api.app.handle(request),
+  });
+
+  expect(removeImpIfPresent(stranger, 'e2e-x-dev')).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
+  });
+});
+
+test('#removeImageIfPresent removes the template it names', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+  await ctx.client.images.add({ imp: 'e2e-x-dev', name: 'e2e-x-golden' });
+
+  await removeImageIfPresent(ctx.client, 'e2e-x-golden');
+
+  const images = await ctx.client.images.list();
+
+  expect(images.map((image) => image.name)).toStrictEqual(['ubuntu']);
+});
+
+test('#removeImageIfPresent passes over an image that is already gone', async () => {
+  const ctx = await setupTest();
+
+  await expect(removeImageIfPresent(ctx.client, 'e2e-x-golden')).toResolve();
+});
+
+test('#removeImageIfPresent fails while an imp boots the image', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+  await ctx.client.images.add({ imp: 'e2e-x-dev', name: 'e2e-x-golden' });
+  await ctx.client.imps.create({ name: 'e2e-x-copy', image: 'e2e-x-golden' });
+
+  expect(removeImageIfPresent(ctx.client, 'e2e-x-golden')).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
 });

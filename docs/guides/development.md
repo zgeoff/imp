@@ -24,9 +24,10 @@ harness against a real instance when a change touches the lifecycle, the agent o
 
 ## End-to-end tests
 
-`scripts/test-e2e.sh` brings up the dev instance (`scripts/dev.sh`), then runs each suite in
-`test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
-way a user would; the dashboard suite drives it through a browser. The suites run in this order:
+`scripts/test-e2e.sh` brings up the dev instance (`scripts/dev.sh`), then runs each journey file of
+each suite in `test/e2e/suites/` as its own `bun test` process, and resets the suite's leftovers
+after each one. Every case drives impd through the `imp` CLI, the way a user would; the dashboard
+suite drives it through a browser. The suites run in this order:
 
 | Suite            | What it proves                                                                                                                                                                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

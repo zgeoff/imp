@@ -1,27 +1,63 @@
 import { expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Suite } from './suites';
-import { FAST_GROUPS, HOST_TESTS_GROUP, SUITES, SUITE_SETS, buildSuiteArgv } from './suites';
+import {
+  FAST_GROUPS,
+  HOST_TESTS_GROUP,
+  SUITES,
+  SUITE_SETS,
+  buildJourneyArgv,
+  listJourneys,
+  readSuitePrefix,
+} from './suites';
 
-test('#buildSuiteArgv runs a suite file by a ./ path, which bun test does not read as a name filter', () => {
-  expect(buildSuiteArgv('/usr/bin/bun', 'sleep')).toStrictEqual([
+test('#buildJourneyArgv runs a journey file by a ./ path, which bun test does not read as a name filter', () => {
+  expect(buildJourneyArgv('/usr/bin/bun', 'proxy-forwards')).toStrictEqual([
     '/usr/bin/bun',
     'test',
     '--config=test/e2e/bunfig.toml',
     '--bail',
     '--timeout',
     '3600000',
-    './test/e2e/suites/sleep.e2e.ts',
+    './test/e2e/suites/proxy-forwards.e2e.ts',
   ]);
 });
 
-test('#SUITES gives every suite a file under test/e2e/suites', () => {
-  const repoRoot = join(import.meta.dir, '..', '..', '..');
+test('#listJourneys runs the file named for a suite that lists no journeys', () => {
+  expect(listJourneys({ name: 'sleep', prefix: 'e2e-slp-', images: [] })).toStrictEqual(['sleep']);
+});
 
-  expect(SUITES).toSatisfyAll((suite: Readonly<Suite>) =>
-    existsSync(join(repoRoot, 'test', 'e2e', 'suites', `${suite.name}.e2e.ts`)),
-  );
+test('#listJourneys runs the journeys a suite lists, in their order', () => {
+  expect(
+    listJourneys({
+      name: 'proxy',
+      prefix: 'e2e-px-',
+      images: [],
+      journeys: ['proxy-b', 'proxy-a'],
+    }),
+  ).toStrictEqual(['proxy-b', 'proxy-a']);
+});
+
+test('#readSuitePrefix reads the prefix of a suite', () => {
+  expect(readSuitePrefix('templates')).toBe('e2e-tpl-');
+});
+
+test('#readSuitePrefix rejects a name that no suite has', () => {
+  expect(() => readSuitePrefix('nope')).toThrowWithMessage(Error, 'no suite named nope');
+});
+
+test('#SUITES runs every journey file under test/e2e/suites exactly once', () => {
+  const suitesDir = join(import.meta.dir, '..', 'suites');
+
+  const files = readdirSync(suitesDir)
+    .filter((file) => file.endsWith('.e2e.ts'))
+    .map((file) => file.slice(0, -'.e2e.ts'.length));
+
+  const journeys = SUITES.flatMap((suite) => listJourneys(suite));
+
+  expect(journeys).toIncludeSameMembers(files);
+  expect(new Set(journeys).size).toBe(journeys.length);
 });
 
 test('#SUITES gives every suite its own e2e- imp name prefix', () => {
