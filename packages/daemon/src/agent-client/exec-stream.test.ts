@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
+import { startStubEchoExecAgent } from '../test-utils/start-stub-echo-exec-agent';
 import { openAttachStream, openExecStream, openTapStream } from './exec-stream';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 
@@ -38,17 +39,10 @@ test('#openExecStream asks the agent for an exec', async () => {
 test('#openExecStream streams stdin in, then output and the exit out', async () => {
   const ctx = setupTest();
 
-  await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
-    const last = frames.at(-1);
-
-    if (frames.length === 1) {
-      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));
-    } else if (last?.type === FRAME_TYPES.stdin) {
-      socket.write(encodeFrame(FRAME_TYPES.stdout, last.payload));
-    } else if (last?.type === FRAME_TYPES.stdinEof) {
-      socket.write(encodeFrame(FRAME_TYPES.stderr, new TextEncoder().encode('bye')));
-      socket.end(encodeJsonFrame(FRAME_TYPES.exit, { code: 3, signal: 0 }));
-    }
+  await startStubEchoExecAgent(ctx.vsockPath, {
+    pid: 42,
+    stderr: new TextEncoder().encode('bye'),
+    exit: { code: 3, signal: 0 },
   });
 
   const stream = await openExecStream(ctx.vsockPath, { argv: ['cat'], tty: false });
@@ -128,7 +122,7 @@ test('#openExecStream rejects when the first frame from the agent is not STARTED
   );
 });
 
-test('#openExecStream rejects with AGENT_OUTDATED and closes a session an agent from before sessions ran plain', async () => {
+test('#openExecStream rejects with AGENT_OUTDATED and closes the connection when an agent from before sessions starts a session exec plain', async () => {
   const ctx = setupTest();
   const closed = Promise.withResolvers<void>();
 
@@ -589,59 +583,157 @@ test('#openTapStream rejects with AGENT_OUTDATED for an agent from before sessio
   });
 });
 
-// each name is held to the form the real agent makes; the agent-ids tests cover every form
+// a hostile agent can send anything; each name must fail before impd touches the disk
 test.each([
-  [
-    'a forged generation',
-    {
-      session: 'main',
-      output: {
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-        execution_generation: '../../../evil',
-        buffer_start: 0,
-        end: 0,
-        offset: 0,
-        prelude: 0,
-        log: true,
-      },
-    },
-  ],
-  [
-    'a forged boot id',
-    {
-      session: 'main',
-      output: {
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11\0',
-        execution_generation: '0123456789abcdef0123456789abcdef',
-        buffer_start: 0,
-        end: 0,
-        offset: 0,
-        prelude: 0,
-        log: true,
-      },
-    },
-  ],
-  [
-    'a forged session name',
-    {
-      session: 'a/b',
-      output: {
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-        execution_generation: '0123456789abcdef0123456789abcdef',
-        buffer_start: 0,
-        end: 0,
-        offset: 0,
-        prelude: 0,
-        log: true,
-      },
-    },
-  ],
-])('#openTapStream rejects a STARTED that names %s', async (_label, started) => {
+  ['a slash', '/'],
+  ['a backslash', '\\'],
+  ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
+  ['the parent directory', '..'],
+  ['the current directory', '.'],
+  ['a relative traversal', '../../../evil'],
+  ['a backslash traversal', String.raw`..\..\evil`],
+  ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
+  ['a NUL', '\0'],
+  ['a NUL inside a name', 'a\0b'],
+  ['a value of 4096 characters', 'x'.repeat(4096)],
+  ['an empty value', ''],
+  ['31 hex characters and a slash', `${'a'.repeat(31)}/`],
+  ['31 hex characters and a backslash', `${'a'.repeat(31)}\\`],
+  ['a traversal between hex characters', `${'a'.repeat(16)}/../${'a'.repeat(13)}`],
+  ['a slash and 31 hex characters', `/${'a'.repeat(31)}`],
+  ['31 hex characters and a NUL', `${'a'.repeat(31)}\0`],
+  ['31 hex characters', 'a'.repeat(31)],
+  ['33 hex characters', 'a'.repeat(33)],
+  ['32 uppercase hex characters', 'A'.repeat(32)],
+  ['32 letters that are not hex', 'g'.repeat(32)],
+  ['a UUID', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+])('#openTapStream rejects a STARTED whose generation is %s', async (_label, value) => {
   const ctx = setupTest();
 
   await startStubAgent(ctx.vsockPath, (socket) => {
-    socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 42, ...started }));
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: 'main',
+        output: {
+          boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+          execution_generation: value,
+          buffer_start: 0,
+          end: 0,
+          offset: 0,
+          prelude: 0,
+          log: true,
+        },
+      }),
+    );
   });
 
-  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({ name: 'ZodError' });
+  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({
+    name: 'ZodError',
+    issues: expect.toPartiallyContain({
+      path: ['output', 'execution_generation'],
+      code: 'invalid_format',
+    }),
+  });
+});
+
+test.each([
+  ['a slash', '/'],
+  ['a backslash', '\\'],
+  ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
+  ['the parent directory', '..'],
+  ['the current directory', '.'],
+  ['a relative traversal', '../../../evil'],
+  ['a backslash traversal', String.raw`..\..\evil`],
+  ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
+  ['a NUL', '\0'],
+  ['a NUL inside a name', 'a\0b'],
+  ['a value of 4096 characters', 'x'.repeat(4096)],
+  ['a UUID that ends in a slash', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1/'],
+  ['a UUID that ends in a backslash', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d1\\'],
+  ['a traversal into a UUID', '../c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a UUID and a NUL', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11\0'],
+  ['a UUID one character short', 'f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a UUID one character long', '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d110'],
+  ['an uppercase UUID', '4F3C0F86-8F8B-4C45-A3B4-8E1C1E9B0D11'],
+  ['a UUID with a letter that is not hex', '4g3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11'],
+  ['a UUID without its dashes', '4f3c0f868f8b4c45a3b48e1c1e9b0d11'],
+])('#openTapStream rejects a STARTED whose boot id is %s', async (_label, value) => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: 'main',
+        output: {
+          boot_id: value,
+          execution_generation: '0123456789abcdef0123456789abcdef',
+          buffer_start: 0,
+          end: 0,
+          offset: 0,
+          prelude: 0,
+          log: true,
+        },
+      }),
+    );
+  });
+
+  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({
+    name: 'ZodError',
+    issues: expect.toPartiallyContain({ path: ['output', 'boot_id'], code: 'invalid_format' }),
+  });
+});
+
+test.each([
+  ['a slash', '/'],
+  ['a backslash', '\\'],
+  ['a path with a slash', 'a/b'],
+  ['a path with a backslash', String.raw`a\b`],
+  ['the parent directory', '..'],
+  ['the current directory', '.'],
+  ['a relative traversal', '../../../evil'],
+  ['a backslash traversal', String.raw`..\..\evil`],
+  ['an absolute path', '/etc/passwd'],
+  ['a drive path', String.raw`C:\evil`],
+  ['a NUL', '\0'],
+  ['a NUL inside a name', 'a\0b'],
+  ['a value of 4096 characters', 'x'.repeat(4096)],
+  ['an empty name', ''],
+  ['a name and a traversal', 'main/..'],
+  ['a name with a backslash', String.raw`main\x`],
+  ['a name and a NUL', 'main\0'],
+  ['a name of 33 characters', 'a'.repeat(33)],
+  ['an uppercase name', 'Main'],
+  ['a name that starts with a dash', '-main'],
+  ['a name with a dot', 'main.log'],
+])('#openTapStream rejects a STARTED whose session name is %s', async (_label, value) => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: value,
+        output: {
+          boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+          execution_generation: '0123456789abcdef0123456789abcdef',
+          buffer_start: 0,
+          end: 0,
+          offset: 0,
+          prelude: 0,
+          log: true,
+        },
+      }),
+    );
+  });
+
+  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({
+    name: 'ZodError',
+    issues: expect.toPartiallyContain({ path: ['session'], code: 'invalid_format' }),
+  });
 });

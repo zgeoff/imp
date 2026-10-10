@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
+import { startStubDialAgent } from '../test-utils/start-stub-dial-agent';
 import { openDialStream } from './dial-stream';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 
@@ -42,22 +43,7 @@ test('it asks the agent to dial the target', async () => {
 test('it relays both ways, with a half-close each way', async () => {
   const ctx = setupTest();
 
-  await startStubAgent(ctx.vsockPath, (socket, _request, frames) => {
-    const last = frames.at(-1);
-
-    if (frames.length === 1) {
-      socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
-    } else if (last?.type === FRAME_TYPES.stdinEof) {
-      // the target answers once the request is whole, then closes its side
-      const asked = frames
-        .filter((frame) => frame.type === FRAME_TYPES.stdin)
-        .map((frame) => new TextDecoder().decode(frame.payload))
-        .join('');
-
-      socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode(`got ${asked}`)));
-      socket.end(encodeFrame(FRAME_TYPES.stdoutEof));
-    }
-  });
+  await startStubDialAgent(ctx.vsockPath, (asked) => `got ${asked}`);
 
   const stream = await openDialStream(ctx.vsockPath, { network: 'tcp', address: '127.0.0.1:8080' });
 

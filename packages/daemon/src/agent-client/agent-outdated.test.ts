@@ -19,12 +19,19 @@ test.each([
 });
 
 test.each([
+  ['0.1.0', false],
+  ['0.1.9', false],
+  ['0.2.0', false],
   ['0.2.5', false],
   ['0.3.0', true],
   ['0.10.1', true],
   ['1.0.0', true],
 ])('#hasFeature gives agent %s dial and sftp: %p', (version, expected) => {
   expect(hasFeature(version, 'ssh')).toBe(expected);
+});
+
+test('#hasFeature passes dial and sftp, which are not strict, for the dev version, which does not parse', () => {
+  expect(hasFeature('dev', 'ssh')).toBe(true);
 });
 
 // the agent's own answer settles a feature that is not strict
@@ -65,6 +72,10 @@ test.each([
   ['1.0.0', true],
 ])('#hasFeature gives agent %s elastic memory: %p', (version, expected) => {
   expect(hasFeature(version, 'elastic-memory')).toBe(expected);
+});
+
+test('#hasFeature fails the strict elastic memory for the dev version, which does not parse', () => {
+  expect(hasFeature('dev', 'elastic-memory')).toBe(false);
 });
 
 test('#hasFeature fails the strict elastic memory for an agent with no recorded version', () => {

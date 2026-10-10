@@ -98,6 +98,9 @@ test.each([
   }).toThrowWithMessage(Error, `agent stream ended inside a frame (${String(pending)} bytes)`);
 });
 
-test('it holds a partial frame back until the rest arrives', () => {
-  expect(createFrameDecoder().push(Uint8Array.of(8, 0, 0, 0, 4, 97))).toStrictEqual([]);
+test.each([
+  ['inside a header', Uint8Array.of(8, 0, 0)],
+  ['inside a payload', Uint8Array.of(8, 0, 0, 0, 4, 97)],
+])('it decodes no frame yet from bytes that stop %s', (_label, input) => {
+  expect(createFrameDecoder().push(input)).toStrictEqual([]);
 });
