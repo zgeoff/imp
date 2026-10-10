@@ -176,6 +176,38 @@ test('it ends overlapping listener syncs with no listener for an imp the databas
   expect(proxy.readImpPort(fresh.id)).toBeNull();
 });
 
+test('it listens on the proxy port and on the port base plus each imp’s slot by default', async () => {
+  const ctx = await setupTest();
+
+  const free = findFreePorts(2);
+  const proxyPort = free.take();
+  const portBase = free.take();
+
+  const proxy = startWakeProxy({
+    config: { ...ctx.config, proxyPort, portBase },
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await proxy.syncListeners();
+
+  const response = await fetch(`http://127.0.0.1:${String(proxyPort)}/`, {
+    headers: { host: 'localhost' },
+  });
+
+  await response.text();
+
+  expect(proxy.port).toBe(proxyPort);
+  expect(proxy.readImpPort(imp.id)).toBe(portBase + imp.slot);
+  expect(response.status).toBe(404);
+});
+
 test('it stops the listener of an imp the database lost', async () => {
   const ctx = await setupTest();
 

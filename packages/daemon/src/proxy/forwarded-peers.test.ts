@@ -115,6 +115,34 @@ test('it evicts the oldest handle when a handle is made with 1024 held', () => {
   expect(peers.take(oldest)).toBeNull();
 });
 
+// the clock steps back after the new handle, so only a handle the store no
+// longer holds can read as gone: take alone refuses an expired one
+test('it drops an expired handle when it makes a new one', () => {
+  const clock = { now: 0 };
+  const peers = createForwardedPeers(() => clock.now);
+  const expired = peers.register('100.64.0.1');
+
+  clock.now = 30_000;
+
+  peers.register('100.64.1.1');
+
+  clock.now = 0;
+
+  expect(peers.take(expired)).toBeNull();
+});
+
+test('it keeps a live handle when it makes a new one', () => {
+  const clock = { now: 0 };
+  const peers = createForwardedPeers(() => clock.now);
+  const live = peers.register('100.64.0.1');
+
+  clock.now = 29_999;
+
+  peers.register('100.64.1.1');
+
+  expect(peers.take(live)).toBe('100.64.0.1');
+});
+
 test('it keeps the oldest live handle when a handle is made with 1023 held', () => {
   const peers = createForwardedPeers(() => 0);
   const oldest = peers.register('100.64.0.1');

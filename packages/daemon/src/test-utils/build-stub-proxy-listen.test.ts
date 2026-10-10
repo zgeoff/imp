@@ -42,7 +42,50 @@ test('it serves the TLS certificate it is given', async () => {
   expect(body).toBe('served on 127.0.0.1');
 });
 
-test('it lets a second listener share the first one’s port', () => {
+test('it runs the route a listener is given for each request', async () => {
+  const proxy = buildStubProxyListen();
+
+  const listener = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => Promise.resolve({ kind: 'none', hint: 'no imp here' }),
+  });
+
+  onTestFinished(() => listener.stop(true));
+
+  const response = await fetch(`http://127.0.0.1:${String(listener.port)}/`);
+
+  await response.text();
+
+  expect(response.headers.get('x-route')).toBe('none');
+  expect(proxy.routes).toStrictEqual(['none']);
+});
+
+test('it lets a second listener that asks for reusePort share the first one’s port', () => {
+  const proxy = buildStubProxyListen();
+
+  const first = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    reusePort: true,
+    route: () => ({ kind: 'api' }),
+  });
+
+  onTestFinished(() => first.stop(true));
+
+  const second = proxy.startListener({
+    port: first.port ?? 0,
+    hostname: '127.0.0.1',
+    reusePort: true,
+    route: () => ({ kind: 'api' }),
+  });
+
+  onTestFinished(() => second.stop(true));
+
+  expect(second.port).toBe(first.port);
+});
+
+test('it refuses a second listener on a taken port when neither asks for reusePort', () => {
   const proxy = buildStubProxyListen();
 
   const first = proxy.startListener({
@@ -53,15 +96,13 @@ test('it lets a second listener share the first one’s port', () => {
 
   onTestFinished(() => first.stop(true));
 
-  const second = proxy.startListener({
-    port: first.port ?? 0,
-    hostname: '127.0.0.1',
-    route: () => ({ kind: 'api' }),
-  });
-
-  onTestFinished(() => second.stop(true));
-
-  expect(second.port).toBe(first.port);
+  expect(() =>
+    proxy.startListener({
+      port: first.port ?? 0,
+      hostname: '127.0.0.1',
+      route: () => ({ kind: 'api' }),
+    }),
+  ).toThrow(expect.objectContaining({ code: 'EADDRINUSE' }));
 });
 
 test('it records each start and stop with its address', async () => {

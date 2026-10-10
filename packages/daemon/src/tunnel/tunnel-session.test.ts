@@ -6,6 +6,7 @@ import {
   TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_WINDOW_BYTES,
 } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
@@ -425,36 +426,7 @@ test('it sends the held guest output once the client acks', async () => {
   expect(ctx.binary[2]).toBe('z');
 });
 
-test('it holds the ack while the guest has not taken the client bytes', async () => {
-  const dial = buildStubDialStream();
-
-  const ctx = setupTest({
-    backend: {
-      findImpId: () => Promise.resolve('imp-1'),
-      openDial: () => Promise.resolve(dial.stream),
-      openListener: mock(),
-      openAccept: mock(),
-      owner: 'token:me:1',
-    },
-    limits: createTunnelLimits(),
-    forwards: createReverseForwards(),
-  });
-
-  ctx.session.handleMessage({ type: 'open', name: 'box', port: 5432 });
-
-  await waitFor(() => {
-    expect(ctx.sent).toHaveLength(1);
-  });
-
-  dial.holdDrain();
-  ctx.session.handleMessage(new TextEncoder().encode('abc'));
-  ctx.session.handleMessage(new TextEncoder().encode('de'));
-
-  expect(dial.state.drainWaits).toBe(1);
-  expect(ctx.sent).toStrictEqual([{ type: 'opened' }]);
-});
-
-test('it acks the client bytes once the guest has taken them', async () => {
+test('it holds the ack of the client bytes until the guest has taken them', async () => {
   const dial = buildStubDialStream();
 
   const ctx = setupTest({
@@ -480,15 +452,36 @@ test('it acks the client bytes once the guest has taken them', async () => {
   ctx.session.handleMessage(new TextEncoder().encode('abc'));
   ctx.session.handleMessage(new TextEncoder().encode('de'));
 
+  // guest bytes reach the client over later turns of the event loop, by
+  // which time an unheld ack would have gone out
+  dial.emit({ type: 'data', data: new TextEncoder().encode('reply') });
+
+  const received = await waitFor(() => {
+    invariant(ctx.binary[0], 'the guest bytes have not reached the client');
+
+    return [...ctx.binary];
+  });
+
+  const sentWhileHeld = [...ctx.sent];
+  const drainWaitsWhileHeld = dial.state.drainWaits;
+
   release();
 
-  await waitFor(() => {
-    expect(ctx.sent).toStrictEqual([
-      { type: 'opened' },
-      { type: 'ack', bytes: 3 },
-      { type: 'ack', bytes: 2 },
-    ]);
+  const sent = await waitFor(() => {
+    invariant(ctx.sent[2], 'the second ack has not arrived');
+
+    return [...ctx.sent];
   });
+
+  expect(received).toStrictEqual(['reply']);
+  expect(sentWhileHeld).toStrictEqual([{ type: 'opened' }]);
+  expect(drainWaitsWhileHeld).toBe(1);
+
+  expect(sent).toStrictEqual([
+    { type: 'opened' },
+    { type: 'ack', bytes: 3 },
+    { type: 'ack', bytes: 2 },
+  ]);
 });
 
 test('it keeps a client that sends up to one frame past the window unacked', async () => {
@@ -644,8 +637,60 @@ test('it names the imp limit it was given in the TUNNEL_LIMIT message', async ()
   ]);
 });
 
-test('it holds 256 tunnels per imp by default', () => {
-  expect(createTunnelLimits().max).toBe(256);
+test('it refuses the 257th tunnel to an imp under the default limit', async () => {
+  const limits = createTunnelLimits();
+
+  const open = Array.from({ length: 256 }, () =>
+    setupTest({
+      backend: {
+        findImpId: () => Promise.resolve('imp-1'),
+        openDial: () => Promise.resolve(buildStubDialStream().stream),
+        openListener: mock(),
+        openAccept: mock(),
+        owner: 'token:me:1',
+      },
+      limits,
+      forwards: createReverseForwards(),
+    }),
+  );
+
+  const last = setupTest({
+    backend: {
+      findImpId: () => Promise.resolve('imp-1'),
+      openDial: () => Promise.resolve(buildStubDialStream().stream),
+      openListener: mock(),
+      openAccept: mock(),
+      owner: 'token:me:1',
+    },
+    limits,
+    forwards: createReverseForwards(),
+  });
+
+  for (const tunnel of open) {
+    tunnel.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+  }
+
+  await waitFor(() => {
+    // false stands for not yet, as invariant throws on undefined
+    invariant(
+      open.every((tunnel) => tunnel.sent.length === 1) || undefined,
+      'the 256 tunnels have not all opened',
+    );
+  });
+
+  last.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+
+  await waitFor(() => {
+    invariant(last.closed.code, 'the 257th tunnel is still open');
+  });
+
+  expect(open.map((tunnel) => tunnel.sent)).toSatisfyAll(
+    (sent: readonly unknown[]) => sent.length === 1 && Bun.deepEquals(sent[0], { type: 'opened' }),
+  );
+
+  expect(last.sent).toStrictEqual([
+    { type: 'error', code: 'TUNNEL_LIMIT', message: 'box has 256 tunnels open already' },
+  ]);
 });
 
 test('it refuses a tunnel past the limit of its imp with TUNNEL_LIMIT', async () => {
