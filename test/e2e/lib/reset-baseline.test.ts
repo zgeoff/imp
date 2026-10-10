@@ -432,6 +432,48 @@ test('#resetBaseline fails when impd refuses to remove what the prefix names', a
   ).rejects.toMatchObject({ code: 'CONFLICT' });
 });
 
+test('#resetBaseline ends the move of an imp a failed move left marked, then removes it', async () => {
+  const ctx = await setupTest();
+
+  // a move's first step counts the image's files too
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'config.json'), '{}');
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+  await ctx.client.imps.stop({ name: 'e2e-x-dev' });
+  await ctx.client.moves.prepare({ name: 'e2e-x-dev', targetStorage: 'xfs' });
+
+  const before = await ctx.client.imps.list();
+
+  await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
+
+  const after = await ctx.client.imps.list();
+
+  expect(before.map((imp) => [imp.name, imp.move])).toStrictEqual([['e2e-x-dev', 'sending']]);
+  expect(after).toBeEmpty();
+});
+
+test('#resetBaseline fails when the move of a marked imp cannot be ended', async () => {
+  const ctx = await setupTest();
+
+  // a move's first step counts the image's files too
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'config.json'), '{}');
+
+  const imp = await ctx.client.imps.create({ name: 'e2e-x-dev' });
+
+  await ctx.client.imps.stop({ name: 'e2e-x-dev' });
+  await ctx.client.moves.prepare({ name: 'e2e-x-dev', targetStorage: 'xfs' });
+
+  // the send's target is one that nothing answers, so the abort cannot reach it
+  await ctx.db
+    .updateTable('move_sends')
+    .set({ peer_url: 'http://127.0.0.1:1', ticket: 'ticket' })
+    .where('imp_id', '=', imp.id)
+    .execute();
+
+  expect(
+    resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir }),
+  ).rejects.toMatchObject({ code: 'BAD_GATEWAY' });
+});
+
 test('#resetBaseline removes an imp that a failed boot left in error', async () => {
   const ctx = await setupTest();
 

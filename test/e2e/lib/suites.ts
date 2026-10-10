@@ -1,4 +1,6 @@
 import type { DevInstance } from './instance';
+import { buildMoveSettings, readMoveOptions } from './move-hosts';
+import type { HostBFixtureName } from './move-hosts';
 
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
@@ -17,8 +19,13 @@ export interface Suite {
 
   // the impd settings every journey runs on, over the run's: the harness
   // reboots the instance onto them before the first journey and back after
-  // the last (runSuites)
-  readonly settings?: (target: Readonly<DevInstance>) => Readonly<Record<string, string>>;
+  // the last (runSuites); null keeps the run's
+  readonly settings?: (target: Readonly<DevInstance>) => Readonly<Record<string, string>> | null;
+
+  // what runs beside the instance for every journey: the harness starts it
+  // before the first, resets it after each, and stops it after the last
+  // (runSuites)
+  readonly fixtures?: readonly HostBFixtureName[];
 }
 
 // Every suite, in run order. The order is the acceptance numbering
@@ -31,13 +38,46 @@ export const SUITES: readonly Suite[] = [
 
   // a registry on the host's loopback; skips unless its name resolves there,
   // as CI's /etc/hosts makes it
-  { name: 'registry', prefix: 'e2e-reg-', images: [] },
+  {
+    name: 'registry',
+    prefix: 'e2e-reg-',
+    images: [],
+    journeys: ['registry-moved-tag', 'registry-copy-from', 'registry-multi-platform'],
+
+    // the host engine's builds: a builder imp may not reach the host's
+    // loopback, by design, so not this registry either
+    settings: () => ({ IMP_BUILD_ISOLATION: 'host' }),
+  },
   { name: 'checkpoints', prefix: 'e2e-cp-', images: ['e2e-tiny'] },
   { name: 'disks', prefix: 'e2e-disk-', images: ['e2e-tiny'] },
-  { name: 'sleep', prefix: 'e2e-slp-', images: ['e2e-bare', 'e2e-ws'] },
-  { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
+  {
+    name: 'sleep',
+    prefix: 'e2e-slp-',
+    images: ['e2e-bare', 'e2e-ws'],
+    journeys: ['sleep-memory', 'sleep-websocket'],
+  },
+  {
+    name: 'scale',
+    prefix: 'e2e-scale-',
+    images: ['e2e-tiny'],
+
+    // long enough that only the governor sleeps imps, or the budget never
+    // fills
+    settings: () => ({ IMP_IDLE_TIMEOUT_S: '600' }),
+  },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
-  { name: 'tailscale', prefix: 'e2e-ts-', images: ['e2e-tiny'] },
+  {
+    name: 'tailscale',
+    prefix: 'e2e-ts-',
+    images: ['e2e-tiny'],
+    journeys: ['tailscale-reach', 'tailscale-identities', 'tailscale-names'],
+
+    // the rule tailscale-identities proves: impd reads it at start, and the
+    // reboot keeps the node
+    settings: () => ({
+      IMP_TAILNET_IDENTITIES: JSON.stringify([{ match: '*', scope: 'read' }]),
+    }),
+  },
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
   { name: 'mcp-oauth', prefix: 'e2e-oa-', images: ['e2e-tiny'] },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
@@ -71,12 +111,40 @@ export const SUITES: readonly Suite[] = [
 
   // root in the container reaches Docker only through imp-docker-proxy; it
   // stops and starts the proxy
-  { name: 'socket', prefix: 'e2e-sock-', images: ['e2e-tiny'] },
+  {
+    name: 'socket',
+    prefix: 'e2e-sock-',
+    images: ['e2e-tiny'],
+    journeys: ['socket-refusals', 'socket-builds', 'socket-proxy-stopped'],
+  },
 
-  // a second instance beside the run's: over a Docker network, then over
-  // the tailnet; each reboots the instance onto the network and back
-  { name: 'moves', prefix: 'e2e-mv-', images: ['e2e-tiny', 'base'] },
-  { name: 'moves-tailnet', prefix: 'e2e-mvt-', images: ['e2e-tiny'] },
+  // a second instance beside the run's, the suite's fixture: over a Docker
+  // network, with the instance rebooted onto it, then over the tailnet
+  {
+    name: 'moves',
+    prefix: 'e2e-mv-',
+    images: ['e2e-tiny', 'base'],
+    journeys: [
+      'moves-cold',
+      'moves-leases',
+      'moves-abort',
+      'moves-place',
+      'moves-list',
+      'moves-warm-open',
+      'moves-warm-box',
+      'moves-warm-pair',
+    ],
+    fixtures: ['host-b'],
+    settings: (target) => buildMoveSettings(readMoveOptions('host-b'), target.portOffset),
+  },
+  {
+    name: 'moves-tailnet',
+    prefix: 'e2e-mvt-',
+    images: ['e2e-tiny'],
+    journeys: ['moves-tailnet-peer', 'moves-tailnet-names'],
+    fixtures: ['host-b-tailnet'],
+    settings: (target) => buildMoveSettings(readMoveOptions('host-b-tailnet'), target.portOffset),
+  },
 
   // kills impd, Firecracker and the container; reboots the instance
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
@@ -173,6 +241,21 @@ export function readSuitePrefix(name: string): string {
   }
 
   return suite.prefix;
+}
+
+// the impd settings a suite's journeys run on for `target`, null for the
+// run's own
+export function readSuiteSettings(
+  name: string,
+  target: Readonly<DevInstance>,
+): Readonly<Record<string, string>> | null {
+  const suite = SUITES.find((candidate) => candidate.name === name);
+
+  if (suite === undefined) {
+    throw new Error(`no suite named ${name}`);
+  }
+
+  return suite.settings?.(target) ?? null;
 }
 
 // generous: a journey's own waits fail long before this

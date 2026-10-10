@@ -1,43 +1,60 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
-import { createImp, holdImp } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import { readEstabResets, waitForGuestListen } from '../lib/guest-net';
+import { createInstanceClient, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import { holdImp, waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent, removeNetworkIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
 // Private networks between imps (docs/guides/networks.md) in real guests.
-// web is open and db is box, so a network reaches past both policies; out
-// is on no network.
+// web is open and db is box, so a network reaches past both policies.
 
-const prefix = setupSuite('networks');
-const TINY = resolveImageName('e2e-tiny');
-const web = `${prefix}web`;
-const db = `${prefix}db`;
-const out = `${prefix}out`;
+// one stack for every release, so each imp goes before its network
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// networks are the host's, not an imp's: a run cut short leaves them
-const LAB = 'e2e-net-lab';
-const OPS = 'e2e-net-ops';
-const ips = { web: '', db: '', out: '' };
+  onTestFinished(() => stack.disposeAsync());
 
-// what `imp net join` said when it put box db next to open web
-const joined = { stderr: '' };
+  const client = await createInstanceClient();
 
-async function removeNetworks(): Promise<void> {
-  for (const network of [LAB, OPS]) {
-    await tryImp(['net', 'rm', network]);
-  }
+  return { prefix: readSuitePrefix('networks'), stack, client };
 }
 
-beforeAll(async () => {
-  await removeNetworks();
-  await runImp('net', 'create', LAB);
-  await createImp(web, '--image', TINY, '--memory', '256', '--net', LAB);
+test('it lets the imps on a network reach and name each other past their policies, and nobody else', async () => {
+  const ctx = await setupTest();
 
-  await createImp(
+  const lab = `${ctx.prefix}lab`;
+  const web = `${ctx.prefix}web`;
+  const db = `${ctx.prefix}db`;
+
+  // on no network
+  const out = `${ctx.prefix}out`;
+
+  await runImp('net', 'create', lab);
+
+  registerRemoval(ctx.stack, config.keep, () => removeNetworkIfPresent(ctx.client, lab));
+
+  await runImp(
+    'new',
+    web,
+    '--image',
+    resolveImageName('e2e-tiny'),
+    '--memory',
+    '256',
+    '--net',
+    lab,
+  );
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, web));
+
+  await runImp(
+    'new',
     db,
     '--image',
-    TINY,
+    resolveImageName('e2e-tiny'),
     '--memory',
     '256',
     '--policy',
@@ -46,184 +63,266 @@ beforeAll(async () => {
     'example.com',
   );
 
-  await createImp(out, '--image', TINY, '--memory', '256');
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, db));
 
-  for (const name of [web, db, out]) {
-    await holdImp(name);
-  }
+  await runImp('new', out, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
 
-  const join = await tryImp(['net', 'join', LAB, db]);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, out));
 
-  if (join.exitCode !== 0) {
-    throw new Error(`imp net join exited ${String(join.exitCode)}: ${join.stderr}`);
-  }
+  await waitForExec(web);
+  await waitForExec(db);
+  await waitForExec(out);
+  await holdImp(web);
+  await holdImp(db);
+  await holdImp(out);
 
-  joined.stderr = join.stderr;
+  // a join that puts a box imp next to an open one warns
+  const joined = await tryImp(['net', 'join', lab, db]);
 
-  const rows = [await requireImp(web), await requireImp(db), await requireImp(out)];
+  expect(joined).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toBeString(),
+    stderr: expect.toInclude(`warning: ${db} is box, but ${web} on ${lab} is open`),
+  });
 
-  ips.web = rows[0]?.ip ?? '';
-  ips.db = rows[1]?.ip ?? '';
-  ips.out = rows[2]?.ip ?? '';
-}, 600_000);
+  const webRow = await requireImp(web);
+  const dbRow = await requireImp(db);
+  const outRow = await requireImp(out);
 
-afterAll(async () => {
-  await removeNetworks();
-});
+  const webIp = webRow.ip;
+  const dbIp = dbRow.ip;
+  const outIp = outRow.ip;
 
-// the shell exits 0 when the command did
-async function tryInImp(name: string, script: string): Promise<boolean> {
-  const result = await tryImp(['exec', name, '--', 'sh', '-c', script]);
+  // the imps on the network reach each other, whatever their policies
+  const webToDb = await tryImp(['exec', web, '--', 'ping', '-c', '1', '-W', '2', dbIp]);
+  const dbToWeb = await tryImp(['exec', db, '--', 'ping', '-c', '1', '-W', '2', webIp]);
 
-  return result.exitCode === 0;
-}
-
-function tryPing(name: string, ip: string): Promise<boolean> {
-  return tryInImp(name, `ping -c 1 -W 2 ${ip} >/dev/null`);
-}
-
-// a one-shot TCP listener in the guest, which writes what it got to `file`
-async function startListener(name: string, port: number, file: string): Promise<void> {
   await runShellInImp(
-    name,
-    `rm -f ${file}; setsid sh -c 'nc -l -p ${String(port)} > ${file}' </dev/null >/dev/null 2>&1 &`,
+    web,
+    `rm -f /tmp/got; setsid sh -c 'nc -l -p 7000 > /tmp/got' </dev/null >/dev/null 2>&1 &`,
   );
 
-  await Bun.sleep(300);
-}
-
-// what busybox nslookup printed, its errors included
-async function resolveInImp(name: string, query: string): Promise<string> {
-  const result = await tryImp(['exec', name, '--', 'nslookup', query]);
-
-  return result.stdout + result.stderr;
-}
-
-// Tcp EstabResets from the guest's /proc/net/snmp
-async function readEstabResets(name: string): Promise<number> {
-  const text = await runShellInImp(name, 'grep ^Tcp: /proc/net/snmp');
-
-  const [header = '', values = ''] = text.split('\n');
-  const column = header.split(' ').indexOf('EstabResets');
-
-  return Number(values.split(' ')[column]);
-}
-
-test('the imps on a network reach each other, whatever their policies', async () => {
-  const reached = [await tryPing(web, ips.db), await tryPing(db, ips.web)];
-
-  await startListener(web, 7000, '/tmp/got');
-  await runShellInImp(db, `echo hello | nc -w 2 ${ips.web} 7000`);
+  await waitForGuestListen(web, 7000);
+  await runShellInImp(db, `echo hello | nc -w 2 ${webIp} 7000`);
 
   const got = await runShellInImp(web, 'cat /tmp/got');
 
-  expect(reached).toEqual([true, true]);
+  expect(webToDb.exitCode).toBe(0);
+  expect(dbToWeb.exitCode).toBe(0);
   expect(got).toBe('hello');
-});
 
-test('a join that puts a box imp next to an open one warns', () => {
-  expect(joined.stderr).toContain(`warning: ${db} is box, but ${web} on ${LAB} is open`);
-});
+  // an imp on no network reaches neither, and neither reaches it
+  const outToWeb = await tryImp(['exec', out, '--', 'ping', '-c', '1', '-W', '2', webIp]);
+  const outToDb = await tryImp(['exec', out, '--', 'ping', '-c', '1', '-W', '2', dbIp]);
+  const webToOut = await tryImp(['exec', web, '--', 'ping', '-c', '1', '-W', '2', outIp]);
+  const dbToOut = await tryImp(['exec', db, '--', 'ping', '-c', '1', '-W', '2', outIp]);
 
-test('an imp on no network reaches neither, and neither reaches it', async () => {
-  const reached = [
-    await tryPing(out, ips.web),
-    await tryPing(out, ips.db),
-    await tryPing(web, ips.out),
-    await tryPing(db, ips.out),
-  ];
+  expect(outToWeb.exitCode).not.toBe(0);
+  expect(outToDb.exitCode).not.toBe(0);
+  expect(webToOut.exitCode).not.toBe(0);
+  expect(dbToOut.exitCode).not.toBe(0);
 
-  expect(reached).toEqual([false, false, false, false]);
-});
-
-test('a network does not open the internet to a box imp', async () => {
-  const fetched = [
-    await tryInImp(db, 'wget -q -T 5 -O /dev/null http://example.com/'),
-    await tryInImp(db, 'wget -q -T 5 -O /dev/null http://example.org/'),
-  ];
-
-  expect(fetched).toEqual([true, false]);
-});
-
-test('impd names the peers, by network and by bare name, for open and box imps', async () => {
-  const fromWeb = await resolveInImp(web, `${db}.${LAB}.internal`);
-  const bare = await resolveInImp(web, db);
-  const fromDb = await resolveInImp(db, `${web}.${LAB}.internal`);
-  const reverse = await resolveInImp(db, ips.web);
-
-  expect(fromWeb).toContain(`Address: ${ips.db}`);
-  expect(bare).toContain(`Address: ${ips.db}`);
-  expect(fromDb).toContain(`Address: ${ips.web}`);
-  expect(reverse).toContain(`${web}.${LAB}.internal`);
-});
-
-test('an imp on no network gets NXDOMAIN for a peer name', async () => {
-  const answer = await resolveInImp(out, `${db}.${LAB}.internal`);
-
-  expect(answer).toContain('NXDOMAIN');
-  expect(answer).not.toContain(ips.db);
-});
-
-test("a query to a peer's own port 53 reaches the peer, not impd", async () => {
-  await startListener(web, 53, '/tmp/dns');
-  await runShellInImp(db, `echo query | nc -w 2 ${ips.web} 53`);
-
-  const got = await runShellInImp(web, 'cat /tmp/dns');
-
-  expect(got).toBe('query');
-});
-
-test('a leave ends a held connection with a reset, and shuts the pair out', async () => {
-  await startListener(web, 7001, '/tmp/held');
-
-  // writes every 200 ms until something ends it, then records nc's exit code
-  await runShellInImp(
+  // a network does not open the internet to a box imp
+  const allowed = await tryImp([
+    'exec',
     db,
-    `rm -f /tmp/peer-*; setsid sh -c '(while sleep 0.2; do echo x; done | nc ${ips.web} 7001; echo $? > /tmp/peer-done)' </dev/null >/dev/null 2>&1 &`,
+    '--',
+    'wget',
+    '-q',
+    '-T',
+    '5',
+    '-O',
+    '/dev/null',
+    'http://example.com/',
+  ]);
+
+  const blocked = await tryImp([
+    'exec',
+    db,
+    '--',
+    'wget',
+    '-q',
+    '-T',
+    '5',
+    '-O',
+    '/dev/null',
+    'http://example.org/',
+  ]);
+
+  expect(allowed.exitCode).toBe(0);
+  expect(blocked.exitCode).not.toBe(0);
+
+  // impd names the peers, by network and by bare name, for open and box imps;
+  // busybox nslookup prints some answers on stderr
+  const fromWeb = await tryImp(['exec', web, '--', 'nslookup', `${db}.${lab}.internal`]);
+  const bare = await tryImp(['exec', web, '--', 'nslookup', db]);
+  const fromDb = await tryImp(['exec', db, '--', 'nslookup', `${web}.${lab}.internal`]);
+  const reverse = await tryImp(['exec', db, '--', 'nslookup', webIp]);
+  const fromOut = await tryImp(['exec', out, '--', 'nslookup', `${db}.${lab}.internal`]);
+
+  expect(`${fromWeb.stdout}${fromWeb.stderr}`).toContain(`Address: ${dbIp}`);
+  expect(`${bare.stdout}${bare.stderr}`).toContain(`Address: ${dbIp}`);
+  expect(`${fromDb.stdout}${fromDb.stderr}`).toContain(`Address: ${webIp}`);
+  expect(`${reverse.stdout}${reverse.stderr}`).toContain(`${web}.${lab}.internal`);
+
+  // an imp on no network gets NXDOMAIN for a peer name
+  expect(`${fromOut.stdout}${fromOut.stderr}`).toContain('NXDOMAIN');
+  expect(`${fromOut.stdout}${fromOut.stderr}`).not.toContain(dbIp);
+
+  // a query to a peer's own port 53 reaches the peer, not impd
+  await runShellInImp(
+    web,
+    `rm -f /tmp/dns; setsid sh -c 'nc -l -p 53 > /tmp/dns' </dev/null >/dev/null 2>&1 &`,
   );
 
-  await waitFor('the held connection to carry data', async () => {
-    const carried = await tryInImp(web, 'test -s /tmp/held');
+  await waitForGuestListen(web, 53);
+  await runShellInImp(db, `echo query | nc -w 2 ${webIp} 53`);
 
-    expect(carried).toBeTrue();
-  });
+  const dns = await runShellInImp(web, 'cat /tmp/dns');
+
+  expect(dns).toBe('query');
+});
+
+test('it ends a held connection with a reset on a leave, and shuts the pair out', async () => {
+  const ctx = await setupTest();
+
+  const lab = `${ctx.prefix}leave`;
+  const web = `${ctx.prefix}lweb`;
+  const db = `${ctx.prefix}ldb`;
+
+  await runImp('net', 'create', lab);
+
+  registerRemoval(ctx.stack, config.keep, () => removeNetworkIfPresent(ctx.client, lab));
+
+  await runImp(
+    'new',
+    web,
+    '--image',
+    resolveImageName('e2e-tiny'),
+    '--memory',
+    '256',
+    '--net',
+    lab,
+  );
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, web));
+
+  await runImp('new', db, '--image', resolveImageName('e2e-tiny'), '--memory', '256', '--net', lab);
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, db));
+
+  await waitForExec(web);
+  await waitForExec(db);
+  await holdImp(web);
+  await holdImp(db);
+
+  const webRow = await requireImp(web);
+  const dbRow = await requireImp(db);
+
+  const webIp = webRow.ip;
+  const dbIp = dbRow.ip;
+
+  await runShellInImp(
+    web,
+    `rm -f /tmp/held; setsid sh -c 'nc -l -p 7001 > /tmp/held' </dev/null >/dev/null 2>&1 &`,
+  );
+
+  await waitForGuestListen(web, 7001);
+
+  // the workload: a write every 200 ms until something ends the connection,
+  // then nc's exit code in /tmp/peer-done
+  await runShellInImp(
+    db,
+    `rm -f /tmp/peer-*; setsid sh -c '(while sleep 0.2; do echo x; done | nc ${webIp} 7001; echo $? > /tmp/peer-done)' </dev/null >/dev/null 2>&1 &`,
+  );
+
+  await waitFor('the held connection to carry data', () => runShellInImp(web, 'test -s /tmp/held'));
 
   const before = await readEstabResets(db);
 
-  await runImp('net', 'leave', LAB, db);
+  await runImp('net', 'leave', lab, db);
 
   // busybox nc says nothing on a reset; the kernel counts an established
   // connection that a RST ended, and a FIN never
-  await waitFor('the guest to see its connection reset', async () => {
+  const ended = await waitFor('the guest to see its connection reset', async () => {
     const code = await runShellInImp(db, 'cat /tmp/peer-done 2>/dev/null || true');
-    const after = await readEstabResets(db);
+    const resets = await readEstabResets(db);
 
-    expect([code !== '' && code !== '0', after > before]).toEqual([true, true]);
+    if (code === '' || resets <= before) {
+      throw new Error(
+        `nc exit ${JSON.stringify(code)}, resets ${String(before)} -> ${String(resets)}`,
+      );
+    }
+
+    return { code, resets };
   });
 
-  const reached = [await tryPing(db, ips.web), await tryPing(web, ips.db)];
+  const dbToWeb = await tryImp(['exec', db, '--', 'ping', '-c', '1', '-W', '2', webIp]);
+  const webToDb = await tryImp(['exec', web, '--', 'ping', '-c', '1', '-W', '2', dbIp]);
+  const name = await tryImp(['exec', web, '--', 'nslookup', `${db}.${lab}.internal`]);
 
-  const name = await resolveInImp(web, `${db}.${LAB}.internal`);
-
-  expect(reached).toEqual([false, false]);
-  expect(name).toContain('NXDOMAIN');
+  expect(ended.code).not.toBe('0');
+  expect(ended.resets).toBeGreaterThan(before);
+  expect(dbToWeb.exitCode).not.toBe(0);
+  expect(webToDb.exitCode).not.toBe(0);
+  expect(`${name.stdout}${name.stderr}`).toContain('NXDOMAIN');
 });
 
-test('two networks join a pair; deleting one of them leaves the other', async () => {
-  await runImp('net', 'create', OPS);
-  await runImp('net', 'join', LAB, db);
-  await runImp('net', 'join', OPS, db);
-  await runImp('net', 'join', OPS, web);
-  await runImp('net', 'rm', LAB);
+test('it keeps a pair that two networks join on the other one when one is deleted', async () => {
+  const ctx = await setupTest();
 
-  const stillReached = await tryPing(db, ips.web);
+  const lab = `${ctx.prefix}two-lab`;
+  const ops = `${ctx.prefix}two-ops`;
+  const web = `${ctx.prefix}tweb`;
+  const db = `${ctx.prefix}tdb`;
+
+  await runImp('net', 'create', lab);
+
+  registerRemoval(ctx.stack, config.keep, () => removeNetworkIfPresent(ctx.client, lab));
+
+  await runImp('net', 'create', ops);
+
+  registerRemoval(ctx.stack, config.keep, () => removeNetworkIfPresent(ctx.client, ops));
+
+  await runImp(
+    'new',
+    web,
+    '--image',
+    resolveImageName('e2e-tiny'),
+    '--memory',
+    '256',
+    '--net',
+    lab,
+  );
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, web));
+
+  await runImp('new', db, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, db));
+
+  await waitForExec(web);
+  await waitForExec(db);
+  await holdImp(web);
+  await holdImp(db);
+
+  const webRow = await requireImp(web);
+
+  const webIp = webRow.ip;
+
+  await runImp('net', 'join', lab, db);
+  await runImp('net', 'join', ops, db);
+  await runImp('net', 'join', ops, web);
+  await runImp('net', 'rm', lab);
+
+  const stillReached = await tryImp(['exec', db, '--', 'ping', '-c', '1', '-W', '2', webIp]);
   const listed = await runImp('net', 'ls', '--json');
 
-  await runImp('net', 'rm', OPS);
+  await runImp('net', 'rm', ops);
 
-  const parted = await tryPing(db, ips.web);
+  const parted = await tryImp(['exec', db, '--', 'ping', '-c', '1', '-W', '2', webIp]);
 
-  expect(stillReached).toBeTrue();
-  expect(JSON.parse(listed)).toEqual([expect.objectContaining({ name: OPS, imps: [db, web] })]);
-  expect(parted).toBeFalse();
+  expect(stillReached.exitCode).toBe(0);
+  expect(JSON.parse(listed)).toMatchObject([{ name: ops, imps: [db, web] }]);
+  expect(parted.exitCode).not.toBe(0);
 });

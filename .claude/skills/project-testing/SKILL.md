@@ -154,9 +154,9 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    the baseline. After a journey that failed, and before that reset, it reboots the instance with
    the run's settings (`scripts/dev.sh reboot`), since the journey may have left impd rebooted onto
    its own; an interrupted run skips that reboot, runs no more journeys, and fails the suite whose
-   journeys it skipped. `scale` keeps its imps when `restart` runs after it, and `restart`'s first
-   reset takes them; then `scale` gets neither the reset nor the reboot, even when it fails, so
-   `restart` runs on whatever `scale` left. A journey whose process cannot start, or whose checks
+   journeys it skipped. A passing `scale` keeps its imps when `restart` runs after it, and
+   `restart`'s first reset takes them; a failed `scale`, or one with no `restart` after it, gets the
+   reboot and reset like any other suite. A journey whose process cannot start, or whose checks
    throw, fails like one that exits non-zero, and the run goes on. A reset or reboot that fails
    fails the suite, and the harness then makes the instance anew (the `--clean` reset below, then up
    with the run's settings, privilege check, token and fixture images) before the next journey; if
@@ -173,12 +173,32 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    reboots onto them (`scripts/dev.sh reboot` with that environment) before the first journey and
    again after any fresh instance; the reboot after a failed journey goes onto them too. After the
    last journey, a failure or an interrupt it reboots back onto the run's settings, under `--keep`
-   and for `scale` too. A read that throws fails the suite with no reboot and no journey; a reboot
-   onto the settings that fails runs no more of its journeys, fails the suite and still reboots
-   back; a reboot back that fails fails the suite and makes the instance anew, unless the run was
-   interrupted, and the run stops if that fails. A suite without `settings` never reboots a passing
-   run, so a `--reuse` instance keeps its own settings until a suite with `settings` or a failure
-   reboots it onto the run's.
+   too. A passing `scale` with `restart` after it is the exception: the instance stays on scale's
+   settings, so `restart` re-adopts the fleet still running under scale's 600 s idle timeout (a
+   reboot would sleep every VM), and the reboot back comes after `restart`'s last journey, or at
+   once when an interrupt stops the run before `restart`. A read that throws fails the suite with no
+   reboot and no journey; a reboot onto the settings that fails runs no more of its journeys, fails
+   the suite and still reboots back; a reboot back that fails fails the suite and makes the instance
+   anew, unless the run was interrupted, and the run stops if that fails. A suite without `settings`
+   never reboots a passing run, so a `--reuse` instance keeps its own settings until a suite with
+   `settings` or a failure reboots it onto the run's.
+
+   A suite's `fixtures` name what runs beside the instance for all its journeys: `host-b`, the moves
+   suites' second instance on a Docker network, or `host-b-tailnet`, the same on the tailnet under
+   its own name (`buildHostBFixture` in `test/e2e/lib/move-hosts.ts`, with the options of
+   `readMoveOptions`). The harness starts a fixture before the suite's first journey and before the
+   reboot onto its settings, since the instance joins the fixture's network; after each journey,
+   once the instance's reset is done, it resets the fixture (`resetBaseline` on B with the suite's
+   prefix, which ends any move a journey left first); and after the reboot back it stops it. A
+   fixture that will not start fails the suite with no journey; one whose reset fails goes down and
+   up anew and fails the suite, and since B's stop takes A off its network, the next journey first
+   reboots onto the suite's settings again; one that cannot come back runs no more of the suite's
+   journeys; one that will not stop fails the suite. An interrupt skips the fixture's reset and
+   still stops it, and `--keep` skips the reset only. A `receiving` imp on B, which `moves.abort`
+   does not end and impd will not remove (`MOVING`), fails B's reset, so B falls back to being made
+   anew; B keeps its data dir, and its impd drops at start only a staged imp whose stream was cut
+   short, so one that already holds a receipt fails the reset again and the suite runs no more
+   journeys.
 
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
@@ -200,19 +220,21 @@ image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in co
 test runs them on a real pool.
 
 The baseline reset, `resetBaseline` in `test/e2e/lib/reset-baseline.ts`, takes impd's client
-(`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It removes
-every imp named with one, and with it the imp's checkpoints, leases and the grants it holds; then
-the networks, secrets, OAuth clients, tokens, and images and templates named with one; then
-`<IMP_DEV_DATA>/broker-test-upstreams.json`. A fixture image (`e2e-<fixture>-<hash>`) carries no
-suite prefix and stays. A removal impd refuses, such as an image another imp boots, rejects the
-reset. `reset-baseline.test.ts` boots impd's real app (`createImpd` on the stub VMM) in process,
-makes each of those kinds, resets, and reads every list back before and after; it also checks that
-an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) and an unprefixed OAuth client
-stay, and that it removes an imp a failed boot left in `error`. Sessions and services are not
-proven: making either needs a guest agent, which the stub VMM has no stand-in for. What the reset
-does not cover: the instance's own settings (the reboot after a failure restores those), the `moves`
-suites' second host (`removeMoveLeftovers` at the end of a run that includes them), and a registry
-container or SSH key a suite file made.
+(`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It first ends
+the move of each such imp that a failed move left marked (`moves.abort`), since impd refuses to
+remove a marked imp with `MOVING`; an abort that cannot reach the move's target rejects the reset.
+It then removes every imp named with one, and with it the imp's checkpoints, leases and the grants
+it holds; then the networks, secrets, OAuth clients, tokens, and images and templates named with
+one; then `<IMP_DEV_DATA>/broker-test-upstreams.json`. A fixture image (`e2e-<fixture>-<hash>`)
+carries no suite prefix and stays. A removal impd refuses, such as an image another imp boots,
+rejects the reset. `reset-baseline.test.ts` boots impd's real app (`createImpd` on the stub VMM) in
+process, makes each of those kinds, resets, and reads every list back before and after; it also
+checks that an unprefixed name, a near-miss prefix (`e2e-xy-` against `e2e-x-`) and an unprefixed
+OAuth client stay, and that it removes an imp a failed boot left in `error`. Sessions and services
+are not proven: making either needs a guest agent, which the stub VMM has no stand-in for. What the
+reset does not cover: the instance's own settings (the reboot after a failure restores those), the
+`moves` suites' second host (its fixture resets it, step 5, and `removeMoveLeftovers` takes it down
+at the end of a run that includes them), and a registry container or SSH key a suite file made.
 
 A journey file releases what it makes itself, in the order the scenario needs: its `setupTest()`
 creates one `AsyncDisposableStack`, registers `onTestFinished(() => stack.disposeAsync())`, and
@@ -220,25 +242,52 @@ returns it with the run's client (`createInstanceClient`) and the suite's prefix
 in `suites.ts`). The test registers each removal on the line after the act that made the thing, with
 `registerRemoval(stack, config.keep, remove)` (`register-removal.ts`):
 `removeImpIfPresent(client, name)` after `imp new`, before the exec wait, and
-`removeImageIfPresent(client, name)` after `imp template create` (both in `reset-baseline.ts`), so
-an imp goes before the template it boots. Each passes over a name the journey already removed and
-throws on any other refusal; `reset-baseline.test.ts` checks both against the in-process impd. Under
-`--keep` (`E2E_KEEP=1`) `registerRemoval` defers nothing, so the journey's imps and images stay, as
-the harness's resets and end-of-run cleanup also skip; other releases, such as a proxy process or a
-held socket, still run.
+`removeImageIfPresent(client, name)` after `imp template create`, and `removeTokenIfPresent`,
+`removeSecretIfPresent` and `removeNetworkIfPresent` after `imp token new`, `imp secret add` and
+`imp net create` (all in `reset-baseline.ts`), so an imp goes before the template it boots and the
+network it joins. Each passes over a name the journey already removed and throws on any other
+refusal; `reset-baseline.test.ts` checks each against the in-process impd. `scale` registers no
+removal for its fleet, which the harness keeps for `restart` (step 5): the one exception to a
+journey's own removals, kept because GEO-135's decision 1 retains "the ordered full-acceptance
+scale/restart dependency". Under `--keep` (`E2E_KEEP=1`) `registerRemoval` defers nothing, so the
+journey's imps and images stay, as the harness's resets and end-of-run cleanup also skip; other
+releases, such as a proxy process or a held socket, still run.
 
 A burst of connections past a guest server's accept backlog (busybox `httpd` on `e2e-tiny`) leaves
 some that the agent's dial completed but the server never accepted; the guest kernel logs
 `Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
 `the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
 `nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
-`templates`, `offsets` and the four `proxy-*` files work this way. The other suite files still read
+`templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent`,
+`reverse`, `services`, `sessions`, `session-logs`, `ssh-wake`, `proxy-wake`, the two `sleep-*`
+files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files, the three
+`registry-*` files, the eight `moves-*` files and the two `moves-tailnet-*` files work this way.
+`registry`, `scale`, `tailscale` and the two moves suites take their impd settings from the suite's
+`settings`, and the moves journeys read their host B from the harness's fixture with `readMoveHosts`
+(step 5); each makes and removes its own imps on both hosts. A journey that reboots the instance
+onto settings only it needs, as `tailscale-names` does, passes them over its suite's own
+(`readSuiteSettings` in `suites.ts`) to `runDevScript('reboot', …)`, and defers a reboot back onto
+the suite's settings, so the journeys after it still run on them. The other suite files still read
 their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
 rely on the harness's reset after them.
 
+Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
+`<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`
+(`buildHostModeProxyArgv` in `test/e2e/lib/host-mode-proxy.ts`), and removes both when it ends. A
+unix socket path holds 107 bytes, which a worktree's `.cache/e2e/ssh-*` dir can pass, so `ssh-agent`
+keeps its ssh control and forward sockets, and `ssh` its forward sockets, in a `mkdtemp` dir under
+`TMPDIR`, and `startLocalSshAgent` (`test/e2e/lib/ssh.ts`) makes its agent's socket in one of its
+own there, which its dispose removes. A journey that checks something keeps an imp awake past the
+idle timeout waits with `waitAwakePastIdle` (`test/e2e/lib/awake-past-idle.ts`): the idle loop moves
+an imp's `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
+`lastActiveAt` reaches the idle timeout past the release has stayed awake that long; its wake count
+and `sleptAt` must stay as the wait first read them once the imp ran, so a sleep and a wake in
+between fail it. The wait polls `imp ls`, which records no activity, so the journey must not exec in
+the imp during it.
+
 A journey file also runs alone against an instance that is up:
-`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`. Nothing then resets the
-baseline or builds missing fixture images for it. `runDevScript` passes the run's
+`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep-memory.e2e.ts`. Nothing then resets
+the baseline or builds missing fixture images for it. `runDevScript` passes the run's
 `IMP_RAM_BUDGET_MIB` and `IMP_IDLE_TIMEOUT_S` (from `config.ts`) under whatever `process.env` sets:
 a suite that reboots the instance onto its own tuning sets them in `process.env`, and that must win.
 So a shell's `IMP_RAM_BUDGET_MIB` or `IMP_IDLE_TIMEOUT_S` wins when a suite file runs alone; through
@@ -802,5 +851,11 @@ file leaves every host on its real origin.
   removes a `<host>:*` directory only when its owner file parses and its pid's start time is not the
   recorded one (the process is gone, or its pid now names another). A directory with no owner file,
   one that does not parse, one that records no start time, and one whose owner still runs all stay,
-  and `mkdir` then refuses the last three if they hold the same port. The suite still removes stale
-  registry containers by the name pattern `e2e-reg-registry-`.
+  and `mkdir` then refuses the last three if they hold the same port. Each `registry-*` journey
+  starts its own registry and trusts its own certificate (`test/e2e/lib/registry-steps.ts`).
+  `startRegistry` refuses a container name already taken before it makes anything, labels the
+  container `imp-e2e-instance=<IMP_DEV_NAME>`, and defers its removal into the journey's stack once
+  `docker run` succeeds; `createMovedTag` defers each tag's removal as soon as the tag exists. Each
+  journey first runs `removeStaleRegistries`, which removes only the containers named
+  `e2e-reg-registry-*` that carry this instance's label, and logs and leaves the rest.
+  `registry-steps.test.ts` runs these against a stub `docker` on `PATH`.

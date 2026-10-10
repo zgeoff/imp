@@ -20,7 +20,8 @@ import {
   runCommand,
   runDevScript,
 } from './lib/instance';
-import { removeMoveLeftovers } from './lib/move-hosts';
+import { buildHostBFixture, readMoveOptions, removeMoveLeftovers } from './lib/move-hosts';
+import type { HostBFixture } from './lib/move-hosts';
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
@@ -29,7 +30,13 @@ import { resetBaseline } from './lib/reset-baseline';
 import { runSuite, stopSuiteGroup } from './lib/run-suite';
 import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
-import { FAST_GROUPS, SUITES, buildJourneyArgv, listJourneys } from './lib/suites';
+import {
+  FAST_GROUPS,
+  SUITES,
+  buildJourneyArgv,
+  listJourneys,
+  readSuiteSettings,
+} from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
 import { resolveWipeTarget } from './lib/wipe-target';
 import type { WipeTarget } from './lib/wipe-target';
@@ -376,6 +383,20 @@ function formatSection(section: Section): string {
   return `[${String(section.index)}] ${section.name.padEnd(12)} ${section.verdict} ${(section.ms / 1000).toFixed(1).padStart(7)} s`;
 }
 
+// a host-B fixture as its suite runs it: B's options, and the suite's prefix
+// for B's reset
+function readHostBFixture(fixture: string): HostBFixture {
+  for (const suite of SUITES) {
+    const name = suite.fixtures?.find((candidate) => candidate === fixture);
+
+    if (name !== undefined) {
+      return buildHostBFixture(readMoveOptions(name), suite.prefix);
+    }
+  }
+
+  throw new Error(`no suite runs the fixture ${fixture}`);
+}
+
 // impd's default and base images stay
 async function removeLeftovers(suites: readonly string[]): Promise<void> {
   console.log('== cleanup');
@@ -520,10 +541,13 @@ async function main(): Promise<number> {
       checkJourney: (suite, journey) =>
         checkNoBootFallbacks(suite, startedAt.get(journey) ?? new Date()),
       reset: resetSuites,
-      settingsOf: (name) =>
-        SUITES.find((suite) => suite.name === name)?.settings?.(instance) ?? null,
+      settingsOf: (name) => readSuiteSettings(name, instance),
       rebootOnto: (settings) => runDevScript('reboot', instance, settings),
       reboot: () => runDevScript('reboot'),
+      fixturesOf: (name) => SUITES.find((suite) => suite.name === name)?.fixtures ?? [],
+      startFixture: (fixture) => readHostBFixture(fixture).start(),
+      resetFixture: (fixture) => readHostBFixture(fixture).reset(),
+      stopFixture: (fixture) => readHostBFixture(fixture).stop(),
 
       // a fresh instance: the container and data dir go, and come back
       // with the run's settings, baseline and images

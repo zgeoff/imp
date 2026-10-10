@@ -16,6 +16,9 @@ export interface Terminal {
   // what the terminal showed so far, without carriage returns
   readonly readOutput: () => string;
   readonly exited: Promise<number>;
+
+  // kills the command, once it has exited too; safe after it exited
+  readonly close: () => Promise<void>;
 }
 
 const DEFAULT_SIZE = { cols: 80, rows: 24 } as const;
@@ -80,5 +83,10 @@ export function openCommandTerminal(
       ),
     readOutput,
     exited,
+    close: async () => {
+      proc.kill();
+
+      await exited;
+    },
   };
 }

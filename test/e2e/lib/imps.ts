@@ -43,6 +43,24 @@ export function readGuestFile(name: string, path: string): Promise<string> {
   return runShellInImp(name, `cat ${path} 2>/dev/null || echo none`);
 }
 
+// a guest script that prints `gone` once nothing is at `path`, a socket
+// included, and `there` while something is
+export function buildPathGoneCheck(path: string): string {
+  return `if [ -e '${path}' ]; then echo there; else echo gone; fi`;
+}
+
+// waits until nothing is at `path` in the imp, such as a socket a forward or
+// a connection made and must remove once it ends
+export async function waitForGuestPathGone(name: string, path: string): Promise<void> {
+  await waitFor(`${path} to go`, async () => {
+    const state = await runShellInImp(name, buildPathGoneCheck(path));
+
+    if (state !== 'gone') {
+      throw new Error(`${path} is still there`);
+    }
+  });
+}
+
 export interface GuestIdentity {
   readonly machineId: string;
 
