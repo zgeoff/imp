@@ -220,20 +220,26 @@ returns it with the run's client (`createInstanceClient`) and the suite's prefix
 in `suites.ts`). The test registers each removal on the line after the act that made the thing, with
 `registerRemoval(stack, config.keep, remove)` (`register-removal.ts`):
 `removeImpIfPresent(client, name)` after `imp new`, before the exec wait, and
-`removeImageIfPresent(client, name)` after `imp template create` (both in `reset-baseline.ts`), so
-an imp goes before the template it boots. Each passes over a name the journey already removed and
-throws on any other refusal; `reset-baseline.test.ts` checks both against the in-process impd. Under
-`--keep` (`E2E_KEEP=1`) `registerRemoval` defers nothing, so the journey's imps and images stay, as
-the harness's resets and end-of-run cleanup also skip; other releases, such as a proxy process or a
-held socket, still run.
+`removeImageIfPresent(client, name)` after `imp template create`, and `removeTokenIfPresent`,
+`removeSecretIfPresent` and `removeNetworkIfPresent` after `imp token new`, `imp secret add` and
+`imp net create` (all in `reset-baseline.ts`), so an imp goes before the template it boots and the
+network it joins. Each passes over a name the journey already removed and throws on any other
+refusal; `reset-baseline.test.ts` checks each against the in-process impd. `scale` registers no
+removal for its fleet, which the harness keeps for `restart` (step 5). Under `--keep` (`E2E_KEEP=1`)
+`registerRemoval` defers nothing, so the journey's imps and images stay, as the harness's resets and
+end-of-run cleanup also skip; other releases, such as a proxy process or a held socket, still run.
 
 A burst of connections past a guest server's accept backlog (busybox `httpd` on `e2e-tiny`) leaves
 some that the agent's dial completed but the server never accepted; the guest kernel logs
 `Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
 `the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
 `nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
-`templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent` and
-`reverse` work this way. The other suite files still read their prefix through `setupSuite` in
+`templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent`,
+`reverse`, `services`, `sessions`, `session-logs`, `ssh-wake`, `proxy-wake`, the two `sleep-*`
+files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files and the two
+`moves-tailnet-*` files work this way. A journey that reboots the instance onto settings of its own
+sets them with `updateEnv` and defers a reboot back, which runs after the preload has restored the
+env. The other suite files still read their prefix through `setupSuite` in
 `test/e2e/lib/setup-suite.ts`, which registers no hooks, and rely on the harness's reset after them.
 
 Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
@@ -248,8 +254,8 @@ past the release has stayed awake that long. The wait polls `imp ls`, which reco
 the journey must not exec in the imp during it.
 
 A journey file also runs alone against an instance that is up:
-`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`. Nothing then resets the
-baseline or builds missing fixture images for it. `runDevScript` passes the run's
+`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep-memory.e2e.ts`. Nothing then resets
+the baseline or builds missing fixture images for it. `runDevScript` passes the run's
 `IMP_RAM_BUDGET_MIB` and `IMP_IDLE_TIMEOUT_S` (from `config.ts`) under whatever `process.env` sets:
 a suite that reboots the instance onto its own tuning sets them in `process.env`, and that must win.
 So a shell's `IMP_RAM_BUDGET_MIB` or `IMP_IDLE_TIMEOUT_S` wins when a suite file runs alone; through

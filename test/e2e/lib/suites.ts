@@ -42,7 +42,12 @@ export const SUITES: readonly Suite[] = [
   },
   { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
-  { name: 'tailscale', prefix: 'e2e-ts-', images: ['e2e-tiny'] },
+  {
+    name: 'tailscale',
+    prefix: 'e2e-ts-',
+    images: ['e2e-tiny'],
+    journeys: ['tailscale-reach', 'tailscale-identities', 'tailscale-names'],
+  },
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
   { name: 'mcp-oauth', prefix: 'e2e-oa-', images: ['e2e-tiny'] },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
@@ -86,7 +91,12 @@ export const SUITES: readonly Suite[] = [
   // a second instance beside the run's: over a Docker network, then over
   // the tailnet; each reboots the instance onto the network and back
   { name: 'moves', prefix: 'e2e-mv-', images: ['e2e-tiny', 'base'] },
-  { name: 'moves-tailnet', prefix: 'e2e-mvt-', images: ['e2e-tiny'] },
+  {
+    name: 'moves-tailnet',
+    prefix: 'e2e-mvt-',
+    images: ['e2e-tiny'],
+    journeys: ['moves-tailnet-peer', 'moves-tailnet-names'],
+  },
 
   // kills impd, Firecracker and the container; reboots the instance
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
