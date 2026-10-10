@@ -154,9 +154,9 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    the baseline. After a journey that failed, and before that reset, it reboots the instance with
    the run's settings (`scripts/dev.sh reboot`), since the journey may have left impd rebooted onto
    its own; an interrupted run skips that reboot, runs no more journeys, and fails the suite whose
-   journeys it skipped. `scale` keeps its imps when `restart` runs after it, and `restart`'s first
-   reset takes them; then `scale` gets neither the reset nor the reboot, even when it fails, so
-   `restart` runs on whatever `scale` left. A journey whose process cannot start, or whose checks
+   journeys it skipped. A passing `scale` keeps its imps when `restart` runs after it, and
+   `restart`'s first reset takes them; a failed `scale`, or one with no `restart` after it, gets the
+   reboot and reset like any other suite. A journey whose process cannot start, or whose checks
    throw, fails like one that exits non-zero, and the run goes on. A reset or reboot that fails
    fails the suite, and the harness then makes the instance anew (the `--clean` reset below, then up
    with the run's settings, privilege check, token and fixture images) before the next journey; if

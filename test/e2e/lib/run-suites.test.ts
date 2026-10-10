@@ -283,7 +283,7 @@ test('#runSuites leaves scale’s imps for restart, whose reset takes them', asy
   expect(ctx.steps).toStrictEqual(['reset e2e-restart-,e2e-scale-', 'reset e2e-tailscale-']);
 });
 
-test('#runSuites neither reboots nor resets after scale fails when restart runs next', async () => {
+test('#runSuites reboots and resets after scale fails, so restart runs without its imps', async () => {
   const ctx = setupTest();
 
   const outcome = await runSuites({
@@ -305,8 +305,72 @@ test('#runSuites neither reboots nor resets after scale fails when restart runs 
     },
   });
 
-  expect(ctx.steps).toStrictEqual(['run scale', 'run restart', 'reset e2e-restart-,e2e-scale-']);
+  expect(ctx.steps).toStrictEqual([
+    'run scale',
+    'reboot',
+    'reset e2e-scale-',
+    'run restart',
+    'reset e2e-restart-',
+  ]);
+
   expect(outcome.results.map((result) => result.passed)).toStrictEqual([false, true]);
+});
+
+test('#runSuites resets scale after its checks fail when restart runs next', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['scale', 'restart'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: () => null,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: (suite) => Promise.resolve(suite !== 'scale'),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'run scale',
+    'reset e2e-scale-',
+    'run restart',
+    'reset e2e-restart-',
+  ]);
+});
+
+test('#runSuites keeps a passing scale’s imps on its own settings for restart, and reboots back onto the run’s', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['scale', 'restart'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'scale' ? { IMP_IDLE_TIMEOUT_S: '600' } : null),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_IDLE_TIMEOUT_S":"600"}',
+    'run scale',
+    'reboot',
+    'run restart',
+    'reset e2e-restart-,e2e-scale-',
+  ]);
 });
 
 test('#runSuites resets scale after it when restart is not in the run', async () => {

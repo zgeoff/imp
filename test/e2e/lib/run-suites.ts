@@ -73,10 +73,9 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
     const isKeptForRestart = name === 'scale' && deps.names.includes('restart');
     const prefixes = [prefix, ...carried];
 
-    // a suite kept for restart is never reset here, so a fresh instance
-    // never has a carry to drop
-    carried = isKeptForRestart ? [prefix] : [];
-
+    // only a passing scale is kept for restart, which takes its imps with its
+    // own reset; a failed one is reset here like any other suite
+    let isKept = false;
     let isPassed = true;
     let stoppedBecause: string | null = null;
 
@@ -118,9 +117,11 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
 
       const verdict = await runChecked(deps, name, journey);
 
+      isKept = isKeptForRestart && verdict.isPassed && verdict.isClean;
+
       const isRestored = await resetAfterJourney(deps, journey, verdict.isPassed, {
         prefixes,
-        isSkipped: deps.keep || isKeptForRestart,
+        isSkipped: deps.keep || isKept,
         reboot: ownSettings === null ? deps.reboot : () => deps.rebootOnto(ownSettings),
       });
 
@@ -142,6 +143,8 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
         break;
       }
     }
+
+    carried = isKept ? [prefix] : [];
 
     if (isOffRunSettings && stoppedBecause === null) {
       const restored = await resetRunSettings(deps, name);
