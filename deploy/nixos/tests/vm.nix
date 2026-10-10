@@ -225,11 +225,18 @@ pkgs.testers.runNixOSTest {
           return f"{where} timeout 5 bash -c 'exec 3<>/dev/tcp/{addr}/{port}'"
 
       # Every firewall here drops what it does not admit (policy drop, no
-      # reject), so a dropped connection hangs until timeout ends it with 124;
-      # a refusal or a broken command exits with another status.
-      def dropped(machine, command):
+      # reject), so a dropped connection hangs until `timeout` ends it; a
+      # refusal (bash exits 1) or a broken command exits with another status.
+      # On the nodes `timeout` is GNU coreutils', which exits 124.
+      TIMED_OUT_ON_NODE = 124
+      # The stand-in image's `timeout` is busybox's (it has no coreutils): it
+      # execs the command itself and kills it with SIGTERM, so docker exec
+      # reports 128 + 15.
+      TIMED_OUT_IN_CONTAINER = 143
+
+      def dropped(machine, command, timed_out):
           status, out = machine.execute(command)
-          assert status == 124, f"{command} exited {status}, not 124 (dropped): {out}"
+          assert status == timed_out, f"{command} exited {status}, not {timed_out} (dropped): {out}"
 
       with subtest("own: SSH connects through the imp table, another port is dropped"):
           own.wait_for_unit("imp-firewall.service")
@@ -238,7 +245,7 @@ pkgs.testers.runNixOSTest {
           own.succeed("systemd-run --unit=listen9999 nc -lk 9999")
           own.wait_for_open_port(9999)
           host.succeed("nc -z -w 5 own 22")
-          dropped(host, connect("", "own", 9999))
+          dropped(host, connect("", "own", 9999), TIMED_OUT_ON_NODE)
           own.succeed("systemctl stop listen9999")
 
       with subtest("without the pool, imp-host does not start"):
@@ -326,16 +333,16 @@ pkgs.testers.runNixOSTest {
               host.succeed(connect("", addr, 22))
           host.succeed(connect(container, own4, 22))
           host.succeed(connect(container, own6, 22))
-          dropped(host, connect(container, "10.99.0.1", 22))
-          dropped(host, connect(container, "fd99::1", 22))
+          dropped(host, connect(container, "10.99.0.1", 22), TIMED_OUT_IN_CONTAINER)
+          dropped(host, connect(container, "fd99::1", 22), TIMED_OUT_IN_CONTAINER)
           # without the module's forward rule, egress stops: the test covers the filter
           chain = "nft -a list chain inet nixos-fw forward-allow"
           rule = f"{chain} | sed -n \"s/.*imp: imp-host's egress.*# handle //p\""
           handle = host.succeed(rule).strip()
           assert handle, host.succeed(chain)
           host.succeed(f"nft delete rule inet nixos-fw forward-allow handle {handle}")
-          dropped(host, connect(container, own4, 22))
-          dropped(host, connect(container, own6, 22))
+          dropped(host, connect(container, own4, 22), TIMED_OUT_IN_CONTAINER)
+          dropped(host, connect(container, own6, 22), TIMED_OUT_IN_CONTAINER)
           # the restore: the rule is back, and egress goes again
           host.succeed("systemctl restart nftables")
           assert host.succeed(rule).strip(), host.succeed(chain)
@@ -352,7 +359,7 @@ pkgs.testers.runNixOSTest {
           for family in ["", "-6"]:
               gateway = host.succeed(f"docker exec imp-host ip {family} route show default | awk '/^default/ {{print $3; exit}}'").strip()
               host.succeed(connect(container, gateway, 9998))
-              dropped(host, connect(container, gateway, 9999))
+              dropped(host, connect(container, gateway, 9999), TIMED_OUT_IN_CONTAINER)
           host.succeed("systemctl stop listen9998 listen9999")
 
       with subtest("a proxy stop leaves imp-host running"):

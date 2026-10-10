@@ -357,9 +357,10 @@ The flake's two checks test `deploy/nixos/module.nix`:
   on its fresh node; then the host's first start; then the checks of that started host, where each
   scenario that changes the host (the forward rule, the listeners, the proxy stop, IPv6 off and on)
   restores it and checks the restore; then the rest of the Tailscale join journey, whose steps
-  depend on each other. A dropped connection is `timeout 5`'s exit 124, since every firewall there
-  drops without a reject. The driver's `fail` is kept for a refusal whose cause the subtest checks
-  another way, such as the journal.
+  depend on each other. Every firewall there drops without a reject, so a dropped connection is the
+  `timeout 5` exit: 124 on a node (GNU coreutils), and 143 inside the stand-in image, whose busybox
+  `timeout` execs the command and kills it with SIGTERM. The driver's `fail` is kept for a refusal
+  whose cause the subtest checks another way, such as the journal.
 
 `.github/workflows/nix.yml` checks the format with `nix fmt -- --check` and builds each check in its
 own job; the `vm` job opens `/dev/kvm` to the builders. The local `nixfmt` must be the pinned
