@@ -50,18 +50,21 @@ test('it installs the latest release after checking its checksum and provenance'
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    [
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: [
       'imp: downloading imp-linux-x64 v1.2.3',
       'imp: provenance verified',
       `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
       `imp: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
-  );
-
-  expect(result.stderr.toString()).toBe('');
-  expect(result.exitCode).toBe(0);
+    stderr: '',
+    exitCode: 0,
+  });
 
   expect(releases.requests).toStrictEqual([
     '/latest',
@@ -104,17 +107,16 @@ test('it installs the release IMP_INSTALL_VERSION names without asking for the l
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    [
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
+    stdout: [
       'imp: downloading imp-linux-x64 v1.0.0',
       'imp: provenance verified',
       `imp: installed 1.0.0 to ${ctx.dir}/install/imp`,
       `imp: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
-  );
-
-  expect(result.exitCode).toBe(0);
+    exitCode: 0,
+  });
 
   expect(releases.requests).toStrictEqual([
     '/download/v1.0.0/imp-linux-x64',
@@ -148,17 +150,16 @@ test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () 
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    [
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
+    stdout: [
       'imp: downloading imp-linux-x64 v1.0.0',
       'imp: provenance verified',
       `imp: installed 1.0.0 to ${ctx.dir}/install/imp`,
       `imp: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
-  );
-
-  expect(result.exitCode).toBe(0);
+    exitCode: 0,
+  });
 
   expect(releases.requests).toStrictEqual([
     '/download/v1.0.0/imp-linux-x64',
@@ -195,17 +196,20 @@ test('it installs without a provenance check when gh is not on PATH', async () =
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    [
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: [
       'imp: downloading imp-linux-x64 v1.2.3',
       `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
       `imp: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
-  );
-
-  expect(result.stderr.toString()).toBe('');
-  expect(result.exitCode).toBe(0);
+    stderr: '',
+    exitCode: 0,
+  });
 });
 
 test('it checks the binary with shasum when sha256sum is not on PATH', async () => {
@@ -270,16 +274,15 @@ test('it leaves out the PATH hint when the install dir is already on PATH', asyn
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    [
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
+    stdout: [
       'imp: downloading imp-linux-x64 v1.2.3',
       'imp: provenance verified',
       `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
       '',
     ].join('\n'),
-  );
-
-  expect(result.exitCode).toBe(0);
+    exitCode: 0,
+  });
 });
 
 test('it installs the binary for the platform uname names', async () => {
@@ -336,13 +339,16 @@ test('it installs nothing when the binary does not match SHA256SUMS', async () =
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('imp: downloading imp-linux-x64 v1.2.3\n');
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
+    stderr: 'imp: imp-linux-x64 does not match SHA256SUMS for v1.2.3; nothing installed\n',
+    exitCode: 1,
+  });
 
-  expect(result.stderr.toString()).toBe(
-    'imp: imp-linux-x64 does not match SHA256SUMS for v1.2.3; nothing installed\n',
-  );
-
-  expect(result.exitCode).toBe(1);
   expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
 });
 
@@ -371,9 +377,16 @@ test('it installs nothing when SHA256SUMS lists no binary for the platform', asy
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('imp: downloading imp-linux-x64 v1.2.3\n');
-  expect(result.stderr.toString()).toBe('imp: SHA256SUMS for v1.2.3 lists no imp-linux-x64\n');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
+    stderr: 'imp: SHA256SUMS for v1.2.3 lists no imp-linux-x64\n',
+    exitCode: 1,
+  });
+
   expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
 });
 
@@ -402,13 +415,17 @@ test('it installs nothing when the provenance check fails', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('imp: downloading imp-linux-x64 v1.2.3\n');
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
+    stderr:
+      'imp: could not verify provenance of imp-linux-x64 from zgeoff/imp; nothing installed\n',
+    exitCode: 1,
+  });
 
-  expect(result.stderr.toString()).toBe(
-    'imp: could not verify provenance of imp-linux-x64 from zgeoff/imp; nothing installed\n',
-  );
-
-  expect(result.exitCode).toBe(1);
   expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
 });
 
@@ -438,18 +455,22 @@ test('it skips the provenance check when gh is not logged in', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    [
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: [
       'imp: downloading imp-linux-x64 v1.2.3',
       'imp: gh is not logged in; skipped the provenance check',
       `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
       `imp: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
-  );
+    stderr: '',
+    exitCode: 0,
+  });
 
-  expect(result.stderr.toString()).toBe('');
-  expect(result.exitCode).toBe(0);
   expect(gh.readCalls()).toStrictEqual(['auth status']);
 });
 
@@ -478,12 +499,15 @@ test('it fails the install when the binary does not run', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe(
-    'imp: downloading imp-linux-x64 v1.2.3\nimp: provenance verified\n',
-  );
-
-  expect(result.stderr.toString()).toBe('');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: 'imp: downloading imp-linux-x64 v1.2.3\nimp: provenance verified\n',
+    stderr: '',
+    exitCode: 1,
+  });
 });
 
 test('it fails when the repo has no release', async () => {
@@ -503,9 +527,15 @@ test('it fails when the repo has no release', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('');
-  expect(result.stderr.toString()).toBe(`imp: no release found at ${releases.url} (got '')\n`);
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: '',
+    stderr: `imp: no release found at ${releases.url} (got '')\n`,
+    exitCode: 1,
+  });
 });
 
 test('it fails when the releases page does not answer', async () => {
@@ -525,9 +555,15 @@ test('it fails when the releases page does not answer', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('');
-  expect(result.stderr.toString()).toEndWith('imp: cannot reach http://127.0.0.1:1/latest\n');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: '',
+    stderr: expect.toEndWith('imp: cannot reach http://127.0.0.1:1/latest\n'),
+    exitCode: 1,
+  });
 });
 
 test('it fails when the release has no binary to download', async () => {
@@ -551,9 +587,15 @@ test('it fails when the release has no binary to download', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('imp: downloading imp-linux-x64 v1.2.3\n');
-  expect(result.stderr.toString()).toEndWith('imp: cannot download imp-linux-x64 v1.2.3\n');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
+    stderr: expect.toEndWith('imp: cannot download imp-linux-x64 v1.2.3\n'),
+    exitCode: 1,
+  });
 });
 
 test('it fails when the release has no SHA256SUMS to download', async () => {
@@ -578,9 +620,15 @@ test('it fails when the release has no SHA256SUMS to download', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('imp: downloading imp-linux-x64 v1.2.3\n');
-  expect(result.stderr.toString()).toEndWith('imp: cannot download SHA256SUMS for v1.2.3\n');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
+    stderr: expect.toEndWith('imp: cannot download SHA256SUMS for v1.2.3\n'),
+    exitCode: 1,
+  });
 });
 
 test('it fails on a system it has no binary for', async () => {
@@ -599,9 +647,11 @@ test('it fails on a system it has no binary for', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('');
-  expect(result.stderr.toString()).toBe('imp: no binary for FreeBSD\n');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({ stdout: '', stderr: 'imp: no binary for FreeBSD\n', exitCode: 1 });
 });
 
 test('it fails on a machine it has no binary for', async () => {
@@ -620,7 +670,9 @@ test('it fails on a machine it has no binary for', async () => {
     .nothrow()
     .quiet();
 
-  expect(result.stdout.toString()).toBe('');
-  expect(result.stderr.toString()).toBe('imp: no binary for riscv64\n');
-  expect(result.exitCode).toBe(1);
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({ stdout: '', stderr: 'imp: no binary for riscv64\n', exitCode: 1 });
 });

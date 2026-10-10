@@ -1,30 +1,21 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCommandLinks } from './create-command-links';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const bin = mkdtempSync(join(tmpdir(), 'create-command-links-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(bin, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    bin,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { bin };
 }
 
 test('it links each named command into the directory', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createCommandLinks({ bin: ctx.bin, names: ['sh', 'cat'] });
 
@@ -32,8 +23,7 @@ test('it links each named command into the directory', () => {
 });
 
 test('it links commands that run with only the directory on PATH', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const note = join(ctx.bin, 'note.txt');
 
   writeFileSync(note, 'linked');
@@ -51,7 +41,7 @@ test('it links commands that run with only the directory on PATH', () => {
 });
 
 test('it rejects a command that is not on PATH', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   expect(() => {
     createCommandLinks({ bin: ctx.bin, names: ['imp-no-such-command'] });

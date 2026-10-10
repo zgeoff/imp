@@ -1,30 +1,21 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStubUname } from './create-stub-uname';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const bin = mkdtempSync(join(tmpdir(), 'stub-uname-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(bin, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    bin,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { bin };
 }
 
 test('it prints the system for -s', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubUname({ bin: ctx.bin, system: 'Darwin', machine: 'arm64' });
 
@@ -32,7 +23,7 @@ test('it prints the system for -s', () => {
 });
 
 test('it prints the machine for -m', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubUname({ bin: ctx.bin, system: 'Darwin', machine: 'arm64' });
 
@@ -40,7 +31,7 @@ test('it prints the machine for -m', () => {
 });
 
 test('it fails for any other flag', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubUname({ bin: ctx.bin, system: 'Darwin', machine: 'arm64' });
 
