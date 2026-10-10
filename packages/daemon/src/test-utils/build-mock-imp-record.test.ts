@@ -47,3 +47,11 @@ test('it grows to its own memory by default', () => {
 
   expect(imp.maxMemoryMib).toBe(imp.memoryMib);
 });
+
+test('it grows to an overridden memory when no maxMemoryMib is given', () => {
+  expect(buildMockImpRecord({ memoryMib: 1024 }).maxMemoryMib).toBe(1024);
+});
+
+test('it merges a partial cpu override into the default cpu', () => {
+  expect(buildMockImpRecord({ cpu: { limit: 2 } }).cpu).toStrictEqual({ limit: 2, weight: 100 });
+});
