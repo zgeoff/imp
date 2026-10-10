@@ -4,160 +4,21 @@ import {
   EXEC_MAX_STDIN_FRAME_BYTES,
   EXEC_STDIN_WINDOW_BYTES,
   EXEC_STDOUT_WINDOW_BYTES,
-  decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
-import type { SessionOutput } from '@imp/api';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
-import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
-import type {
-  AgentAttachRequest,
-  AgentExecRequest,
-  ExecEvent,
-  ExecStream,
-} from '../agent-client/exec-stream';
+import { buildMockSessionOutput } from '../test-utils/build-mock-session-output';
+import { buildStubAgentExecStream } from '../test-utils/build-stub-agent-exec-stream';
+import { buildStubExecBackend } from '../test-utils/build-stub-exec-backend';
+import { buildStubExecSocket } from '../test-utils/build-stub-exec-socket';
 import { createExecSession } from './exec-session';
-import type { ExecBackend } from './exec-session';
 
-interface EventSource {
-  readonly next: () => Promise<ExecEvent>;
-}
-
-// one output chunk, then the connection drops
-async function* readWithoutExit(): AsyncGenerator<ExecEvent, void, undefined> {
-  await Bun.sleep(1);
-
-  yield { type: 'stdout', data: new TextEncoder().encode('partial') };
-}
-
-async function* readUntilEnd(source: EventSource): AsyncGenerator<ExecEvent, void, undefined> {
-  for (;;) {
-    const event = await source.next();
-
-    yield event;
-
-    if (event.type === 'exit' || event.type === 'detached') {
-      return;
-    }
-  }
-}
-
-// an exec stream whose events the test feeds and whose input it records
-function buildFakeStream() {
-  const queue: ExecEvent[] = [];
-  const input: string[] = [];
-  const waiting: { wake: (() => void) | null } = { wake: null };
-
-  const emitEvent = (event: ExecEvent): void => {
-    queue.push(event);
-    waiting.wake?.();
-  };
-
-  const source: EventSource = {
-    next: async () => {
-      for (;;) {
-        const event = queue.shift();
-
-        if (event !== undefined) {
-          return event;
-        }
-
-        await new Promise<void>((resolve) => {
-          waiting.wake = resolve;
-        });
-      }
-    },
-  };
-
-  const stream: ExecStream = {
-    pid: 7,
-    session: null,
-    created: false,
-    groupKill: false,
-    output: null,
-    writeStdin: (data) => {
-      input.push(`stdin:${new TextDecoder().decode(data)}`);
-    },
-    stdinDrained: () => Promise.resolve(),
-    closeStdin: () => {
-      input.push('eof');
-    },
-    resize: (cols, rows) => {
-      input.push(`resize:${String(cols)}x${String(rows)}`);
-    },
-    sendSignal: (signal) => {
-      input.push(`signal:${String(signal)}`);
-    },
-    events: () => readUntilEnd(source),
-    close: () => {
-      input.push('close');
-    },
-  };
-
-  return { stream, input, emitEvent };
-}
-
-// the backend a test passes, with the parts it leaves out failing
-function buildBackend(backend: Partial<ExecBackend>): ExecBackend {
-  return {
-    openExec: () => Promise.reject(new Error('unused')),
-    openAttach: () => Promise.reject(new Error('unused')),
-    recordActivity: () => Promise.resolve(),
-    ...backend,
-  };
-}
-
-// `drops` binary messages after the first `keeps`, as a socket over its
-// backpressure limit does
-function buildFakePeer(keeps = Infinity) {
-  const sent: unknown[] = [];
-  const closes: number[] = [];
-  const binary = { count: 0 };
-
-  return {
-    sent,
-    closes,
-    peer: {
-      sendText: (text: string) => {
-        sent.push(JSON.parse(text));
-      },
-      sendBinary: (data: Uint8Array) => {
-        binary.count += 1;
-
-        if (binary.count > keeps) {
-          return false;
-        }
-
-        const frame = decodeExecFrame(data);
-
-        sent.push([frame.channel, new TextDecoder().decode(frame.data)]);
-
-        return true;
-      },
-      close: (code = 1000) => {
-        closes.push(code);
-      },
-      readBufferedAmount: () => 0,
-    },
-  };
-}
-
-test('it bridges a WebSocket to an agent exec stream', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const requests: AgentExecRequest[] = [];
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: (_name, request) => {
-        requests.push(request);
-
-        return Promise.resolve(fake.stream);
-      },
-    }),
-  );
+test("it opens the exec with the start's argv, env and size", async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
 
   session.handleMessage({
     type: 'start',
@@ -169,204 +30,318 @@ test('it bridges a WebSocket to an agent exec stream', async () => {
     rows: 30,
   });
 
-  // input before `started` waits for the stream
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
+
+  expect(stub.opens).toStrictEqual([
+    {
+      kind: 'exec',
+      name: 'dev',
+      request: { argv: ['sh'], tty: true, env: ['TERM=xterm'], cols: 100, rows: 30 },
+      feature: undefined,
+    },
+  ]);
+});
+
+test('it passes input sent before started to the stream in order', async () => {
+  const fake = buildStubAgentExecStream();
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true });
   session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('ls\n')));
   session.handleMessage({ type: 'resize', cols: 120, rows: 40 });
   session.handleMessage({ type: 'signal', signal: 'SIGINT' });
   session.handleMessage({ type: 'stdin_eof' });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(fake.input).toStrictEqual(['stdin:ls\n', 'resize:120x40', 'signal:2', 'eof']);
+  });
+});
 
+test('it sends the output and the exit to the client, then closes the socket', async () => {
+  const fake = buildStubAgentExecStream();
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true });
   fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('out') });
   fake.emitEvent({ type: 'exit', code: 137, signal: 9 });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
 
-  expect(requests).toEqual([{ argv: ['sh'], tty: true, env: ['TERM=xterm'], cols: 100, rows: 30 }]);
-  expect(fake.input).toEqual(['stdin:ls\n', 'resize:120x40', 'signal:2', 'eof', 'close']);
-
-  expect(peer.sent).toEqual([
+  expect(socket.sent).toStrictEqual([
     { type: 'started', pid: 7 },
     [EXEC_CHANNELS.stdout, 'out'],
     { type: 'exit', code: null, signal: 'SIGKILL' },
   ]);
-
-  expect(peer.closes).toEqual([1000]);
 });
 
-test('it reports an exec that cannot start and closes the socket', async () => {
-  const peer = buildFakePeer();
+test('it closes the stream and records activity once the exec exits', async () => {
+  const fake = buildStubAgentExecStream();
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const session = createExecSession(buildStubExecSocket().peer, stub.backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['true'], tty: false });
+  fake.emitEvent({ type: 'exit', code: 0, signal: 0 });
+
+  await waitFor(() => {
+    expect(stub.activity).toStrictEqual(['dev']);
+  });
+
+  expect(fake.input).toStrictEqual(['close']);
+});
+
+test('it sends an exit code when no signal ended the process', async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: () => Promise.reject(new AgentError('EXEC_FAILED', 'no such file')),
-    }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['false'], tty: false });
+  fake.emitEvent({ type: 'exit', code: 1, signal: 0 });
+
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
+
+  expect(socket.sent.at(-1)).toStrictEqual({ type: 'exit', code: 1, signal: null });
+});
+
+test('it reports an exec that cannot start and closes the socket with 1011', async () => {
+  const stub = buildStubExecBackend({ exec: new AgentError('EXEC_FAILED', 'no such file') });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['nope'], tty: false });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1011]);
+  });
 
-  expect(peer.sent).toEqual([{ type: 'error', code: 'EXEC_FAILED', message: 'no such file' }]);
-  expect(peer.closes).toEqual([1011]);
-});
-
-test('it passes a contract error on with its data', async () => {
-  const peer = buildFakePeer();
-  const data = { budgetMib: 1024, usedMib: 900, requestedMib: 512 };
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: () =>
-        Promise.reject(new ORPCError('RAM_BUDGET_EXCEEDED', { message: 'no room', data })),
-    }),
-  );
-
-  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
-
-  await Bun.sleep(5);
-
-  expect(peer.sent).toEqual([
-    { type: 'error', code: 'RAM_BUDGET_EXCEEDED', message: 'no room', data },
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', code: 'EXEC_FAILED', message: 'no such file' },
   ]);
 });
 
-test('it rejects a control message before start', () => {
-  const peer = buildFakePeer();
+test('it reports a plain failure to start by its message alone', async () => {
+  const stub = buildStubExecBackend({ exec: new Error('dev is stopped') });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
 
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: () => Promise.reject(new Error('unused')),
-    }),
-  );
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
+
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1011]);
+  });
+
+  expect(socket.sent).toStrictEqual([{ type: 'error', message: 'dev is stopped' }]);
+});
+
+test('it passes a contract error on with its data', async () => {
+  const data = { budgetMib: 1024, usedMib: 900, requestedMib: 512 };
+
+  const stub = buildStubExecBackend({
+    exec: new ORPCError('RAM_BUDGET_EXCEEDED', { message: 'no room', data }),
+  });
+
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([
+      { type: 'error', code: 'RAM_BUDGET_EXCEEDED', message: 'no room', data },
+    ]);
+  });
+});
+
+test('it rejects a control message before start', () => {
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
 
   session.handleMessage({ type: 'resize', cols: 1, rows: 1 });
 
-  expect(peer.sent).toEqual([{ type: 'error', message: 'resize before start' }]);
+  expect(socket.sent).toStrictEqual([{ type: 'error', message: 'resize before start' }]);
+  expect(socket.closes).toStrictEqual([1011]);
 });
 
-test('it closes with 1011 when the stream ends without an exit', async () => {
-  const peer = buildFakePeer();
-  const stream: ExecStream = { ...buildFakeStream().stream, events: readWithoutExit };
+test('it rejects a second start on the same socket', () => {
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
+
+  expect(socket.sent).toStrictEqual([{ type: 'error', message: 'exec already started' }]);
+  expect(socket.closes).toStrictEqual([1011]);
+});
+
+test('it reports a message that is not part of the protocol', () => {
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
+
+  session.handleMessage({ type: 'launch', name: 'dev' });
+
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', message: expect.toStartWith('bad exec message: ') },
+  ]);
+
+  expect(socket.closes).toStrictEqual([1011]);
+});
+
+test('it fails a plain exec whose stream ends without an exit', async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: () => Promise.resolve(stream),
-    }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('partial') });
+  fake.drop();
 
-  await Bun.sleep(10);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1011]);
+  });
 
-  expect(peer.closes).toEqual([1011]);
+  expect(socket.sent.at(-1)).toStrictEqual({
+    type: 'error',
+    message: 'the agent connection closed before the process exited',
+  });
 });
 
 test('it reports a malformed binary frame instead of throwing', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: () => Promise.resolve(fake.stream),
-    }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
 
   session.handleMessage(new Uint8Array([]));
 
-  expect(peer.closes).toEqual([1011]);
+  expect(socket.sent.at(-1)).toStrictEqual({
+    type: 'error',
+    message: 'exec frame has an unknown channel byte: undefined',
+  });
+
+  expect(socket.closes).toStrictEqual([1011]);
 });
 
-test('it attaches to a session and ends with detached when taken over', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const requests: AgentAttachRequest[] = [];
-  const stream: ExecStream = { ...fake.stream, session: 'main', created: false };
+test('it closes the stream when the client closes the socket', async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openAttach: (_name, request) => {
-        requests.push(request);
-
-        return Promise.resolve(stream);
-      },
-    }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
+
+  session.handleClose();
+
+  expect(fake.input).toStrictEqual(['close']);
+});
+
+test('it closes a stream that opens after the client closed the socket', async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+  session.handleClose();
+
+  await waitFor(() => {
+    expect(fake.input).toStrictEqual(['close']);
+  });
+
+  expect(socket.sent).toStrictEqual([]);
+});
+
+test('it attaches to a session and ends with detached when the session is taken over', async () => {
+  const fake = buildStubAgentExecStream({ session: 'main', created: false });
+  const stub = buildStubExecBackend({ attach: fake.stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
+
   session.handleMessage({ type: 'attach', name: 'dev', session: 'main', cols: 100, rows: 30 });
-
-  await Bun.sleep(5);
-
   fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('replay') });
   fake.emitEvent({ type: 'detached', reason: 'taken_over' });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
 
-  expect(requests).toEqual([{ session: 'main', cols: 100, rows: 30 }]);
+  expect(stub.opens).toStrictEqual([
+    { kind: 'attach', name: 'dev', request: { session: 'main', cols: 100, rows: 30 } },
+  ]);
 
-  expect(peer.sent).toEqual([
+  expect(socket.sent).toStrictEqual([
     { type: 'started', pid: 7, session: 'main', created: false, output: { continuity: 'none' } },
     [EXEC_CHANNELS.stdout, 'replay'],
     { type: 'detached', reason: 'taken_over' },
   ]);
-
-  expect(peer.closes).toEqual([1000]);
 });
 
 test('it starts a named session', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const requests: AgentExecRequest[] = [];
-  const stream: ExecStream = { ...fake.stream, session: 'main', created: true };
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: (_name, request) => {
-        requests.push(request);
-
-        return Promise.resolve(stream);
-      },
-    }),
-  );
+  const fake = buildStubAgentExecStream({ session: 'main', created: true });
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true, session: 'main' });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([
+      { type: 'started', pid: 7, session: 'main', created: true, output: { continuity: 'none' } },
+    ]);
+  });
 
-  expect(requests).toEqual([{ argv: ['sh'], tty: true, session: 'main' }]);
-
-  expect(peer.sent).toEqual([
-    { type: 'started', pid: 7, session: 'main', created: true, output: { continuity: 'none' } },
+  expect(stub.opens).toStrictEqual([
+    {
+      kind: 'exec',
+      name: 'dev',
+      request: { argv: ['sh'], tty: true, session: 'main' },
+      feature: undefined,
+    },
   ]);
 });
 
-test('a kill grace goes to the agent, and started says whether it kills the group', async () => {
-  for (const groupKill of [true, false]) {
-    const fake = buildFakeStream();
-    const peer = buildFakePeer();
-    const requests: AgentExecRequest[] = [];
-
-    const session = createExecSession(
-      peer.peer,
-      buildBackend({
-        openExec: (_name, request) => {
-          requests.push(request);
-
-          return Promise.resolve({ ...fake.stream, groupKill });
-        },
-      }),
-    );
+test.each([true, false])(
+  'it sends a kill grace to the agent and says in started whether the agent kills the group (%p)',
+  async (groupKill) => {
+    const fake = buildStubAgentExecStream({ groupKill });
+    const stub = buildStubExecBackend({ exec: fake.stream });
+    const socket = buildStubExecSocket();
+    const session = createExecSession(socket.peer, stub.backend);
 
     session.handleMessage({
       type: 'start',
@@ -376,109 +351,103 @@ test('a kill grace goes to the agent, and started says whether it kills the grou
       killGraceMs: 2000,
     });
 
-    await Bun.sleep(5);
-
-    expect(requests).toEqual([{ argv: ['sleep', '9'], tty: false, killGraceMs: 2000 }]);
-    expect(peer.sent).toEqual([{ type: 'started', pid: 7, groupKill }]);
-  }
-});
-
-// a tty's group belongs to its terminal; a session always has one
-test('it refuses a kill grace with a tty', () => {
-  for (const extra of [{}, { session: 'main' }]) {
-    const peer = buildFakePeer();
-    const session = createExecSession(peer.peer, buildBackend({}));
-
-    session.handleMessage({
-      type: 'start',
-      name: 'dev',
-      argv: ['sh'],
-      tty: true,
-      killGraceMs: 2000,
-      ...extra,
+    await waitFor(() => {
+      expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7, groupKill }]);
     });
 
-    expect(JSON.stringify(peer.sent[0])).toContain('a tty exec takes no kill grace');
-    expect(peer.closes).toEqual([1011]);
-  }
+    expect(stub.opens).toStrictEqual([
+      {
+        kind: 'exec',
+        name: 'dev',
+        request: { argv: ['sleep', '9'], tty: false, killGraceMs: 2000 },
+        feature: undefined,
+      },
+    ]);
+  },
+);
+
+// a tty's group belongs to its terminal; a session always has one
+test.each([
+  ['a plain tty exec', {}],
+  ['a session', { session: 'main' }],
+])('it refuses a kill grace for %s', (_label, extra) => {
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['sh'],
+    tty: true,
+    killGraceMs: 2000,
+    ...extra,
+  });
+
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', message: expect.toInclude('a tty exec takes no kill grace') },
+  ]);
+
+  expect(socket.closes).toStrictEqual([1011]);
 });
 
 test('it refuses a session without a tty', () => {
-  const peer = buildFakePeer();
-  const session = createExecSession(peer.peer, buildBackend({}));
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false, session: 'main' });
 
-  expect(peer.sent).toHaveLength(1);
-  expect(JSON.stringify(peer.sent[0])).toContain('a session needs a tty');
-  expect(peer.closes).toEqual([1011]);
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', message: expect.toInclude('a session needs a tty') },
+  ]);
+
+  expect(socket.closes).toStrictEqual([1011]);
 });
 
 // A session runs on when impd loses its agent connection (a sleep, a
 // restore): the client gets a clean detach it can attach again after.
-test('a session stream that ends without exit or detached is a lost detach', async () => {
-  const peer = buildFakePeer();
-
-  const stream: ExecStream = {
-    ...buildFakeStream().stream,
-    session: 'main',
-    created: false,
-    events: readWithoutExit,
-  };
+test('it detaches as lost from a session whose stream ends without an exit or a detached', async () => {
+  const fake = buildStubAgentExecStream({ session: 'main', created: false });
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ attach: fake.stream }).backend,
   );
 
   session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('partial') });
+  fake.drop();
 
-  await Bun.sleep(10);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
 
-  expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost' });
-  expect(peer.closes).toEqual([1000]);
+  expect(socket.sent.at(-1)).toStrictEqual({ type: 'detached', reason: 'lost' });
 });
 
-test('an unknown detach reason from the agent reads as lost', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const stream: ExecStream = { ...fake.stream, session: 'main', created: false };
+test('it reads a detach reason the agent sends that impd does not know as lost', async () => {
+  const fake = buildStubAgentExecStream({ session: 'main', created: false });
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ attach: fake.stream }).backend,
   );
 
   session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
-
-  await Bun.sleep(5);
-
   fake.emitEvent({ type: 'detached', reason: 'cosmic_rays' });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
 
-  expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost' });
+  expect(socket.sent.at(-1)).toStrictEqual({ type: 'detached', reason: 'lost' });
 });
 
-function encodeStdin(size: number): Uint8Array {
-  return encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(size));
-}
-
-test('a tool runs from the system drive as root, gated on its agent feature', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const opened: unknown[] = [];
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: (name, request, feature) => {
-        opened.push({ name, request, feature });
-
-        return Promise.resolve(fake.stream);
-      },
-    }),
-  );
+test('it runs a tool from the system drive as root, gated on its agent feature', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
 
   session.handleMessage({
     type: 'start',
@@ -488,10 +457,13 @@ test('a tool runs from the system drive as root, gated on its agent feature', as
     tty: false,
   });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
 
-  expect(opened).toEqual([
+  expect(stub.opens).toStrictEqual([
     {
+      kind: 'exec',
       name: 'dev',
       request: {
         argv: ['/run/imp/sys/imp-agent', 'tar', 'extract', '/srv/app'],
@@ -503,9 +475,10 @@ test('a tool runs from the system drive as root, gated on its agent feature', as
   ]);
 });
 
-test('a tool with a tty is a bad message', async () => {
-  const peer = buildFakePeer();
-  const session = createExecSession(peer.peer, buildBackend({}));
+test('it refuses a tool with a tty as a bad message', () => {
+  const socket = buildStubExecSocket();
+  const stub = buildStubExecBackend();
+  const session = createExecSession(socket.peer, stub.backend);
 
   session.handleMessage({
     type: 'start',
@@ -515,21 +488,21 @@ test('a tool with a tty is a bad message', async () => {
     tty: true,
   });
 
-  await Bun.sleep(5);
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', message: expect.toStartWith('bad exec message: ') },
+  ]);
 
-  expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
-  expect(peer.closes).toEqual([1011]);
+  expect(socket.closes).toStrictEqual([1011]);
+  expect(stub.opens).toStrictEqual([]);
 });
 
-test("a tool's stdin is acked once it is on its way to the guest", async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const drained = { gate: Promise.withResolvers<void>() };
-  const stream: ExecStream = { ...fake.stream, stdinDrained: () => drained.gate.promise };
+test("it acks none of a tool's stdin before the stream has it on its way", async () => {
+  const fake = buildStubAgentExecStream({ stdinDrained: () => new Promise(() => {}) });
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openExec: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
   session.handleMessage({
@@ -540,35 +513,24 @@ test("a tool's stdin is acked once it is on its way to the guest", async () => {
     tty: false,
   });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
 
-  session.handleMessage(encodeStdin(3));
-  session.handleMessage(encodeStdin(2));
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('abc')));
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('de')));
 
-  await Bun.sleep(5);
-
-  expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
-
-  drained.gate.resolve();
-
-  await Bun.sleep(5);
-
-  const acked = peer.sent
-    .slice(1)
-    .map((message) => z.object({ bytes: z.number() }).parse(message).bytes)
-    .reduce((total, bytes) => total + bytes, 0);
-
-  expect(acked).toBe(5);
+  expect(fake.input).toStrictEqual(['stdin:abc', 'stdin:de']);
+  expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
 });
 
-test('a tool client past the stdin window is cut off', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const stream: ExecStream = { ...fake.stream, stdinDrained: () => new Promise(() => {}) };
+test("it acks a tool's stdin once the stream has it on its way", async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openExec: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
   session.handleMessage({
@@ -579,55 +541,158 @@ test('a tool client past the stdin window is cut off', async () => {
     tty: false,
   });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
+
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(3)));
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(2)));
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([
+      { type: 'started', pid: 7 },
+      { type: 'stdin_ack', bytes: 3 },
+      { type: 'stdin_ack', bytes: 2 },
+    ]);
+  });
+});
+
+test("it takes a tool's stdin up to the window and a frame past it", async () => {
+  const fake = buildStubAgentExecStream({ stdinDrained: () => new Promise(() => {}) });
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
+  );
 
   const frames =
     (EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES) / EXEC_MAX_STDIN_FRAME_BYTES;
 
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['extract', 'x'],
+    tty: false,
+  });
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
+
+  // each frame repeats its own letter, so the input shows every frame in order
   for (let index = 0; index < frames; index++) {
-    session.handleMessage(encodeStdin(EXEC_MAX_STDIN_FRAME_BYTES));
+    session.handleMessage(
+      encodeExecFrame(
+        EXEC_CHANNELS.stdin,
+        new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES).fill(0x61 + index),
+      ),
+    );
   }
 
-  expect(peer.closes).toEqual([]);
+  expect(socket.closes).toStrictEqual([]);
 
-  session.handleMessage(encodeStdin(1));
-
-  expect(peer.sent.at(-1)).toMatchObject({ type: 'error', message: 'stdin past the window' });
-  expect(peer.closes).toEqual([1011]);
-  expect(fake.input.filter((entry) => entry.startsWith('stdin:'))).toHaveLength(frames);
+  expect(fake.input).toStrictEqual(
+    Array.from(
+      'abcdefghijklmnopq',
+      (letter) => `stdin:${letter.repeat(EXEC_MAX_STDIN_FRAME_BYTES)}`,
+    ),
+  );
 });
 
-test("a plain exec's stdin is not acked or windowed", async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
+test('it cuts off a tool client that sends stdin past the window', async () => {
+  const fake = buildStubAgentExecStream({ stdinDrained: () => new Promise(() => {}) });
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
+
+  const frames =
+    (EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES) / EXEC_MAX_STDIN_FRAME_BYTES;
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['extract', 'x'],
+    tty: false,
+  });
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
+
+  // each frame repeats its own letter, so the input shows every frame in order
+  for (let index = 0; index < frames; index++) {
+    session.handleMessage(
+      encodeExecFrame(
+        EXEC_CHANNELS.stdin,
+        new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES).fill(0x61 + index),
+      ),
+    );
+  }
+
+  session.handleMessage(encodeExecFrame(EXEC_CHANNELS.stdin, new TextEncoder().encode('z')));
+
+  expect(socket.sent.at(-1)).toStrictEqual({ type: 'error', message: 'stdin past the window' });
+  expect(socket.closes).toStrictEqual([1011]);
+
+  expect(fake.input).toStrictEqual([
+    ...Array.from(
+      'abcdefghijklmnopq',
+      (letter) => `stdin:${letter.repeat(EXEC_MAX_STDIN_FRAME_BYTES)}`,
+    ),
+    'close',
+  ]);
+});
+
+test("it neither acks nor windows a plain exec's stdin", async () => {
+  const fake = buildStubAgentExecStream();
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  });
 
   for (let index = 0; index < 40; index++) {
-    session.handleMessage(encodeStdin(EXEC_MAX_STDIN_FRAME_BYTES));
+    session.handleMessage(
+      encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(EXEC_MAX_STDIN_FRAME_BYTES)),
+    );
   }
 
-  await Bun.sleep(5);
+  fake.emitEvent({ type: 'exit', code: 0, signal: 0 });
 
-  expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
-  expect(peer.closes).toEqual([]);
+  await waitFor(() => {
+    expect(stub.activity).toStrictEqual(['dev']);
+  });
+
+  expect(socket.sent).toStrictEqual([
+    { type: 'started', pid: 7 },
+    { type: 'exit', code: 0, signal: null },
+  ]);
+
+  expect(socket.closes).toStrictEqual([1000]);
 });
 
-test("a tool's stdout waits for the client's acks past the window", async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
+// all of the fed output is ready at once, so a session that did not hold
+// would send every frame before the wait reads the count
+test("it holds a tool's stdout once the client has not acked a window of it", async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
+
+  const frames = EXEC_STDOUT_WINDOW_BYTES / 65_536 + 2;
 
   session.handleMessage({
     type: 'start',
@@ -637,276 +702,286 @@ test("a tool's stdout waits for the client's acks past the window", async () => 
     tty: false,
   });
 
-  await Bun.sleep(5);
-
-  const chunk = 65_536;
-  const frames = EXEC_STDOUT_WINDOW_BYTES / chunk + 2;
-
   for (let index = 0; index < frames; index++) {
-    fake.emitEvent({ type: 'stdout', data: new Uint8Array(chunk) });
+    fake.emitEvent({ type: 'stdout', data: new Uint8Array(65_536) });
   }
 
-  await Bun.sleep(5);
-
-  const countStdout = (): number =>
-    peer.sent.filter((message) => Array.isArray(message) && message[0] === EXEC_CHANNELS.stdout)
-      .length;
-
-  expect(countStdout()).toBe(frames - 1);
-
-  session.handleMessage({ type: 'stdout_ack', bytes: chunk * 2 });
-
-  await Bun.sleep(5);
-
-  expect(countStdout()).toBe(frames);
+  await waitFor(() => {
+    expect(socket.sent.filter((message) => Array.isArray(message))).toHaveLength(frames - 1);
+  });
 });
 
-test("a plain exec's stdout does not wait for acks", async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
+test("it sends a tool's held stdout once the client acks it", async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
-  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+  const frames = EXEC_STDOUT_WINDOW_BYTES / 65_536 + 2;
 
-  await Bun.sleep(5);
-
-  const frames = EXEC_STDOUT_WINDOW_BYTES / 65_536 + 4;
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['create', 'x'],
+    tty: false,
+  });
 
   for (let index = 0; index < frames; index++) {
     fake.emitEvent({ type: 'stdout', data: new Uint8Array(65_536) });
   }
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.sent.filter((message) => Array.isArray(message))).toHaveLength(frames - 1);
+  });
 
-  expect(peer.sent).toHaveLength(frames + 1);
+  session.handleMessage({ type: 'stdout_ack', bytes: 65_536 * 2 });
+
+  await waitFor(() => {
+    expect(socket.sent.filter((message) => Array.isArray(message))).toHaveLength(frames);
+  });
 });
 
-const GENERATION = 'a'.repeat(32);
-
-// a session whose agent counts output: a fresh attach with a 3-byte prelude
-const OFFSETS_OUTPUT: SessionOutput = {
-  continuity: 'offsets',
-  bootId: 'boot-1',
-  executionGeneration: GENERATION,
-  bufferStart: 0,
-  end: 100,
-  offset: 90,
-  prelude: 3,
-  coldBoots: [{ bootId: 'boot-1', cause: 'start', at: '2026-10-03T00:00:00.000Z' }],
-};
-
-test('a session with offsets: started places the data, and exit gives the offset after it', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const stream: ExecStream = { ...fake.stream, session: 'main', output: OFFSETS_OUTPUT };
+test("it sends a plain exec's stdout without waiting for acks", async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
+  );
+
+  const frames = EXEC_STDOUT_WINDOW_BYTES / 65_536 + 4;
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  for (let index = 0; index < frames; index++) {
+    fake.emitEvent({ type: 'stdout', data: new Uint8Array(65_536) });
+  }
+
+  await waitFor(() => {
+    expect(socket.sent).toHaveLength(frames + 1);
+  });
+});
+
+test('it holds the next output while the client has more than 1 MiB queued, until it drains', async () => {
+  const fake = buildStubAgentExecStream();
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
+  );
+
+  socket.buffered.bytes = 2_000_000;
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('one') });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('two') });
+
+  // a read that saw the queue past the mark leaves the session waiting
+  await waitFor(() => {
+    expect(socket.buffered.reads).toBeGreaterThanOrEqual(1);
+  });
+
+  const held = [...socket.sent];
+
+  socket.buffered.bytes = 0;
+
+  session.handleDrain();
+
+  await waitFor(() => {
+    expect(socket.sent).toHaveLength(3);
+  });
+
+  expect(held).toStrictEqual([{ type: 'started', pid: 7 }, [EXEC_CHANNELS.stdout, 'one']]);
+
+  expect(socket.sent).toStrictEqual([
+    { type: 'started', pid: 7 },
+    [EXEC_CHANNELS.stdout, 'one'],
+    [EXEC_CHANNELS.stdout, 'two'],
+  ]);
+});
+
+test("it places a session's data in started and gives the offset after it in the exit", async () => {
+  const output = buildMockSessionOutput({ bufferStart: 0, end: 100, offset: 90, prelude: 3 });
+  const fake = buildStubAgentExecStream({ session: 'main', output });
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ attach: fake.stream }).backend,
   );
 
   session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
 
-  await Bun.sleep(5);
-
-  // the prelude, then the 10 kept bytes, then 5 live ones
+  // the 3-byte prelude, then the 10 kept bytes, then 5 live ones
   fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('\u001B[?0123456789') });
   fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('abcde') });
   fake.emitEvent({ type: 'exit', code: 0, signal: 0 });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
 
-  expect(peer.sent[0]).toEqual({
+  expect(socket.sent[0]).toStrictEqual({
     type: 'started',
     pid: 7,
     session: 'main',
     created: false,
-    output: OFFSETS_OUTPUT,
+    output,
   });
 
-  expect(peer.sent.at(-1)).toEqual({ type: 'exit', code: 0, signal: null, offset: 105 });
+  expect(socket.sent.at(-1)).toStrictEqual({ type: 'exit', code: 0, signal: null, offset: 105 });
 });
 
-test('a session that loses the agent ends with detached at its offset', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-
-  const stream: ExecStream = {
-    ...fake.stream,
-    session: 'main',
-    output: { ...OFFSETS_OUTPUT, offset: 40, prelude: 0 },
-    events: readWithoutExit,
-  };
+test('it detaches a session that loses the agent at the offset after its last byte', async () => {
+  const output = buildMockSessionOutput({ end: 40, offset: 40, prelude: 0 });
+  const fake = buildStubAgentExecStream({ session: 'main', output });
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ attach: fake.stream }).backend,
   );
 
   session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('partial') });
+  fake.drop();
 
-  await Bun.sleep(10);
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1000]);
+  });
 
-  expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost', offset: 47 });
-  expect(peer.closes).toEqual([1000]);
+  expect(socket.sent.at(-1)).toStrictEqual({ type: 'detached', reason: 'lost', offset: 47 });
 });
 
 // a dropped message would skip bytes: the socket closes, and no later byte
 // goes out
-test('it closes the socket when the peer drops output', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer(1);
-  const stream: ExecStream = { ...fake.stream, session: 'main', output: OFFSETS_OUTPUT };
+test('it closes the socket and the stream when the client socket drops output', async () => {
+  const fake = buildStubAgentExecStream({ session: 'main', output: buildMockSessionOutput() });
+  const socket = buildStubExecSocket({ keeps: 1 });
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+    socket.peer,
+    buildStubExecBackend({ attach: fake.stream }).backend,
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('one') });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('two') });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('three') });
+
+  await waitFor(() => {
+    expect(socket.closes).toStrictEqual([1011]);
+  });
+
+  expect(socket.sent.slice(1)).toStrictEqual([[EXEC_CHANNELS.stdout, 'one']]);
+  expect(fake.input).toContain('close');
+});
+
+test('it sends a plain exec whose output was dropped no failure after the close', async () => {
+  const fake = buildStubAgentExecStream();
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const socket = buildStubExecSocket({ keeps: 0 });
+  const session = createExecSession(socket.peer, stub.backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('partial') });
+  fake.drop();
+
+  await waitFor(() => {
+    expect(stub.activity).toStrictEqual(['dev']);
+  });
+
+  expect(socket.sent).toStrictEqual([{ type: 'started', pid: 7 }]);
+  expect(socket.closes).toStrictEqual([1011]);
+});
+
+test('it passes an attach its resumeFrom and wake', async () => {
+  const fake = buildStubAgentExecStream({ session: 'main' });
+  const stub = buildStubExecBackend({ attach: fake.stream });
+  const session = createExecSession(buildStubExecSocket().peer, stub.backend);
+
+  session.handleMessage({
+    type: 'attach',
+    name: 'dev',
+    session: 'main',
+    resumeFrom: { executionGeneration: 'a'.repeat(32), offset: 12 },
+    wake: false,
+  });
+
+  await waitFor(() => {
+    expect(stub.opens).toStrictEqual([
+      {
+        kind: 'attach',
+        name: 'dev',
+        request: {
+          session: 'main',
+          resumeFrom: { executionGeneration: 'a'.repeat(32), offset: 12 },
+          wake: false,
+        },
+      },
+    ]);
+  });
+});
+
+test.each([
+  ['NO_SESSION', 'no session "main"', { bootId: 'boot-1', coldBoots: [] }],
+  ['INVALID_RESUME', 'offset 9 is past the end', { end: 4, bufferStart: 0 }],
+])('it passes the agent error %s on with its data', async (code, message, data) => {
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ attach: new AgentError(code, message, data) }).backend,
   );
 
   session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
 
-  await Bun.sleep(5);
-
-  for (const chunk of ['one', 'two', 'three']) {
-    fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode(chunk) });
-  }
-
-  await Bun.sleep(5);
-
-  expect(peer.sent.slice(1)).toEqual([[EXEC_CHANNELS.stdout, 'one']]);
-  expect(peer.closes).toEqual([1011]);
-  expect(fake.input).toContain('close');
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([{ type: 'error', code, message, data }]);
+  });
 });
 
-test('an attach passes resumeFrom and wake to the backend', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const requests: AgentAttachRequest[] = [];
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openAttach: (_name, request) => {
-        requests.push(request);
-
-        return Promise.resolve({ ...fake.stream, session: 'main' });
-      },
-    }),
-  );
-
-  const resumeFrom = { executionGeneration: GENERATION, offset: 12 };
-
-  session.handleMessage({ type: 'attach', name: 'dev', session: 'main', resumeFrom, wake: false });
-
-  await Bun.sleep(5);
-
-  expect(requests).toEqual([{ session: 'main', resumeFrom, wake: false }]);
-});
-
-test('NO_SESSION and INVALID_RESUME keep their data', async () => {
-  const errors = [
-    ['NO_SESSION', 'no session "main"', { bootId: 'boot-1', coldBoots: [] }],
-    ['INVALID_RESUME', 'offset 9 is past the end', { end: 4, bufferStart: 0 }],
-  ] as const;
-
-  for (const [code, message, data] of errors) {
-    const peer = buildFakePeer();
-
-    const session = createExecSession(
-      peer.peer,
-      buildBackend({ openAttach: () => Promise.reject(new AgentError(code, message, data)) }),
-    );
-
-    session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
-
-    await Bun.sleep(5);
-
-    expect(peer.sent).toEqual([{ type: 'error', code, message, data }]);
-  }
-});
-
-test('a plain exec whose output was dropped sends no failure after the close', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer(0);
-  const stream: ExecStream = { ...fake.stream, events: readWithoutExit };
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({ openExec: () => Promise.resolve(stream) }),
-  );
-
-  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
-
-  await Bun.sleep(10);
-
-  expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
-  expect(peer.closes).toEqual([1011]);
-});
-
-test('an outer exec goes to the agent as outer, gated on its agent feature', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const opened: unknown[] = [];
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: (name, request, feature) => {
-        opened.push({ name, request, feature });
-
-        return Promise.resolve(fake.stream);
-      },
-    }),
-  );
+test('it sends an exec in the agent as outer, gated on its agent feature', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const session = createExecSession(buildStubExecSocket().peer, stub.backend);
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true, outer: true });
 
-  await Bun.sleep(5);
+  await waitFor(() => {
+    expect(stub.opens).toStrictEqual([
+      {
+        kind: 'exec',
+        name: 'dev',
+        request: { argv: ['sh'], tty: true, outer: true },
+        feature: 'outer-exec',
+      },
+    ]);
+  });
+});
 
-  expect(opened).toEqual([
-    {
-      name: 'dev',
-      request: { argv: ['sh'], tty: true, outer: true },
-      feature: 'outer-exec',
-    },
+test.each([
+  ['a session', { argv: ['sh'], tty: true, session: 'main' }],
+  ['a tool', { argv: ['create', 'x'], tty: false, tool: 'tar' }],
+])('it refuses an exec in the agent with %s as a bad message', (_label, start) => {
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
+
+  session.handleMessage({ type: 'start', name: 'dev', outer: true, ...start });
+
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', message: expect.toStartWith('bad exec message: ') },
   ]);
 });
 
-test('an outer exec with a session or a tool is a bad message', async () => {
-  for (const start of [
-    { argv: ['sh'], tty: true, session: 'main' },
-    { argv: ['create', 'x'], tty: false, tool: 'tar' },
-  ]) {
-    const peer = buildFakePeer();
-    const session = createExecSession(peer.peer, buildBackend({}));
-
-    session.handleMessage({ type: 'start', name: 'dev', outer: true, ...start });
-
-    await Bun.sleep(5);
-
-    expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
-  }
-});
-
-test('a start passes its requirements to the backend, and a refusal keeps its data', async () => {
-  const peer = buildFakePeer();
-  const opened: unknown[] = [];
-  const data = { reason: 'broker_not_ready', detail: 'the imp has no grant' };
-
-  const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: (_name, request) => {
-        opened.push(request);
-
-        return Promise.reject(new ORPCError('PRECONDITION_FAILED', { message: 'not ready', data }));
-      },
-    }),
-  );
+test("it passes a start's requirements to the backend", async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const session = createExecSession(buildStubExecSocket().peer, stub.backend);
 
   session.handleMessage({
     type: 'start',
@@ -916,36 +991,82 @@ test('a start passes its requirements to the backend, and a refusal keeps its da
     require: ['broker'],
   });
 
-  await Bun.sleep(5);
-
-  expect(opened).toEqual([{ argv: ['true'], tty: false, require: ['broker'] }]);
-
-  expect(peer.sent).toEqual([
-    { type: 'error', code: 'PRECONDITION_FAILED', message: 'not ready', data },
-  ]);
+  await waitFor(() => {
+    expect(stub.opens).toStrictEqual([
+      {
+        kind: 'exec',
+        name: 'dev',
+        request: { argv: ['true'], tty: false, require: ['broker'] },
+        feature: undefined,
+      },
+    ]);
+  });
 });
 
-test('a log goes to the agent, and an agent that keeps none says so in started', async () => {
-  const fake = buildFakeStream();
-  const peer = buildFakePeer();
-  const requests: AgentExecRequest[] = [];
+test("it passes the backend's refusal of a requirement on with its data", async () => {
+  const data = { reason: 'broker_not_ready', detail: 'the imp has no grant' };
 
-  const stream: ExecStream = {
-    ...fake.stream,
+  const stub = buildStubExecBackend({
+    exec: new ORPCError('PRECONDITION_FAILED', { message: 'not ready', data }),
+  });
+
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, stub.backend);
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+  });
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([
+      { type: 'error', code: 'PRECONDITION_FAILED', message: 'not ready', data },
+    ]);
+  });
+});
+
+test('it sends a log to the agent', async () => {
+  const fake = buildStubAgentExecStream({
     session: 'main',
     created: true,
-    output: OFFSETS_OUTPUT,
-  };
+    output: buildMockSessionOutput(),
+  });
+
+  const stub = buildStubExecBackend({ exec: fake.stream });
+  const session = createExecSession(buildStubExecSocket().peer, stub.backend);
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['sh'],
+    tty: true,
+    session: 'main',
+    log: true,
+  });
+
+  await waitFor(() => {
+    expect(stub.opens).toStrictEqual([
+      {
+        kind: 'exec',
+        name: 'dev',
+        request: { argv: ['sh'], tty: true, session: 'main', log: true },
+        feature: undefined,
+      },
+    ]);
+  });
+});
+
+test('it says in started that an agent which keeps no log keeps none', async () => {
+  const output = buildMockSessionOutput();
+  const fake = buildStubAgentExecStream({ session: 'main', created: true, output });
+  const socket = buildStubExecSocket();
 
   const session = createExecSession(
-    peer.peer,
-    buildBackend({
-      openExec: (_name, request) => {
-        requests.push(request);
-
-        return Promise.resolve(stream);
-      },
-    }),
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
   );
 
   session.handleMessage({
@@ -957,17 +1078,52 @@ test('a log goes to the agent, and an agent that keeps none says so in started',
     log: true,
   });
 
-  await Bun.sleep(5);
-
-  expect(requests).toEqual([{ argv: ['sh'], tty: true, session: 'main', log: true }]);
-  expect(peer.sent[0]).toMatchObject({ output: { ...OFFSETS_OUTPUT, log: { enabled: false } } });
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([
+      {
+        type: 'started',
+        pid: 7,
+        session: 'main',
+        created: true,
+        output: { ...output, log: { enabled: false } },
+      },
+    ]);
+  });
 });
 
-test('a log without a session is a bad message', () => {
-  const peer = buildFakePeer();
-  const session = createExecSession(peer.peer, buildBackend({}));
+test("it keeps the agent's own log answer in started", async () => {
+  const output = buildMockSessionOutput({ log: { enabled: true } });
+  const fake = buildStubAgentExecStream({ session: 'main', created: true, output });
+  const socket = buildStubExecSocket();
+
+  const session = createExecSession(
+    socket.peer,
+    buildStubExecBackend({ exec: fake.stream }).backend,
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['sh'],
+    tty: true,
+    session: 'main',
+    log: true,
+  });
+
+  await waitFor(() => {
+    expect(socket.sent).toStrictEqual([
+      { type: 'started', pid: 7, session: 'main', created: true, output },
+    ]);
+  });
+});
+
+test('it refuses a log without a session as a bad message', () => {
+  const socket = buildStubExecSocket();
+  const session = createExecSession(socket.peer, buildStubExecBackend().backend);
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true, log: true });
 
-  expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
+  expect(socket.sent).toStrictEqual([
+    { type: 'error', message: expect.toStartWith('bad exec message: ') },
+  ]);
 });

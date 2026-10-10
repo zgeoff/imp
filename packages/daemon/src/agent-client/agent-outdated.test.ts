@@ -1,68 +1,129 @@
 import { expect, test } from 'bun:test';
-import { buildAgentOutdatedError, hasFeature } from './agent-outdated';
+import { AgentError } from './agent-connection';
+import {
+  buildAgentOutdatedError,
+  buildAgentUnknownError,
+  handleUnknownOp,
+  hasFeature,
+} from './agent-outdated';
 
-const VERSIONS = ['0.1.0', '0.1.9', '0.2.0', '0.2.5', '0.3.0', '0.10.1', '1.0.0', 'dev'];
-
-test('sessions start with agent 0.2.0', () => {
-  expect(VERSIONS.map((version) => hasFeature(version, 'sessions'))).toEqual([
-    false,
-    false,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-  ]);
+test.each([
+  ['0.1.0', false],
+  ['0.1.9', false],
+  ['0.2.0', true],
+  ['0.2.5', true],
+  ['0.10.1', true],
+  ['1.0.0', true],
+])('#hasFeature gives agent %s sessions: %p', (version, expected) => {
+  expect(hasFeature(version, 'sessions')).toBe(expected);
 });
 
-test('dial and sftp start with agent 0.3.0', () => {
-  expect(VERSIONS.map((version) => hasFeature(version, 'ssh'))).toEqual([
-    false,
-    false,
-    false,
-    false,
-    true,
-    true,
-    true,
-    true,
-  ]);
+test.each([
+  ['0.1.0', false],
+  ['0.1.9', false],
+  ['0.2.0', false],
+  ['0.2.5', false],
+  ['0.3.0', true],
+  ['0.10.1', true],
+  ['1.0.0', true],
+])('#hasFeature gives agent %s dial and sftp: %p', (version, expected) => {
+  expect(hasFeature(version, 'ssh')).toBe(expected);
 });
 
-test('an outer exec needs agent 0.16.0, and a version that is missing or does not parse fails', () => {
-  const versions = [undefined, '', 'dev', '0.15.9', '0.16.0', '0.17.1', '1.0.0'];
+test('#hasFeature passes dial and sftp, which are not strict, for the dev version, which does not parse', () => {
+  expect(hasFeature('dev', 'ssh')).toBe(true);
+});
 
-  expect(versions.map((version) => hasFeature(version, 'outer-exec'))).toEqual([
-    false,
-    false,
-    false,
-    false,
-    true,
-    true,
-    true,
-  ]);
+// the agent's own answer settles a feature that is not strict
+test.each([['dev'], ['']])(
+  '#hasFeature passes a feature that is not strict for the version %p, which does not parse',
+  (version) => {
+    expect(hasFeature(version, 'sessions')).toBe(true);
+  },
+);
 
+test('#hasFeature passes a feature that is not strict for an agent with no recorded version', () => {
   expect(hasFeature(undefined, 'sessions')).toBe(true);
 });
 
-test('elastic memory needs agent 0.17.0, and a version that is missing or does not parse fails', () => {
-  const versions = [undefined, 'dev', '0.16.9', '0.17.0', '1.0.0'];
-
-  expect(versions.map((version) => hasFeature(version, 'elastic-memory'))).toEqual([
-    false,
-    false,
-    false,
-    true,
-    true,
-  ]);
+test.each([
+  ['0.15.9', false],
+  ['0.16.0', true],
+  ['0.17.1', true],
+  ['1.0.0', true],
+])('#hasFeature gives agent %s an outer exec: %p', (version, expected) => {
+  expect(hasFeature(version, 'outer-exec')).toBe(expected);
 });
 
-test('the outdated error tells the user to stop and start the imp', () => {
+test.each([['dev'], ['']])(
+  '#hasFeature fails the strict outer exec for the version %p, which does not parse',
+  (version) => {
+    expect(hasFeature(version, 'outer-exec')).toBe(false);
+  },
+);
+
+test('#hasFeature fails the strict outer exec for an agent with no recorded version', () => {
+  expect(hasFeature(undefined, 'outer-exec')).toBe(false);
+});
+
+test.each([
+  ['0.16.9', false],
+  ['0.17.0', true],
+  ['1.0.0', true],
+])('#hasFeature gives agent %s elastic memory: %p', (version, expected) => {
+  expect(hasFeature(version, 'elastic-memory')).toBe(expected);
+});
+
+test('#hasFeature fails the strict elastic memory for the dev version, which does not parse', () => {
+  expect(hasFeature('dev', 'elastic-memory')).toBe(false);
+});
+
+test('#hasFeature fails the strict elastic memory for an agent with no recorded version', () => {
+  expect(hasFeature(undefined, 'elastic-memory')).toBe(false);
+});
+
+test('#buildAgentOutdatedError tells the user to stop and start the imp', () => {
   const error = buildAgentOutdatedError('ssh');
 
+  expect(error).toBeInstanceOf(AgentError);
   expect(error.code).toBe('AGENT_OUTDATED');
 
   expect(error.detail).toBe(
     "the imp's agent has no port forwarding or SFTP yet; stop and start the imp to update it",
   );
+});
+
+test('#buildAgentUnknownError tells the user to stop and start the imp to record its version', () => {
+  const error = buildAgentUnknownError('outer-exec');
+
+  expect(error).toBeInstanceOf(AgentError);
+  expect(error.code).toBe('AGENT_OUTDATED');
+
+  expect(error.detail).toBe(
+    "impd has no record of the imp's agent version, so it takes it to have no exec --agent; stop and start the imp to record it",
+  );
+});
+
+test("#handleUnknownOp turns the agent's UNKNOWN_OP into AGENT_OUTDATED for the feature", () => {
+  const handle = handleUnknownOp('grow');
+
+  expect(() => handle(new AgentError('UNKNOWN_OP', 'unknown op grow'))).toThrowWithMessage(
+    AgentError,
+    "AGENT_OUTDATED: the imp's agent has no online disk grow yet; stop and start the imp to update it",
+  );
+});
+
+test('#handleUnknownOp rethrows any other agent error as it came', () => {
+  const handle = handleUnknownOp('sessions');
+
+  expect(() => handle(new AgentError('NO_SESSION', 'no session "main"'))).toThrowWithMessage(
+    AgentError,
+    'NO_SESSION: no session "main"',
+  );
+});
+
+test('#handleUnknownOp rethrows an error that does not come from the agent', () => {
+  const handle = handleUnknownOp('sessions');
+
+  expect(() => handle(new Error('socket hang up'))).toThrowWithMessage(Error, 'socket hang up');
 });

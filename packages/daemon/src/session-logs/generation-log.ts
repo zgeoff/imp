@@ -95,8 +95,9 @@ export interface GenerationLogOptions {
   readonly now: () => number;
   readonly log: (message: string) => void;
 
-  // how long appended bytes wait for their flush; a test shortens it
-  readonly commitDelayMs?: number;
+  // starts the timer that flushes appended bytes and returns its cancel;
+  // an unref'd setTimeout by default, a test passes one it fires
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
 }
 
 type StopReason = NonNullable<StoredMeta['stopped']>;
@@ -204,6 +205,16 @@ async function readFileSize(path: string): Promise<number | null> {
   }
 }
 
+function startUnrefTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  timer.unref();
+
+  return () => {
+    clearTimeout(timer);
+  };
+}
+
 async function removeQuietly(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -262,7 +273,9 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     // the meta's entry for the segment the open file writes
     current: null as StoredMeta['segments'][number] | null,
     skipTo: null as number | null,
-    timer: null as ReturnType<typeof setTimeout> | null,
+
+    // the pending commit timer's cancel
+    cancelTimer: null as (() => void) | null,
 
     // set once the log finished or stopped: later output is not kept
     settled: initial.state === 'ended' || initial.stopped !== undefined,
@@ -324,24 +337,24 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     }
   };
 
+  const startTimer = options.startTimer ?? startUnrefTimer;
+
   const startCommitTimer = (): void => {
-    if (state.timer !== null) {
+    if (state.cancelTimer !== null) {
       return;
     }
 
-    state.timer = setTimeout(() => {
-      state.timer = null;
+    state.cancelTimer = startTimer(() => {
+      state.cancelTimer = null;
       void runCommit();
-    }, options.commitDelayMs ?? COMMIT_DELAY_MS);
-
-    state.timer.unref();
+    }, COMMIT_DELAY_MS);
   };
 
   const stopCommitTimer = (): void => {
-    if (state.timer !== null) {
-      clearTimeout(state.timer);
+    if (state.cancelTimer !== null) {
+      state.cancelTimer();
 
-      state.timer = null;
+      state.cancelTimer = null;
     }
   };
 

@@ -1,340 +1,706 @@
-import { expect, test } from 'bun:test';
-import { EVENT_VERSION } from '@imp/api';
+import { expect, onTestFinished, test } from 'bun:test';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ImpContract, ImpEvent } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { buildSessionValue } from '../auth/session-cookie';
 import { ROOT_TOKEN_ID } from '../auth/token-store';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import type { ImpdDeps } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
+import { createImage } from '../db/images';
+import { subscribeImpWrites } from '../db/imp-write-feed';
+import type { ImpWrite } from '../db/imp-write-feed';
 import { findImpByName } from '../db/imps';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
-import type { ImpTest } from '../imps/test-imps';
+import { openDatabase } from '../db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
+import { buildStubClock } from '../test-utils/build-stub-clock';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { readInBackground } from '../test-utils/read-in-background';
 
-async function setupEventTest(env: Readonly<Record<string, string>> = {}) {
-  const harness = await setupImpTest({ env });
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  await harness.createTestImage('ubuntu');
+  onTestFinished(() => stack.disposeAsync());
 
-  const app = buildTestApp(harness, harness);
+  const dataDir = await mkdtemp(join(tmpdir(), 'imp-events-'));
 
-  return { ...harness, app, client: app.client };
-}
+  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-// Every event a stream sends, as `ev reason` or `ev decision`, read in the
-// background until `stop`.
-async function readEvents(client: ContractRouterClient<ImpContract>) {
-  const controller = new AbortController();
+  const db = await openDatabase(':memory:');
 
-  const stream = await client.events.stream(undefined, { signal: controller.signal });
+  stack.defer(() => db.destroy());
 
-  const events: ImpEvent[] = [];
-
-  const reading = (async () => {
-    try {
-      for await (const event of stream) {
-        events.push(event);
-      }
-    } catch {
-      // the abort below
-    }
-  })();
-
-  return {
-    events,
-    lines: () => events.map((event) => formatEvent(event)),
-    waitFor: async (line: string) => {
-      const deadline = Date.now() + 5000;
-
-      while (!events.some((event) => formatEvent(event) === line)) {
-        if (Date.now() > deadline) {
-          throw new Error(`no ${line} in ${events.map((event) => formatEvent(event)).join(', ')}`);
-        }
-
-        await Bun.sleep(1);
-      }
-    },
-    stop: async () => {
-      controller.abort();
-
-      await reading;
-    },
-    ended: reading,
-  };
-}
-
-function formatEvent(event: Readonly<ImpEvent>): string {
-  if (event.ev === 'ImpAdded' || event.ev === 'ImpChanged') {
-    return `${event.ev} ${event.reason} ${event.imp.name}`;
-  }
-
-  if (event.ev === 'GovernorDecision') {
-    return `${event.ev} ${event.decision} ${event.name}`;
-  }
-
-  if (event.ev === 'ImpRemoved') {
-    return `${event.ev} ${event.imp.name}`;
-  }
-
-  return `${event.ev} ${event.name}`;
-}
-
-interface DashboardApp {
-  readonly app: { readonly handle: (request: Request) => Promise<Response> };
-}
-
-// a client that calls as the dashboard does: a session cookie, no token
-function buildDashboardClient(app: DashboardApp, expiresAt: number) {
-  const link = new RPCLink({
-    url: 'http://impd.test/rpc',
-    headers: {
-      cookie: `imp_session=${buildSessionValue(TEST_TOKEN, { tokenId: ROOT_TOKEN_ID, expiresAt })}`,
-      'sec-fetch-site': 'same-origin',
-    },
-    fetch: (request) => app.app.handle(request),
+  // the stub VMM runs no jailer and builds no boot template; the resolver
+  // binds its port on every address, so each impd takes a free one
+  const config = loadConfig({
+    IMP_DATA_DIR: dataDir,
+    IMP_JAILER: 'false',
+    IMP_BOOT_TEMPLATES: 'false',
+    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
   });
 
-  return createORPCClient<ContractRouterClient<ImpContract>>(link);
+  // the system drive impd boots imps with, as setupSystemFiles installs it
+  const drive = 'd1'.repeat(32);
+  const systemDrivePath = buildSystemDrivePath(dataDir, drive);
+
+  await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
+  await writeFile(systemDrivePath, drive);
+
+  const vmm = buildStubVmm();
+  const logs: string[] = [];
+
+  // a frozen clock, far from the wall clock, that the session cookies read
+  const clock = { nowMs: Date.UTC(2026, 0, 1) };
+
+  // the clock a sleep's timings and its young-guest wait read, which moves
+  // only by that wait's pauses
+  const sleepClock = buildStubClock();
+
+  const deps: ImpdDeps = {
+    db,
+
+    // the bearer the test's client sends, and the key of its session cookies
+    rootToken: 'root-token',
+    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+
+    // what system.info reports; the drive's hash names the drive file above
+    systemFiles: {
+      kernelPath: join(dataDir, 'system', 'vmlinux'),
+      systemDrivePath,
+      info: {
+        guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+        systemDrive: { sha256: drive },
+      },
+    },
+
+    // the host's free space, so a create never meets this machine's disk
+    readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
+    log: (message) => {
+      logs.push(message);
+    },
+    now: () => clock.nowMs,
+
+    // Firecracker, the kernel and the CPU as this host reports them, which a
+    // snapshot must match to load
+    readIdentity: (files, ipv6Prefix) => ({
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: 'test',
+      guestKernel: files.info.guestKernel.sha256,
+      systemDrive: files.info.systemDrive.sha256,
+      systemDrivePath: files.systemDrivePath,
+      cpuModel: 'Test CPU',
+      cpuFlags: 'test-flags',
+      ipv6Prefix,
+    }),
+    resolveIpv6: () => Promise.resolve(null),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    cgroups: buildStubCpuCgroups().cgroups,
+    vms: vmm.startGeneration(),
+    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    broker: {
+      installBundle: () => Promise.resolve(),
+      resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
+      runOAuthTimer: false,
+    },
+    egress: {
+      runNft: () => Promise.resolve(),
+      flushConnections: () => Promise.resolve(),
+      flushPair: () => Promise.resolve(),
+      readForwardRules: () => Promise.resolve(''),
+      forward: () => Promise.reject(new Error('no upstream in tests')),
+      resolveExact: () => Promise.resolve([]),
+      readConnected4: () => Promise.resolve(['172.17.0.0/16']),
+      readConnected6: () => Promise.resolve([]),
+      readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+    },
+    imps: {
+      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
+      growFilesystem: () => Promise.resolve(false),
+      hostCpus: 8,
+      sleepTiming: { now: sleepClock.now, sleep: sleepClock.sleep },
+    },
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  };
+
+  const impd = await createImpd(config, deps);
+
+  stack.defer(() => impd.broker.stop());
+
+  stack.defer(() => {
+    impd.egress.stop();
+  });
+
+  stack.defer(() => {
+    impd.diskUsage.stop();
+  });
+
+  const link = new RPCLink({
+    url: 'http://impd.test/rpc',
+    headers: { authorization: 'Bearer root-token' },
+    fetch: (request) => impd.api.app.handle(request),
+  });
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(link);
+
+  return { config, db, dataDir, deps, vmm, logs, clock, sleepClock, impd, client, stack };
 }
 
-test('a stream sends the snapshot, then each change with its reason', async () => {
-  const ctx = await setupEventTest();
+test('it sends the snapshot, then each change with its reason', async () => {
+  const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'old' });
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  const stream = await readEvents(ctx.client);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.create({ name: 'old', image: 'ubuntu' });
+
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const events = await ctx.client.events.stream(undefined, { signal: controller.signal });
+
+  const stream = readInBackground(events);
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
   await ctx.client.imps.destroy({ name: 'dev' });
-  await stream.waitFor('ImpRemoved dev');
-  await stream.stop();
 
-  expect(stream.lines()).toEqual([
-    'ImpAdded snapshot old',
-    'ImpAdded created dev',
-    'GovernorDecision admitted dev',
-    'ImpChanged booted dev',
-    'ImpChanged slept dev',
-    'GovernorDecision admitted dev',
-    'ImpChanged woke dev',
-    'ImpRemoved dev',
-  ]);
-
-  const timed = stream.events.filter((event) => event.ev === 'ImpChanged');
-
-  for (const event of timed.slice(0, 3)) {
-    expect(event.detail?.durationMs).toBeNumber();
-  }
-
-  expect(timed[1]?.detail?.trigger).toBe('requested');
-});
-
-test('a slept event counts the work before its durationMs in prepareMs', async () => {
-  const ctx = await setupEventTest({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
-
-  await ctx.client.imps.create({ name: 'dev' });
-
-  const stream = await readEvents(ctx.client);
-
-  // a young guest: the sleep first waits about 200 ms before the pause
-  ctx.fake.setGuestUptime(100);
-
-  await ctx.client.imps.sleep({ name: 'dev' });
-  await stream.waitFor('ImpChanged slept dev');
-  await stream.stop();
-
-  const slept = stream.events.find((event) => formatEvent(event) === 'ImpChanged slept dev');
-  const detail = slept?.ev === 'ImpChanged' ? slept.detail : undefined;
-
-  expect(detail?.prepareMs).toBeGreaterThanOrEqual(190);
-  expect(detail?.durationMs).toBeLessThan(detail?.prepareMs ?? 0);
-});
-
-test('a liveness repair and a restarted impd adopting a VM each send an event', async () => {
-  const ctx = await setupEventTest();
-
-  await ctx.client.imps.create({ name: 'dead' });
-  await ctx.client.imps.create({ name: 'alive' });
-
-  const stream = await readEvents(ctx.client);
-  const dead = await findImpByName(ctx.db, 'dead');
-
-  ctx.fake.alive.delete(dead?.pid ?? 0);
-
-  await ctx.client.imps.list();
-  await stream.waitFor('ImpChanged repaired dead');
-  await stream.stop();
-
-  // a restart over the same VMs re-adopts the one still running
-  const restarted = ctx.restartImpd();
-  const adopted: string[] = [];
-
-  restarted.imps.events.subscribe((event) => {
-    adopted.push(formatEvent(event));
+  await waitFor(() => {
+    expect(stream.items).toPartiallyContain({ ev: 'ImpRemoved' });
   });
 
-  await restarted.imps.reconcileImps();
+  controller.abort();
 
-  await waitUntil(() => adopted.includes('ImpChanged adopted alive'));
-});
+  await stream.ended;
 
-test('a secret value reaches no event and no audit row', async () => {
-  const ctx = await setupEventTest();
-
-  await ctx.client.imps.create({ name: 'dev' });
-
-  const stream = await readEvents(ctx.client);
-
-  const value = 'ghp_secretvalue0123456789';
-
-  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value });
-  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
-  await ctx.client.imps.sleep({ name: 'dev' });
-  await stream.waitFor('ImpChanged slept dev');
-  await stream.stop();
-
-  const calls = await waitForCalls(ctx, 4);
-
-  expect(JSON.stringify(stream.events)).not.toContain(value);
-  expect(JSON.stringify(calls)).not.toContain(value);
-
-  expect(calls.map((call) => [call.procedure, call.imp ?? null, call.actor])).toEqual([
-    ['imps.sleep', 'dev', 'token'],
-    ['grants.add', 'dev', 'token'],
-    ['secrets.add', null, 'token'],
-    ['imps.create', 'dev', 'token'],
+  expect(stream.items).toMatchObject([
+    { ev: 'ImpAdded', reason: 'snapshot', imp: { name: 'old' } },
+    { ev: 'ImpAdded', reason: 'created', imp: { name: 'dev' } },
+    { ev: 'GovernorDecision', decision: 'admitted', name: 'dev' },
+    {
+      ev: 'ImpChanged',
+      reason: 'booted',
+      imp: { name: 'dev' },
+      detail: { durationMs: expect.toBeNumber() },
+    },
+    {
+      ev: 'ImpChanged',
+      reason: 'slept',
+      imp: { name: 'dev' },
+      detail: { durationMs: expect.toBeNumber(), trigger: 'requested' },
+    },
+    { ev: 'GovernorDecision', decision: 'admitted', name: 'dev' },
+    {
+      ev: 'ImpChanged',
+      reason: 'woke',
+      imp: { name: 'dev' },
+      detail: { durationMs: expect.toBeNumber() },
+    },
+    { ev: 'ImpRemoved', imp: { name: 'dev' } },
   ]);
 });
 
-test('a dashboard stream ends at the session expiry and at any logout', async () => {
-  const ctx = await setupEventTest();
-  const expiring = await readEvents(buildDashboardClient(ctx.app, ctx.now() + 100));
+test('it counts a young guest’s wait before a sleep in the slept event’s prepareMs', async () => {
+  const ctx = await setupTest();
 
-  await expiring.ended;
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  const dashboard = await readEvents(buildDashboardClient(ctx.app, ctx.now() + 60_000));
-  const token = await readEvents(ctx.client);
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
 
-  const logout = await ctx.app.app.handle(
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const events = await ctx.client.events.stream(undefined, { signal: controller.signal });
+
+  const stream = readInBackground(events);
+
+  // 200 ms short of IMP_SLEEP_MIN_GUEST_UPTIME_MS's 1500 ms default: the
+  // sleep waits the rest on the sleep clock before it pauses the VM, and
+  // the pause itself moves that clock by nothing
+  ctx.vmm.setGuestUptime(1300);
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const slept = await waitFor(() => {
+    const found = stream.items.find(
+      (event): event is Extract<ImpEvent, { ev: 'ImpChanged' }> =>
+        event.ev === 'ImpChanged' && event.reason === 'slept',
+    );
+
+    invariant(found, 'no slept event yet');
+
+    return found;
+  });
+
+  controller.abort();
+
+  expect(slept.detail?.prepareMs).toBe(200);
+  expect(slept.detail?.durationMs).toBe(0);
+});
+
+test('it sends a repaired event when a check finds an imp’s VM gone', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dead', image: 'ubuntu' });
+
+  const dead = await findImpByName(ctx.db, 'dead');
+
+  invariant(dead?.pid);
+
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const events = await ctx.client.events.stream(undefined, { signal: controller.signal });
+
+  const stream = readInBackground(events);
+
+  ctx.vmm.alive.delete(dead.pid);
+
+  await ctx.client.imps.list();
+
+  const repaired = await waitFor(() => {
+    const found = stream.items.find(
+      (event) => event.ev === 'ImpChanged' && event.reason === 'repaired',
+    );
+
+    invariant(found, 'no repaired event yet');
+
+    return found;
+  });
+
+  controller.abort();
+
+  expect(repaired).toMatchObject({ imp: { name: 'dead' } });
+});
+
+test('it reports an adopted change when a restarted impd adopts a running VM', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'alive', image: 'ubuntu' });
+
+  // the restarted impd adopts during its boot, before anything could listen
+  // on its event bus: the write its publisher turns into the event shows it
+  const writes: ImpWrite[] = [];
+
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    writes.push(write);
+  });
+
+  onTestFinished(unsubscribe);
+
+  // the first impd still holds its resolver's port in this process
+  const restarted = await createImpd(
+    { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
+    { ...ctx.deps, vms: ctx.vmm.startGeneration() },
+  );
+
+  ctx.stack.defer(() => restarted.broker.stop());
+
+  ctx.stack.defer(() => {
+    restarted.egress.stop();
+  });
+
+  ctx.stack.defer(() => {
+    restarted.diskUsage.stop();
+  });
+
+  const bootChanges = writes
+    .filter((write) => write.kind === 'changed')
+    .map((write) => `${write.reason} ${write.imp.name}`);
+
+  const events: ImpEvent[] = [];
+
+  onTestFinished(
+    restarted.imps.events.subscribe((event) => {
+      events.push(event);
+    }),
+  );
+
+  // each reconcile reports a VM it finds still running to the event bus
+  await restarted.imps.reconcileImps();
+
+  const adopted = await waitFor(() => {
+    const found = events.find((event) => event.ev === 'ImpChanged' && event.reason === 'adopted');
+
+    invariant(found, 'no adopted event yet');
+
+    return found;
+  });
+
+  expect(bootChanges).toContain('adopted alive');
+  expect(adopted).toMatchObject({ imp: { name: 'alive', state: 'running' } });
+});
+
+test('it puts a secret’s value in no event and no audit row', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const events = await ctx.client.events.stream(undefined, { signal: controller.signal });
+
+  const stream = readInBackground(events);
+
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_secretvalue0123456789' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  await waitFor(() => {
+    expect(stream.items).toPartiallyContain({ ev: 'ImpChanged', reason: 'slept' });
+  });
+
+  controller.abort();
+
+  // each audit row lands after its call's answer
+  const calls = await waitFor(async () => {
+    const listed = await listApiCalls(ctx.db, null, 100, null);
+
+    expect(listed).toHaveLength(4);
+
+    return listed;
+  });
+
+  expect(JSON.stringify(stream.items)).not.toInclude('ghp_secretvalue0123456789');
+  expect(JSON.stringify(calls)).not.toInclude('ghp_secretvalue0123456789');
+
+  // impd's clock is frozen, so every call takes 0 ms at the same time
+  expect(calls).toStrictEqual([
+    {
+      procedure: 'imps.sleep',
+      imp: 'dev',
+      actor: 'token',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
+    {
+      procedure: 'grants.add',
+      imp: 'dev',
+      actor: 'token',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
+    {
+      procedure: 'secrets.add',
+      actor: 'token',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
+    {
+      procedure: 'imps.create',
+      imp: 'dev',
+      actor: 'token',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
+  ]);
+});
+
+test('it ends a dashboard stream at the session’s expiry', async () => {
+  const ctx = await setupTest();
+
+  // a session that ends a millisecond after the test's frozen now
+  const dashboard: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: {
+        cookie: `imp_session=${buildSessionValue('root-token', { tokenId: ROOT_TOKEN_ID, expiresAt: ctx.clock.nowMs + 1 })}`,
+        'sec-fetch-site': 'same-origin',
+      },
+      fetch: (request) => ctx.impd.api.app.handle(request),
+    }),
+  );
+
+  const events = await dashboard.events.stream();
+
+  const stream = readInBackground(events);
+
+  const ended = await stream.ended;
+
+  expect(ended).toBeNull();
+});
+
+test('it ends a dashboard stream at any logout, and leaves a token’s stream open', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  const dashboard: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: {
+        cookie: `imp_session=${buildSessionValue('root-token', { tokenId: ROOT_TOKEN_ID, expiresAt: ctx.clock.nowMs + 60_000 })}`,
+        'sec-fetch-site': 'same-origin',
+      },
+      fetch: (request) => ctx.impd.api.app.handle(request),
+    }),
+  );
+
+  const dashboardEvents = await dashboard.events.stream();
+
+  const dashboardStream = readInBackground(dashboardEvents);
+
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const tokenEvents = await ctx.client.events.stream(undefined, { signal: controller.signal });
+
+  const tokenStream = readInBackground(tokenEvents);
+
+  const logout = await ctx.impd.api.app.handle(
     new Request('http://impd.test/auth/logout', {
       method: 'POST',
       headers: { 'sec-fetch-site': 'same-origin' },
     }),
   );
 
+  const dashboardEnded = await dashboardStream.ended;
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await waitFor(() => {
+    expect(tokenStream.items).toPartiallyContain({ ev: 'ImpAdded' });
+  });
+
+  controller.abort();
+
   expect(logout.status).toBe(204);
+  expect(dashboardEnded).toBeNull();
 
-  await dashboard.ended;
-
-  await ctx.client.imps.create({ name: 'dev' });
-  await token.waitFor('ImpAdded created dev');
-  await token.stop();
-
-  // the dashboard's mutations are its own in the audit log
-  await buildDashboardClient(ctx.app, ctx.now() + 60_000).imps.stop({ name: 'dev' });
-
-  const calls = await waitForCalls(ctx, 2);
-
-  expect(calls.map((call) => call.actor)).toEqual(['dashboard', 'token']);
+  expect(tokenStream.items[0]).toMatchObject({
+    ev: 'ImpAdded',
+    reason: 'created',
+    imp: { name: 'dev' },
+  });
 });
 
-// a decision as the governor sends one; no imp is named with a space
-function buildDecision(name: string): ImpEvent {
-  return {
-    v: EVENT_VERSION,
-    at: new Date(),
-    ev: 'GovernorDecision',
-    decision: 'admitted',
-    name,
-    trigger: 'admission',
-    usedMib: 0,
-    budgetMib: 1024,
-  };
-}
+test('it records a dashboard session’s calls in the audit log as the dashboard’s', async () => {
+  const ctx = await setupTest();
 
-// whether the stream is still open a moment on
-async function isOpen(stream: Readonly<{ ended: Promise<void> }>): Promise<boolean> {
-  const ended = await Promise.race([
-    stream.ended.then(() => true),
-    Bun.sleep(20).then(() => false),
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const dashboard: ContractRouterClient<ImpContract> = createORPCClient(
+    new RPCLink({
+      url: 'http://impd.test/rpc',
+      headers: {
+        cookie: `imp_session=${buildSessionValue('root-token', { tokenId: ROOT_TOKEN_ID, expiresAt: ctx.clock.nowMs + 60_000 })}`,
+        'sec-fetch-site': 'same-origin',
+      },
+      fetch: (request) => ctx.impd.api.app.handle(request),
+    }),
+  );
+
+  await dashboard.imps.stop({ name: 'dev' });
+
+  // each audit row lands after its call's answer
+  const calls = await waitFor(async () => {
+    const listed = await listApiCalls(ctx.db, null, 100, null);
+
+    expect(listed).toHaveLength(2);
+
+    return listed;
+  });
+
+  // impd's clock is frozen, so every call takes 0 ms at the same time
+  expect(calls).toStrictEqual([
+    {
+      procedure: 'imps.stop',
+      imp: 'dev',
+      actor: 'dashboard',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
+    {
+      procedure: 'imps.create',
+      imp: 'dev',
+      actor: 'token',
+      actorName: 'root',
+      at: new Date(Date.UTC(2026, 0, 1)),
+      durationMs: 0,
+      outcome: 'ok',
+    },
   ]);
+});
 
-  return !ended;
-}
+test('it drops an event that fails the schema and goes on', async () => {
+  const ctx = await setupTest();
 
-test('an event that fails the schema is dropped and the stream goes on', async () => {
-  const ctx = await setupEventTest();
-  const stream = await readEvents(ctx.client);
+  const controller = new AbortController();
 
-  ctx.imps.events.publish(buildDecision('boot template'));
-  ctx.imps.events.publish(buildDecision('good'));
+  onTestFinished(() => {
+    controller.abort();
+  });
 
-  await stream.waitFor('GovernorDecision admitted good');
+  const events = await ctx.client.events.stream(undefined, { signal: controller.signal });
 
-  const open = await isOpen(stream);
+  const stream = readInBackground(events);
+  const good = buildMockGovernorDecision({ name: 'good' });
+  const after = buildMockGovernorDecision({ name: 'after' });
 
-  expect(open).toBe(true);
+  // no imp is named with a space
+  ctx.impd.imps.events.publish(buildMockGovernorDecision({ name: 'boot template' }));
+  ctx.impd.imps.events.publish(good);
 
-  await stream.stop();
+  await waitFor(() => {
+    expect(stream.items).not.toBeEmpty();
+  });
 
-  expect(stream.lines()).toEqual(['GovernorDecision admitted good']);
+  // a stream that ended at the bad event would never send this one
+  ctx.impd.imps.events.publish(after);
 
-  expect(ctx.logs.filter((line) => line.includes('fail the event schema'))).toEqual([
+  await waitFor(() => {
+    expect(stream.items).toHaveLength(2);
+  });
+
+  controller.abort();
+
+  expect(stream.items).toStrictEqual([good, after]);
+
+  expect(ctx.logs.filter((line) => line.includes('fail the event schema'))).toStrictEqual([
     'impd: dropped 1 GovernorDecision event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
   ]);
 });
 
-test('a snapshot imp that fails the schema is dropped and the stream goes on', async () => {
-  const ctx = await setupEventTest();
+test('it drops a snapshot imp that fails the schema and goes on', async () => {
+  const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'bad' });
-  await ctx.client.imps.create({ name: 'good' });
+  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, {
+    name: 'ubuntu',
+    ref: 'ubuntu:latest',
+    digest: 'sha256:ubuntu',
+    sizeBytes: 6,
+  });
+
+  await ctx.client.imps.create({ name: 'bad', image: 'ubuntu' });
+  await ctx.client.imps.create({ name: 'good', image: 'ubuntu' });
 
   // a row no create would write
   await ctx.db.updateTable('imps').set({ name: 'Bad Name' }).where('name', '=', 'bad').execute();
 
-  const stream = await readEvents(ctx.client);
+  const controller = new AbortController();
 
-  await stream.waitFor('ImpAdded snapshot good');
+  onTestFinished(() => {
+    controller.abort();
+  });
 
-  ctx.imps.events.publish(buildDecision('later'));
+  const events = await ctx.client.events.stream(undefined, { signal: controller.signal });
 
-  await stream.waitFor('GovernorDecision admitted later');
+  const stream = readInBackground(events);
+  const later = buildMockGovernorDecision({ name: 'later' });
 
-  const open = await isOpen(stream);
+  await waitFor(() => {
+    expect(stream.items).not.toBeEmpty();
+  });
 
-  expect(open).toBe(true);
+  // a stream that ended at the bad imp would never send this one
+  ctx.impd.imps.events.publish(later);
 
-  await stream.stop();
+  await waitFor(() => {
+    expect(stream.items).toHaveLength(2);
+  });
 
-  expect(stream.lines()).toEqual(['ImpAdded snapshot good', 'GovernorDecision admitted later']);
+  controller.abort();
+
+  expect(stream.items).toMatchObject([
+    { ev: 'ImpAdded', reason: 'snapshot', imp: { name: 'good' } },
+    later,
+  ]);
 });
-
-async function waitUntil(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
-
-  while (!check()) {
-    if (Date.now() > deadline) {
-      throw new Error('the condition never held');
-    }
-
-    await Bun.sleep(1);
-  }
-}
-
-// the audit log once it holds `count` rows; each lands after its answer
-async function waitForCalls(ctx: Readonly<Pick<ImpTest, 'db'>>, count: number) {
-  const deadline = Date.now() + 5000;
-
-  for (;;) {
-    const calls = await listApiCalls(ctx.db, null, 100, null);
-
-    if (calls.length >= count || Date.now() > deadline) {
-      return calls;
-    }
-
-    await Bun.sleep(1);
-  }
-}

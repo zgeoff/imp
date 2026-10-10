@@ -186,6 +186,8 @@
       "dependencies": {
         "@faker-js/faker": "catalog:",
         "@mswjs/interceptors": "catalog:",
+        "@opentelemetry/api": "catalog:",
+        "@opentelemetry/sdk-trace-base": "catalog:",
         "msw": "catalog:",
       },
     },

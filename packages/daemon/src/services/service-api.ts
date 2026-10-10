@@ -68,6 +68,22 @@ interface ServiceApiParts {
 
   // the list a sleeping imp's last sleep recorded, if it did
   readonly readSleptServices: (imp: ImpRecord) => AgentServices | undefined;
+
+  // the clock and the timers of a follow's and a list's waits; Date.now and
+  // setTimeout by default
+  readonly now?: () => number;
+  readonly startTimer?: StartTimer;
+}
+
+// starts a timer and returns its cancel
+type StartTimer = (fire: () => void, ms: number) => () => void;
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
 }
 
 // lines in all when every service's log goes, split among them
@@ -91,10 +107,11 @@ const LIST_WAIT_MS = 10_000;
 // read, and a read never starts an imp. A sleeping imp has none; any other
 // state that does not run is INVALID_STATE.
 async function findRunningAgent(
-  runtime: Pick<ImpRuntime, 'findAgent'>,
+  context: Readonly<WaitContext>,
   name: string,
 ): Promise<{ readonly imp: ImpRecord; readonly vsockPath: string | null }> {
-  const deadline = Date.now() + LIST_WAIT_MS;
+  const runtime = context.runtime;
+  const deadline = context.now() + LIST_WAIT_MS;
 
   for (;;) {
     const found = await runtime.findAgent(name);
@@ -103,7 +120,7 @@ async function findRunningAgent(
       return found;
     }
 
-    if (found.imp.state !== 'running' || Date.now() > deadline) {
+    if (found.imp.state !== 'running' || context.now() > deadline) {
       throw buildInvalidStateError(
         found.imp.state,
         ['running', 'sleeping'],
@@ -111,8 +128,21 @@ async function findRunningAgent(
       );
     }
 
-    await Bun.sleep(FOLLOW_RETRY_MS);
+    const waited = Promise.withResolvers<undefined>();
+
+    context.startTimer(() => {
+      waited.resolve(undefined);
+    }, FOLLOW_RETRY_MS);
+
+    await waited.promise;
   }
+}
+
+// what a list's and a follow's waits read
+interface WaitContext {
+  readonly runtime: Pick<ImpRuntime, 'findAgent'>;
+  readonly now: () => number;
+  readonly startTimer: StartTimer;
 }
 
 interface NamedStream {
@@ -155,7 +185,14 @@ export function createServiceApi(parts: ServiceApiParts): ServiceApi {
   const follows = new Set<FollowControl>();
 
   const restart = { started: false };
-  const followContext: FollowContext = { runtime, events: parts.events, restart };
+
+  const followContext: FollowContext = {
+    runtime,
+    events: parts.events,
+    restart,
+    now: parts.now ?? Date.now,
+    startTimer: parts.startTimer ?? startRealTimer,
+  };
 
   const openLogs: ServiceApi['openServiceLogs'] = async (name, request) => {
     if (!request.follow) {
@@ -203,7 +240,7 @@ export function createServiceApi(parts: ServiceApiParts): ServiceApi {
 
   return {
     listServices: async (name) => {
-      const found = await findRunningAgent(runtime, name);
+      const found = await findRunningAgent(followContext, name);
 
       if (found.vsockPath === null) {
         const slept = parts.readSleptServices(found.imp);
@@ -286,8 +323,7 @@ export function createServiceApi(parts: ServiceApiParts): ServiceApi {
 }
 
 // what a follow needs of impd
-interface FollowContext {
-  readonly runtime: Pick<ImpRuntime, 'findAgent'>;
+interface FollowContext extends WaitContext {
   readonly events: Pick<EventBus, 'subscribe'>;
   readonly restart: { readonly started: boolean };
 }
@@ -335,7 +371,7 @@ async function* readFollowedLogs(
         // lock goes: look again soon, not at the next event
         const waitMs = found.imp.state === 'running' ? FOLLOW_RETRY_MS : FOLLOW_RECHECK_MS;
 
-        await waitForImpChange(context.events, name, signal, waitMs);
+        await waitForImpChange(context, name, signal, waitMs);
 
         continue;
       }
@@ -356,7 +392,7 @@ async function* readFollowedLogs(
           throw error;
         }
 
-        await waitForImpChange(context.events, name, signal, FOLLOW_RETRY_MS);
+        await waitForImpChange(context, name, signal, FOLLOW_RETRY_MS);
 
         continue;
       }
@@ -387,7 +423,7 @@ async function* readFollowedLogs(
       break;
     }
 
-    await waitForImpChange(context.events, name, signal, FOLLOW_RETRY_MS);
+    await waitForImpChange(context, name, signal, FOLLOW_RETRY_MS);
   }
 
   yield* decoders.readRest();
@@ -491,7 +527,7 @@ function stopStreams(streams: readonly NamedStream[]): void {
 
 // Resolves on the imp's next event, after `timeoutMs`, or on the abort.
 function waitForImpChange(
-  events: Pick<EventBus, 'subscribe'>,
+  context: Readonly<Pick<FollowContext, 'events' | 'startTimer'>>,
   name: string,
   signal: Readonly<AbortSignal>,
   timeoutMs: number,
@@ -503,20 +539,20 @@ function waitForImpChange(
   const waiting = Promise.withResolvers<void>();
 
   const stopWaiting = (): void => {
-    clearTimeout(timer);
+    cancelTimer();
     unsubscribe();
 
     signal.removeEventListener('abort', stopWaiting);
     waiting.resolve();
   };
 
-  const unsubscribe = events.subscribe((event: Readonly<ImpEvent>) => {
+  const unsubscribe = context.events.subscribe((event: Readonly<ImpEvent>) => {
     if ('imp' in event && event.imp.name === name) {
       stopWaiting();
     }
   });
 
-  const timer = setTimeout(stopWaiting, timeoutMs);
+  const cancelTimer = context.startTimer(stopWaiting, timeoutMs);
 
   signal.addEventListener('abort', stopWaiting, { once: true });
 

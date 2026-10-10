@@ -504,7 +504,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       () => null,
     );
 
-    const started = performance.now();
+    const started = context.sleepTiming.now();
 
     // what the event stream reports about this sleep
     const slept: { detail: ImpEventDetail } = { detail: { trigger: reason } };
@@ -535,7 +535,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         writeIdentity(imp, paths, { ...booted, bootReason: null });
       }
 
-      const sleepMs = Math.round(performance.now() - started);
+      const sleepMs = Math.round(context.sleepTiming.now() - started);
       const waited = waitedMs > 0 ? `, waited ${String(waitedMs)}ms for a young guest` : '';
 
       slept.detail = {
@@ -595,7 +595,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     requireTransition(imp.state, 'sleeping', 'sleep');
 
     // the slept event's prepareMs counts from here
-    const requestedAt = performance.now();
+    const requestedAt = context.sleepTiming.now();
     const paths = context.findPaths(imp.id);
     const pid = imp.pid;
 
@@ -614,6 +614,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
             readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
             minUptimeMs: context.config.sleepMinGuestUptimeMs,
             isWanted: youngGuest.isWanted,
+            now: context.sleepTiming.now,
+            sleep: context.sleepTiming.sleep,
           })
         : 0;
 

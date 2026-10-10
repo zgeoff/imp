@@ -1,218 +1,235 @@
 import { expect, test } from 'bun:test';
 import { buildRamBudgetError } from '../api-errors';
-import { buildTestCaller } from '../auth/test-callers';
+import { buildMockCaller } from '../test-utils/build-mock-caller';
+import { buildStubAgentExecStream } from '../test-utils/build-stub-agent-exec-stream';
+import { buildStubExecBackend } from '../test-utils/build-stub-exec-backend';
 import { buildGrantedBackend } from './exec-grant';
-import type { ExecBackend } from './exec-session';
 
-// a backend that records which imps it opened; the stream is never used
-function buildBackend() {
-  const opened: string[] = [];
+test('it opens an exec in an imp the token may exec in', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const granted = buildGrantedBackend(stub.backend, { caller: buildMockCaller(), name: null });
 
-  const backend: ExecBackend = {
-    openExec: (name) => {
-      opened.push(name);
+  await expect(granted.openExec('a', { argv: ['true'], tty: false })).toResolve();
 
-      return Promise.reject(new Error('opened'));
+  expect(stub.opens).toStrictEqual([
+    { kind: 'exec', name: 'a', request: { argv: ['true'], tty: false }, feature: undefined },
+  ]);
+});
+
+test("it opens an exec in a ticket's own imp", async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const caller = buildMockCaller({ kind: 'dashboard' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: 'a' });
+
+  await expect(granted.openExec('a', { argv: ['true'], tty: false })).toResolve();
+
+  expect(stub.opens).toStrictEqual([
+    { kind: 'exec', name: 'a', request: { argv: ['true'], tty: false }, feature: undefined },
+  ]);
+});
+
+test("it attaches to a session in a ticket's own imp", async () => {
+  const stub = buildStubExecBackend({ attach: buildStubAgentExecStream().stream });
+  const caller = buildMockCaller({ kind: 'dashboard' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: 'a' });
+
+  await expect(granted.openAttach('a', { session: 'main' })).toResolve();
+
+  expect(stub.opens).toStrictEqual([{ kind: 'attach', name: 'a', request: { session: 'main' } }]);
+});
+
+test("it refuses an exec in an imp other than the ticket's", () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ kind: 'dashboard' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: 'a' });
+
+  expect(granted.openExec('b', { argv: ['true'], tty: false })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'the exec ticket is for imp a',
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test("it refuses an attach in an imp other than the ticket's", () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ kind: 'dashboard' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: 'a' });
+
+  expect(granted.openAttach('b', { session: 'main' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'the exec ticket is for imp a',
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test('it refuses an exec on a socket with no grant', () => {
+  const stub = buildStubExecBackend();
+  const granted = buildGrantedBackend(stub.backend, undefined);
+
+  expect(granted.openExec('a', { argv: ['true'], tty: false })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'the exec socket was not authorized',
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test('it refuses an exec for a read token', () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'read' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(granted.openExec('dev-a', { argv: ['true'], tty: false })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} may not exec in imp dev-a`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test("it refuses an attach outside a patterned token's imps", () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'exec', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(granted.openAttach('prod', { session: 'main' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} may not exec in imp prod`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test("it opens an exec in one of a patterned token's imps", async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const caller = buildMockCaller({ scope: 'exec', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  await expect(granted.openExec('dev-a', { argv: ['true'], tty: false })).toResolve();
+
+  expect(stub.opens).toStrictEqual([
+    { kind: 'exec', name: 'dev-a', request: { argv: ['true'], tty: false }, feature: undefined },
+  ]);
+});
+
+test("it refuses a tool on a ticket's own imp", () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ kind: 'dashboard' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: 'a' });
+
+  expect(
+    granted.openExec(
+      'a',
+      { argv: ['/run/imp/sys/imp-agent', 'tar', 'create', '/etc'], tty: false, user: 'root' },
+      'cp',
+    ),
+  ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'an exec ticket cannot run a tool' });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test('it opens a tool with its feature for a manage token', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const caller = buildMockCaller({ scope: 'manage' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  await expect(
+    granted.openExec('a', { argv: ['tar'], tty: false, user: 'root' }, 'cp'),
+  ).toResolve();
+
+  expect(stub.opens).toStrictEqual([
+    {
+      kind: 'exec',
+      name: 'a',
+      request: { argv: ['tar'], tty: false, user: 'root' },
+      feature: 'cp',
     },
-    openAttach: (name) => {
-      opened.push(`attach ${name}`);
+  ]);
+});
 
-      return Promise.reject(new Error('opened'));
+test('it refuses a tool for a read token', () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'read' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(
+    granted.openExec('a', { argv: ['tar'], tty: false, user: 'root' }, 'cp'),
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} may not exec in imp a`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test('it refuses a tool for an exec token', () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'exec' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(
+    granted.openExec('a', { argv: ['tar'], tty: false, user: 'root' }, 'cp'),
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} needs scope manage to copy as root`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test("it refuses a tool outside a patterned manage token's imps", () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'manage', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(
+    granted.openExec('prod', { argv: ['tar'], tty: false, user: 'root' }, 'cp'),
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} may not exec in imp prod`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test("it opens a tool in one of a patterned manage token's imps", async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const caller = buildMockCaller({ scope: 'manage', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  await expect(
+    granted.openExec('dev-a', { argv: ['tar'], tty: false, user: 'root' }, 'cp'),
+  ).toResolve();
+
+  expect(stub.opens).toStrictEqual([
+    {
+      kind: 'exec',
+      name: 'dev-a',
+      request: { argv: ['tar'], tty: false, user: 'root' },
+      feature: 'cp',
     },
-    recordActivity: () => Promise.resolve(),
-  };
-
-  return { backend, opened };
-}
-
-test('a token grant starts any imp the token may exec in', async () => {
-  const ctx = buildBackend();
-  const granted = buildGrantedBackend(ctx.backend, { caller: buildTestCaller(), name: null });
-
-  await granted.openExec('a', { argv: ['true'], tty: false }).catch(() => {});
-  await granted.openExec('b', { argv: ['true'], tty: false }).catch(() => {});
-
-  expect(ctx.opened).toEqual(['a', 'b']);
+  ]);
 });
 
-test('a ticket grant starts only its imp', async () => {
-  const ctx = buildBackend();
-  const caller = buildTestCaller({ kind: 'dashboard' });
-  const granted = buildGrantedBackend(ctx.backend, { caller, name: 'a' });
-
-  await granted.openExec('a', { argv: ['true'], tty: false }).catch(() => {});
-  await granted.openAttach('a', { session: 'main' }).catch(() => {});
-
-  const rejection = await granted
-    .openExec('b', { argv: ['true'], tty: false })
-    .catch((error: unknown) => error);
-
-  const attachRejection = await granted
-    .openAttach('b', { session: 'main' })
-    .catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(attachRejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual(['a', 'attach a']);
-});
-
-test('a read token starts nothing, and a patterned one only its imps', async () => {
-  const ctx = buildBackend();
-
-  const reader = buildGrantedBackend(ctx.backend, {
-    caller: buildTestCaller({ scope: 'read' }),
-    name: null,
+test("it names only the imps the caller may read in an exec's refused boot", () => {
+  const stub = buildStubExecBackend({
+    exec: buildRamBudgetError({
+      budgetMib: 800,
+      usedMib: 600,
+      requestedMib: 300,
+      protected: [
+        { name: 'dev-b', ramMib: 300, leased: true, busy: false },
+        { name: 'prod', ramMib: 300, leased: false, busy: true },
+      ],
+    }),
   });
 
-  const patterned = buildGrantedBackend(ctx.backend, {
-    caller: buildTestCaller({ scope: 'exec', imps: ['dev-*'] }),
-    name: null,
-  });
+  const caller = buildMockCaller({ scope: 'exec', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
 
-  const readRejection = await reader
-    .openExec('dev-a', { argv: ['true'], tty: false })
-    .catch((error: unknown) => error);
-
-  const otherRejection = await patterned
-    .openAttach('prod', { session: 'main' })
-    .catch((error: unknown) => error);
-
-  await patterned.openExec('dev-a', { argv: ['true'], tty: false }).catch(() => {});
-
-  expect(readRejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(otherRejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual(['dev-a']);
-});
-
-test('a socket with no grant starts nothing', async () => {
-  const ctx = buildBackend();
-  const granted = buildGrantedBackend(ctx.backend, undefined);
-
-  const rejection = await granted
-    .openExec('a', { argv: ['true'], tty: false })
-    .catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual([]);
-});
-
-test('a ticket grant never starts a tool, even on its own imp', async () => {
-  const ctx = buildBackend();
-  const caller = buildTestCaller({ kind: 'dashboard' });
-  const granted = buildGrantedBackend(ctx.backend, { caller, name: 'a' });
-  const request = { argv: ['/run/imp/sys/imp-agent', 'tar', 'create', '/etc'], tty: false };
-
-  const rejection = await granted
-    .openExec('a', { ...request, user: 'root' }, 'cp')
-    .catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual([]);
-});
-
-test('a token grant passes a tool and its feature through', async () => {
-  const features: unknown[] = [];
-
-  const backend: ExecBackend = {
-    openExec: (_name, _request, feature) => {
-      features.push(feature);
-
-      return Promise.reject(new Error('opened'));
-    },
-    openAttach: () => Promise.reject(new Error('opened')),
-    recordActivity: () => Promise.resolve(),
-  };
-
-  const granted = buildGrantedBackend(backend, { caller: buildTestCaller(), name: null });
-
-  await granted.openExec('a', { argv: ['true'], tty: false, user: 'root' }, 'cp').catch(() => {});
-
-  expect(features).toEqual(['cp']);
-});
-
-test('a read token cannot run a tool', async () => {
-  const ctx = buildBackend();
-
-  const reader = buildGrantedBackend(ctx.backend, {
-    caller: buildTestCaller({ scope: 'read' }),
-    name: null,
-  });
-
-  const rejection = await reader
-    .openExec('a', { argv: ['tar'], tty: false, user: 'root' }, 'cp')
-    .catch((error: unknown) => error);
-
-  expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual([]);
-});
-
-test('a pattern token runs a tool only on its imps', async () => {
-  const ctx = buildBackend();
-
-  const patterned = buildGrantedBackend(ctx.backend, {
-    caller: buildTestCaller({ scope: 'manage', imps: ['dev-*'] }),
-    name: null,
-  });
-
-  const tool = { argv: ['tar'], tty: false, user: 'root' };
-
-  const rejection = await patterned.openExec('prod', tool, 'cp').catch((error: unknown) => error);
-
-  await patterned.openExec('dev-a', tool, 'cp').catch(() => {});
-
-  expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual(['dev-a']);
-});
-
-test('a tool needs manage: an exec token is refused, a manage token passes', async () => {
-  const ctx = buildBackend();
-  const tool = { argv: ['tar'], tty: false, user: 'root' };
-
-  const execToken = buildGrantedBackend(ctx.backend, {
-    caller: buildTestCaller({ scope: 'exec' }),
-    name: null,
-  });
-
-  const manageToken = buildGrantedBackend(ctx.backend, {
-    caller: buildTestCaller({ scope: 'manage' }),
-    name: null,
-  });
-
-  const rejection = await execToken.openExec('a', tool, 'cp').catch((error: unknown) => error);
-
-  await execToken.openExec('a', { argv: ['true'], tty: false }).catch(() => {});
-  await manageToken.openExec('b', tool, 'cp').catch(() => {});
-
-  expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual(['a', 'b']);
-});
-
-test('a refused boot over the socket names only the imps the caller may read', async () => {
-  const backend: ExecBackend = {
-    openExec: () =>
-      Promise.reject(
-        buildRamBudgetError({
-          budgetMib: 800,
-          usedMib: 600,
-          requestedMib: 300,
-          protected: [
-            { name: 'dev-b', ramMib: 300, leased: true, busy: false },
-            { name: 'prod', ramMib: 300, leased: false, busy: true },
-          ],
-        }),
-      ),
-    openAttach: () => Promise.reject(new Error('unused')),
-    recordActivity: () => Promise.resolve(),
-  };
-
-  const caller = buildTestCaller({ scope: 'exec', imps: ['dev-*'] });
-  const granted = buildGrantedBackend(backend, { caller, name: null });
-
-  const refusal = await granted
-    .openExec('dev-a', { argv: ['true'], tty: false })
-    .catch((error: unknown) => error);
-
-  expect(refusal).toMatchObject({
+  expect(granted.openExec('dev-a', { argv: ['true'], tty: false })).rejects.toMatchObject({
     code: 'RAM_BUDGET_EXCEEDED',
     data: {
       neededMib: 100,
@@ -222,34 +239,111 @@ test('a refused boot over the socket names only the imps the caller may read', a
   });
 });
 
-test('an outer exec needs host-wide manage, and no ticket starts one', async () => {
-  const outer = { argv: ['sh'], tty: true, outer: true };
+test("it names only the imps the caller may read in an attach's refused boot", () => {
+  const stub = buildStubExecBackend({
+    attach: buildRamBudgetError({
+      budgetMib: 800,
+      usedMib: 600,
+      requestedMib: 300,
+      protected: [
+        { name: 'dev-b', ramMib: 300, leased: true, busy: false },
+        { name: 'prod', ramMib: 300, leased: false, busy: true },
+      ],
+    }),
+  });
 
-  const open = async (grant: Parameters<typeof buildGrantedBackend>[1]) => {
-    const ctx = buildBackend();
+  const caller = buildMockCaller({ scope: 'exec', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
 
-    const result = await buildGrantedBackend(ctx.backend, grant)
-      .openExec('dev', outer, 'outer-exec')
-      .catch((error: unknown) => error);
+  expect(granted.openAttach('dev-a', { session: 'main' })).rejects.toMatchObject({
+    code: 'RAM_BUDGET_EXCEEDED',
+    data: {
+      protected: [{ name: 'dev-b', ramMib: 300, leased: true, busy: false }],
+      protectedHidden: 1,
+    },
+  });
+});
 
-    return { result, opened: ctx.opened };
-  };
+test('it passes a failure that hides no imps through unchanged', () => {
+  const failure = new Error('dev is stopped');
 
-  const refusals = [
-    { caller: buildTestCaller({ scope: 'exec' }), name: null },
-    { caller: buildTestCaller({ scope: 'manage', imps: ['dev'] }), name: null },
-    { caller: buildTestCaller({ kind: 'dashboard', scope: 'manage' }), name: 'dev' },
-    undefined,
-  ];
+  const stub = buildStubExecBackend({ exec: failure });
+  const granted = buildGrantedBackend(stub.backend, { caller: buildMockCaller(), name: null });
 
-  for (const grant of refusals) {
-    const refused = await open(grant);
+  expect(granted.openExec('dev', { argv: ['true'], tty: false })).rejects.toBe(failure);
+});
 
-    expect(refused.result).toMatchObject({ code: 'FORBIDDEN' });
-    expect(refused.opened).toEqual([]);
-  }
+test('it opens an exec in the agent for a host-wide manage token', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const caller = buildMockCaller({ scope: 'manage' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
 
-  const allowed = await open({ caller: buildTestCaller({ scope: 'manage' }), name: null });
+  await expect(
+    granted.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).toResolve();
 
-  expect(allowed.opened).toEqual(['dev']);
+  expect(stub.opens).toStrictEqual([
+    {
+      kind: 'exec',
+      name: 'dev',
+      request: { argv: ['sh'], tty: true, outer: true },
+      feature: 'outer-exec',
+    },
+  ]);
+});
+
+test('it refuses an exec in the agent for an exec token', () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'exec' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(
+    granted.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} needs host-wide scope manage to exec in the agent`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test('it refuses an exec in the agent for a manage token limited to some imps', () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ scope: 'manage', imps: ['dev'] });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: null });
+
+  expect(
+    granted.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: `token ${caller.name} needs host-wide scope manage to exec in the agent`,
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test("it refuses an exec in the agent on a ticket's own imp", () => {
+  const stub = buildStubExecBackend();
+  const caller = buildMockCaller({ kind: 'dashboard', scope: 'manage' });
+  const granted = buildGrantedBackend(stub.backend, { caller, name: 'dev' });
+
+  expect(
+    granted.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'an exec ticket cannot run an exec in the agent',
+  });
+
+  expect(stub.opens).toStrictEqual([]);
+});
+
+test('it refuses an exec in the agent on a socket with no grant', () => {
+  const stub = buildStubExecBackend();
+  const granted = buildGrantedBackend(stub.backend, undefined);
+
+  expect(
+    granted.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec'),
+  ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'the exec socket was not authorized' });
+
+  expect(stub.opens).toStrictEqual([]);
 });

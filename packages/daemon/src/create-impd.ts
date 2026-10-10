@@ -124,6 +124,7 @@ type ImpBoundaries = Pick<
   | 'memoryLimit'
   | 'now'
   | 'sleep'
+  | 'sleepTiming'
   | 'openTap'
 >;
 

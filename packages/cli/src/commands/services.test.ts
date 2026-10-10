@@ -16,11 +16,11 @@ import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubServiceAgent } from '@imp/daemon/src/test-utils/start-stub-service-agent';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { runCli } from '../test-utils/start-cli';
-import { startStubServiceAgent } from '../test-utils/start-stub-service-agent';
 import { UsageError } from '../usage-error';
 import { buildServiceDef, createLogPrinter, formatLogEvent } from './services';
 
@@ -272,10 +272,10 @@ test.each([
 test('#serviceCommand sends the definition to the guest with --env given more than once', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
-  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket);
 
-  ctx.stack.defer(() => {
-    agent.close();
+  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    knowsServices: true,
+    stack: ctx.stack,
   });
 
   const result = await runCli({
@@ -308,10 +308,10 @@ test('#serviceCommand sends the definition to the guest with --env given more th
 test('#serviceCommand adds the service and then sets the imp’s HTTP port for --http-port', async () => {
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
-  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket);
 
-  ctx.stack.defer(() => {
-    agent.close();
+  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    knowsServices: true,
+    stack: ctx.stack,
   });
 
   const result = await runCli({
@@ -353,11 +353,7 @@ test('#serviceCommand sets no HTTP port when the guest refuses the add', async (
 
   const vsockPath = buildImpPaths(ctx.dataDir, imp.id).vsockSocket;
 
-  const agent = await startStubServiceAgent(vsockPath);
-
-  ctx.stack.defer(() => {
-    agent.close();
-  });
+  const agent = await startStubServiceAgent(vsockPath, { knowsServices: true, stack: ctx.stack });
 
   // the guest has a service web already, so an add without --replace is refused
   await sendServicesAdd(vsockPath, { name: 'web', argv: ['httpd'] }, false);
@@ -388,10 +384,10 @@ test('#serviceCommand says the service runs and how to set the port when an exec
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
   const made = await ctx.client.tokens.create({ name: 'runner', scope: 'exec' });
-  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket);
 
-  ctx.stack.defer(() => {
-    agent.close();
+  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    knowsServices: true,
+    stack: ctx.stack,
   });
 
   const result = await runCli({

@@ -97,8 +97,13 @@ interface SessionLogDeps {
   readonly now: () => number;
   readonly log: (message: string) => void;
 
-  // how long appended bytes wait for their flush; a test shortens it
-  readonly commitDelayMs?: number;
+  // starts each log's commit timer; setTimeout by default, a test fires it
+  readonly startTimer?: GenerationLogOptions['startTimer'];
+
+  // called once per look (observe, tapNow) as every tap it tried has reached
+  // its pump or been refused; the look itself runs on until its pumps end
+  // and changes nothing for it. A test waits on it.
+  readonly onLookDone?: () => void;
   readonly openTap?: (
     vsockPath: string,
     session: string,
@@ -216,7 +221,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     requireRoom: deps.requireRoom,
     now: deps.now,
     log: deps.log,
-    ...(deps.commitDelayMs !== undefined && { commitDelayMs: deps.commitDelayMs }),
+    ...(deps.startTimer !== undefined && { startTimer: deps.startTimer }),
   });
 
   const readLive = (impId: string) => (generation: string) =>
@@ -518,6 +523,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     entry: LiveLog,
     tap: Readonly<ExecStream>,
     life: number,
+    emitReached: () => void,
   ): Promise<void> => {
     const output = tap.output;
 
@@ -587,6 +593,8 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     next.log.setOrigin(output.offset);
 
+    emitReached();
+
     await runTap(imp, next, tap, life);
   };
 
@@ -602,6 +610,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     entry: LiveLog,
     life: number,
     opening: OpeningTap,
+    emitReached: () => void,
   ): Promise<void> => {
     const meta = entry.log.readMeta();
     const logEnd = readGenerationBounds(meta).logEnd;
@@ -644,7 +653,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     if (resume?.kind === 'generation_changed') {
       removeSlot(entry.key, opening);
 
-      await startNextGeneration(imp, entry, tap, life);
+      await startNextGeneration(imp, entry, tap, life, emitReached);
 
       return;
     }
@@ -664,13 +673,16 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     taps.set(entry.key, tap);
 
+    emitReached();
+
     await runTap(imp, entry, tap, life);
   };
 
-  const startTap = async (
+  const openSessionTap = async (
     imp: SessionLogImp,
     session: Readonly<TappedSession>,
     life: number,
+    emitReached: () => void,
   ): Promise<void> => {
     const generation = session.execution_generation;
     const bootId = session.boot_id;
@@ -721,19 +733,60 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
         return;
       }
 
-      await openEntryTap(imp, entry, life, opening);
+      await openEntryTap(imp, entry, life, opening, emitReached);
     } catch (error) {
       removeSlot(key, opening);
       throw error;
     }
   };
 
-  const runInBackground = (imp: SessionLogImp, task: () => Promise<void>): void => {
+  // taps the session until its tap ends; `emitReached` runs once, as its
+  // pump starts or as soon as no pump will
+  const startTap = async (
+    imp: SessionLogImp,
+    session: Readonly<TappedSession>,
+    life: number,
+    emitReached: () => void,
+  ): Promise<void> => {
+    const reached = { isDone: false };
+
+    const emitReachedOnce = (): void => {
+      if (!reached.isDone) {
+        reached.isDone = true;
+
+        emitReached();
+      }
+    };
+
+    try {
+      await openSessionTap(imp, session, life, emitReachedOnce);
+    } finally {
+      emitReachedOnce();
+    }
+  };
+
+  // runs the look; its `emitLookDone` reports it to onLookDone once, early
+  // when the look says so, else when it ends
+  const runInBackground = (
+    imp: SessionLogImp,
+    task: (emitLookDone: () => void) => Promise<void>,
+  ): void => {
+    const looked = { isDone: false };
+
+    const emitLookDone = (): void => {
+      if (!looked.isDone) {
+        looked.isDone = true;
+        deps.onLookDone?.();
+      }
+    };
+
     void (async () => {
       try {
-        await task();
+        await task(emitLookDone);
       } catch (error) {
         printError(imp, error);
+      } finally {
+        emitLookDone();
       }
     })();
   };
@@ -774,7 +827,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
         return;
       }
 
-      runInBackground(imp, async () => {
+      runInBackground(imp, async (emitLookDone) => {
         await loadImpLogs(imp, life);
 
         if (isForgotten(imp.id, life)) {
@@ -798,16 +851,28 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
         const logged = sessions.filter((session) => session.log === true);
 
-        await Promise.all(logged.map((session) => startTap(imp, session, life)));
+        // the look is done for onLookDone once every tap reached its pump or
+        // was refused; it still ends only as its pumps end
+        const unreached = { count: logged.length };
+
+        const emitReached = (): void => {
+          unreached.count -= 1;
+
+          if (unreached.count === 0) {
+            emitLookDone();
+          }
+        };
+
+        await Promise.all(logged.map((session) => startTap(imp, session, life, emitReached)));
       });
     },
 
     tapNow: (imp, session) => {
       const life = readLife(imp.id);
 
-      runInBackground(imp, async () => {
+      runInBackground(imp, async (emitLookDone) => {
         await loadImpLogs(imp, life);
-        await startTap(imp, session, life);
+        await startTap(imp, session, life, emitLookDone);
       });
     },
 

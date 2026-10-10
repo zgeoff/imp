@@ -1,45 +1,11 @@
-import { afterEach, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { EVENT_VERSION } from '@imp/api';
-import type { ImpEvent } from '@imp/api';
-import { metrics } from '@opentelemetry/api';
-import {
-  AggregationTemporality,
-  InMemoryMetricExporter,
-  MeterProvider,
-  PeriodicExportingMetricReader,
-} from '@opentelemetry/sdk-metrics';
+import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
+import { startInMemoryMetrics } from '../test-utils/start-in-memory-metrics';
 import { createEventCheck } from './event-check';
 
-const AT = new Date('2026-10-02T12:00:00Z');
-
-afterEach(() => {
-  metrics.disable();
-});
-
-function buildDecision(name: string): ImpEvent {
-  return {
-    v: EVENT_VERSION,
-    at: AT,
-    ev: 'GovernorDecision',
-    decision: 'slept',
-    name,
-    trigger: 'admission',
-    usedMib: 0,
-    budgetMib: 1024,
-  };
-}
-
-// a check over a clock the test moves, with its log lines and the
-// `imp.events.dropped` points as `attributes=value`
-function setupEventCheck() {
-  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-
-  const meterProvider = new MeterProvider({
-    readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 3_600_000 })],
-  });
-
-  metrics.setGlobalMeterProvider(meterProvider);
-
+function setupTest() {
+  const metrics = startInMemoryMetrics();
   const clock = { ms: 0 };
   const logs: string[] = [];
 
@@ -50,107 +16,90 @@ function setupEventCheck() {
     now: () => clock.ms,
   });
 
-  const readDropped = async (): Promise<string[]> => {
-    await meterProvider.forceFlush();
-
-    const metric = exporter
-      .getMetrics()
-      .flatMap((resource) => resource.scopeMetrics)
-      .flatMap((scope) => scope.metrics)
-      .findLast((candidate) => candidate.descriptor.name === 'imp.events.dropped');
-
-    return (metric?.dataPoints ?? []).map(
-      (point) => `${JSON.stringify(point.attributes)}=${JSON.stringify(point.value)}`,
-    );
-  };
-
-  return {
-    isValid,
-    logs,
-    clock,
-    readDropped,
-    async [Symbol.asyncDispose]() {
-      await meterProvider.shutdown();
-    },
-  };
+  return { metrics, clock, logs, isValid };
 }
 
-test('a valid event passes', async () => {
-  await using check = setupEventCheck();
+test('it passes an event that the schema accepts, and logs and counts nothing', async () => {
+  const ctx = setupTest();
+  const isValid = ctx.isValid(buildMockGovernorDecision());
 
-  expect(check.isValid(buildDecision('dev'))).toBe(true);
-  expect(check.logs).toEqual([]);
+  const dropped = await ctx.metrics.readPoints('imp.events.dropped');
 
-  const dropped = await check.readDropped();
-
-  expect(dropped).toEqual([]);
+  expect(isValid).toBe(true);
+  expect(ctx.logs).toStrictEqual([]);
+  expect(dropped).toStrictEqual([]);
 });
 
-test('an event that fails the schema is counted and logged once, whoever checks it', async () => {
-  await using check = setupEventCheck();
+test('it counts and logs an event that fails the schema once, however many streams check it', async () => {
+  const ctx = setupTest();
 
-  // no imp is named with a space; three streams check the one event
-  const event = buildDecision('boot template');
+  // no imp is named with a space
+  const event = buildMockGovernorDecision({ name: 'boot template' });
+  const checks = [ctx.isValid(event), ctx.isValid(event), ctx.isValid(event)];
 
-  expect([check.isValid(event), check.isValid(event), check.isValid(event)]).toEqual([
-    false,
-    false,
-    false,
-  ]);
+  const dropped = await ctx.metrics.readPoints('imp.events.dropped');
 
-  expect(check.logs).toEqual([
+  expect(checks).toStrictEqual([false, false, false]);
+
+  expect(ctx.logs).toStrictEqual([
     'impd: dropped 1 GovernorDecision event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
   ]);
 
-  const dropped = await check.readDropped();
-
-  expect(dropped).toEqual(['{"ev":"GovernorDecision"}=1']);
+  expect(dropped).toStrictEqual([{ attributes: { ev: 'GovernorDecision' }, value: 1 }]);
 });
 
-test('drops of one type are logged at most every 5 minutes, with the count since', async () => {
-  await using check = setupEventCheck();
+test('it logs the drops of one type at most every 5 minutes, with the count since', async () => {
+  const ctx = setupTest();
 
-  check.isValid(buildDecision('Bad'));
+  ctx.isValid(buildMockGovernorDecision({ name: 'Bad' }));
 
-  check.clock.ms = 60_000;
+  ctx.clock.ms = 60_000;
 
-  check.isValid(buildDecision('Worse'));
-  check.isValid(buildDecision('1st'));
+  ctx.isValid(buildMockGovernorDecision({ name: 'Worse' }));
+  ctx.isValid(buildMockGovernorDecision({ name: '1st' }));
 
-  check.clock.ms = 5 * 60_000;
+  ctx.clock.ms = 5 * 60_000;
 
-  check.isValid(buildDecision('Last'));
+  ctx.isValid(buildMockGovernorDecision({ name: 'Last' }));
 
-  expect(check.logs.map((line) => line.split(';')[0])).toEqual([
-    'impd: dropped 1 GovernorDecision event(s) that fail the event schema',
-    'impd: dropped 3 GovernorDecision event(s) that fail the event schema',
+  const dropped = await ctx.metrics.readPoints('imp.events.dropped');
+
+  expect(ctx.logs).toStrictEqual([
+    'impd: dropped 1 GovernorDecision event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+    'impd: dropped 3 GovernorDecision event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
   ]);
 
-  const dropped = await check.readDropped();
-
-  expect(dropped).toEqual(['{"ev":"GovernorDecision"}=4']);
+  expect(dropped).toStrictEqual([{ attributes: { ev: 'GovernorDecision' }, value: 4 }]);
 });
 
-test('each event type has its own log interval', async () => {
-  await using check = setupEventCheck();
+test('it keeps a log interval for each event type', async () => {
+  const ctx = setupTest();
 
-  const checkpoint: ImpEvent = {
+  ctx.isValid(buildMockGovernorDecision({ name: 'Bad' }));
+
+  ctx.isValid({
     v: EVENT_VERSION,
-    at: AT,
+    at: new Date('2026-10-02T12:00:00Z'),
     ev: 'CheckpointAdded',
     name: 'Bad',
-    checkpoint: { id: 'id-1', createdAt: AT, diskMib: 1024 },
-  };
+    checkpoint: { id: 'id-1', createdAt: new Date('2026-10-02T12:00:00Z'), diskMib: 1024 },
+  });
 
-  check.isValid(buildDecision('Bad'));
-  check.isValid(checkpoint);
+  const dropped = await ctx.metrics.readPoints('imp.events.dropped');
 
-  expect(check.logs.map((line) => line.split(' event(s)')[0])).toEqual([
-    'impd: dropped 1 GovernorDecision',
-    'impd: dropped 1 CheckpointAdded',
+  expect(ctx.logs).toStrictEqual([
+    'impd: dropped 1 GovernorDecision event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+    'impd: dropped 1 CheckpointAdded event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
   ]);
 
-  const dropped = await check.readDropped();
+  expect(dropped).toStrictEqual([
+    { attributes: { ev: 'GovernorDecision' }, value: 1 },
+    { attributes: { ev: 'CheckpointAdded' }, value: 1 },
+  ]);
+});
 
-  expect(dropped).toEqual(['{"ev":"GovernorDecision"}=1', '{"ev":"CheckpointAdded"}=1']);
+test('it stays inert without a registered meter provider', () => {
+  const isValid = createEventCheck({ log: () => {}, now: () => 0 });
+
+  expect(() => isValid(buildMockGovernorDecision({ name: 'boot template' }))).not.toThrow();
 });

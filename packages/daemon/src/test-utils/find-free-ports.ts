@@ -1,8 +1,12 @@
-import { readFileSync } from 'node:fs';
-import { faker } from '@faker-js/faker';
+import { onTestFinished } from 'bun:test';
+import { randomInt } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 
 // How many ports below the kernel's ephemeral range a test picks from
 const PICK_SPAN = 4000;
+
+// The socket tables of this network namespace, for every family a test binds
+const SOCKET_TABLES = ['tcp', 'tcp6', 'udp', 'udp6'].map((name) => `/proc/net/${name}`);
 
 // The first port the kernel hands out on its own, to a bind to port 0 or an
 // outgoing connection. Ports below it are taken only by an explicit bind.
@@ -12,34 +16,71 @@ function readEphemeralStart(): number {
   return Number(range.trim().split(/\s+/)[0]);
 }
 
-// a listener on `port`, or null when something holds it
-function openPortProbe(port: number) {
+// Every local port a TCP or UDP socket of any state holds, on any address
+function readBusyPorts(): ReadonlySet<number> {
+  const busy = new Set<number>();
+
+  // a kernel without IPv6 has no tcp6 or udp6 table
+  for (const table of SOCKET_TABLES.filter((path) => existsSync(path))) {
+    // the header line, then one socket per line: `sl local_address ...`,
+    // where local_address is `<hex address>:<hex port>`
+    const lines = readFileSync(table, 'utf8').trim().split('\n');
+
+    for (const line of lines.slice(1)) {
+      const local = line.trim().split(/\s+/)[1] ?? '';
+      const hexPort = local.slice(local.lastIndexOf(':') + 1);
+
+      busy.add(Number.parseInt(hexPort, 16));
+    }
+  }
+
+  return busy;
+}
+
+// A claim on `port` that every picker in every process on this host sees: an
+// abstract unix socket, which only one holder can bind and which the kernel
+// frees when its process dies. Null when another picker holds it.
+function claimPort(port: number) {
   try {
-    return Bun.listen({ hostname: '127.0.0.1', port, socket: { data: () => {} } });
+    return Bun.listen({ unix: `\0imp-test-port-${String(port)}`, socket: { data: () => {} } });
   } catch {
     return null;
   }
 }
 
-// `count` free ports from just below the ephemeral range, held open together
-// so they differ; take them in turn. In that range, no port-0 bind elsewhere
-// can take one between this probe and the test's own bind. The seeded faker picks.
-export function findFreePorts(count: number) {
+interface FindFreePortsOptions {
+  // the next port to try; a random one from just below the ephemeral range by default
+  readonly pick?: () => number;
+}
+
+// `count` distinct free ports from just below the ephemeral range, claimed
+// until the test ends so no picker in another process hands one out again. A
+// process that binds such a port without a claim can still race the test.
+export function findFreePorts(count: number, options: FindFreePortsOptions = {}) {
   const top = readEphemeralStart();
-  const probes: NonNullable<ReturnType<typeof openPortProbe>>[] = [];
+  const pick = options.pick ?? (() => randomInt(top - PICK_SPAN, top));
+  const claims: NonNullable<ReturnType<typeof claimPort>>[] = [];
+  const ports: number[] = [];
 
-  while (probes.length < count) {
-    const probe = openPortProbe(faker.number.int({ min: top - PICK_SPAN, max: top - 1 }));
-
-    if (probe !== null) {
-      probes.push(probe);
+  onTestFinished(() => {
+    for (const claim of claims) {
+      claim.stop(true);
     }
-  }
+  });
 
-  const ports = probes.map((probe) => probe.port);
+  while (ports.length < count) {
+    const port = pick();
+    const claim = claimPort(port);
 
-  for (const probe of probes) {
-    probe.stop(true);
+    if (claim === null) {
+      continue;
+    }
+
+    claims.push(claim);
+
+    if (!readBusyPorts().has(port)) {
+      ports.push(port);
+    }
   }
 
   return {
