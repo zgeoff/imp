@@ -11,12 +11,12 @@ test('it logs in, creates an imp, runs a command in its console and destroys it'
 }) => {
   const token = process.env['IMP_TOKEN'] ?? '';
 
-  // the harness's suite (test/e2e/suites/dashboard.e2e.ts) names the prefix,
-  // so its cleanup finds the imp, and a small fixture image; '' picks the
-  // default image
+  // the harness's suite (test/e2e/suites/dashboard.e2e.ts) names the imp, so
+  // its cleanup removes it, and a small fixture image; '' picks the default
+  // image
   const prefix = process.env['E2E_IMP_PREFIX'] ?? 'e2e-dash-';
   const image = process.env['E2E_IMP_IMAGE'] ?? '';
-  const name = `${prefix}${String(Date.now() % 100_000)}`;
+  const name = process.env['E2E_IMP_NAME'] ?? `${prefix}${String(Date.now() % 100_000)}`;
 
   await page.goto('/');
 

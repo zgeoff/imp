@@ -124,6 +124,17 @@ export async function removeNetworkIfPresent(client: ImpClient, name: string): P
   }
 }
 
+// The same for an OAuth client a journey made; it revokes the client's grants.
+export async function removeOAuthClientIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.oauth.clients.delete({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
 // The same for an image or template a journey made; release it after the
 // imps that boot it.
 export async function removeImageIfPresent(client: ImpClient, name: string): Promise<void> {

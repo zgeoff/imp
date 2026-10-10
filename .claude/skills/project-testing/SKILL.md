@@ -258,18 +258,14 @@ some that the agent's dial completed but the server never accepted; the guest ke
 `Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
 `the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
 `nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
-`templates`, `offsets`, the four `proxy-*` files, the three `socket-*` files, `ssh`, `ssh-agent`,
-`reverse`, `services`, `sessions`, `session-logs`, `ssh-wake`, `proxy-wake`, the two `sleep-*`
-files, `tokens`, `networks`, `scale`, `restart`, the three `tailscale-*` files, the three
-`registry-*` files, the eight `moves-*` files and the two `moves-tailnet-*` files work this way.
-`registry`, `scale`, `tailscale` and the two moves suites take their impd settings from the suite's
-`settings`, and the moves journeys read their host B from the harness's fixture with `readMoveHosts`
-(step 5); each makes and removes its own imps on both hosts. A journey that reboots the instance
-onto settings only it needs, as `tailscale-names` does, passes them over its suite's own
-(`readSuiteSettings` in `suites.ts`) to `runDevScript('reboot', …)`, and defers a reboot back onto
-the suite's settings, so the journeys after it still run on them. The other suite files still read
-their prefix through `setupSuite` in `test/e2e/lib/setup-suite.ts`, which registers no hooks, and
-rely on the harness's reset after them.
+Every suite file works this way; `proxy-refusals`, `socket-refusals` and `socket-builds` make no
+imps and release their own processes and containers with `onTestFinished`. `registry`, `scale`,
+`tailscale` and the two moves suites take their impd settings from the suite's `settings`, and the
+moves journeys read their host B from the harness's fixture with `readMoveHosts` (step 5); each
+makes and removes its own imps on both hosts. A journey that reboots the instance onto settings only
+it needs, as `tailscale-names` does, passes them over its suite's own (`readSuiteSettings` in
+`suites.ts`) to `runDevScript('reboot', …)`, and defers a reboot back onto the suite's settings, so
+the journeys after it still run on them.
 
 Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
 `<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`
