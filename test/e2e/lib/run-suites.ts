@@ -30,6 +30,17 @@ export interface RunSuitesDeps {
   // a fresh instance with the run's settings, when a reset cannot restore
   // the baseline
   readonly recreate: () => Promise<void>;
+
+  // what a suite runs beside the instance, such as the moves suites' second
+  // host, read as it starts; none when left out
+  readonly fixturesOf?: (name: string) => readonly string[];
+
+  // a fixture up before the suite's settings, since the instance may join
+  // it; its reset after each journey; and down after the settings' reboot
+  // back
+  readonly startFixture: (fixture: string) => Promise<void>;
+  readonly resetFixture: (fixture: string) => Promise<void>;
+  readonly stopFixture: (fixture: string) => Promise<void>;
   readonly isInterrupted: () => boolean;
   readonly now: () => number;
   readonly onSuiteStart: (name: string) => void;
@@ -96,11 +107,27 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
       isPassed = false;
     }
 
+    // up before the first journey, and down at the suite's end once it was
+    // started, even in part
+    const fixtures = deps.fixturesOf?.(name) ?? [];
+    let isFixtureStarted = false;
+
     for (const journey of settings === undefined ? [] : deps.journeysOf(name)) {
       // a journey that never ran fails its suite
       if (deps.isInterrupted()) {
         isPassed = false;
         break;
+      }
+
+      if (!isFixtureStarted && fixtures.length > 0) {
+        isFixtureStarted = true;
+
+        const isStarted = await startFixtures(deps, name, fixtures);
+
+        if (!isStarted) {
+          isPassed = false;
+          break;
+        }
       }
 
       if (ownSettings !== null && !isOnSettings) {
@@ -137,9 +164,12 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
         }
       }
 
-      isPassed &&= verdict.isPassed && verdict.isClean && isRestored;
+      const fixtureReset =
+        deps.keep || deps.isInterrupted() ? 'reset' : await resetFixtures(deps, journey, fixtures);
 
-      if (stoppedBecause !== null) {
+      isPassed &&= verdict.isPassed && verdict.isClean && isRestored && fixtureReset === 'reset';
+
+      if (stoppedBecause !== null || fixtureReset === 'lost') {
         break;
       }
     }
@@ -153,6 +183,12 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
       stoppedBecause = restored.stoppedBecause;
     }
 
+    if (isFixtureStarted) {
+      const isStopped = await stopFixtures(deps, name, fixtures);
+
+      isPassed &&= isStopped;
+    }
+
     const result = { name, passed: isPassed, ms: deps.now() - started };
 
     results.push(result);
@@ -164,6 +200,80 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
   }
 
   return { results, stoppedBecause: deps.isInterrupted() ? 'interrupted' : null };
+}
+
+// every fixture up, in order; false when one would not start
+async function startFixtures(
+  deps: Readonly<RunSuitesDeps>,
+  name: string,
+  fixtures: readonly string[],
+): Promise<boolean> {
+  for (const fixture of fixtures) {
+    try {
+      await deps.startFixture(fixture);
+    } catch (error) {
+      deps.log(`    the ${name} suite's ${fixture} could not start: ${readReason(error)}`);
+
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// The reset of each fixture after a journey. One whose reset fails goes
+// down and up anew, which fails the suite ('anew'); one that will not come
+// back runs no more of its journeys ('lost').
+async function resetFixtures(
+  deps: Readonly<RunSuitesDeps>,
+  journey: string,
+  fixtures: readonly string[],
+): Promise<'reset' | 'anew' | 'lost'> {
+  let outcome: 'reset' | 'anew' = 'reset';
+
+  for (const fixture of fixtures) {
+    try {
+      await deps.resetFixture(fixture);
+
+      continue;
+    } catch (error) {
+      deps.log(`    the ${journey} journey left ${fixture} dirty: ${readReason(error)}`);
+    }
+
+    try {
+      await deps.stopFixture(fixture);
+      await deps.startFixture(fixture);
+
+      outcome = 'anew';
+    } catch (error) {
+      deps.log(`    ${fixture} could not be made anew after ${journey}: ${readReason(error)}`);
+
+      return 'lost';
+    }
+  }
+
+  return outcome;
+}
+
+// every fixture down, the last started first; false when one would not stop
+async function stopFixtures(
+  deps: Readonly<RunSuitesDeps>,
+  name: string,
+  fixtures: readonly string[],
+): Promise<boolean> {
+  let isStopped = true;
+
+  for (const fixture of fixtures.toReversed()) {
+    try {
+      await deps.stopFixture(fixture);
+    } catch (error) {
+      deps.log(`    the ${name} suite's ${fixture} could not stop: ${readReason(error)}`);
+
+      isStopped = false;
+    }
+  }
+
+  return isStopped;
 }
 
 // the suite's settings, null for the run's, or undefined when reading them

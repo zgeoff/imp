@@ -1,4 +1,5 @@
 import type { DevInstance } from './instance';
+import type { HostBFixtureName } from './move-hosts';
 
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
@@ -19,6 +20,11 @@ export interface Suite {
   // reboots the instance onto them before the first journey and back after
   // the last (runSuites)
   readonly settings?: (target: Readonly<DevInstance>) => Readonly<Record<string, string>>;
+
+  // what runs beside the instance for every journey: the harness starts it
+  // before the first, resets it after each, and stops it after the last
+  // (runSuites)
+  readonly fixtures?: readonly HostBFixtureName[];
 }
 
 // Every suite, in run order. The order is the acceptance numbering

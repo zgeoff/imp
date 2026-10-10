@@ -180,6 +180,18 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    run, so a `--reuse` instance keeps its own settings until a suite with `settings` or a failure
    reboots it onto the run's.
 
+   A suite's `fixtures` name what runs beside the instance for all its journeys: `host-b`, the moves
+   suites' second instance on a Docker network, or `host-b-tailnet`, the same on the tailnet under
+   its own name (`buildHostBFixture` in `test/e2e/lib/move-hosts.ts`, with the options of
+   `readMoveOptions`). The harness starts a fixture before the suite's first journey and before the
+   reboot onto its settings, since the instance joins the fixture's network; after each journey,
+   once the instance's reset is done, it resets the fixture (`resetBaseline` on B with the suite's
+   prefix, which ends any move a journey left first); and after the reboot back it stops it. A
+   fixture that will not start fails the suite with no journey; one whose reset fails goes down and
+   up anew and fails the suite; one that cannot come back runs no more of the suite's journeys; one
+   that will not stop fails the suite. An interrupt skips the fixture's reset and still stops it,
+   and `--keep` skips the reset only.
+
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
    (`E2E_METRICS_FILE`). The run passes only when every section passed, nothing stopped it, and no

@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { listImps, runImpWith, tryImp } from './imp-cli';
+import { createInstanceClient, listImps, runImpWith, tryImp } from './imp-cli';
 import type { DevInstance } from './instance';
 import {
   REPO_ROOT,
@@ -12,6 +12,7 @@ import {
   runDevScript,
 } from './instance';
 import { checkPrivileges } from './privileges';
+import { resetBaseline } from './reset-baseline';
 
 // The moves suites' hosts: the run's own instance as A, and B beside it on
 // a Docker network, reached at its address there. B's data dir stays
@@ -157,6 +158,126 @@ export async function removeMoveLeftovers(): Promise<void> {
   }
 
   await runCommand(['docker', 'network', 'rm', names.network]);
+}
+
+// the two ways the harness runs B: on the Docker network, or on the tailnet
+// under its own name
+export type HostBFixtureName = 'host-b' | 'host-b-tailnet';
+
+// The options each fixture runs B with. Per-imp tailnet names need an OAuth
+// client, so both impds run them only once IMP_E2E_TAILNET_NAMES=1 says it
+// exists, and then under one test prefix.
+export function readMoveOptions(fixture: HostBFixtureName): MoveHostsOptions {
+  if (fixture === 'host-b') {
+    return { tailnet: false };
+  }
+
+  return process.env['IMP_E2E_TAILNET_NAMES'] === '1'
+    ? { tailnet: true, env: { IMP_TAILNET_NAMES: '1', IMP_TAILNET_NAME_PREFIX: 'e2e-' } }
+    : { tailnet: true };
+}
+
+// A's settings for the moves: onto the network, with the test range and its
+// peer URL, unless the move goes over the tailnet, which A is on already;
+// null when A runs on the run's own.
+export function buildMoveSettings(
+  options: Readonly<MoveHostsOptions>,
+  offset: number,
+): Record<string, string> | null {
+  if (options.tailnet && options.env === undefined) {
+    return null;
+  }
+
+  const names = buildNames();
+  const network = buildMoveNetwork(offset);
+
+  return {
+    ...buildHostEnv(options, network, network.ipA),
+    IMP_DEV_NETWORK: names.network,
+    IMP_DEV_IP: network.ipA,
+  };
+}
+
+// B's part of a moves suite, which the harness runs as the suite's fixture
+export interface HostBFixture {
+  // the network, B on it, and the CLI config that saves it, before A's
+  // settings reboot A onto the network
+  readonly start: () => Promise<void>;
+
+  // B's imps, secrets and moves that a journey named with the prefix
+  readonly reset: () => Promise<void>;
+
+  // B down and the network gone, once A is back on the run's settings
+  readonly stop: () => Promise<void>;
+}
+
+export function buildHostBFixture(
+  options: Readonly<MoveHostsOptions>,
+  prefix: string,
+): HostBFixture {
+  const names = buildNames();
+  const b = buildHostB(options);
+
+  const reset = async () => {
+    const client = await createInstanceClient(b);
+
+    await resetBaseline({ client, prefixes: [prefix], dataDir: b.dataDir });
+  };
+
+  return {
+    start: async () => {
+      const network = buildMoveNetwork(readOffset());
+
+      await removeMoveLeftovers();
+
+      await runChecked([
+        'docker',
+        'network',
+        'create',
+        '--subnet',
+        network.subnet,
+        '--gateway',
+        network.gateway,
+        names.network,
+      ]);
+
+      await runDevScript('up', b);
+      await checkPrivileges(b.container);
+
+      rmSync(names.cliDir, { recursive: true, force: true });
+      mkdirSync(names.cliDir, { recursive: true });
+
+      const token = await readToken(b);
+
+      const cliEnv = { XDG_CONFIG_HOME: names.cliDir };
+
+      await runImpWith({ stdin: `${token}\n`, env: cliEnv }, 'login', b.apiUrl, '--name', HOST_B);
+
+      // what an earlier, killed run left on B
+      await reset();
+    },
+    reset,
+    stop: async () => {
+      await removeMoveLeftovers();
+
+      rmSync(names.cliDir, { recursive: true, force: true });
+    },
+  };
+}
+
+// The hosts that the harness's host-B fixture keeps up with these options,
+// for a journey; it starts nothing.
+export function readMoveHosts(options: Readonly<MoveHostsOptions>): MoveHosts {
+  const names = buildNames();
+
+  return {
+    a: instance,
+    b: buildHostB(options),
+    network: names.network,
+    gateway: buildMoveNetwork(readOffset()).gateway,
+    cliEnv: { XDG_CONFIG_HOME: names.cliDir },
+    isARebooted: !options.tailnet || options.env !== undefined,
+  };
 }
 
 // Starts B, and reboots A onto the network unless the move goes over the

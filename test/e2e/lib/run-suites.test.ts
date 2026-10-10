@@ -29,6 +29,21 @@ function setupTest() {
 
         return Promise.resolve();
       },
+      startFixture: (fixture: string) => {
+        steps.push(`start ${fixture}`);
+
+        return Promise.resolve();
+      },
+      resetFixture: (fixture: string) => {
+        steps.push(`reset ${fixture}`);
+
+        return Promise.resolve();
+      },
+      stopFixture: (fixture: string) => {
+        steps.push(`stop ${fixture}`);
+
+        return Promise.resolve();
+      },
       onSuiteStart: () => {},
       onSuiteEnd: () => {},
       log: (line: string) => {
@@ -1232,6 +1247,316 @@ test('#runSuites reboots onto a suite’s settings and back with --keep, and res
   });
 
   expect(ctx.steps).toStrictEqual(['reboot onto {"IMP_DOMAIN":"e2e.test"}', 'run https', 'reboot']);
+});
+
+test('#runSuites starts a suite’s fixture before its settings, resets it after each journey, and stops it after the reboot back', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => (name === 'moves' ? ['moves-cold', 'moves-abort'] : [name]),
+    keep: false,
+    settingsOf: (name) => (name === 'moves' ? { IMP_DEV_NETWORK: 'e2e-mv' } : null),
+    fixturesOf: (name) => (name === 'moves' ? ['host-b'] : []),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'reboot onto {"IMP_DEV_NETWORK":"e2e-mv"}',
+    'run moves-cold',
+    'reset e2e-moves-',
+    'reset host-b',
+    'run moves-abort',
+    'reset e2e-moves-',
+    'reset host-b',
+    'reboot',
+    'stop host-b',
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([true, true]);
+});
+
+test('#runSuites resets a suite’s fixture after a journey that fails, runs the next, and fails the suite', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['moves-cold', 'moves-abort'],
+    keep: false,
+    settingsOf: () => null,
+    fixturesOf: () => ['host-b'],
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      const exitCode = journey === 'moves-cold' ? 1 : 0;
+
+      return Promise.resolve(exitCode);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'run moves-cold',
+    'reboot',
+    'reset e2e-moves-',
+    'reset host-b',
+    'run moves-abort',
+    'reset e2e-moves-',
+    'reset host-b',
+    'stop host-b',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([false]);
+});
+
+test('#runSuites stops a suite’s fixture after an interrupt, without its reset or another journey', async () => {
+  const ctx = setupTest();
+  const run = { isInterrupted: false };
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => (name === 'moves' ? ['moves-cold', 'moves-abort'] : [name]),
+    keep: false,
+    settingsOf: () => null,
+    fixturesOf: (name) => (name === 'moves' ? ['host-b'] : []),
+    isInterrupted: () => run.isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      run.isInterrupted = true;
+
+      return Promise.resolve(130);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'run moves-cold',
+    'reset e2e-moves-',
+    'stop host-b',
+  ]);
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'moves', passed: false, ms: 0 }],
+    stoppedBecause: 'interrupted',
+  });
+});
+
+test('#runSuites makes a suite’s fixture anew when its reset fails, runs on, and fails the suite', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['moves-cold', 'moves-abort'],
+    keep: false,
+    settingsOf: () => null,
+    fixturesOf: () => ['host-b'],
+    resetFixture: (fixture) => {
+      ctx.steps.push(`reset ${fixture}`);
+
+      return ctx.steps.filter((step) => step === 'reset host-b').length === 1
+        ? Promise.reject(new Error('MOVING e2e-mv-cold is moving between hosts'))
+        : Promise.resolve();
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'run moves-cold',
+    'reset e2e-moves-',
+    'reset host-b',
+    'log the moves-cold journey left host-b dirty: MOVING e2e-mv-cold is moving between hosts',
+    'stop host-b',
+    'start host-b',
+    'run moves-abort',
+    'reset e2e-moves-',
+    'reset host-b',
+    'stop host-b',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([false]);
+});
+
+test('#runSuites runs no more of a suite whose fixture cannot be made anew, stops it, and runs on', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => (name === 'moves' ? ['moves-cold', 'moves-abort'] : [name]),
+    keep: false,
+    settingsOf: () => null,
+    fixturesOf: (name) => (name === 'moves' ? ['host-b'] : []),
+    resetFixture: () => Promise.reject(new Error('B is gone')),
+    startFixture: (fixture) => {
+      ctx.steps.push(`start ${fixture}`);
+
+      return ctx.steps.filter((step) => step === 'start host-b').length === 1
+        ? Promise.resolve()
+        : Promise.reject(new Error('no network'));
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'run moves-cold',
+    'reset e2e-moves-',
+    'log the moves-cold journey left host-b dirty: B is gone',
+    'stop host-b',
+    'start host-b',
+    'log host-b could not be made anew after moves-cold: no network',
+    'stop host-b',
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([false, true]);
+});
+
+test('#runSuites fails a suite whose fixture cannot start, runs none of its journeys, stops it, and runs on', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'moves' ? { IMP_DEV_NETWORK: 'e2e-mv' } : null),
+    fixturesOf: (name) => (name === 'moves' ? ['host-b'] : []),
+    startFixture: (fixture) => {
+      ctx.steps.push(`start ${fixture}`);
+
+      return Promise.reject(new Error('no network'));
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    "log the moves suite's host-b could not start: no network",
+    'stop host-b',
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([false, true]);
+});
+
+test('#runSuites fails a suite whose fixture cannot stop, and runs on', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['moves', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: () => null,
+    fixturesOf: (name) => (name === 'moves' ? ['host-b'] : []),
+    stopFixture: (fixture) => {
+      ctx.steps.push(`stop ${fixture}`);
+
+      return Promise.reject(new Error('network in use'));
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'run moves',
+    'reset e2e-moves-',
+    'reset host-b',
+    'stop host-b',
+    "log the moves suite's host-b could not stop: network in use",
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome.results.map((result) => result.passed)).toStrictEqual([false, true]);
+});
+
+test('#runSuites starts and stops a suite’s fixture with --keep, and resets nothing', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['moves'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['moves-cold', 'moves-abort'],
+    keep: true,
+    settingsOf: () => null,
+    fixturesOf: () => ['host-b'],
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'start host-b',
+    'run moves-cold',
+    'run moves-abort',
+    'stop host-b',
+  ]);
 });
 
 test.each([
