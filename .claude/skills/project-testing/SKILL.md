@@ -227,9 +227,11 @@ in `suites.ts`). The test registers each removal on the line after the act that 
 `imp net create` (all in `reset-baseline.ts`), so an imp goes before the template it boots and the
 network it joins. Each passes over a name the journey already removed and throws on any other
 refusal; `reset-baseline.test.ts` checks each against the in-process impd. `scale` registers no
-removal for its fleet, which the harness keeps for `restart` (step 5). Under `--keep` (`E2E_KEEP=1`)
-`registerRemoval` defers nothing, so the journey's imps and images stay, as the harness's resets and
-end-of-run cleanup also skip; other releases, such as a proxy process or a held socket, still run.
+removal for its fleet, which the harness keeps for `restart` (step 5): the one exception to a
+journey's own removals, kept because GEO-135's decision 1 retains "the ordered full-acceptance
+scale/restart dependency". Under `--keep` (`E2E_KEEP=1`) `registerRemoval` defers nothing, so the
+journey's imps and images stay, as the harness's resets and end-of-run cleanup also skip; other
+releases, such as a proxy process or a held socket, still run.
 
 A burst of connections past a guest server's accept backlog (busybox `httpd` on `e2e-tiny`) leaves
 some that the agent's dial completed but the server never accepted; the guest kernel logs

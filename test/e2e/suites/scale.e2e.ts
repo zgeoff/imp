@@ -80,9 +80,9 @@ test(`it keeps ${String(config.scaleCount)} imps inside the RAM budget, sleeps t
 
   ctx.stack.defer(() => monitor.stop());
 
-  // No removal for the fleet: the acceptance run's restart re-adopts it, and
-  // the harness keeps a suite's imps for restart (run-suites.ts) and resets
-  // them otherwise.
+  // No removal for the fleet: run-suites.ts keeps it for restart, per GEO-135
+  // decision 1 ("the ordered full-acceptance scale/restart dependency"), and
+  // resets it when restart does not follow.
   const names = Array.from(
     { length: config.scaleCount },
     (_, index) => `${ctx.prefix}${String(index + 1).padStart(2, '0')}`,
