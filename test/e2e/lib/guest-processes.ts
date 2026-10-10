@@ -1,4 +1,5 @@
 import { runShellInImp } from './imp-cli';
+import { parseWholeNumber } from './parse-whole-number';
 
 // Thin glue over a live guest: how many of its processes run `sleep` with
 // seconds that match the grep pattern, read from /proc, since ps lists every
@@ -9,5 +10,5 @@ export async function countGuestSleeps(name: string, secondsPattern: string): Pr
     `for p in /proc/[0-9]*; do tr '\\0' ' ' < "$p/cmdline" 2>/dev/null; echo; done | grep -c '^sleep ${secondsPattern} ' || true`,
   );
 
-  return Number(stdout.trim());
+  return parseWholeNumber(stdout, `${name}'s sleep count`);
 }

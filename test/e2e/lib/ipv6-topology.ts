@@ -58,7 +58,13 @@ export function parseUlaNetwork(log: string): string {
 
 // the first global /128 of `ip -6 addr show`, '' for none
 export function parseGlobal128(addresses: string): string {
-  return /inet6 (?<address>[\da-f:]+)\/128/v.exec(addresses)?.groups?.['address'] ?? '';
+  const address = /inet6 (?<address>[\da-f:]+)\/128/v.exec(addresses)?.groups?.['address'];
+
+  if (address === undefined) {
+    throw new Error(`no global /128 in ${JSON.stringify(addresses)}`);
+  }
+
+  return address;
 }
 
 // the packet count of ip6tables' INPUT rule that drops from the taps

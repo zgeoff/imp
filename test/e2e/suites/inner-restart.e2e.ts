@@ -14,6 +14,7 @@ import {
 } from '../lib/imp-cli';
 import { holdImp, readGuestFile, waitForExec, writeGuestFile } from '../lib/imps';
 import { readInitStart, readUptime, waitForInnerInit } from '../lib/inner-container';
+import { parseWholeNumber } from '../lib/parse-whole-number';
 import { findSocketListenAgain, parseProxyForwards } from '../lib/proxy-forward-lines';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
@@ -226,7 +227,7 @@ test('it starts a container whose root was wiped again', async () => {
   const after = await waitFor(`the inner container in ${name} after the wipe`, async () => {
     const stat = await runInImp(name, keep, 'cat', '/proc/1/stat');
 
-    const start = stat.split(' ').at(21);
+    const start = parseWholeNumber(stat.split(' ').at(21) ?? '', `${name}'s init start`);
 
     if (start === before) {
       throw new Error('the old container still runs');

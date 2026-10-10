@@ -7,6 +7,7 @@ import { startHeldListener } from '../lib/held-listener';
 import { createInstanceClient, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import { readContainerGateway } from '../lib/instance';
+import { parseWholeNumber } from '../lib/parse-whole-number';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
@@ -300,7 +301,7 @@ test('it ends the broker tunnels a tighter policy denies, even one whose head co
       `awk '$3 ~ /:1BA9$/ && $4 == "01"' /proc/net/tcp | wc -l`,
     );
 
-    if (Number(count) < 2) {
+    if (parseWholeNumber(count, 'the broker connections') < 2) {
       throw new Error(`${count.trim()} connections to the broker`);
     }
   });

@@ -152,7 +152,9 @@ test('it makes a fork from a checkpoint and a fork from the live disk independen
 
   expect(forked).toBe('v1');
   expect(unchanged).toBe('v2');
-  expect(sourceAndCheckpointFork).toStrictEqual({ seenInA: 'none', seenInB: 'none', ownInB: 'b' });
+  expect(sourceAndCheckpointFork.seenInA).toBe('none');
+  expect(sourceAndCheckpointFork.seenInB).toBe('none');
+  expect(sourceAndCheckpointFork.ownInB).toBe('b');
 
   const liveForkStarted = Date.now();
 
@@ -181,8 +183,12 @@ test('it makes a fork from a checkpoint and a fork from the live disk independen
   expect(forkCheckpoints).toBeEmpty();
   expect(live).toBe('v2');
   expect(earlier).toBe('a');
-  expect(sourceAndLiveFork).toStrictEqual({ seenInA: 'none', seenInB: 'none', ownInB: 'b' });
-  expect(theForks).toStrictEqual({ seenInA: 'none', seenInB: 'none', ownInB: 'b' });
+  expect(sourceAndLiveFork.seenInA).toBe('none');
+  expect(sourceAndLiveFork.seenInB).toBe('none');
+  expect(sourceAndLiveFork.ownInB).toBe('b');
+  expect(theForks.seenInA).toBe('none');
+  expect(theForks.seenInB).toBe('none');
+  expect(theForks.ownInB).toBe('b');
 });
 
 test('it lists checkpoints newest first, refuses a label taken, and deletes one with its storage', async () => {

@@ -18,6 +18,7 @@ import {
   readVmProcess,
 } from '../lib/jail-host';
 import { checkMemoryProof, startMemoryProof } from '../lib/memory-proof';
+import { parseWholeNumber } from '../lib/parse-whole-number';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
@@ -65,7 +66,7 @@ test('it runs a new imp jailed under a memory cap, sleeps and wakes it full unde
   const swapMax = await readImpCgroupText(name, 'memory.swap.max');
   const oomGroup = await readImpCgroupText(name, 'memory.oom.group');
 
-  expect(Number(max)).toBe((512 + 256) * 1024 * 1024);
+  expect(parseWholeNumber(max, 'memory.max')).toBe((512 + 256) * 1024 * 1024);
   expect(high).toBe('max');
   expect(swapMax).toBe('0');
   expect(oomGroup).toBe('1');
@@ -102,9 +103,9 @@ test('it runs a new imp jailed under a memory cap, sleeps and wakes it full unde
   const peak = await readImpCgroupText(name, 'memory.peak');
   const woke = await readJailState(name);
 
-  expect(Number(size)).toBe(380 * 1024 * 1024);
+  expect(parseWholeNumber(size, 'the fill size')).toBe(380 * 1024 * 1024);
   expect(wokeEvents).toMatch(/^oom_kill 0$/m);
-  expect(Number(peak)).toBeLessThanOrEqual((512 + 256) * 1024 * 1024);
+  expect(parseWholeNumber(peak, 'memory.peak')).toBeLessThanOrEqual((512 + 256) * 1024 * 1024);
   expect(findJailViolations(woke)).toStrictEqual([]);
 
   const beforeRestart = await readVmProcess(name);

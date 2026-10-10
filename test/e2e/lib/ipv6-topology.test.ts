@@ -68,8 +68,11 @@ test('#parseGlobal128 reads the global /128 of the guest', () => {
   expect(parseGlobal128(shown)).toBe('fd4e:2a1b:9c00::a42:6');
 });
 
-test('#parseGlobal128 reads no global address as empty', () => {
-  expect(parseGlobal128('2: eth0: <UP> mtu 1500\n')).toBe('');
+test('#parseGlobal128 throws on no global address', () => {
+  expect(() => parseGlobal128('2: eth0: <UP> mtu 1500\n')).toThrowWithMessage(
+    Error,
+    String.raw`no global /128 in "2: eth0: <UP> mtu 1500\n"`,
+  );
 });
 
 test('#parseRsAccepts reads the packets the taps’ RS ACCEPT rule counted', () => {
