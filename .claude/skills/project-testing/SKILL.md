@@ -101,8 +101,9 @@ Utils that take a caller's stack and register nothing themselves:
 
 - `createImpTest(stack, options)` in `imps/test-imps.ts`: the `setupImpTest` harness. For each impd
   it starts, the stack stops its boot templates, which waits for a running template build, before it
-  removes the data dir; a test that holds the `template` step defers the release into the same
-  stack, so the release runs first.
+  removes the data dir. It releases the fake's hangs first, and skips the wait for an impd that
+  `restartImpd` replaced, whose build's VM call parks. A test that holds the `template` step defers
+  the release into the same stack, so the release runs first.
 - `createMoveHosts(stack, options)` in `moves/test-moves.ts`: the two `setupMoveHosts` impds.
 - The broker stand-ins `test-utils/start-stub-broker-*.ts` that start something: the TLS and plain
   upstreams, the reply and hold targets, the guest socket and the tunnel.

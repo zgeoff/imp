@@ -445,8 +445,14 @@ export async function createImpTest(
     readTailscale: readNoTailscale,
   };
 
+  // the impd restartImpd started last; a replaced one's VM calls park forever
+  const generations = { current: 0 };
+
   const startImpd = (identity: HostIdentity = host.identity) => {
     host.identity = identity;
+    generations.current += 1;
+
+    const generation = generations.current;
 
     const started = startGovernedImps(
       config,
@@ -457,8 +463,15 @@ export async function createImpTest(
     );
 
     // as main.ts stops them: a template build still running would write
-    // into the data dir after its removal
-    stack.defer(() => started.imps.bootTemplates?.stop());
+    // into the data dir after its removal. A hung build is released first,
+    // and a replaced impd's build is parked, so nothing waits on it.
+    stack.defer(async () => {
+      fake.releaseHangs();
+
+      if (generation === generations.current) {
+        await started.imps.bootTemplates?.stop();
+      }
+    });
 
     return started;
   };

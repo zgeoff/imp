@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { runChildTests } from '@imp/test-utils/run-child-tests';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
@@ -196,6 +197,64 @@ test('#createImpTest finishes a running template build before it removes its dat
 
   expect(builtAt).toBeGreaterThanOrEqual(0);
   expect(builtAt).toBeLessThan(logs.indexOf('test harness: database closed'));
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
+test('#createImpTest releases a hung template build before it waits for the build', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, { env: { IMP_BOOT_TEMPLATES: 'true' } });
+
+  await harness.createTestImage('ubuntu');
+
+  harness.fake.queue('template', 'hang');
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await waitFor(() => {
+    expect(harness.fake.countHungCalls()).toBe(1);
+  });
+
+  await stack.disposeAsync();
+
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
+test('#createImpTest never waits for the template build of an impd that restartImpd replaced', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, { env: { IMP_BOOT_TEMPLATES: 'true' } });
+
+  await harness.createTestImage('ubuntu');
+
+  const held = harness.fake.hold('template');
+
+  stack.defer(() => {
+    held.release();
+  });
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await held.reached;
+
+  // the build's VM call comes back to a replaced impd, so it parks
+  harness.restartImpd();
+  held.release();
+
+  await waitFor(() => {
+    expect(harness.fake.countParkedCalls()).toBe(1);
+  });
+
+  await stack.disposeAsync();
+
   expect(existsSync(harness.dataDir)).toBeFalse();
 });
 
