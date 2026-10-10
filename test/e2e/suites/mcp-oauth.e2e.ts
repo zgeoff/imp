@@ -1,372 +1,385 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { createHash, randomBytes } from 'node:crypto';
+import { expect, onTestFinished, test } from 'bun:test';
+import { randomBytes } from 'node:crypto';
 import * as z from 'zod';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { readImpEnv, runImp, tryImp } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
+import { createInstanceClient, readImpEnv, runImp, tryImp } from '../lib/imp-cli';
+import { waitForExec } from '../lib/imps';
 import { instance, runDevScript } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import {
+  RouteTokensSchema,
+  buildPkceChallenge,
+  openRouteMcp,
+  parseApprovalPage,
+  runSignIn,
+  sendForm,
+  sendMcp,
+} from '../lib/oauth-route';
+import { registerRemoval } from '../lib/register-removal';
+import {
+  removeImpIfPresent,
+  removeOAuthClientIfPresent,
+  removeTokenIfPresent,
+} from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
+import { waitFor } from '../lib/wait-for';
 
-// The public MCP route (docs/guides/mcp.md#public-route): a client signs in,
-// a named token approves it with the CLI, and the grant reaches /mcp on the
-// route's own port. The instance runs with the route on for this suite only.
+// The public MCP route (docs/guides/mcp.md#public-route) on plain http on
+// loopback, as tests alone may use. Each test reboots the instance with the
+// route on, and back; a named token approves each sign-in with the CLI.
 
-const prefix = setupSuite('mcp-oauth');
-const box = `${prefix}box`;
-const CLIENT = `${prefix}conn`;
-const APPROVER = `${prefix}approver`;
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// the route's origin: plain http on loopback, as tests alone may use
-const ORIGIN = `http://127.0.0.1:${String(7071 + instance.portOffset)}`;
-const ROUTE_ENV = { IMP_MCP_PUBLIC_URL: ORIGIN };
+  onTestFinished(() => stack.disposeAsync());
 
-const TokenSchema = z.object({
-  access_token: z.string(),
-  refresh_token: z.string(),
-  scope: z.string(),
-});
+  const client = await createInstanceClient();
 
-const ErrorSchema = z.object({ error: z.string() });
-const ToolSchema = z.object({ name: z.string() });
-const ToolsSchema = z.object({ result: z.object({ tools: z.array(ToolSchema) }) });
+  const origin = `http://127.0.0.1:${String(7071 + instance.portOffset)}`;
 
-// the redirect URI's server: it takes the code a sign-in sends back
-const catcher = Bun.serve({
-  hostname: '127.0.0.1',
-  port: 0,
-  fetch: () => new Response('signed in'),
-});
-
-const REDIRECT = `http://127.0.0.1:${String(catcher.port)}/callback`;
-const state: { clientId: string; approverToken: string } = { clientId: '', approverToken: '' };
-
-beforeAll(async () => {
-  Object.assign(process.env, ROUTE_ENV);
-
-  await runDevScript('reboot');
-  await createImp(box, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
-  await tryImp(['oauth', 'client', 'rm', CLIENT]);
-  await tryImp(['token', 'rm', APPROVER]);
-
-  const clientId = await runImp('oauth', 'client', 'add', CLIENT, '--redirect-uri', REDIRECT);
-
-  const approverToken = await runImp(
-    'token',
-    'new',
-    APPROVER,
-    '--scope',
-    'exec',
-    '--imps',
-    `${prefix}*`,
-  );
-
-  state.clientId = clientId.trim();
-  state.approverToken = approverToken.trim();
-}, 600_000);
-
-afterAll(async () => {
-  await catcher.stop(true);
-
-  await tryImp(['oauth', 'client', 'rm', CLIENT]);
-  await tryImp(['token', 'rm', APPROVER]);
-
-  for (const key of Object.keys(ROUTE_ENV)) {
-    delete process.env[key];
-  }
-
-  // the instance goes back to the route off
-  await runDevScript('reboot');
-}, 600_000);
-
-function createVerifier(): { readonly verifier: string; readonly challenge: string } {
-  const verifier = randomBytes(32).toString('base64url');
-  const challenge = createHash('sha256').update(verifier).digest('base64url');
-
-  return { verifier, challenge };
-}
-
-function sendForm(
-  path: string,
-  fields: Readonly<Record<string, string>>,
-  headers: Readonly<Record<string, string>> = {},
-) {
-  return fetch(`${ORIGIN}${path}`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
-    body: new URLSearchParams(fields).toString(),
+  // the redirect URI's server: it takes the code a sign-in sends back
+  const catcher = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response('signed in'),
   });
+
+  stack.defer(() => catcher.stop(true));
+
+  return {
+    prefix: readSuitePrefix('mcp-oauth'),
+    stack,
+    client,
+    origin,
+    redirect: `http://127.0.0.1:${String(catcher.port)}/callback`,
+  };
 }
 
-// a sign-in from the page to the client's tokens, approved with the CLI
-async function runSignIn(scope: string) {
-  const pkce = createVerifier();
+test('it serves the route’s discovery documents and nothing private', async () => {
+  const ctx = await setupTest();
+
+  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  const metadata = await fetch(`${ctx.origin}/.well-known/oauth-authorization-server`);
+  const resource = await fetch(`${ctx.origin}/.well-known/oauth-protected-resource/mcp`);
+  const unauthorized = await fetch(`${ctx.origin}/mcp`, { method: 'POST' });
+  const issuer: unknown = await metadata.json();
+  const protectedResource: unknown = await resource.json();
+  const rpc = await fetch(`${ctx.origin}/rpc/system/info`);
+  const health = await fetch(`${ctx.origin}/health`);
+  const ui = await fetch(`${ctx.origin}/ui/`);
+  const env = await readImpEnv();
+
+  // the instance's root token is no way in
+  const withRoot = await fetch(`${ctx.origin}/mcp`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env['IMP_TOKEN'] ?? ''}` },
+  });
+
+  expect(issuer).toMatchObject({
+    issuer: ctx.origin,
+    code_challenge_methods_supported: ['S256'],
+  });
+
+  expect(protectedResource).toMatchObject({
+    resource: `${ctx.origin}/mcp`,
+    authorization_servers: [ctx.origin],
+  });
+
+  expect(unauthorized.status).toBe(401);
+  expect(unauthorized.headers.get('www-authenticate')).toContain('resource_metadata=');
+  expect([rpc.status, health.status, ui.status]).toStrictEqual([404, 404, 404]);
+  expect(withRoot.status).toBe(401);
+});
+
+test('it signs a client in on an approval from the CLI, and the grant lists the tools its scope allows and runs a command in its imps', async () => {
+  const ctx = await setupTest();
+
+  const box = `${ctx.prefix}box`;
+  const clientName = `${ctx.prefix}conn`;
+  const approver = `${ctx.prefix}approver`;
+
+  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  await runImp('new', box, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, box));
+
+  await waitForExec(box);
+
+  const added = await ctx.client.oauth.clients.add({
+    name: clientName,
+    redirectUris: [ctx.redirect],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeOAuthClientIfPresent(ctx.client, clientName));
+
+  const token = await ctx.client.tokens.create({
+    name: approver,
+    scope: 'exec',
+    imps: [`${ctx.prefix}*`],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, approver));
+
+  const verifier = randomBytes(32).toString('base64url');
 
   const query = new URLSearchParams({
     response_type: 'code',
-    client_id: state.clientId,
-    redirect_uri: REDIRECT,
-    code_challenge: pkce.challenge,
+    client_id: added.clientId,
+    redirect_uri: ctx.redirect,
+    code_challenge: buildPkceChallenge(verifier),
     code_challenge_method: 'S256',
     state: 'e2e',
     scope: 'read exec',
-    resource: `${ORIGIN}/mcp`,
+    resource: `${ctx.origin}/mcp`,
   });
 
-  const opened = await fetch(`${ORIGIN}/oauth/authorize?${query.toString()}`);
+  const opened = await fetch(`${ctx.origin}/oauth/authorize?${query.toString()}`);
   const page = await opened.text();
+
+  const approval = parseApprovalPage(page);
 
   expect(opened.status).toBe(200);
   expect(opened.headers.get('referrer-policy')).toBe('same-origin');
 
-  const code = /imp oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
-  const approved = await tryImp(['oauth', 'approve', code, '--scope', scope, '--yes'], {
-    token: state.approverToken,
+  const approved = await tryImp(['oauth', 'approve', approval.code, '--scope', 'exec', '--yes'], {
+    token: token.secret,
   });
 
   expect(approved.exitCode).toBe(0);
-  expect(approved.stderr).toContain(`client:       ${CLIENT}`);
-  expect(approved.stderr).toContain(`returns to:   ${REDIRECT}`);
+  expect(approved.stderr).toContain(`client:       ${clientName}`);
+  expect(approved.stderr).toContain(`returns to:   ${ctx.redirect}`);
 
   // as a browser posts it from a page whose referrer policy is same-origin
   // or stricter: Origin null, and Sec-Fetch-Site it sets itself
   const allowed = await sendForm(
-    '/oauth/authorize',
-    { id, signature, action: 'allow' },
+    `${ctx.origin}/oauth/authorize`,
+    { id: approval.id, signature: approval.signature, action: 'allow' },
     { origin: 'null', 'sec-fetch-site': 'same-origin' },
   );
 
   const location = new URL(allowed.headers.get('location') ?? '');
 
-  expect(allowed.status).toBe(302);
-  expect(allowed.headers.get('referrer-policy')).toBe('no-referrer');
-  expect(location.searchParams.get('iss')).toBe(ORIGIN);
-  expect(location.searchParams.get('state')).toBe('e2e');
-
   // the browser follows the redirect to the client
   const caught = await fetch(location);
 
+  expect(allowed.status).toBe(302);
+  expect(allowed.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(location.searchParams.get('iss')).toBe(ctx.origin);
+  expect(location.searchParams.get('state')).toBe('e2e');
   expect(caught.status).toBe(200);
 
-  const exchanged = await sendForm('/oauth/token', {
+  const exchanged = await sendForm(`${ctx.origin}/oauth/token`, {
     grant_type: 'authorization_code',
-    client_id: state.clientId,
+    client_id: added.clientId,
     code: location.searchParams.get('code') ?? '',
-    redirect_uri: REDIRECT,
-    code_verifier: pkce.verifier,
-    resource: `${ORIGIN}/mcp`,
+    redirect_uri: ctx.redirect,
+    code_verifier: verifier,
+    resource: `${ctx.origin}/mcp`,
   });
 
-  const body: unknown = await exchanged.json();
+  const exchangedBody: unknown = await exchanged.json();
 
-  return TokenSchema.parse(body);
-}
-
-// a JSON-RPC call on the public /mcp; the answer is the last SSE event or
-// the JSON body
-async function sendMcp(bearer: string, session: string, method: string, params: unknown = {}) {
-  const response = await fetch(`${ORIGIN}/mcp`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${bearer}`,
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(session !== '' && { 'mcp-session-id': session }),
-    },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-
-  const text = await response.text();
-
-  const events = text.split('\n').filter((line) => line.startsWith('data: '));
-  const last = events.at(-1)?.slice('data: '.length) ?? text;
-  const body = parseBody(last);
-
-  return { status: response.status, session: response.headers.get('mcp-session-id') ?? '', body };
-}
-
-// a JSON body, or the text of one that is not JSON, such as a 401's
-function parseBody(text: string): unknown {
-  try {
-    const parsed: unknown = JSON.parse(text);
-
-    return parsed;
-  } catch {
-    return text;
-  }
-}
-
-// whether a call got its result, or its stream ended with none
-async function readCallOutcome(call: Promise<{ readonly body: unknown }>): Promise<string> {
-  try {
-    const answer = await call;
-
-    return JSON.stringify(answer.body).includes('"result"') ? 'answered' : 'dropped';
-  } catch {
-    return 'dropped';
-  }
-}
-
-async function openMcp(bearer: string): Promise<string> {
-  const opened = await sendMcp(bearer, '', 'initialize', {
-    protocolVersion: '2025-06-18',
-    capabilities: {},
-    clientInfo: { name: 'e2e' },
-  });
-
-  expect(opened.status).toBe(200);
-
-  return opened.session;
-}
-
-test('the route serves its discovery documents and nothing private', async () => {
-  const metadata = await fetch(`${ORIGIN}/.well-known/oauth-authorization-server`);
-  const resource = await fetch(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`);
-  const unauthorized = await fetch(`${ORIGIN}/mcp`, { method: 'POST' });
-  const issuer: unknown = await metadata.json();
-  const protectedResource: unknown = await resource.json();
-
-  expect(issuer).toMatchObject({
-    issuer: ORIGIN,
-    code_challenge_methods_supported: ['S256'],
-  });
-
-  expect(protectedResource).toMatchObject({
-    resource: `${ORIGIN}/mcp`,
-    authorization_servers: [ORIGIN],
-  });
-
-  expect(unauthorized.status).toBe(401);
-  expect(unauthorized.headers.get('www-authenticate')).toContain('resource_metadata=');
-
-  for (const path of ['/rpc/system/info', '/health', '/ui/']) {
-    const response = await fetch(`${ORIGIN}${path}`);
-
-    expect(response.status).toBe(404);
-  }
-
-  // the instance's root token is no way in
-  const env = await readImpEnv();
-
-  const withRoot = await fetch(`${ORIGIN}/mcp`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env['IMP_TOKEN'] ?? ''}` },
-  });
-
-  expect(withRoot.status).toBe(401);
-});
-
-test('a grant lists the tools its scope allows and runs a command in its imps', async () => {
-  const tokens = await runSignIn('exec');
+  const tokens = RouteTokensSchema.parse(exchangedBody);
 
   expect(tokens.scope).toBe('read exec');
 
-  const session = await openMcp(tokens.access_token);
-  const listed = await sendMcp(tokens.access_token, session, 'tools/list');
+  const session = await openRouteMcp(ctx.origin, tokens.access_token);
+  const listed = await sendMcp(ctx.origin, tokens.access_token, session, 'tools/list');
 
-  const names = ToolsSchema.parse(listed.body).result.tools.map((tool) => tool.name);
-
-  expect(names).toContain('imp_exec');
-  expect(names).not.toContain('imp_create');
-
-  const ran = await sendMcp(tokens.access_token, session, 'tools/call', {
+  const ran = await sendMcp(ctx.origin, tokens.access_token, session, 'tools/call', {
     name: 'imp_exec',
     arguments: { name: box, command: 'echo from-the-route' },
   });
 
-  expect(JSON.stringify(ran.body)).toContain('from-the-route');
-
   const grants = await runImp('oauth', 'grant', 'ls');
 
-  expect(grants).toContain(CLIENT);
-  expect(grants).toContain(APPROVER);
+  const tool = z.object({ name: z.string() });
+
+  const names = z
+    .object({ result: z.object({ tools: z.array(tool) }) })
+    .parse(listed.body)
+    .result.tools.map((entry) => entry.name);
+
+  expect(names).toContain('imp_exec');
+  expect(names).not.toContain('imp_create');
+  expect(JSON.stringify(ran.body)).toContain('from-the-route');
+  expect(grants).toContain(clientName);
+  expect(grants).toContain(approver);
 });
 
-test('a refresh rotates, and a spent refresh token presented again ends the grant', async () => {
-  const first = await runSignIn('read');
+test('it rotates a refresh, and ends the grant when a spent refresh token comes again', async () => {
+  const ctx = await setupTest();
 
-  const sendRefresh = (token: string) =>
-    sendForm('/oauth/token', {
-      grant_type: 'refresh_token',
-      client_id: state.clientId,
-      refresh_token: token,
-    });
+  const clientName = `${ctx.prefix}conn`;
+  const approver = `${ctx.prefix}approver`;
 
-  const rotated = await sendRefresh(first.refresh_token);
+  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  const added = await ctx.client.oauth.clients.add({
+    name: clientName,
+    redirectUris: [ctx.redirect],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeOAuthClientIfPresent(ctx.client, clientName));
+
+  const token = await ctx.client.tokens.create({
+    name: approver,
+    scope: 'exec',
+    imps: [`${ctx.prefix}*`],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, approver));
+
+  const first = await runSignIn({
+    origin: ctx.origin,
+    clientId: added.clientId,
+    redirect: ctx.redirect,
+    approverToken: token.secret,
+    scope: 'read',
+  });
+
+  const refresh = {
+    grant_type: 'refresh_token',
+    client_id: added.clientId,
+    refresh_token: first.refresh_token,
+  };
+
+  const rotated = await sendForm(`${ctx.origin}/oauth/token`, refresh);
   const rotatedBody: unknown = await rotated.json();
-
-  const second = TokenSchema.parse(rotatedBody);
-
-  expect(second.scope).toBe('read');
-
-  const replayed = await sendRefresh(first.refresh_token);
+  const replayed = await sendForm(`${ctx.origin}/oauth/token`, refresh);
   const replayBody: unknown = await replayed.json();
 
-  expect(ErrorSchema.parse(replayBody).error).toBe('invalid_grant');
+  const second = RouteTokensSchema.parse(rotatedBody);
 
-  const after = await sendMcp(second.access_token, '', 'initialize', {
+  const after = await sendMcp(ctx.origin, second.access_token, '', 'initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
     clientInfo: { name: 'e2e' },
   });
 
+  expect(second.scope).toBe('read');
+  expect(replayBody).toMatchObject({ error: 'invalid_grant' });
   expect(after.status).toBe(401);
 });
 
-test('removing the approving token stops the command a grant runs, then answers 401', async () => {
-  const tokens = await runSignIn('exec');
-  const session = await openMcp(tokens.access_token);
+test('it stops the command a grant runs when the approving token goes, then answers 401', async () => {
+  const ctx = await setupTest();
 
-  const call = readCallOutcome(
-    sendMcp(tokens.access_token, session, 'tools/call', {
-      name: 'imp_exec',
-      arguments: { name: box, command: 'sleep 120', timeoutSeconds: 180 },
-    }),
-  );
+  const box = `${ctx.prefix}box`;
+  const clientName = `${ctx.prefix}conn`;
+  const approver = `${ctx.prefix}approver`;
 
-  await Bun.sleep(2000);
+  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  await runImp('new', box, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, box));
+
+  await waitForExec(box);
+
+  const added = await ctx.client.oauth.clients.add({
+    name: clientName,
+    redirectUris: [ctx.redirect],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeOAuthClientIfPresent(ctx.client, clientName));
+
+  const token = await ctx.client.tokens.create({
+    name: approver,
+    scope: 'exec',
+    imps: [`${ctx.prefix}*`],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, approver));
+
+  const tokens = await runSignIn({
+    origin: ctx.origin,
+    clientId: added.clientId,
+    redirect: ctx.redirect,
+    approverToken: token.secret,
+    scope: 'exec',
+  });
+
+  const session = await openRouteMcp(ctx.origin, tokens.access_token);
+
+  const call = sendMcp(ctx.origin, tokens.access_token, session, 'tools/call', {
+    name: 'imp_exec',
+    arguments: { name: box, command: 'sleep 120', timeoutSeconds: 180 },
+  });
+
+  // the command runs in the guest before the token goes
+  await waitFor('the command to start', async () => {
+    const processes = await runImp('exec', box, '--', 'ps');
+
+    if (!processes.includes('sleep 120')) {
+      throw new Error('no sleep 120 yet');
+    }
+  });
 
   const started = Date.now();
 
-  await runImp('token', 'rm', APPROVER);
+  await runImp('token', 'rm', approver);
 
-  const ended = await call;
+  const [settled] = await Promise.allSettled([call]);
 
-  // the stream closed long before the command's 120 s
-  expect(ended).toBe('dropped');
-  expect(Date.now() - started).toBeLessThan(30_000);
+  const elapsedMs = Date.now() - started;
 
-  const after = await sendMcp(tokens.access_token, session, 'ping');
+  // a stream that ended with no result, or none at all
+  const outcome =
+    settled?.status === 'fulfilled' && JSON.stringify(settled.value.body).includes('"result"')
+      ? 'answered'
+      : 'dropped';
 
-  expect(after.status).toBe(401);
-
+  const after = await sendMcp(ctx.origin, tokens.access_token, session, 'ping');
   const processes = await runImp('exec', box, '--', 'ps');
 
+  expect(outcome).toBe('dropped');
+
+  // the stream closed long before the command's 120 s
+  expect(elapsedMs).toBeLessThan(30_000);
+  expect(after.status).toBe(401);
   expect(processes).not.toContain('sleep 120');
-
-  // a new approver for the cases after this one
-  const remade = await runImp('token', 'new', APPROVER, '--scope', 'exec', '--imps', `${prefix}*`);
-
-  state.approverToken = remade.trim();
 }, 120_000);
 
-test('sign-ins past the burst get 429', async () => {
+test('it answers 429 to sign-ins past the burst', async () => {
+  const ctx = await setupTest();
+
+  const clientName = `${ctx.prefix}conn`;
+
+  await runDevScript('reboot', instance, { IMP_MCP_PUBLIC_URL: ctx.origin });
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  const added = await ctx.client.oauth.clients.add({
+    name: clientName,
+    redirectUris: [ctx.redirect],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeOAuthClientIfPresent(ctx.client, clientName));
+
+  const query = new URLSearchParams({
+    response_type: 'code',
+    client_id: added.clientId,
+    redirect_uri: ctx.redirect,
+    code_challenge: buildPkceChallenge(randomBytes(32).toString('base64url')),
+    code_challenge_method: 'S256',
+  });
+
+  // twelve, one after another
   const statuses: number[] = [];
-  const pkce = createVerifier();
 
   for (let index = 0; index < 12; index += 1) {
-    const query = new URLSearchParams({
-      response_type: 'code',
-      client_id: state.clientId,
-      redirect_uri: REDIRECT,
-      code_challenge: pkce.challenge,
-      code_challenge_method: 'S256',
-    });
-
-    const response = await fetch(`${ORIGIN}/oauth/authorize?${query.toString()}`);
+    const response = await fetch(`${ctx.origin}/oauth/authorize?${query.toString()}`);
 
     statuses.push(response.status);
   }

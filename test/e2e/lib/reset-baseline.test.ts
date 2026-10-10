@@ -20,6 +20,7 @@ import {
   removeImageIfPresent,
   removeImpIfPresent,
   removeNetworkIfPresent,
+  removeOAuthClientIfPresent,
   removeSecretIfPresent,
   removeTokenIfPresent,
   resetBaseline,
@@ -658,6 +659,46 @@ test('#removeNetworkIfPresent fails when impd refuses the removal', async () => 
   });
 
   expect(removeNetworkIfPresent(stranger, 'e2e-x-lab')).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
+  });
+});
+
+test('#removeOAuthClientIfPresent removes the OAuth client it names', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.oauth.clients.add({
+    name: 'e2e-x-conn',
+    redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
+  });
+
+  await removeOAuthClientIfPresent(ctx.client, 'e2e-x-conn');
+
+  const clients = await ctx.client.oauth.clients.list();
+
+  expect(clients).toBeEmpty();
+});
+
+test('#removeOAuthClientIfPresent passes over an OAuth client that is already gone', async () => {
+  const ctx = await setupTest();
+
+  await expect(removeOAuthClientIfPresent(ctx.client, 'e2e-x-conn')).toResolve();
+});
+
+test('#removeOAuthClientIfPresent fails when impd refuses the removal', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.oauth.clients.add({
+    name: 'e2e-x-conn',
+    redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
+  });
+
+  const stranger = createImpClient({
+    url: 'http://impd.test',
+    token: 'not-a-token',
+    fetch: (request) => ctx.impd.api.app.handle(request),
+  });
+
+  expect(removeOAuthClientIfPresent(stranger, 'e2e-x-conn')).rejects.toMatchObject({
     code: 'UNAUTHORIZED',
   });
 });
