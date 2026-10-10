@@ -17,10 +17,10 @@ import { runCommand, runInContainer } from '../lib/instance';
 import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
 import type { MoveHosts } from '../lib/move-hosts';
 import { setupSuite } from '../lib/setup-suite';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
-// Moves between two tag:imp nodes on this machine, with neither
+// Moves between two tag:imp-e2e nodes on this machine, with neither
 // IMP_MOVE_TEST_CIDR nor IMP_PEER_URL: the real peer check, to the peer URL
 // each impd builds from its tailnet IP (docs/architecture/moves.md#scope).
 
@@ -28,10 +28,12 @@ const prefix = setupSuite('moves-tailnet');
 const TINY = resolveImageName('e2e-tiny');
 const plain = `${prefix}a`;
 const named = `${prefix}n`;
-const NOT_READY = 'moves-tailnet needs TAILSCALE_AUTHKEY (env, 1Password or .env)';
+
+const NOT_READY =
+  'moves-tailnet needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth)';
 
 const NO_PEER_RULE =
-  'add { "action": "accept", "src": ["tag:imp"], "dst": ["tag:imp:7070"] } to the tailnet policy';
+  'add { "src": ["tag:imp-e2e"], "dst": ["tag:imp-e2e"], "ip": ["tcp:7070"] } to the tailnet policy';
 
 const NAMES_BLOCKED =
   'the tailnet name handover waits for the Tailscale Services OAuth client of #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it exists';
@@ -40,9 +42,7 @@ const InfoSchema = z.object({
   tailscale: z.object({ state: z.string().nullable(), ip: z.string().nullable() }),
 });
 
-const authKey = await readTailscaleAuthKey();
-
-const ready = authKey !== null;
+const ready = hasTailscaleE2EKey();
 
 const localStatus = await runCommand(['tailscale', 'status', '--json']).catch(() => null);
 
@@ -126,8 +126,8 @@ test.skipIf(!ready && !config.acceptance)(
     expect(ipB).toStartWith('100.');
     expect(ipB).not.toBe(ipA);
 
-    // tag:imp nodes see each other only with the policy's tag:imp to
-    // tag:imp:7070 rule (docs/guides/hosts.md#moves)
+    // tag:imp-e2e nodes see each other only with the policy's tag:imp-e2e
+    // to tag:imp-e2e:7070 grant
     await waitFor(
       "A among B's tailnet peers",
       async () => {

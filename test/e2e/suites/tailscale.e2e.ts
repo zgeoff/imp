@@ -6,7 +6,7 @@ import { assertState, readImpUrls, readInfo, requireImp, runImp } from '../lib/i
 import { createImp, holdImp } from '../lib/imps';
 import { runCommand, runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
-import { readTailscaleAuthKey } from '../lib/tailscale-key';
+import { hasTailscaleE2EKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
 const prefix = setupSuite('tailscale');
@@ -14,12 +14,13 @@ const TINY = resolveImageName('e2e-tiny');
 const name = `${prefix}a`;
 
 const NOT_READY =
-  'tailscale needs TAILSCALE_AUTHKEY (env, 1Password or .env) and this machine on the tailnet';
+  'tailscale needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth) and this machine on the tailnet';
 
 const PeerSchema = z.object({
   DNSName: z.string().default(''),
   TailscaleIPs: z.array(z.string()).default([]),
   Online: z.boolean().default(false),
+  Tags: z.array(z.string()).default([]),
 });
 
 const TailscaleStatusSchema = z.object({
@@ -81,9 +82,8 @@ async function readTailnetBody(url: string, host?: string): Promise<string> {
 }
 
 const localStatus = await readLocalStatus();
-const authKey = await readTailscaleAuthKey();
 
-const ready = authKey !== null && localStatus?.BackendState === 'Running';
+const ready = hasTailscaleE2EKey() && localStatus?.BackendState === 'Running';
 
 if (!ready && !config.acceptance) {
   console.log(`    ${NOT_READY}; skipped`);
@@ -110,6 +110,9 @@ test.skipIf(!ready && !config.acceptance)(
     const node = peers.find((peer) => peer.Online && peer.TailscaleIPs.includes(ip));
 
     expect(node).toBeDefined();
+
+    // the e2e tag, which the tailnet policy keeps away from tag:imp's live impd
+    expect(node?.Tags).toStrictEqual(['tag:imp-e2e']);
 
     // the host container runs its own tailscaled and still needs public DNS
     const dns = await runInContainer(['getent', 'hosts', 'pkgs.tailscale.com']);

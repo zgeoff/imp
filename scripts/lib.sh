@@ -102,6 +102,31 @@ load_tailscale_authkey() {
   return "$found"
 }
 
+# load_tailscale_e2e_authkey exports TAILSCALE_AUTHKEY and IMP_TAILSCALE_TAGS
+# for the e2e suites' nodes and returns 1 when it has no key. The key is the
+# OAuth client secret of tag:imp-e2e, from IMP_E2E_TAILSCALE_AUTHKEY, else a
+# 1Password read of IMP_E2E_TAILSCALE_OAUTH_REF (default
+# op://imp-e2e/imp-e2e-tailscale-oauth/client-secret). tailscale up takes the
+# secret as an auth key; the suffix makes each node ephemeral and
+# preauthorized. Never TAILSCALE_AUTHKEY or .env: those hold dev's tag:imp key,
+# and tag:imp nodes reach a live impd. Tracing stays off in here.
+load_tailscale_e2e_authkey() {
+  { local xtrace=$-; set +x; } 2>/dev/null
+  local secret=${IMP_E2E_TAILSCALE_AUTHKEY:-} found=1
+  if [ -z "$secret" ] && command -v op >/dev/null 2>&1; then
+    secret=$(timeout 20 op read \
+      "${IMP_E2E_TAILSCALE_OAUTH_REF:-op://imp-e2e/imp-e2e-tailscale-oauth/client-secret}" \
+      </dev/null 2>/dev/null) || secret=
+  fi
+  if [ -n "$secret" ]; then
+    export TAILSCALE_AUTHKEY="${secret%%\?*}?ephemeral=true&preauthorized=true"
+    export IMP_TAILSCALE_TAGS=tag:imp-e2e
+    found=0
+  fi
+  if [[ $xtrace == *x* ]]; then set -x; fi
+  return "$found"
+}
+
 # write_tailnet_oauth_file PATH writes the OAuth client for per-imp tailnet
 # names (docs/guides/tailscale.md#per-imp-names) to PATH, mode 0600, from the
 # 1Password item IMP_TAILNET_OAUTH_REF (default op://cloud/imp-tailscale-oauth),

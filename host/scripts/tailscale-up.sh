@@ -1,5 +1,5 @@
 #!/bin/bash
-# Join the tailnet as tag:imp (docs/guides/tailscale.md). Idempotent.
+# Join the tailnet as tag:imp, or IMP_TAILSCALE_TAGS (docs/guides/tailscale.md). Idempotent.
 # Runs inside the host container. With saved node state it starts tailscaled
 # from that state first, so a joined node stays on the tailnet without a key
 # (deploy/bootstrap.sh blanks it). Only when the saved node does not reach
@@ -11,6 +11,8 @@
 #      IMP_TAILSCALE_AUTHKEY_FILE  a file that holds the key instead (the NixOS module
 #                                mounts one); read by tailscale itself, never by this script
 #      IMP_TAILSCALE_HOSTNAME    tailnet hostname (default imp)
+#      IMP_TAILSCALE_TAGS        tags to advertise, comma-separated (default tag:imp); the
+#                                e2e harness sets tag:imp-e2e
 #      IMP_TAILSCALE_STATE_DIR   node state (default /var/lib/imp/tailscale); "mem" keeps it in memory
 #      IMP_DNS                   resolvers used if resolv.conf points into the tailnet,
 #                                comma-separated as impd reads it (default "1.1.1.1,8.8.8.8")
@@ -94,7 +96,7 @@ join() {
     printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
   fi
   ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
-    --advertise-tags=tag:imp --accept-dns=false --timeout=60s || rc=$?
+    --advertise-tags="${IMP_TAILSCALE_TAGS:-tag:imp}" --accept-dns=false --timeout=60s || rc=$?
   [ -n "$key_file" ] || rm -f "$auth"
   if [ "$rc" != 0 ]; then
     echo "tailscale-up: tailscale up failed with the key. A single-use key that was used already, an" \
