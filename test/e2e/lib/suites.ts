@@ -1,3 +1,5 @@
+import type { DevInstance } from './instance';
+
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
 export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws' | 'e2e-git' | 'e2e-ra';
@@ -12,6 +14,11 @@ export interface Suite {
   // its journey files under test/e2e/suites, in run order, when they are more
   // than <name>.e2e.ts; each runs as its own bun test process
   readonly journeys?: readonly string[];
+
+  // the impd settings every journey runs on, over the run's: the harness
+  // reboots the instance onto them before the first journey and back after
+  // the last (runSuites)
+  readonly settings?: (target: Readonly<DevInstance>) => Readonly<Record<string, string>>;
 }
 
 // Every suite, in run order. The order is the acceptance numbering

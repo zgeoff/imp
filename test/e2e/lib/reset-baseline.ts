@@ -84,6 +84,40 @@ export async function removeImpIfPresent(client: ImpClient, name: string): Promi
   }
 }
 
+// The same for a token a journey made, such as one it removes itself to
+// check the refusal that follows.
+export async function removeTokenIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.tokens.delete({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
+// The same for a secret a journey added; its removal revokes its grants.
+export async function removeSecretIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.secrets.delete({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
+// The same for a network a journey made.
+export async function removeNetworkIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.networks.delete({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
 // The same for an image or template a journey made; release it after the
 // imps that boot it.
 export async function removeImageIfPresent(client: ImpClient, name: string): Promise<void> {

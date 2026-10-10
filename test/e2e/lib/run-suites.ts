@@ -17,7 +17,14 @@ export interface RunSuitesDeps {
   readonly checkJourney: (suite: string, journey: string) => Promise<boolean>;
   readonly reset: (prefixes: readonly string[]) => Promise<void>;
 
-  // the instance back on the run's settings, after a journey that failed
+  // the impd settings a suite runs on, read as it starts; null for the run's
+  readonly settingsOf: (name: string) => Readonly<Record<string, string>> | null;
+
+  // the instance on a suite's settings
+  readonly rebootOnto: (settings: Readonly<Record<string, string>>) => Promise<void>;
+
+  // the instance back on the run's settings, after a journey that failed or
+  // a suite with settings of its own
   readonly reboot: () => Promise<void>;
 
   // a fresh instance with the run's settings, when a reset cannot restore
@@ -73,11 +80,40 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
     let isPassed = true;
     let stoppedBecause: string | null = null;
 
-    for (const journey of deps.journeysOf(name)) {
+    // A suite's own settings: every journey runs on them, rebooted onto
+    // before the first and after a fresh instance, and back onto the run's
+    // after the last, a failure or an interrupt.
+    const settings = readSettings(deps, name);
+    const ownSettings = settings ?? null;
+
+    // whether the instance may be off the run's settings, and needs the
+    // reboot back
+    let isOffRunSettings = false;
+
+    // whether it runs on the suite's settings now
+    let isOnSettings = false;
+
+    if (settings === undefined) {
+      isPassed = false;
+    }
+
+    for (const journey of settings === undefined ? [] : deps.journeysOf(name)) {
       // a journey that never ran fails its suite
       if (deps.isInterrupted()) {
         isPassed = false;
         break;
+      }
+
+      if (ownSettings !== null && !isOnSettings) {
+        isOffRunSettings = true;
+
+        isOnSettings = await runRebootOnto(deps, name, ownSettings);
+
+        // a signal during the reboot finds no journey to stop, so none starts
+        if (!isOnSettings || deps.isInterrupted()) {
+          isPassed = false;
+          break;
+        }
       }
 
       const verdict = await runChecked(deps, name, journey);
@@ -85,11 +121,16 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
       const isRestored = await resetAfterJourney(deps, journey, verdict.isPassed, {
         prefixes,
         isSkipped: deps.keep || isKeptForRestart,
+        reboot: ownSettings === null ? deps.reboot : () => deps.rebootOnto(ownSettings),
       });
 
       if (!isRestored && !deps.isInterrupted()) {
         try {
           await deps.recreate();
+
+          // a fresh instance comes up on the run's settings
+          isOnSettings = false;
+          isOffRunSettings = false;
         } catch (error) {
           stoppedBecause = `the instance could not be made anew after ${journey}: ${readReason(error)}`;
         }
@@ -100,6 +141,13 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
       if (stoppedBecause !== null) {
         break;
       }
+    }
+
+    if (isOffRunSettings && stoppedBecause === null) {
+      const restored = await resetRunSettings(deps, name);
+
+      isPassed &&= restored.isRestored;
+      stoppedBecause = restored.stoppedBecause;
     }
 
     const result = { name, passed: isPassed, ms: deps.now() - started };
@@ -115,11 +163,84 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
   return { results, stoppedBecause: deps.isInterrupted() ? 'interrupted' : null };
 }
 
+// the suite's settings, null for the run's, or undefined when reading them
+// threw, which fails the suite before it changes anything
+function readSettings(
+  deps: Readonly<RunSuitesDeps>,
+  name: string,
+): Readonly<Record<string, string>> | null | undefined {
+  try {
+    return deps.settingsOf(name);
+  } catch (error) {
+    deps.log(`    the ${name} suite's settings could not be read: ${readReason(error)}`);
+
+    return undefined;
+  }
+}
+
+async function runRebootOnto(
+  deps: Readonly<RunSuitesDeps>,
+  name: string,
+  settings: Readonly<Record<string, string>>,
+): Promise<boolean> {
+  try {
+    await deps.rebootOnto(settings);
+
+    return true;
+  } catch (error) {
+    deps.log(
+      `    the instance could not reboot onto the ${name} suite's settings: ${readReason(error)}`,
+    );
+
+    return false;
+  }
+}
+
+interface SettingsRestore {
+  readonly isRestored: boolean;
+  readonly stoppedBecause: string | null;
+}
+
+// The reboot back onto the run's settings after a suite with its own; when
+// it fails, a fresh instance, unless the run was interrupted.
+async function resetRunSettings(
+  deps: Readonly<RunSuitesDeps>,
+  name: string,
+): Promise<SettingsRestore> {
+  try {
+    await deps.reboot();
+
+    return { isRestored: true, stoppedBecause: null };
+  } catch (error) {
+    deps.log(
+      `    the instance could not reboot off the ${name} suite's settings: ${readReason(error)}`,
+    );
+  }
+
+  if (deps.isInterrupted()) {
+    return { isRestored: false, stoppedBecause: null };
+  }
+
+  try {
+    await deps.recreate();
+
+    return { isRestored: false, stoppedBecause: null };
+  } catch (error) {
+    return {
+      isRestored: false,
+      stoppedBecause: `the instance could not be made anew after the ${name} suite: ${readReason(error)}`,
+    };
+  }
+}
+
 interface RestoreOptions {
   readonly prefixes: readonly string[];
 
   // --keep, or scale's imps kept for restart
   readonly isSkipped: boolean;
+
+  // the reboot after a failure: onto the suite's settings, or the run's
+  readonly reboot: () => Promise<void>;
 }
 
 // The reset after one journey file, with a reboot first when it failed and
@@ -136,7 +257,7 @@ async function resetAfterJourney(
 
   try {
     if (!isPassed && !deps.isInterrupted()) {
-      await deps.reboot();
+      await options.reboot();
     }
 
     await deps.reset(options.prefixes);

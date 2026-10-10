@@ -14,6 +14,11 @@ function setupTest() {
 
         return Promise.resolve();
       },
+      rebootOnto: (settings: Readonly<Record<string, string>>) => {
+        steps.push(`reboot onto ${JSON.stringify(settings)}`);
+
+        return Promise.resolve();
+      },
       reboot: () => {
         steps.push('reboot');
 
@@ -42,6 +47,7 @@ test('#runSuites resets each suite’s prefix after the suite passes', async () 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -64,6 +70,7 @@ test('#runSuites resets the suite’s prefix after each of its journeys', async 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -93,6 +100,7 @@ test('#runSuites reboots and resets after a journey that fails, runs the next on
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -125,6 +133,7 @@ test('#runSuites reboots the instance before the reset after a suite that fails'
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -144,6 +153,7 @@ test('#runSuites skips the reboot and the next suite once the run is interrupted
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => isInterrupted,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -170,6 +180,7 @@ test('#runSuites resets after the journey an interrupt stopped, runs no more of 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => isInterrupted,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -200,6 +211,7 @@ test('#runSuites reports an interrupt that comes after the last suite', async ()
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => isInterrupted,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -227,6 +239,7 @@ test('#runSuites neither makes the instance anew nor runs on when a reset fails 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => isInterrupted,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -260,6 +273,7 @@ test('#runSuites leaves scale’s imps for restart, whose reset takes them', asy
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -278,6 +292,7 @@ test('#runSuites neither reboots nor resets after scale fails when restart runs 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -303,6 +318,7 @@ test('#runSuites resets scale after it when restart is not in the run', async ()
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -321,6 +337,7 @@ test('#runSuites leaves what each journey left with --keep', async () => {
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: true,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -339,6 +356,7 @@ test('#runSuites makes the instance anew and runs on when the reset fails', asyn
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -378,6 +396,7 @@ test('#runSuites makes the instance anew before the next journey of a suite when
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -414,6 +433,7 @@ test('#runSuites stops before the next journey of a suite when the instance cann
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => (name === 'proxy' ? ['proxy-refusals', 'proxy-forwards'] : [name]),
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -446,6 +466,7 @@ test('#runSuites runs every journey of a suite and resets after none with --keep
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: true,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -471,6 +492,7 @@ test('#runSuites makes the instance anew when the reboot after a failure throws'
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -493,6 +515,7 @@ test('#runSuites stops the run when the instance cannot be made anew', async () 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -524,6 +547,7 @@ test('#runSuites fails a suite that throws, restores the baseline, and runs on',
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -561,6 +585,7 @@ test('#runSuites fails a suite whose checks throw, and runs on', async () => {
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     runJourney: () => Promise.resolve(0),
@@ -580,6 +605,7 @@ test('#runSuites fails a suite whose checks fail', async () => {
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     runJourney: () => Promise.resolve(0),
@@ -598,6 +624,7 @@ test('#runSuites checks each journey under its suite’s name', async () => {
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     runJourney: () => Promise.resolve(0),
@@ -626,6 +653,7 @@ test('#runSuites times each suite from its start to the end of its last reset', 
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: () => ['proxy-refusals', 'proxy-forwards'],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => clock,
     checkJourney: () => Promise.resolve(true),
@@ -653,6 +681,7 @@ test('#runSuites reports each suite as it starts and ends', async () => {
     prefixOf: (name) => `e2e-${name}-`,
     journeysOf: (name) => [name],
     keep: false,
+    settingsOf: () => null,
     isInterrupted: () => false,
     now: () => 0,
     checkJourney: () => Promise.resolve(true),
@@ -666,6 +695,479 @@ test('#runSuites reports each suite as it starts and ends', async () => {
   });
 
   expect(ctx.steps).toStrictEqual(['start sleep', 'reset e2e-sleep-', 'end sleep true']);
+});
+
+test('#runSuites reboots onto a suite’s settings before its first journey and back after its last', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => (name === 'https' ? ['https-issue', 'https-renew'] : [name]),
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-issue',
+    'reset e2e-https-',
+    'run https-renew',
+    'reset e2e-https-',
+    'reboot',
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome).toStrictEqual({
+    results: [
+      { name: 'https', passed: true, ms: 0 },
+      { name: 'sleep', passed: true, ms: 0 },
+    ],
+    stoppedBecause: null,
+  });
+});
+
+test('#runSuites reboots onto the suite’s settings after a journey that fails, and back onto the run’s after the last', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['https-issue', 'https-renew'],
+    keep: false,
+    settingsOf: () => ({ IMP_DOMAIN: 'e2e.test' }),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(1);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-issue',
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'reset e2e-https-',
+    'run https-renew',
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'reset e2e-https-',
+    'reboot',
+  ]);
+
+  expect(outcome.results).toStrictEqual([{ name: 'https', passed: false, ms: 0 }]);
+});
+
+test('#runSuites reboots back onto the run’s settings after an interrupt stops a suite with its own', async () => {
+  const ctx = setupTest();
+  let isInterrupted = false;
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => (name === 'https' ? ['https-issue', 'https-renew'] : [name]),
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    isInterrupted: () => isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      isInterrupted = true;
+
+      return Promise.resolve(130);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-issue',
+    'reset e2e-https-',
+    'reboot',
+  ]);
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'https', passed: false, ms: 0 }],
+    stoppedBecause: 'interrupted',
+  });
+});
+
+test('#runSuites starts no journey after an interrupt during the reboot onto a suite’s settings, reboots back, and fails the suite', async () => {
+  const ctx = setupTest();
+  let isInterrupted = false;
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    rebootOnto: (settings) => {
+      ctx.steps.push(`reboot onto ${JSON.stringify(settings)}`);
+
+      isInterrupted = true;
+
+      return Promise.resolve();
+    },
+    isInterrupted: () => isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual(['reboot onto {"IMP_DOMAIN":"e2e.test"}', 'reboot']);
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'https', passed: false, ms: 0 }],
+    stoppedBecause: 'interrupted',
+  });
+});
+
+test('#runSuites fails a suite whose reboot onto its settings throws, runs none of its journeys, reboots back, and runs on', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    rebootOnto: () => Promise.reject(new Error('dev.sh reboot exited 1')),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    "log the instance could not reboot onto the https suite's settings: dev.sh reboot exited 1",
+    'reboot',
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome).toStrictEqual({
+    results: [
+      { name: 'https', passed: false, ms: 0 },
+      { name: 'sleep', passed: true, ms: 0 },
+    ],
+    stoppedBecause: null,
+  });
+});
+
+test('#runSuites fails a suite whose settings cannot be read, without a reboot or a journey', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: () => {
+      throw new Error('no Pebble network');
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    "log the https suite's settings could not be read: no Pebble network",
+  ]);
+
+  expect(outcome.results).toStrictEqual([{ name: 'https', passed: false, ms: 0 }]);
+});
+
+test('#runSuites makes the instance anew and runs on when the reboot off a suite’s settings throws', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    reboot: () => Promise.reject(new Error('dev.sh reboot exited 1')),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https',
+    'reset e2e-https-',
+    "log the instance could not reboot off the https suite's settings: dev.sh reboot exited 1",
+    'recreate',
+    'run sleep',
+    'reset e2e-sleep-',
+  ]);
+
+  expect(outcome.results).toStrictEqual([
+    { name: 'https', passed: false, ms: 0 },
+    { name: 'sleep', passed: true, ms: 0 },
+  ]);
+});
+
+test('#runSuites stops the run when the instance cannot be made anew after the reboot off a suite’s settings throws', async () => {
+  const ctx = setupTest();
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    reboot: () => Promise.reject(new Error('dev.sh reboot exited 1')),
+    recreate: () => Promise.reject(new Error('dev.sh up exited 1')),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'https', passed: false, ms: 0 }],
+    stoppedBecause: 'the instance could not be made anew after the https suite: dev.sh up exited 1',
+  });
+});
+
+test('#runSuites reboots onto a suite’s settings again before the next journey after a fresh instance', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['https'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['https-issue', 'https-renew'],
+    keep: false,
+    settingsOf: () => ({ IMP_DOMAIN: 'e2e.test' }),
+    reset: (prefixes) => {
+      ctx.steps.push(`reset ${prefixes.join(',')}`);
+
+      return ctx.steps.filter((step) => step.startsWith('reset')).length === 1
+        ? Promise.reject(new Error('CONFLICT'))
+        : Promise.resolve();
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-issue',
+    'reset e2e-https-',
+    'log the https-issue journey left the baseline dirty: CONFLICT',
+    'recreate',
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-renew',
+    'reset e2e-https-',
+    'reboot',
+  ]);
+});
+
+test('#runSuites makes no fresh instance when the reboot off a suite’s settings throws after an interrupt', async () => {
+  const ctx = setupTest();
+  let isInterrupted = false;
+
+  const outcome = await runSuites({
+    ...ctx.recorders,
+    names: ['https', 'sleep'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'https' ? { IMP_DOMAIN: 'e2e.test' } : null),
+    reboot: () => {
+      ctx.steps.push('reboot');
+
+      return Promise.reject(new Error('dev.sh reboot exited 1'));
+    },
+    isInterrupted: () => isInterrupted,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      isInterrupted = true;
+
+      return Promise.resolve(130);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https',
+    'reset e2e-https-',
+    'reboot',
+    "log the instance could not reboot off the https suite's settings: dev.sh reboot exited 1",
+  ]);
+
+  expect(outcome).toStrictEqual({
+    results: [{ name: 'https', passed: false, ms: 0 }],
+    stoppedBecause: 'interrupted',
+  });
+});
+
+test('#runSuites makes the instance anew and reboots onto the suite’s settings again when the reboot after a failed journey throws', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['https'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: () => ['https-issue', 'https-renew'],
+    keep: false,
+    settingsOf: () => ({ IMP_DOMAIN: 'e2e.test' }),
+    rebootOnto: (settings) => {
+      ctx.steps.push(`reboot onto ${JSON.stringify(settings)}`);
+
+      // the second reboot onto the settings is the one after the failed journey
+      return ctx.steps.filter((step) => step.startsWith('reboot onto')).length === 2
+        ? Promise.reject(new Error('dev.sh reboot exited 1'))
+        : Promise.resolve();
+    },
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      const exitCode = journey === 'https-issue' ? 1 : 0;
+
+      return Promise.resolve(exitCode);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-issue',
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'log the https-issue journey left the baseline dirty: dev.sh reboot exited 1',
+    'recreate',
+    'reboot onto {"IMP_DOMAIN":"e2e.test"}',
+    'run https-renew',
+    'reset e2e-https-',
+    'reboot',
+  ]);
+});
+
+test('#runSuites reboots back off the settings of scale kept for restart, and resets nothing after it', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['scale', 'restart'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: (name) => (name === 'scale' ? { IMP_RAM_BUDGET_MIB: '8192' } : null),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'reboot onto {"IMP_RAM_BUDGET_MIB":"8192"}',
+    'run scale',
+    'reboot',
+    'run restart',
+    'reset e2e-restart-,e2e-scale-',
+  ]);
+});
+
+test('#runSuites never reboots a run whose suites pass on the run’s settings', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['sleep', 'jail'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: () => null,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: () => Promise.resolve(0),
+  });
+
+  expect(ctx.steps).toStrictEqual(['reset e2e-sleep-', 'reset e2e-jail-']);
+});
+
+test('#runSuites reboots onto a suite’s settings and back with --keep, and resets nothing', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['https'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: true,
+    settingsOf: () => ({ IMP_DOMAIN: 'e2e.test' }),
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey) => {
+      ctx.steps.push(`run ${journey}`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual(['reboot onto {"IMP_DOMAIN":"e2e.test"}', 'run https', 'reboot']);
 });
 
 test.each([

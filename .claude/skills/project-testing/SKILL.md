@@ -167,6 +167,19 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    `runSuites` in `test/e2e/lib/run-suites.ts`, which takes each step as a dependency;
    `run-suites.test.ts` checks the order of runs, reboots, resets and re-creations, between the
    journeys of one suite too.
+
+   A suite's `settings` in `suites.ts`, a function of the instance that returns impd environment,
+   puts every one of its journeys on those settings. The harness reads them as the suite starts and
+   reboots onto them (`scripts/dev.sh reboot` with that environment) before the first journey and
+   again after any fresh instance; the reboot after a failed journey goes onto them too. After the
+   last journey, a failure or an interrupt it reboots back onto the run's settings, under `--keep`
+   and for `scale` too. A read that throws fails the suite with no reboot and no journey; a reboot
+   onto the settings that fails runs no more of its journeys, fails the suite and still reboots
+   back; a reboot back that fails fails the suite and makes the instance anew, unless the run was
+   interrupted, and the run stops if that fails. A suite without `settings` never reboots a passing
+   run, so a `--reuse` instance keeps its own settings until a suite with `settings` or a failure
+   reboots it onto the run's.
+
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
    (`E2E_METRICS_FILE`). The run passes only when every section passed, nothing stopped it, and no

@@ -16,7 +16,14 @@ import { createXfsBackend } from '../../../packages/daemon/src/storage/xfs-backe
 import { buildStubCpuCgroups } from '../../../packages/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../../../packages/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '../../../packages/daemon/src/test-utils/find-free-ports';
-import { removeImageIfPresent, removeImpIfPresent, resetBaseline } from './reset-baseline';
+import {
+  removeImageIfPresent,
+  removeImpIfPresent,
+  removeNetworkIfPresent,
+  removeSecretIfPresent,
+  removeTokenIfPresent,
+  resetBaseline,
+} from './reset-baseline';
 
 // impd's real app on the stub VMM, as the dev instance runs it, with the
 // in-process client the reset drives
@@ -504,5 +511,111 @@ test('#removeImageIfPresent fails while an imp boots the image', async () => {
 
   expect(removeImageIfPresent(ctx.client, 'e2e-x-golden')).rejects.toMatchObject({
     code: 'CONFLICT',
+  });
+});
+
+test('#removeTokenIfPresent removes the token it names', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.tokens.create({ name: 'e2e-x-reader', scope: 'read' });
+
+  await removeTokenIfPresent(ctx.client, 'e2e-x-reader');
+
+  const tokens = await ctx.client.tokens.list();
+
+  expect(tokens).toBeEmpty();
+});
+
+test('#removeTokenIfPresent passes over a token that is already gone', async () => {
+  const ctx = await setupTest();
+
+  await expect(removeTokenIfPresent(ctx.client, 'e2e-x-reader')).toResolve();
+});
+
+test('#removeTokenIfPresent fails when impd refuses the removal', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.tokens.create({ name: 'e2e-x-reader', scope: 'read' });
+
+  const stranger = createImpClient({
+    url: 'http://impd.test',
+    token: 'not-a-token',
+    fetch: (request) => ctx.impd.api.app.handle(request),
+  });
+
+  expect(removeTokenIfPresent(stranger, 'e2e-x-reader')).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
+  });
+});
+
+test('#removeSecretIfPresent removes the secret it names, and its grants', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'e2e-x-dev' });
+  await ctx.client.secrets.add({ name: 'e2e-x-gh', kind: 'github', value: 'ghp_e2e' });
+  await ctx.client.grants.add({ name: 'e2e-x-dev', secret: 'e2e-x-gh' });
+
+  await removeSecretIfPresent(ctx.client, 'e2e-x-gh');
+
+  const secrets = await ctx.client.secrets.list();
+  const grants = await ctx.client.grants.list({ name: 'e2e-x-dev' });
+
+  expect(secrets).toBeEmpty();
+  expect(grants).toBeEmpty();
+});
+
+test('#removeSecretIfPresent passes over a secret that is already gone', async () => {
+  const ctx = await setupTest();
+
+  await expect(removeSecretIfPresent(ctx.client, 'e2e-x-gh')).toResolve();
+});
+
+test('#removeSecretIfPresent fails when impd refuses the removal', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.secrets.add({ name: 'e2e-x-gh', kind: 'github', value: 'ghp_e2e' });
+
+  const stranger = createImpClient({
+    url: 'http://impd.test',
+    token: 'not-a-token',
+    fetch: (request) => ctx.impd.api.app.handle(request),
+  });
+
+  expect(removeSecretIfPresent(stranger, 'e2e-x-gh')).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
+  });
+});
+
+test('#removeNetworkIfPresent removes the network it names', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.networks.create({ name: 'e2e-x-lab' });
+
+  await removeNetworkIfPresent(ctx.client, 'e2e-x-lab');
+
+  const networks = await ctx.client.networks.list();
+
+  expect(networks).toBeEmpty();
+});
+
+test('#removeNetworkIfPresent passes over a network that is already gone', async () => {
+  const ctx = await setupTest();
+
+  await expect(removeNetworkIfPresent(ctx.client, 'e2e-x-lab')).toResolve();
+});
+
+test('#removeNetworkIfPresent fails when impd refuses the removal', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.networks.create({ name: 'e2e-x-lab' });
+
+  const stranger = createImpClient({
+    url: 'http://impd.test',
+    token: 'not-a-token',
+    fetch: (request) => ctx.impd.api.app.handle(request),
+  });
+
+  expect(removeNetworkIfPresent(stranger, 'e2e-x-lab')).rejects.toMatchObject({
+    code: 'UNAUTHORIZED',
   });
 });
