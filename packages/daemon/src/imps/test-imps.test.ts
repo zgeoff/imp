@@ -258,6 +258,42 @@ test('#createImpTest never waits for the template build of an impd that restartI
   expect(existsSync(harness.dataDir)).toBeFalse();
 });
 
+test('#createImpTest finishes the template build of a replaced impd that got past its VM call', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const logs: string[] = [];
+
+  const harness = await createImpTest(stack, {
+    env: { IMP_BOOT_TEMPLATES: 'true' },
+    onLog: (message) => {
+      logs.push(message);
+    },
+  });
+
+  await harness.createTestImage('ubuntu');
+
+  // the second boot of a shape builds its template in the background
+  await harness.imps.createImp({ name: 'once', vcpus: 1, memoryMib: 256 });
+  await harness.imps.createImp({ name: 'first', vcpus: 1, memoryMib: 256 });
+
+  await waitFor(() => {
+    expect(harness.fake.templateBuilds).toHaveLength(1);
+  });
+
+  // the build's VM call came back to a live impd, so the rest of it runs
+  harness.restartImpd();
+
+  await stack.disposeAsync();
+
+  const builtAt = logs.findIndex((line) => /^impd: boot template \w+ built in/u.test(line));
+
+  expect(builtAt).toBeGreaterThanOrEqual(0);
+  expect(builtAt).toBeLessThan(logs.indexOf('test harness: database closed'));
+  expect(existsSync(harness.dataDir)).toBeFalse();
+});
+
 test('#buildTestApp serves the API over the harness', async () => {
   const ctx = await setupImpTest();
 

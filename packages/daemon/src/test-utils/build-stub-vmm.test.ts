@@ -1219,6 +1219,100 @@ test('#buildStubVmm writes no snapshot when a template build fails', async () =>
   expect(existsSync(snapshot.snapshotDir)).toBeFalse();
 });
 
+test('#buildStubVmm settles the parked-build signal once a template build of a replaced runner parks', async () => {
+  const ctx = await setupTest();
+
+  const snapshot = buildSnapshotPaths(join(ctx.dir, 'templates', 'shape-1'));
+  const hold = ctx.fake.hold('template');
+
+  void ctx.runner.buildTemplateVm({
+    firecrackerBin: '/usr/bin/firecracker',
+    kernelPath: '/images/vmlinux',
+    systemDrivePath: '/images/system.ext4',
+    bootArgs: 'console=ttyS0',
+    vcpus: 2,
+    memoryMib: 1024,
+    workDir: join(ctx.dir, 'build'),
+    paths: {
+      runDir: join(ctx.dir, 'build', 'run'),
+      apiSocket: join(ctx.dir, 'build', 'run', 'api.sock'),
+      vsockSocket: join(ctx.dir, 'build', 'run', 'vsock.sock'),
+      logFile: join(ctx.dir, 'build', 'run', 'firecracker.log'),
+      pidFile: join(ctx.dir, 'build', 'run', 'pid'),
+    },
+    placeholderPath: join(ctx.dir, 'build', 'placeholder.ext4'),
+    tap: 'imptpl0',
+    guestMac: '06:00:0a:64:00:02',
+    jailId: 'template-1',
+    jail: null,
+    cgroup: null,
+    minGuestUptimeMs: 0,
+    snapshotDir: snapshot.snapshotDir,
+    vmstate: snapshot.vmstate,
+    memFile: snapshot.memFile,
+  });
+
+  await hold.reached;
+
+  ctx.fake.startGeneration();
+  hold.release();
+
+  await expect(ctx.fake.whenTemplateBuildParks(ctx.runner)).toResolve();
+});
+
+test('#buildStubVmm leaves the parked-build signal pending for a template build that got past its VM call', async () => {
+  const ctx = await setupTest();
+
+  const snapshot = buildSnapshotPaths(join(ctx.dir, 'templates', 'shape-1'));
+
+  await ctx.runner.buildTemplateVm({
+    firecrackerBin: '/usr/bin/firecracker',
+    kernelPath: '/images/vmlinux',
+    systemDrivePath: '/images/system.ext4',
+    bootArgs: 'console=ttyS0',
+    vcpus: 2,
+    memoryMib: 1024,
+    workDir: join(ctx.dir, 'build'),
+    paths: {
+      runDir: join(ctx.dir, 'build', 'run'),
+      apiSocket: join(ctx.dir, 'build', 'run', 'api.sock'),
+      vsockSocket: join(ctx.dir, 'build', 'run', 'vsock.sock'),
+      logFile: join(ctx.dir, 'build', 'run', 'firecracker.log'),
+      pidFile: join(ctx.dir, 'build', 'run', 'pid'),
+    },
+    placeholderPath: join(ctx.dir, 'build', 'placeholder.ext4'),
+    tap: 'imptpl0',
+    guestMac: '06:00:0a:64:00:02',
+    jailId: 'template-1',
+    jail: null,
+    cgroup: null,
+    minGuestUptimeMs: 0,
+    snapshotDir: snapshot.snapshotDir,
+    vmstate: snapshot.vmstate,
+    memFile: snapshot.memFile,
+  });
+
+  ctx.fake.startGeneration();
+
+  // a call other than a template build parks, and settles nothing
+  void ctx.runner.isAgentReady(ctx.paths);
+
+  await waitFor(() => {
+    expect(ctx.fake.countParkedCalls()).toBe(1);
+  });
+
+  expect(Bun.peek.status(ctx.fake.whenTemplateBuildParks(ctx.runner))).toBe('pending');
+});
+
+test('#buildStubVmm rejects the parked-build signal of a runner from another fake', () => {
+  const runner = buildStubVmm().startGeneration();
+
+  expect(buildStubVmm().whenTemplateBuildParks(runner)).rejects.toThrowWithMessage(
+    Error,
+    'not a runner of this fake',
+  );
+});
+
 test('#buildStubVmm starts a running VM and records the claim on a template restore', async () => {
   const ctx = await setupTest();
 

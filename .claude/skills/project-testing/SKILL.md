@@ -101,9 +101,10 @@ Utils that take a caller's stack and register nothing themselves:
 
 - `createImpTest(stack, options)` in `imps/test-imps.ts`: the `setupImpTest` harness. For each impd
   it starts, the stack stops its boot templates, which waits for a running template build, before it
-  removes the data dir. It releases the fake's hangs first, and skips the wait for an impd that
-  `restartImpd` replaced, whose build's VM call parks. A test that holds the `template` step defers
-  the release into the same stack, so the release runs first.
+  removes the data dir. It releases the fake's hangs first, and stops waiting for a replaced impd's
+  build once its VM call parks (`whenTemplateBuildParks`); a build past that call still finishes. A
+  test that holds the `template` step defers the release into the same stack, so the release runs
+  first.
 - `createMoveHosts(stack, options)` in `moves/test-moves.ts`: the two `setupMoveHosts` impds.
 - The broker stand-ins `test-utils/start-stub-broker-*.ts` that start something: the TLS and plain
   upstreams, the reply and hold targets, the guest socket and the tunnel.
@@ -478,6 +479,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 11. An MSW handler a test adds with `server.use`; an unissued refresh token gets `invalid_grant`.
 12. `countHungCalls` and `countParkedCalls` count the calls that wait on a `hang` or on a runner of
     an older generation; a test waits for them with `waitFor` before it peeks at the call.
+    `whenTemplateBuildParks(runner)` settles once a template build of that runner parks.
 13. The three guest-memory stand-ins apply an unplug at different times. `buildStubVmm` applies it
     when the request comes, down to the guest's floor. `buildStubGuestMemory` shows it done on the
     next read, for the memory controller. `buildStubElasticGuest` unplugs one step per read, for
