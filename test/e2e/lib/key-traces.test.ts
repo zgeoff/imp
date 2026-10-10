@@ -1,11 +1,11 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { utils } from 'ssh2';
 import { createStubBin } from '../../../scripts/test-utils/create-stub-bin';
+import { buildMockEd25519Key } from './build-mock-ed25519-key';
 import { instance } from './instance';
 import { countKeyTraces, readKeyPatterns } from './key-traces';
 
@@ -20,19 +20,16 @@ async function setupTest() {
 test('#readKeyPatterns gives a seed pattern that matches the seed the key holds', async () => {
   const ctx = await setupTest();
 
-  // the seed by another road: node makes the key, whose JWK's d is the raw
-  // ed25519 private key, and ssh-keygen rewrites it as an OpenSSH key file
-  const pair = generateKeyPairSync('ed25519');
+  // the seed by another road: node made the key, and its file is built from
+  // node's seed
+  const key = buildMockEd25519Key();
   const path = join(ctx.dir, 'id');
 
-  await writeFile(path, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  await writeFile(path, key.privateKey, { mode: 0o600 });
 
-  const converted = Bun.spawnSync(['ssh-keygen', '-p', '-q', '-N', '', '-P', '', '-f', path]);
   const patterns = readKeyPatterns(path);
-  const jwk = pair.privateKey.export({ format: 'jwk' });
-  const seed = Buffer.from(jwk.d ?? '', 'base64url').toString('latin1');
+  const seed = key.seed.toString('latin1');
 
-  expect(converted.exitCode).toBe(0);
   expect(seed).toHaveLength(32);
   expect(seed).toMatch(new RegExp(patterns.seedHex, 'v'));
   expect(patterns.seedHex).not.toInclude(String.raw`\x0a`);
@@ -70,24 +67,19 @@ test('#countKeyTraces counts the key’s file line and its seed in a file in the
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  const pair = generateKeyPairSync('ed25519');
+  const key = buildMockEd25519Key();
   const keyPath = join(ctx.dir, 'id');
 
-  await writeFile(keyPath, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), {
-    mode: 0o600,
-  });
-
-  Bun.spawnSync(['ssh-keygen', '-p', '-q', '-N', '', '-P', '', '-f', keyPath]);
+  await writeFile(keyPath, key.privateKey, { mode: 0o600 });
 
   const patterns = readKeyPatterns(keyPath);
-  const seed = Buffer.from(pair.privateKey.export({ format: 'jwk' }).d ?? '', 'base64url');
   const disk = join(ctx.dir, 'disk.ext4');
 
   await writeFile(
     disk,
     Buffer.concat([
       Buffer.from(`e2e-control\n${patterns.text}\n`),
-      seed,
+      key.seed,
       Buffer.from('\nthe rest\n'),
     ]),
   );
