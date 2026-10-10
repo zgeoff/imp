@@ -1,30 +1,21 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStubGhAttestation } from './create-stub-gh-attestation';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const bin = mkdtempSync(join(tmpdir(), 'stub-gh-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(bin, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    bin,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { bin };
 }
 
 test('it succeeds auth status and attestation verify when logged in and verifying', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
 
@@ -38,7 +29,7 @@ test('it succeeds auth status and attestation verify when logged in and verifyin
 });
 
 test('it fails auth status when logged out', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubGhAttestation({ bin: ctx.bin, loggedIn: false, verifies: true });
 
@@ -46,7 +37,7 @@ test('it fails auth status when logged out', () => {
 });
 
 test('it fails attestation verify when it does not verify', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: false });
 
@@ -54,7 +45,7 @@ test('it fails attestation verify when it does not verify', () => {
 });
 
 test('it succeeds any other command', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubGhAttestation({ bin: ctx.bin, loggedIn: false, verifies: false });
 
@@ -62,8 +53,7 @@ test('it succeeds any other command', () => {
 });
 
 test('it records the arguments of each call in order', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const gh = createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
 
   Bun.spawnSync([join(ctx.bin, 'gh'), 'auth', 'status']);
@@ -73,8 +63,7 @@ test('it records the arguments of each call in order', () => {
 });
 
 test('it records no calls before the first', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const gh = createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
 
   expect(gh.readCalls()).toStrictEqual([]);

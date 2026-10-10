@@ -1,4 +1,3 @@
-import { onTestFinished } from 'bun:test';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -100,6 +99,7 @@ function buildTestDeps(
     systemDrivePath: string;
     now: () => number;
     log: (message: string) => void;
+    logRpcFailure: (failure: unknown) => void;
   }>,
 ): ImpdDeps {
   return {
@@ -112,6 +112,7 @@ function buildTestDeps(
       info: TEST_SYSTEM_FILES,
     },
     log: ctx.log,
+    logRpcFailure: ctx.logRpcFailure,
     now: ctx.now,
     readTailscale: readNoTailscale,
     freezer: NO_FREEZER,
@@ -189,27 +190,9 @@ export interface ImpTestOptions {
   readonly readKsmHostStats?: () => KsmHostStats | null;
 }
 
-// A shim over createImpd's parts, released at the test's end. `restartImpd`
-// starts a new impd on the same database, data dir and VMs; given an
-// identity, as an upgrade would.
-export async function setupImpTest(options: ImpTestOptions = {}) {
-  const stack = new AsyncDisposableStack();
-
-  onTestFinished(() => stack.disposeAsync());
-
-  const harness = await createImpTest(stack, options);
-
-  return {
-    ...harness,
-
-    // transitional: in-flight area branches still hold the harness with
-    // `await using`; the GEO-135 PR that deletes this shim removes it
-    [Symbol.asyncDispose]: () => stack.disposeAsync(),
-  };
-}
-
-// The same harness outside a test, as the client's smoke impd runs it: each
-// release goes into `stack`, which the caller disposes.
+// A shim over createImpd's parts, each release in `stack`, which the caller
+// disposes. `restartImpd` starts a new impd on the same database, data dir
+// and VMs; given an identity, as an upgrade would.
 export async function createImpTest(
   stack: Readonly<AsyncDisposableStack>,
   options: ImpTestOptions = {},
@@ -274,6 +257,16 @@ export async function createImpTest(
     options.onLog?.(message);
   };
 
+  // each unexpected failure the API's router hit, as impd would log it to
+  // stderr; the stub VMM makes plenty on purpose
+  const rpcFailures: unknown[] = [];
+
+  const printRpcFailure = (failure: unknown): void => {
+    rpcFailures.push(failure);
+
+    printTestLog(`impd: rpc failed: ${Bun.inspect(failure)}`);
+  };
+
   // a system drive file, as setupSystemFiles installs it
   const createSystemDrive = (drive: string): HostIdentity => {
     const identity = buildTestIdentity(dataDir, drive);
@@ -308,6 +301,7 @@ export async function createImpTest(
       systemDrivePath: host.identity.systemDrivePath,
       now: readClock,
       log: printTestLog,
+      logRpcFailure: printRpcFailure,
     }),
     readDiskSpace: () => Promise.resolve({ ...diskUsage }),
     broker: {
@@ -486,6 +480,8 @@ export async function createImpTest(
     removedTaps,
     logs,
     log: printTestLog,
+    rpcFailures,
+    logRpcFailure: printRpcFailure,
     filesystemGrows,
     imps: governed.imps,
     governor: governed.governor,
@@ -517,7 +513,7 @@ export async function createImpTest(
   };
 }
 
-export type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
+export type ImpTest = Awaited<ReturnType<typeof createImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
@@ -531,6 +527,7 @@ type AppParts = Pick<
   | 'diskBudget'
   | 'now'
   | 'log'
+  | 'logRpcFailure'
   | 'broker'
   | 'tokens'
   | 'revocations'
@@ -574,6 +571,7 @@ export function buildTestApp(
     systemDrivePath: identity.systemDrivePath,
     now: ctx.now,
     log: ctx.log,
+    logRpcFailure: ctx.logRpcFailure,
   });
 
   // the services under the API log nowhere, as before the shim

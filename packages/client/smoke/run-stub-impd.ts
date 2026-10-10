@@ -39,7 +39,14 @@ async function stopAndExit(): Promise<void> {
 }
 
 async function startStubImpd() {
-  const harness = await createImpTest(stack);
+  // only impd's unexpected RPC failures reach stderr, as on a host
+  const harness = await createImpTest(stack, {
+    onLog: (message) => {
+      if (message.startsWith('impd: rpc failed: ')) {
+        console.error(message);
+      }
+    },
+  });
 
   const built = buildTestApp(harness, harness, TEST_TOKEN, {
     openExec: (_name, request) => Promise.resolve(buildFakeStream(request)),

@@ -35,14 +35,6 @@ test('it opens a fresh database on each call', async () => {
   expect(images).toStrictEqual([]);
 });
 
-test('it closes the database on release', async () => {
-  const testDatabase = await createTestDatabase();
-
-  await testDatabase[Symbol.asyncDispose]();
-
-  expect(listImages(testDatabase.db)).rejects.toThrow();
-});
-
 test('it closes the database when the test finishes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'test-database-'));
 

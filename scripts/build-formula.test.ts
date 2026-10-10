@@ -1,30 +1,20 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-formula-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    dir,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { dir };
 }
 
 test('it renders each platform with its own URL and checksum', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const sums = join(ctx.dir, 'SHA256SUMS');
 
   writeFileSync(
@@ -98,8 +88,7 @@ test('it renders each platform with its own URL and checksum', () => {
 });
 
 test('it renders the same formula from the same release twice', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const sums = join(ctx.dir, 'SHA256SUMS');
 
   writeFileSync(
@@ -121,8 +110,7 @@ test('it renders the same formula from the same release twice', () => {
 });
 
 test.skipIf(Bun.which('ruby') === null)('it renders a formula that is valid Ruby', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const sums = join(ctx.dir, 'SHA256SUMS');
   const formula = join(ctx.dir, 'imp.rb');
 
@@ -148,8 +136,7 @@ test.skipIf(Bun.which('ruby') === null)('it renders a formula that is valid Ruby
 });
 
 test('it renders nothing for a platform missing from SHA256SUMS', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const sums = join(ctx.dir, 'SHA256SUMS');
 
   writeFileSync(
@@ -171,8 +158,7 @@ test('it renders nothing for a platform missing from SHA256SUMS', () => {
 });
 
 test('it renders nothing for a checksum that is not 64 hex digits', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const sums = join(ctx.dir, 'SHA256SUMS');
 
   writeFileSync(
@@ -200,8 +186,7 @@ test('it renders nothing for a checksum that is not 64 hex digits', () => {
 });
 
 test('it refuses a version that is not X.Y.Z', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const sums = join(ctx.dir, 'SHA256SUMS');
 
   writeFileSync(

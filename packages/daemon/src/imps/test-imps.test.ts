@@ -4,138 +4,97 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
-import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
+import { StubVmError } from '../test-utils/build-stub-vmm';
 import {
   buildTestApp,
   createImpTest,
   findBrokenInvariants,
-  setupImpTest,
   waitForOutcome,
   writeTestSnapshot,
 } from './test-imps';
 
-test('#setupImpTest boots imps on the stub VMM', async () => {
-  const ctx = await setupImpTest();
+test('#createImpTest boots imps on the stub VMM', async () => {
+  const stack = new AsyncDisposableStack();
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  onTestFinished(() => stack.disposeAsync());
 
-  const [imp] = await listImps(ctx.db);
+  const harness = await createImpTest(stack);
+
+  await harness.createTestImage('ubuntu');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const [imp] = await listImps(harness.db);
 
   invariant(imp?.pid);
 
   expect(imp.state).toBe('running');
-  expect(ctx.fake.alive.has(imp.pid)).toBeTrue();
+  expect(harness.fake.alive.has(imp.pid)).toBeTrue();
 });
 
-test('#setupImpTest re-adopts a running VM after restartImpd', async () => {
-  const ctx = await setupImpTest();
+test('#createImpTest re-adopts a running VM after restartImpd', async () => {
+  const stack = new AsyncDisposableStack();
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  onTestFinished(() => stack.disposeAsync());
 
-  const [before] = await listImps(ctx.db);
+  const harness = await createImpTest(stack);
 
-  const impd = ctx.restartImpd();
+  await harness.createTestImage('ubuntu');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const [before] = await listImps(harness.db);
+
+  const impd = harness.restartImpd();
 
   await impd.imps.reconcileImps();
 
-  const [after] = await listImps(ctx.db);
+  const [after] = await listImps(harness.db);
 
   invariant(before);
 
   expect(after).toMatchObject({ state: 'running', pid: before.pid });
 });
 
-test('#setupImpTest removes its data dir and closes its database on release', async () => {
-  const ctx = await setupImpTest();
+test('#createImpTest has its data dir removed by the stack', async () => {
+  const stack = new AsyncDisposableStack();
 
-  await ctx[Symbol.asyncDispose]();
+  onTestFinished(() => stack.disposeAsync());
 
-  expect(existsSync(ctx.dataDir)).toBeFalse();
-  expect(listImps(ctx.db)).rejects.toThrow();
+  const harness = await createImpTest(stack);
+
+  await stack.disposeAsync();
+
+  expect(existsSync(harness.dataDir)).toBeFalse();
 });
 
-test('#setupImpTest removes its data dir when the test finishes', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+test('#createImpTest has its database closed by the stack', async () => {
+  const stack = new AsyncDisposableStack();
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  onTestFinished(() => stack.disposeAsync());
 
-  const run = runChildTests(
-    dir,
-    [
-      "import { expect, test } from 'bun:test';",
-      "import { existsSync } from 'node:fs';",
-      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
-      "const left = { dataDir: '' };",
-      "test('it sets up', async () => { left.dataDir = (await setupImpTest()).dataDir; });",
-      "test('it finds the data dir gone', () => { expect(existsSync(left.dataDir)).toBeFalse(); });",
-    ].join('\n'),
-  );
+  const harness = await createImpTest(stack);
 
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 2 pass');
+  await stack.disposeAsync();
+
+  expect(listImps(harness.db)).rejects.toThrow();
 });
 
-test('#setupImpTest lets the test end release it again after an explicit release', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
+test('#createImpTest keeps a data dir the caller passed', async () => {
+  // registered first, so the impd stops before its data dir goes
+  const stack = new AsyncDisposableStack();
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  onTestFinished(() => stack.disposeAsync());
 
-  // a second release that threw would fail the child's test
-  const run = runChildTests(
-    dir,
-    [
-      "import { test } from 'bun:test';",
-      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
-      "test('it releases early', async () => { await (await setupImpTest())[Symbol.asyncDispose](); });",
-    ].join('\n'),
-  );
-
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 1 pass');
-});
-
-test('#setupImpTest removes its data dir when a setup step throws', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'test-imps-'));
-
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
-
-  const run = runChildTests(
-    dir,
-    [
-      "import { expect, test } from 'bun:test';",
-      "import { existsSync } from 'node:fs';",
-      `import { setupImpTest } from ${JSON.stringify(join(import.meta.dir, 'test-imps.ts'))};`,
-      'const seen: string[] = [];',
-      "test('it fails to set up', () => {",
-      '  const setup = setupImpTest({',
-      "    createStorage: (dataDir) => { seen.push(dataDir); throw new Error('no storage'); },",
-      '  });',
-      "  expect(setup).rejects.toThrow('no storage');",
-      '});',
-      "test('it finds the data dir gone', () => {",
-      '  expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);',
-      '});',
-    ].join('\n'),
-  );
-
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 2 pass');
-});
-
-test('#setupImpTest keeps a data dir the caller passed', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'test-imps-'));
 
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
 
-  const ctx = await setupImpTest({ dataDir });
+  await createImpTest(stack, { dataDir });
 
-  await ctx[Symbol.asyncDispose]();
+  await stack.disposeAsync();
 
   expect(existsSync(dataDir)).toBeTrue();
 });
@@ -295,85 +254,169 @@ test('#createImpTest finishes the template build of a replaced impd that got pas
 });
 
 test('#buildTestApp serves the API over the harness', async () => {
-  const ctx = await setupImpTest();
+  const stack = new AsyncDisposableStack();
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  onTestFinished(() => stack.disposeAsync());
 
-  const app = buildTestApp(ctx, ctx);
+  const harness = await createImpTest(stack);
+
+  await harness.createTestImage('ubuntu');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const app = buildTestApp(harness, harness);
 
   const imps = await app.client.imps.list({});
 
   expect(imps.map((imp) => imp.name)).toStrictEqual(['dev']);
 });
 
-test('#setupImpTest moves a frozen clock when the test advances it', async () => {
-  const ctx = await setupImpTest({ frozenClockMs: 1_000_000 });
+test('#buildTestApp records an unexpected RPC failure in the harness', async () => {
+  const stack = new AsyncDisposableStack();
 
-  ctx.advance(500);
+  onTestFinished(() => stack.disposeAsync());
 
-  expect(ctx.now()).toBe(1_000_500);
+  const harness = await createImpTest(stack);
+
+  await harness.createTestImage('ubuntu');
+
+  const app = buildTestApp(harness, harness);
+
+  harness.fake.queue('boot', 'fail');
+
+  expect(app.client.imps.create({ name: 'dev' })).rejects.toMatchObject({
+    code: 'INTERNAL_SERVER_ERROR',
+  });
+
+  expect(harness.rpcFailures).toStrictEqual([expect.any(StubVmError)]);
 });
 
-test('#setupImpTest moves a frozen clock by the pauses of a young guest wait', async () => {
-  const ctx = await setupImpTest({
+test('#buildTestApp logs an unexpected RPC failure to the harness log', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack);
+
+  await harness.createTestImage('ubuntu');
+
+  const app = buildTestApp(harness, harness);
+
+  harness.fake.queue('boot', 'fail');
+
+  expect(app.client.imps.create({ name: 'dev' })).rejects.toMatchObject({
+    code: 'INTERNAL_SERVER_ERROR',
+  });
+
+  expect(harness.logs).toSatisfyAny(
+    (line: string) =>
+      line.startsWith('impd: rpc failed: ') && line.includes('StubVmError: boot failed: no agent'),
+  );
+});
+
+test('#buildTestApp records no failure the API returns as an expected error', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack);
+
+  const app = buildTestApp(harness, harness);
+
+  expect(app.client.imps.get({ name: 'missing' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(harness.rpcFailures).toBeEmpty();
+});
+
+test('#createImpTest moves a frozen clock when the test advances it', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, { frozenClockMs: 1_000_000 });
+
+  harness.advance(500);
+
+  expect(harness.now()).toBe(1_000_500);
+});
+
+test('#createImpTest moves a frozen clock by the pauses of a young guest wait', async () => {
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack, {
     env: { IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' },
     frozenClockMs: 1_000_000,
   });
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  await harness.createTestImage('ubuntu');
+  await harness.imps.createImp({ name: 'dev' });
 
   // 100 ms old against a 300 ms minimum
-  ctx.fake.setGuestUptime(100);
+  harness.fake.setGuestUptime(100);
 
-  await ctx.imps.sleepImp('dev');
+  await harness.imps.sleepImp('dev');
 
-  expect(ctx.now()).toBe(1_000_200);
+  expect(harness.now()).toBe(1_000_200);
 });
 
 test('#findBrokenInvariants finds nothing wrong with a running imp and its VM', async () => {
-  const ctx = await setupImpTest();
+  const stack = new AsyncDisposableStack();
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  onTestFinished(() => stack.disposeAsync());
 
-  const broken = await findBrokenInvariants(ctx, true);
+  const harness = await createImpTest(stack);
+
+  await harness.createTestImage('ubuntu');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const broken = await findBrokenInvariants(harness, true);
 
   expect(broken).toStrictEqual([]);
 });
 
 test('#findBrokenInvariants reports a VM that runs for no running imp', async () => {
-  const ctx = await setupImpTest();
+  const stack = new AsyncDisposableStack();
 
-  const pid = ctx.fake.spawnOrphan();
+  onTestFinished(() => stack.disposeAsync());
 
-  const broken = await findBrokenInvariants(ctx, true);
+  const harness = await createImpTest(stack);
+
+  const pid = harness.fake.spawnOrphan();
+
+  const broken = await findBrokenInvariants(harness, true);
 
   expect(broken).toStrictEqual([`VM ${String(pid)} runs for no running imp`]);
 });
 
 test('#findBrokenInvariants reports a running imp whose VM died once liveness ran', async () => {
-  const ctx = await setupImpTest();
+  const stack = new AsyncDisposableStack();
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'dev' });
+  onTestFinished(() => stack.disposeAsync());
 
-  const [imp] = await listImps(ctx.db);
+  const harness = await createImpTest(stack);
+
+  await harness.createTestImage('ubuntu');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const [imp] = await listImps(harness.db);
 
   invariant(imp?.pid);
 
-  ctx.fake.alive.delete(imp.pid);
+  harness.fake.alive.delete(imp.pid);
 
-  const broken = await findBrokenInvariants(ctx, true);
+  const broken = await findBrokenInvariants(harness, true);
 
   expect(broken).toStrictEqual(['dev (running): its VM is dead']);
 });
 
 test('#writeTestSnapshot writes the files and the meta a wake loads', async () => {
-  const ctx = await setupImpTest();
+  const stack = new AsyncDisposableStack();
 
-  const paths = buildImpPaths(ctx.dataDir, 'imp-a');
+  onTestFinished(() => stack.disposeAsync());
+
+  const harness = await createImpTest(stack);
+
+  const paths = buildImpPaths(harness.dataDir, 'imp-a');
 
   writeTestSnapshot(paths, 1234, {
     firecrackerVersion: 'v1.17.0',

@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,27 +6,17 @@ import { createStubShasum } from './create-stub-shasum';
 import { updateEnv } from './update-env';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const bin = mkdtempSync(join(tmpdir(), 'stub-shasum-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(bin, { recursive: true, force: true });
   });
 
-  const owned = stack.move();
-
-  return {
-    bin,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { bin };
 }
 
 test('it prints the SHA-256 and the name of a file for -a 256', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const file = join(ctx.bin, 'payload');
 
   writeFileSync(file, 'hello');
@@ -40,7 +30,7 @@ test('it prints the SHA-256 and the name of a file for -a 256', () => {
 });
 
 test('it fails for an algorithm other than 256', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubShasum({ bin: ctx.bin });
 
@@ -48,8 +38,7 @@ test('it fails for an algorithm other than 256', () => {
 });
 
 test('it records the arguments of each call in order', () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const shasum = createStubShasum({ bin: ctx.bin });
 
   Bun.spawnSync([join(ctx.bin, 'shasum'), '-a', '1', 'first']);
@@ -59,7 +48,7 @@ test('it records the arguments of each call in order', () => {
 });
 
 test('it rejects a machine without sha256sum on PATH', () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   updateEnv('PATH', ctx.bin);
 

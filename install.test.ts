@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,11 +10,9 @@ import { createStubUname } from './packages/test-utils/src/create-stub-uname';
 import { startStubGithubReleases } from './packages/test-utils/src/start-stub-github-releases';
 
 function setupTest() {
-  using stack = new DisposableStack();
-
   const dir = mkdtempSync(join(tmpdir(), 'imp-install-'));
 
-  stack.defer(() => {
+  onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -23,23 +21,14 @@ function setupTest() {
 
   mkdirSync(bin);
 
-  const owned = stack.move();
-
-  return {
-    dir,
-    bin,
-    [Symbol.dispose]: () => {
-      owned.dispose();
-    },
-  };
+  return { dir, bin };
 }
 
 test('it installs the latest release after checking its checksum and provenance', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -65,9 +54,6 @@ test('it installs the latest release after checking its checksum and provenance'
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-    requests: releases.requests,
-    ghCalls: gh.readCalls(),
-    installed: readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8'),
   }).toStrictEqual({
     stdout: [
       'imp: downloading imp-linux-x64 v1.2.3',
@@ -78,26 +64,28 @@ test('it installs the latest release after checking its checksum and provenance'
     ].join('\n'),
     stderr: '',
     exitCode: 0,
-    requests: [
-      '/latest',
-      '/tag/v1.2.3',
-      '/download/v1.2.3/imp-linux-x64',
-      '/download/v1.2.3/SHA256SUMS',
-    ],
-    ghCalls: [
-      'auth status',
-      expect.stringMatching(/^attestation verify \S+\/imp-linux-x64 -R zgeoff\/imp$/u),
-    ],
-    installed: binary,
   });
+
+  expect(releases.requests).toStrictEqual([
+    '/latest',
+    '/tag/v1.2.3',
+    '/download/v1.2.3/imp-linux-x64',
+    '/download/v1.2.3/SHA256SUMS',
+  ]);
+
+  expect(gh.readCalls()).toStrictEqual([
+    'auth status',
+    expect.stringMatching(/^attestation verify \S+\/imp-linux-x64 -R zgeoff\/imp$/u),
+  ]);
+
+  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe(binary);
 });
 
 test('it installs the release IMP_INSTALL_VERSION names without asking for the latest', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.0.0\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.0.0/imp-linux-x64': binary,
@@ -119,11 +107,7 @@ test('it installs the release IMP_INSTALL_VERSION names without asking for the l
     .nothrow()
     .quiet();
 
-  expect({
-    stdout: result.stdout.toString(),
-    exitCode: result.exitCode,
-    requests: releases.requests,
-  }).toStrictEqual({
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
     stdout: [
       'imp: downloading imp-linux-x64 v1.0.0',
       'imp: provenance verified',
@@ -132,16 +116,19 @@ test('it installs the release IMP_INSTALL_VERSION names without asking for the l
       '',
     ].join('\n'),
     exitCode: 0,
-    requests: ['/download/v1.0.0/imp-linux-x64', '/download/v1.0.0/SHA256SUMS'],
   });
+
+  expect(releases.requests).toStrictEqual([
+    '/download/v1.0.0/imp-linux-x64',
+    '/download/v1.0.0/SHA256SUMS',
+  ]);
 });
 
 test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.0.0\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.0.0/imp-linux-x64': binary,
@@ -163,11 +150,7 @@ test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () 
     .nothrow()
     .quiet();
 
-  expect({
-    stdout: result.stdout.toString(),
-    exitCode: result.exitCode,
-    requests: releases.requests,
-  }).toStrictEqual({
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
     stdout: [
       'imp: downloading imp-linux-x64 v1.0.0',
       'imp: provenance verified',
@@ -176,16 +159,19 @@ test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () 
       '',
     ].join('\n'),
     exitCode: 0,
-    requests: ['/download/v1.0.0/imp-linux-x64', '/download/v1.0.0/SHA256SUMS'],
   });
+
+  expect(releases.requests).toStrictEqual([
+    '/download/v1.0.0/imp-linux-x64',
+    '/download/v1.0.0/SHA256SUMS',
+  ]);
 });
 
 test('it installs without a provenance check when gh is not on PATH', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -227,11 +213,10 @@ test('it installs without a provenance check when gh is not on PATH', async () =
 });
 
 test('it checks the binary with shasum when sha256sum is not on PATH', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -259,23 +244,16 @@ test('it checks the binary with shasum when sha256sum is not on PATH', async () 
     .nothrow()
     .quiet();
 
-  expect({
-    exitCode: result.exitCode,
-    shasumCalls: shasum.readCalls(),
-    installed: readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8'),
-  }).toStrictEqual({
-    exitCode: 0,
-    shasumCalls: [expect.stringMatching(/^-a 256 \S+\/imp-linux-x64$/u)],
-    installed: binary,
-  });
+  expect(result.exitCode).toBe(0);
+  expect(shasum.readCalls()).toStrictEqual([expect.stringMatching(/^-a 256 \S+\/imp-linux-x64$/u)]);
+  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe(binary);
 });
 
 test('it leaves out the PATH hint when the install dir is already on PATH', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -308,11 +286,10 @@ test('it leaves out the PATH hint when the install dir is already on PATH', asyn
 });
 
 test('it installs the binary for the platform uname names', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-darwin-arm64': binary,
@@ -333,18 +310,15 @@ test('it installs the binary for the platform uname names', async () => {
     .nothrow()
     .quiet();
 
-  expect({
-    exitCode: result.exitCode,
-    installed: readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8'),
-  }).toStrictEqual({ exitCode: 0, installed: binary });
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe(binary);
 });
 
 test('it installs nothing when the binary does not match SHA256SUMS', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -369,21 +343,20 @@ test('it installs nothing when the binary does not match SHA256SUMS', async () =
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-    installed: existsSync(join(ctx.dir, 'install', 'imp')),
   }).toStrictEqual({
     stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
     stderr: 'imp: imp-linux-x64 does not match SHA256SUMS for v1.2.3; nothing installed\n',
     exitCode: 1,
-    installed: false,
   });
+
+  expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
 });
 
 test('it installs nothing when SHA256SUMS lists no binary for the platform', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -408,21 +381,20 @@ test('it installs nothing when SHA256SUMS lists no binary for the platform', asy
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-    installed: existsSync(join(ctx.dir, 'install', 'imp')),
   }).toStrictEqual({
     stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
     stderr: 'imp: SHA256SUMS for v1.2.3 lists no imp-linux-x64\n',
     exitCode: 1,
-    installed: false,
   });
+
+  expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
 });
 
 test('it installs nothing when the provenance check fails', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -447,22 +419,21 @@ test('it installs nothing when the provenance check fails', async () => {
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-    installed: existsSync(join(ctx.dir, 'install', 'imp')),
   }).toStrictEqual({
     stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
     stderr:
       'imp: could not verify provenance of imp-linux-x64 from zgeoff/imp; nothing installed\n',
     exitCode: 1,
-    installed: false,
   });
+
+  expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
 });
 
 test('it skips the provenance check when gh is not logged in', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -488,7 +459,6 @@ test('it skips the provenance check when gh is not logged in', async () => {
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-    ghCalls: gh.readCalls(),
   }).toStrictEqual({
     stdout: [
       'imp: downloading imp-linux-x64 v1.2.3',
@@ -499,16 +469,16 @@ test('it skips the provenance check when gh is not logged in', async () => {
     ].join('\n'),
     stderr: '',
     exitCode: 0,
-    ghCalls: ['auth status'],
   });
+
+  expect(gh.readCalls()).toStrictEqual(['auth status']);
 });
 
 test('it fails the install when the binary does not run', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\nexit 1\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
       'v1.2.3/imp-linux-x64': binary,
@@ -541,9 +511,8 @@ test('it fails the install when the binary does not run', async () => {
 });
 
 test('it fails when the repo has no release', async () => {
-  using ctx = setupTest();
-
-  await using releases = startStubGithubReleases({ latest: null, assets: {} });
+  const ctx = setupTest();
+  const releases = startStubGithubReleases({ latest: null, assets: {} });
 
   createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
   createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
@@ -570,7 +539,7 @@ test('it fails when the repo has no release', async () => {
 });
 
 test('it fails when the releases page does not answer', async () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
   createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
@@ -598,9 +567,9 @@ test('it fails when the releases page does not answer', async () => {
 });
 
 test('it fails when the release has no binary to download', async () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: { 'v1.2.3/SHA256SUMS': 'sums' },
   });
@@ -630,11 +599,10 @@ test('it fails when the release has no binary to download', async () => {
 });
 
 test('it fails when the release has no SHA256SUMS to download', async () => {
-  using ctx = setupTest();
-
+  const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
 
-  await using releases = startStubGithubReleases({
+  const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: { 'v1.2.3/imp-linux-x64': binary },
   });
@@ -664,7 +632,7 @@ test('it fails when the release has no SHA256SUMS to download', async () => {
 });
 
 test('it fails on a system it has no binary for', async () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubUname({ bin: ctx.bin, system: 'FreeBSD', machine: 'x86_64' });
   createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
@@ -687,7 +655,7 @@ test('it fails on a system it has no binary for', async () => {
 });
 
 test('it fails on a machine it has no binary for', async () => {
-  using ctx = setupTest();
+  const ctx = setupTest();
 
   createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'riscv64' });
   createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });

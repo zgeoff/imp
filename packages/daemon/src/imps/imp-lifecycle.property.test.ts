@@ -1,4 +1,4 @@
-import { expect, onTestFinished, spyOn, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import fc from 'fast-check';
 import { findImpByName, listImps } from '../db/imps';
@@ -13,14 +13,6 @@ import { buildTestApp, createImpTest, findBrokenInvariants } from './test-imps';
 test(
   'it leaves consistent records after concurrent lifecycle calls on a few imps',
   async () => {
-    // the router logs every internal error, and the stub VMM makes plenty on
-    // purpose; the checks below read what it logged
-    const routerErrors = spyOn(console, 'error').mockImplementation(() => {});
-
-    onTestFinished(() => {
-      routerErrors.mockRestore();
-    });
-
     const nameArb = fc.constantFrom('a', 'b', 'c', 'd');
 
     // holds come often: only with imps pinned does the budget turn calls away
@@ -67,8 +59,6 @@ test(
         // each case releases its impd before the next, pass or fail
         (scheduler, ops, script) =>
           runWithStack(async (stack) => {
-            routerErrors.mockClear();
-
             // each governor sleep, with whether the imp was held when it went;
             // the read queues before the sleep's own record update, under its lock
             const governorSleeps: Promise<{ readonly name: string; readonly held: boolean }>[] = [];
@@ -288,9 +278,9 @@ test(
                 ),
             );
 
-            const realErrors = routerErrors.mock.calls
-              .map((call): unknown => call[1])
-              .filter((error) => !(error instanceof StubVmError));
+            // the router's unexpected failures; the stub VMM makes plenty on
+            // purpose
+            const realErrors = ctx.rpcFailures.filter((error) => !(error instanceof StubVmError));
 
             const sleeps = await Promise.all(governorSleeps);
 
