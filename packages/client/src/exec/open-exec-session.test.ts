@@ -22,6 +22,7 @@ import { http } from 'msw';
 import { createImpClient } from '../create-imp-client';
 import { buildStubExecAgent } from '../test-utils/build-stub-exec-agent';
 import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
+import { createStubUndiciWebSocket } from '../test-utils/create-stub-undici-web-socket';
 import { startStubImpdSocket } from '../test-utils/start-stub-impd-socket';
 import { openExecSession } from './open-exec-session';
 import type { ExecSession, ExecStarted } from './open-exec-session';
@@ -200,22 +201,7 @@ test('it reports a refused upgrade that only an error event tells of as unauthor
     onStarted: () => {},
     onOutput: () => {},
 
-    // Node's WebSocket fires `error` and no `close` for a refused upgrade
-    connect: (url) => {
-      const socket = new WebSocket(url);
-
-      const listen = socket.addEventListener.bind(socket);
-
-      Object.defineProperty(socket, 'addEventListener', {
-        value: (type: string, listener: EventListener) => {
-          if (type !== 'close') {
-            listen(type, listener);
-          }
-        },
-      });
-
-      return socket;
-    },
+    connect: (url) => createStubUndiciWebSocket(url),
   });
 
   const outcome = await session.outcome;

@@ -71,7 +71,6 @@
         "zod": "catalog:",
       },
       "devDependencies": {
-        "@faker-js/faker": "catalog:",
         "@imp/api": "workspace:*",
         "@imp/daemon": "workspace:*",
         "@imp/test-utils": "workspace:*",

@@ -1,9 +1,9 @@
 import { expect, mock, test } from 'bun:test';
 import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
 import type { ImageBuildProgress } from '@imp/api';
+import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
 import { ORPCError } from '@orpc/client';
 import { readBuildAnswer } from './read-build-answer';
-import { buildMockImage } from './test-utils/build-mock-image';
 
 // Answers a real impd never sends, from a newer impd, a proxy in front of
 // impd or a dropped connection. build-image.test.ts reads impd's own.

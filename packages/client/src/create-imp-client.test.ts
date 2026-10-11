@@ -497,7 +497,7 @@ test('#images.buildStream hands on each progress event as it comes, then the ima
 
   updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
 
-  startStubDockerEngine({
+  const engine = startStubDockerEngine({
     socketPath: join(ctx.workDir, 'docker.sock'),
     imageId,
     holdUntil: () => release.promise,
@@ -554,4 +554,6 @@ test('#images.buildStream hands on each progress event as it comes, then the ima
       },
     },
   ]);
+
+  expect(engine.unexpected).toStrictEqual([]);
 });
