@@ -451,7 +451,9 @@ test('#events.stream lets go of its listener once the caller aborts it', async (
 
   const stream = await client.events.stream(undefined, { signal: controller.signal });
 
-  onTestFinished(() => controller.abort());
+  onTestFinished(() => {
+    controller.abort();
+  });
 
   await stream.next();
 

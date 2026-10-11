@@ -122,7 +122,9 @@ test('#openImpdEventStream lets go of its listener once the caller aborts it', a
     controller.signal,
   );
 
-  onTestFinished(() => controller.abort());
+  onTestFinished(() => {
+    controller.abort();
+  });
 
   const pending = stream.next();
 
