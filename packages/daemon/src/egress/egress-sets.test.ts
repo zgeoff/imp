@@ -57,7 +57,7 @@ test('#sweep drops an address at the maximum TTL, whatever longer TTL it came wi
   expect(sets.sweep(86_400_000)).toStrictEqual(new Map([[1, ['192.0.2.1']]]));
 });
 
-test('#isAlias holds each name of the CNAME chain after the first, in its own slot', () => {
+test('#isAlias holds a name of the CNAME chain after the first', () => {
   const sets = createEgressSets({ minTtlS: 300, maxTtlS: 86_400, maxPerSlot: 3 });
 
   sets.record(
@@ -68,7 +68,31 @@ test('#isAlias holds each name of the CNAME chain after the first, in its own sl
   );
 
   expect(sets.isAlias(2, 'registry.npmjs.org.cdn.cloudflare.net', 1000)).toBeTrue();
+});
+
+test('#isAlias does not hold the first name of the CNAME chain', () => {
+  const sets = createEgressSets({ minTtlS: 300, maxTtlS: 86_400, maxPerSlot: 3 });
+
+  sets.record(
+    2,
+    ['registry.npmjs.org', 'registry.npmjs.org.cdn.cloudflare.net'],
+    [{ address: '104.16.0.1', ttlS: 300 }],
+    0,
+  );
+
   expect(sets.isAlias(2, 'registry.npmjs.org', 1000)).toBeFalse();
+});
+
+test('#isAlias does not hold an alias of another slot', () => {
+  const sets = createEgressSets({ minTtlS: 300, maxTtlS: 86_400, maxPerSlot: 3 });
+
+  sets.record(
+    2,
+    ['registry.npmjs.org', 'registry.npmjs.org.cdn.cloudflare.net'],
+    [{ address: '104.16.0.1', ttlS: 300 }],
+    0,
+  );
+
   expect(sets.isAlias(3, 'registry.npmjs.org.cdn.cloudflare.net', 1000)).toBeFalse();
 });
 

@@ -345,12 +345,8 @@ test('it sends the sign-in page with headers that keep it from being framed, cac
     referrer: 'same-origin',
     frame: 'DENY',
     cache: 'no-store',
-    policy: expect.toSatisfy(
-      (text: string | null) =>
-        text !== null &&
-        text.includes("default-src 'none'") &&
-        text.includes("form-action 'self' https://client.example"),
-    ),
+    policy:
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'; base-uri 'none'",
   });
 });
 
@@ -499,8 +495,11 @@ test.each([
 
   const page = await opened.text();
 
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'];
+  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'];
+
+  invariant(id);
+  invariant(signature);
 
   const posted = await ctx.handle(
     new Request('http://127.0.0.1:7171/oauth/authorize', {

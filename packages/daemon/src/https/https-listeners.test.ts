@@ -986,10 +986,16 @@ test('it redirects plain http for a public imp to port 443', async () => {
 });
 
 test.each([
-  ['no credential', null],
-  ['a wrong token', 'Bearer wrong'],
-  ['the token as basic auth', `Basic ${Buffer.from('secret-credential').toString('base64')}`],
-])('it asks a token imp’s caller for the token, given %s', async (_label, authorization) => {
+  ['no credential', { host: 'web.imp.test' }],
+  ['a wrong token', { host: 'web.imp.test', authorization: 'Bearer wrong' }],
+  [
+    'the token as basic auth',
+    {
+      host: 'web.imp.test',
+      authorization: `Basic ${Buffer.from('secret-credential').toString('base64')}`,
+    },
+  ],
+])('it asks a token imp’s caller for the token, given %s', async (_label, headers) => {
   const ctx = await setupTest();
 
   const listeners = createHttpsListeners({
@@ -1018,7 +1024,7 @@ test.each([
   listeners.setCertificate(certificate);
 
   const response = await fetch(`https://127.0.0.1:${String(listeners.readPorts().https)}/`, {
-    headers: { host: 'web.imp.test', ...(authorization !== null && { authorization }) },
+    headers,
     tls: { rejectUnauthorized: false },
   });
 

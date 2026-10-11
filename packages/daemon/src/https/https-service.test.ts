@@ -84,7 +84,7 @@ test('it serves nothing until the first certificate arrives', async () => {
     issued.resolve(arrived);
 
     await waitFor(() => {
-      expect(ctx.logs).toSatisfyAny((line: string) => line.includes('got a certificate'));
+      invariant(ctx.store.readCertificate());
     });
   });
 
@@ -1635,7 +1635,7 @@ test('it cancels every pending tick when it stops', async () => {
 
   await service.stop();
 
-  expect(Object.keys(delaysBefore)).toIncludeSameMembers([
+  expect(delaysBefore).toContainAllKeys([
     'https renewal',
     'https public records',
     'https addresses',
