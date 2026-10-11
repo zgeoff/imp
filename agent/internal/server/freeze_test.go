@@ -90,9 +90,9 @@ func TestStaleAutoThawLeavesALaterFreezeFrozen(t *testing.T) {
 	t.Cleanup(func() { afterFunc = prev })
 	s := &Server{}
 	assert.NilError(t, s.freeze(time.Millisecond))
+	t.Cleanup(func() { s.thaw() })
 	assert.NilError(t, s.thaw())
 	assert.NilError(t, s.freeze(time.Hour))
-	t.Cleanup(func() { s.thaw() })
 
 	callbacks[0]()
 
@@ -181,6 +181,7 @@ func TestThawThawsASecondFreeze(t *testing.T) {
 	f.install(t)
 	s := &Server{}
 	assert.NilError(t, s.freeze(time.Hour))
+	t.Cleanup(func() { s.thaw() })
 	assert.NilError(t, s.thaw())
 	assert.NilError(t, s.freeze(time.Hour))
 
@@ -196,10 +197,10 @@ func TestFreezeSucceedsAgainAfterAThaw(t *testing.T) {
 	f.install(t)
 	s := &Server{}
 	assert.NilError(t, s.freeze(time.Hour))
+	t.Cleanup(func() { s.thaw() })
 	assert.NilError(t, s.thaw())
 
 	err := s.freeze(time.Hour)
-	t.Cleanup(func() { s.thaw() })
 
 	assert.Check(t, cmp.Nil(err))
 	assert.Check(t, cmp.DeepEqual(f.get(), []uint{fiFreeze, fiThaw, fiFreeze}))
@@ -243,6 +244,7 @@ func TestThawForPoweroffThawsAFrozenRoot(t *testing.T) {
 	f.install(t)
 	s := &Server{}
 	assert.NilError(t, s.freeze(time.Hour))
+	t.Cleanup(func() { s.thaw() })
 
 	err := s.ThawForPoweroff()
 
@@ -295,6 +297,7 @@ func TestGrowAfterAThawGrowsTheDisk(t *testing.T) {
 	grown := fakeGrow(t)
 	s := &Server{}
 	assert.NilError(t, s.freeze(time.Minute))
+	t.Cleanup(func() { s.thaw() })
 	assert.NilError(t, s.thaw())
 
 	err := s.grow(1 << 30)

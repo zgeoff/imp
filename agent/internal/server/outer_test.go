@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,6 +34,34 @@ func (r outsideRunner) Start(s proc.Spec) (*proc.Process, error) {
 	r.inCgroup <- s.Cgroup != nil
 	s.Cgroup = nil
 	return r.direct.Start(s)
+}
+
+// A plain directory is no cgroup, so a start that must use it fails unless
+// the runner drops it.
+func TestOutsideRunnerRecordsTheCgroupItWasGivenAndStartsWithoutIt(t *testing.T) {
+	dir, err := os.Open(t.TempDir())
+	assert.NilError(t, err)
+	t.Cleanup(func() { dir.Close() })
+	inCgroup := make(chan bool, 1)
+	r := outsideRunner{direct: &proc.Direct{Reaper: testReaper}, inCgroup: inCgroup}
+
+	p, err := r.Start(proc.Spec{Argv: []string{"/bin/true"}, Dir: "/", Cgroup: dir, RequireCgroup: true})
+
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(<-inCgroup, true), "the given cgroup was not recorded")
+	assert.Check(t, !p.InCgroup, "the process started in the cgroup")
+	assert.Check(t, cmp.Equal((<-p.Done).Code, 0))
+}
+
+func TestOutsideRunnerRecordsAStartWithoutACgroup(t *testing.T) {
+	inCgroup := make(chan bool, 1)
+	r := outsideRunner{direct: &proc.Direct{Reaper: testReaper}, inCgroup: inCgroup}
+
+	p, err := r.Start(proc.Spec{Argv: []string{"/bin/true"}, Dir: "/"})
+
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(<-inCgroup, false), "a start without a cgroup recorded one")
+	assert.Check(t, cmp.Equal((<-p.Done).Code, 0))
 }
 
 func newOuterServer(t *testing.T) (*Server, chan bool) {
