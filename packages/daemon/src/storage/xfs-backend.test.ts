@@ -827,13 +827,9 @@ test('#start logs and skips a reserve file that would take more than half the fr
 });
 
 test('#measureUsage counts the blocks of each imp and its checkpoints through FIEMAP', async () => {
-  // FIEMAP needs a filesystem with extents, which a tmpfs temp dir is not: the
-  // checkout's own ignored .cache is one. It stays; setupTest's dir in it goes.
-  const parentDir = join(import.meta.dir, '..', '..', '..', '..', '.cache');
-
-  mkdirSync(parentDir, { recursive: true });
-
-  const ctx = await setupTest({ parentDir });
+  // FIEMAP needs a filesystem with extents, which a tmpfs /tmp lacks; /var/tmp
+  // is the disk-backed temp root
+  const ctx = await setupTest({ parentDir: '/var/tmp' });
 
   await ctx.backend.createImage('sha256:abc', async (dir) => {
     await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
