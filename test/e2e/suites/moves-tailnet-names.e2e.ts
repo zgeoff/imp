@@ -37,16 +37,17 @@ async function setupTest() {
   return { prefix: readSuitePrefix('moves-tailnet'), stack, client };
 }
 
-// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const tailscaleStatus = await readLocalTailscaleStatus();
 
 // the tailnet name handover waits for the Tailscale Services OAuth client of
 // #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it
 // exists
-test.skipIf(
+const tailnetNamesMissing =
   !isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) ||
-    process.env['IMP_E2E_TAILNET_NAMES'] !== '1',
-)(
+  process.env['IMP_E2E_TAILNET_NAMES'] !== '1';
+
+test.skipIf(tailnetNamesMissing)(
   'it hands a per-imp tailnet name over with its imp: the source lets it go, the target takes it',
   async () => {
     const ctx = await setupTest();

@@ -23,8 +23,10 @@ import { writeMetric } from '../lib/write-metric';
 // and no private address. The private listeners are this machine, at the
 // container's gateway, and a netns of 10/8 and link-local in the container.
 
-// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const startInfo = await readInfo();
+
+const hostTailnetMissing = startInfo.tailscale.ip === null;
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -116,36 +118,33 @@ test('it lets an open imp reach each private listener, before and after a public
   expect(againGateway.isConnected).toBeTrue();
 });
 
-test.skipIf(startInfo.tailscale.ip === null)(
-  'it refuses a public imp the host’s tailnet address',
-  async () => {
-    const ctx = await setupTest();
-    const info = await readInfo();
+test.skipIf(hostTailnetMissing)('it refuses a public imp the host’s tailnet address', async () => {
+  const ctx = await setupTest();
+  const info = await readInfo();
 
-    invariant(info.tailscale.ip);
+  invariant(info.tailscale.ip);
 
-    const pub = `${ctx.prefix}tail-pub`;
+  const pub = `${ctx.prefix}tail-pub`;
 
-    await runImp(
-      'new',
-      pub,
-      '--image',
-      resolveImageName('e2e-tiny'),
-      '--memory',
-      '256',
-      '--policy',
-      'public',
-    );
+  await runImp(
+    'new',
+    pub,
+    '--image',
+    resolveImageName('e2e-tiny'),
+    '--memory',
+    '256',
+    '--policy',
+    'public',
+  );
 
-    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, pub));
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, pub));
 
-    await waitForExec(pub);
+  await waitForExec(pub);
 
-    const dial = await runTimedDial(pub, info.tailscale.ip, 7070);
+  const dial = await runTimedDial(pub, info.tailscale.ip, 7070);
 
-    expect(dial.isConnected).toBeFalse();
-  },
-);
+  expect(dial.isConnected).toBeFalse();
+});
 
 test('it lets a public imp fetch from the internet, and removes a private address from its DNS answers', async () => {
   const ctx = await setupTest();

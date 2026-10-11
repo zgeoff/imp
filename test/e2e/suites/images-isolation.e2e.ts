@@ -23,9 +23,11 @@ import { waitFor } from '../lib/wait-for';
 // whose network reaches the internet only, and leave nothing on the host's
 // Docker. Each test reads what its build saw from the image it made.
 
-// The public IPv6 fetch needs an IPv6 default route in the host container.
-// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads.
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const route6 = await runInContainer(['ip', '-6', 'route', 'show', 'default']);
+
+// the public IPv6 fetch needs an IPv6 default route in the host container
+const ipv6RouteMissing = route6.stdout.trim() === '';
 
 // one stack for every release, so each imp goes before the image it boots
 async function setupTest() {
@@ -187,7 +189,7 @@ test("it lets an isolated build's broker tunnel reach the internet, but not the 
   expect(requests).toStrictEqual([]);
 });
 
-test.skipIf(route6.stdout.trim() === '')(
+test.skipIf(ipv6RouteMissing)(
   "it lets an isolated build's broker tunnel reach a public IPv6 address",
   async () => {
     const ctx = await setupTest();

@@ -26,8 +26,10 @@ import { readSuitePrefix } from '../lib/suites';
 // (lib/registry-steps.ts), on the suite's IMP_BUILD_ISOLATION=host: impd
 // binds the host's variant and inspects that variant's config.
 
-// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const isReady = await checkRegistryReady(config.registryName);
+
+const registryMissing = !isReady;
 
 // one stack for every release: the trust goes before its registry
 async function setupTest() {
@@ -59,7 +61,7 @@ async function setupTest() {
   return { prefix, stack, dir, registry, client: await createInstanceClient() };
 }
 
-test.skipIf(!isReady)(
+test.skipIf(registryMissing)(
   'it binds the host’s variant of a multi-platform image, whose ONBUILD-free config impd inspected',
   async () => {
     const ctx = await setupTest();

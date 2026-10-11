@@ -23,8 +23,10 @@ import { readSuitePrefix } from '../lib/suites';
 // from= a tag the registry moved, against a registry the journey owns
 // (lib/registry-steps.ts), on the suite's IMP_BUILD_ISOLATION=host.
 
-// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const isReady = await checkRegistryReady(config.registryName);
+
+const registryMissing = !isReady;
 
 // one stack for every release: the trust goes before its registry
 async function setupTest() {
@@ -56,7 +58,7 @@ async function setupTest() {
   return { prefix, stack, dir, registry, client: await createInstanceClient() };
 }
 
-test.skipIf(!isReady)(
+test.skipIf(registryMissing)(
   'it uses the content impd inspected for COPY --from and RUN --mount from= a moved tag',
   async () => {
     const ctx = await setupTest();

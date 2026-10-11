@@ -30,12 +30,14 @@ async function setupTest() {
   return { prefix: readSuitePrefix('tailscale'), stack, client };
 }
 
-// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const tailscaleStatus = await readLocalTailscaleStatus();
 
 // the definition of done needs the tailnet; any other run skips without it
 // (requireTailnetReady says what it needs)
-test.skipIf(!isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) && !config.acceptance)(
+const tailnetMissing = !isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) && !config.acceptance;
+
+test.skipIf(tailnetMissing)(
   'it lets a tailnet member a rule names reach the API without a token, with that scope only',
   async () => {
     const ctx = await setupTest();

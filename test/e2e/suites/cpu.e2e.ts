@@ -15,8 +15,10 @@ import { writeMetric } from '../lib/write-metric';
 // Docker does not delegate the cpu controller to a private cgroup namespace,
 // impd reports limits not enforced and the limit tests skip; CI must enforce.
 
-// Bun 1.4.2 has no in-body skip, so the skips' probe runs as the file loads
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const startInfo = await readInfo();
+
+const cpuLimitsMissing = startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '';
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -35,16 +37,13 @@ test('it still lands docker exec in a cgroup where it may run after the cgroup m
   expect(exec.exitCode).toBe(0);
 });
 
-test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '')(
-  'it reports CPU limits as enforced',
-  async () => {
-    const info = await readInfo();
+test.skipIf(cpuLimitsMissing)('it reports CPU limits as enforced', async () => {
+  const info = await readInfo();
 
-    expect(info.cpu?.limitsEnforced).toBeTrue();
-  },
-);
+  expect(info.cpu?.limitsEnforced).toBeTrue();
+});
 
-test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '')(
+test.skipIf(cpuLimitsMissing)(
   'it holds a busy guest under a limit of half a core, again after a sleep and a wake, and under a limit imp set changes at once',
   async () => {
     const ctx = await setupTest();
@@ -104,7 +103,7 @@ test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') 
   },
 );
 
-test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '')(
+test.skipIf(cpuLimitsMissing)(
   'it prints the imp in imp top with its sampled throttling and weight',
   async () => {
     const ctx = await setupTest();
