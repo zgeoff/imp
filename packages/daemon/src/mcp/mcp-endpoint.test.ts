@@ -1043,10 +1043,17 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
   });
 });
 
-test('it answers a JSON tool call that outlasts the idle timeout through the wake proxy', async () => {
-  const ctx = await setupTest({ tailscale: buildStubTailscale(), idleTimeoutS: 1 });
+test('it answers a long JSON tool call through the wake proxy', async () => {
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
-  const guest = buildStubExecGuest();
+  // the guest's `wait` runs until the test lets it end
+  const done = Promise.withResolvers<void>();
+  const guest = buildStubExecGuest({ wait: () => done.promise });
+
+  // the guest's command ends before impd stops
+  ctx.stack.defer(() => {
+    done.resolve();
+  });
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -1116,9 +1123,15 @@ test('it answers a JSON tool call that outlasts the idle timeout through the wak
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 6000' } },
+      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 1' } },
     }),
   });
+
+  await waitFor(() => {
+    invariant(guest.requests[0]);
+  });
+
+  done.resolve();
 
   const response = await call;
   const text = await response.text();
@@ -1129,7 +1142,7 @@ test('it answers a JSON tool call that outlasts the idle timeout through the wak
     id: 1,
     result: { isError: false, structuredContent: { exitCode: 0, stdout: 'waited\n' } },
   });
-}, 20_000);
+});
 
 test('it keeps a call answered as server-sent events open through the wake proxy past the idle timeout that ends an unprotected stream', async () => {
   const ctx = await setupTest({ tailscale: buildStubTailscale(), idleTimeoutS: 1 });

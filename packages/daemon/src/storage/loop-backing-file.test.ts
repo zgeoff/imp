@@ -8,10 +8,10 @@ import { findLoopBackingFile, readLoopHostFreeBytes } from './loop-backing-file'
 async function setupTest() {
   const made = await mkdtemp(join(tmpdir(), 'loop-backing-file-'));
 
+  onTestFinished(() => rm(made, { recursive: true, force: true }));
+
   // mountinfo names the real path, which the unit resolves the dir to
   const root = realpathSync(made);
-
-  onTestFinished(() => rm(root, { recursive: true, force: true }));
 
   // procfs and sysfs as trees under the root, and the dir a test mounts
   const procDir = join(root, 'proc');

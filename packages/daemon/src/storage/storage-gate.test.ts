@@ -1,5 +1,6 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { createStorageGate } from './storage-gate';
 
 test('it runs a task alone after the operations in flight, and lets new ones pass while it waits', async () => {
@@ -110,7 +111,8 @@ test('it gives up a task alone when operations keep the gate busy past its timeo
 });
 
 test('it gives up a task alone whose wait runs out while an operation stays in flight', async () => {
-  const gate = createStorageGate();
+  const clock = buildStubClock();
+  const gate = createStorageGate(clock);
   const stuck = Promise.withResolvers<void>();
 
   onTestFinished(() => {
@@ -119,13 +121,13 @@ test('it gives up a task alone whose wait runs out while an operation stays in f
 
   const op = gate.join(() => stuck.promise);
   const task = mock(() => Promise.resolve('never'));
-
-  // a short real wait, long enough to see it start: then its deadline passes
   const alone = gate.runAlone(task, 200);
 
   await waitFor(() => {
     expect(gate.countWaiting()).toBe(1);
   });
+
+  clock.runFor(200);
 
   const result = await alone;
 

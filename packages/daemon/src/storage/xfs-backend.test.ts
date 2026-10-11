@@ -4,7 +4,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   statfsSync,
   writeFileSync,
@@ -16,14 +15,14 @@ import { buildStubFiemap } from '../test-utils/build-stub-fiemap';
 import { readExtents } from './fiemap';
 import { createXfsBackend } from './xfs-backend';
 
-interface SetupOptions {
-  // where the data dir goes; a temp dir by default
-  readonly parentDir?: string;
-  readonly reserveFileBytes?: number;
-  readonly readFileExtents?: typeof readExtents;
-}
-
-async function setupTest(options: SetupOptions = {}) {
+// `parentDir` is where the data dir goes, a temp dir by default
+async function setupTest(
+  options: Readonly<{
+    parentDir?: string;
+    reserveFileBytes?: number;
+    readFileExtents?: typeof readExtents;
+  }> = {},
+) {
   const dataDir = await mkdtemp(join(options.parentDir ?? tmpdir(), 'impd-xfs-test-'));
 
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
@@ -828,18 +827,11 @@ test('#start logs and skips a reserve file that would take more than half the fr
 });
 
 test('#measureUsage counts the blocks of each imp and its checkpoints through FIEMAP', async () => {
-  // FIEMAP needs a real filesystem, which a tmpfs temp dir is not: the
-  // checkout's own ignored .cache is one
+  // FIEMAP needs a filesystem with extents, which a tmpfs temp dir is not: the
+  // checkout's own ignored .cache is one. It stays; setupTest's dir in it goes.
   const parentDir = join(import.meta.dir, '..', '..', '..', '..', '.cache');
 
-  // the first dir this made, when .cache was not there yet
-  const made = mkdirSync(parentDir, { recursive: true });
-
-  onTestFinished(() => {
-    if (made !== undefined) {
-      rmSync(made, { recursive: true, force: true });
-    }
-  });
+  mkdirSync(parentDir, { recursive: true });
 
   const ctx = await setupTest({ parentDir });
 

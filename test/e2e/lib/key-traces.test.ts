@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateEnv } from '@imp/test-utils/update-env';
-import { utils } from 'ssh2';
 import { createStubBin } from '../../../scripts/test-utils/create-stub-bin';
 import { buildMockEd25519Key } from './build-mock-ed25519-key';
 import { instance } from './instance';
@@ -38,14 +37,14 @@ test('#readKeyPatterns gives a seed pattern that matches the seed the key holds'
 test('#readKeyPatterns gives a base64 line of the key file as its text', async () => {
   const ctx = await setupTest();
 
-  const key = utils.generateKeyPairSync('ed25519');
+  const key = buildMockEd25519Key();
   const path = join(ctx.dir, 'id');
 
-  await writeFile(path, key.private);
+  await writeFile(path, key.privateKey);
 
   const patterns = readKeyPatterns(path);
 
-  expect(key.private.split('\n')).toContain(patterns.text);
+  expect(key.privateKey.split('\n')).toContain(patterns.text);
   expect(patterns.text).toMatch(/^[\w+\/=]+$/v);
 });
 
@@ -99,10 +98,10 @@ test('#countKeyTraces finds no control and no trace in a file that holds neither
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  const key = utils.generateKeyPairSync('ed25519');
+  const key = buildMockEd25519Key();
   const keyPath = join(ctx.dir, 'id');
 
-  await writeFile(keyPath, key.private);
+  await writeFile(keyPath, key.privateKey);
 
   const patterns = readKeyPatterns(keyPath);
   const disk = join(ctx.dir, 'disk.ext4');

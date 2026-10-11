@@ -65,7 +65,8 @@ test('#runMigrations runs nothing on a database file a newer impd migrated', asy
 
   // the refusal's own message: Kysely also rejects a migration it does not
   // know, so only the message shows that impd refused before Kysely ran
-  expect(runMigrations(db)).rejects.toThrow(
+  expect(runMigrations(db)).rejects.toThrowWithMessage(
+    Error,
     `the database is at migration 999_from_a_newer_impd, newer than this impd's last, ${last}: start the impd that wrote it or a newer one, or restore an older database copy (docs/guides/operations.md#database-copy-and-restore)`,
   );
 

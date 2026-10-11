@@ -1,5 +1,4 @@
 import type { TryResult } from '../imps/keyed-mutex';
-import { waitWithin } from '../process/wait-within';
 
 // An operation that may make storage before its rows commit runs in `join`.
 // `runAlone` (the GC) waits until none is in flight, and holds new ones back
@@ -15,7 +14,26 @@ export interface StorageGate {
   readonly countWaiting: () => number;
 }
 
-export function createStorageGate(): StorageGate {
+// The wall clock and setTimeout by default; tests pass a clock they step
+interface StorageGateClock {
+  readonly now: () => number;
+
+  // starts a timer `ms` from now; returns its cancel
+  readonly startTimer: (fire: () => void, ms: number) => () => void;
+}
+
+const SYSTEM_CLOCK: StorageGateClock = {
+  now: () => Date.now(),
+  startTimer: (fire, ms) => {
+    const timeout = setTimeout(fire, ms);
+
+    return () => {
+      clearTimeout(timeout);
+    };
+  },
+};
+
+export function createStorageGate(clock: StorageGateClock = SYSTEM_CLOCK): StorageGate {
   const state = {
     inFlight: 0,
     waiting: 0,
@@ -57,20 +75,30 @@ export function createStorageGate(): StorageGate {
     try {
       await previous;
 
-      const deadline = Date.now() + timeoutMs;
+      const deadline = clock.now() + timeoutMs;
 
       state.waiting += 1;
 
       try {
         // the check and the claim run in one synchronous step: no join slips in
         while (state.inFlight > 0) {
-          const left = deadline - Date.now();
+          const left = deadline - clock.now();
 
           if (left <= 0) {
             return { ran: false };
           }
 
-          await waitWithin(state.idle.promise, left);
+          const expired = Promise.withResolvers<void>();
+
+          const cancel = clock.startTimer(() => {
+            expired.resolve();
+          }, left);
+
+          try {
+            await Promise.race([state.idle.promise, expired.promise]);
+          } finally {
+            cancel();
+          }
         }
       } finally {
         state.waiting -= 1;

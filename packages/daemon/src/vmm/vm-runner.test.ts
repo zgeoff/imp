@@ -15,8 +15,9 @@ import { isFirecrackerAlive, stopProcess } from './firecracker-process';
 import { buildJailerCommand } from './jail';
 import { buildBootArgs, createVmRunner } from './vm-runner';
 
-// A temp dir with the run/ and the disk of imp `vm`, which a sleep needs for
-// its snapshot's owner, and the log the stub VMM appends its calls to.
+// A temp dir and the log the stub VMM appends its calls to. `createImpDir`
+// makes the run/ and the disk of the imp a test names, which a sleep needs for
+// its snapshot's owner.
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
 
@@ -24,12 +25,16 @@ function setupTest() {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const paths = buildImpPaths(dir, 'vm');
+  const createImpDir = (impId: string) => {
+    const paths = buildImpPaths(dir, impId);
 
-  mkdirSync(paths.runDir, { recursive: true });
-  writeFileSync(paths.disk, '');
+    mkdirSync(paths.runDir, { recursive: true });
+    writeFileSync(paths.disk, '');
 
-  return { dir, paths, logPath: join(dir, 'calls.log') };
+    return paths;
+  };
+
+  return { dir, createImpDir, logPath: join(dir, 'calls.log') };
 }
 
 test('#buildBootArgs builds the kernel cmdline with the slot addressing', () => {
@@ -178,9 +183,10 @@ test('#buildBootArgs leaves hot-plugged memory alone for an imp that does not gr
 
 test('#sleepVm resumes a VM whose pause fails and leaves it running, its limit back', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
   const vm = await startStubFirecracker({
-    apiSocket: ctx.paths.apiSocket,
+    apiSocket: paths.apiSocket,
     logPath: ctx.logPath,
     failures: ['PATCH /vm {"state":"Paused"}'],
     isLoggingBodies: true,
@@ -198,12 +204,7 @@ test('#sleepVm resumes a VM whose pause fails and leaves it running, its limit b
     },
   };
 
-  const sleeping = createVmRunner(buildStubJails().jails).sleepVm(
-    vm.pid,
-    ctx.paths,
-    cgroup,
-    ctx.paths,
-  );
+  const sleeping = createVmRunner(buildStubJails().jails).sleepVm(vm.pid, paths, cgroup, paths);
 
   expect(sleeping).rejects.toThrow('refused PATCH /vm');
 
@@ -213,102 +214,107 @@ test('#sleepVm resumes a VM whose pause fails and leaves it running, its limit b
   ]);
 
   expect(limits).toStrictEqual(['lifted', 'applied']);
-  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeTrue();
+  expect(isFirecrackerAlive(vm.pid, paths.apiSocket)).toBeTrue();
 });
 
 test('#sleepVm kills a VM whose pause and resume both fail', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
   const vm = await startStubFirecracker({
-    apiSocket: ctx.paths.apiSocket,
+    apiSocket: paths.apiSocket,
     logPath: ctx.logPath,
     failures: ['PATCH /vm'],
   });
 
   expect(
-    createVmRunner(buildStubJails().jails).sleepVm(vm.pid, ctx.paths, null, ctx.paths),
+    createVmRunner(buildStubJails().jails).sleepVm(vm.pid, paths, null, paths),
   ).rejects.toThrow('refused PATCH /vm');
 
-  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
+  expect(isFirecrackerAlive(vm.pid, paths.apiSocket)).toBeFalse();
 });
 
 // a sleep asks under the imp's lock: far below a ping's default of 2 s
 test('#readGuestUptimeMs asks the agent with a 250 ms deadline', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
   const ping = mock(() =>
     Promise.resolve({ ok: true as const, version: '0.1.0', uptime_ms: 1350 }),
   );
 
-  const uptime = await createVmRunner(buildStubJails().jails, null, ping).readGuestUptimeMs(
-    ctx.paths,
-  );
+  const uptime = await createVmRunner(buildStubJails().jails, null, ping).readGuestUptimeMs(paths);
 
   expect(uptime).toBe(1350);
-  expect(ping).toHaveBeenCalledWith(ctx.paths.vsockSocket, 250);
+  expect(ping).toHaveBeenCalledWith(paths.vsockSocket, 250);
 });
 
 test('#readGuestUptimeMs reads no uptime from an agent that does not answer by the deadline', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
   // accepts the connection and never answers
-  await startStubAgent(ctx.paths.vsockSocket, () => {});
+  await startStubAgent(paths.vsockSocket, () => {});
 
   const uptime = await createVmRunner(buildStubJails().jails, null, (vsockPath) =>
     sendPing(vsockPath, 20),
-  ).readGuestUptimeMs(ctx.paths);
+  ).readGuestUptimeMs(paths);
 
   expect(uptime).toBeNull();
 });
 
 test('#readGuestUptimeMs reads no uptime from an agent that cannot read its clock', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
-  await startStubAgent(ctx.paths.vsockSocket, (socket) => {
+  await startStubAgent(paths.vsockSocket, (socket) => {
     socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true, version: '0.1.0' }));
   });
 
-  const uptime = await createVmRunner(buildStubJails().jails).readGuestUptimeMs(ctx.paths);
+  const uptime = await createVmRunner(buildStubJails().jails).readGuestUptimeMs(paths);
 
   expect(uptime).toBeNull();
 });
 
 test('#readVmState reads the VM state from the API', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
-  await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+  await startStubFirecracker({ apiSocket: paths.apiSocket, logPath: ctx.logPath });
 
-  const state = await createVmRunner(buildStubJails().jails).readVmState(ctx.paths);
+  const state = await createVmRunner(buildStubJails().jails).readVmState(paths);
 
   expect(state).toBe('Running');
 });
 
 test('#readVmState reads no state once the API is gone', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
-  const vm = await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+  const vm = await startStubFirecracker({ apiSocket: paths.apiSocket, logPath: ctx.logPath });
 
   stopProcess(vm.pid);
 
   await vm.exited;
 
-  const state = await createVmRunner(buildStubJails().jails).readVmState(ctx.paths);
+  const state = await createVmRunner(buildStubJails().jails).readVmState(paths);
 
   expect(state).toBeNull();
 });
 
 test('#resumeVm seals the run dir, then patches the VM to resumed', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
   const vm = await startStubFirecracker({
-    apiSocket: ctx.paths.apiSocket,
+    apiSocket: paths.apiSocket,
     logPath: ctx.logPath,
     isLoggingBodies: true,
   });
 
   const stub = buildStubJails();
 
-  await createVmRunner(stub.jails).resumeVm(vm.pid, ctx.paths);
+  await createVmRunner(stub.jails).resumeVm(vm.pid, paths);
 
   expect(stub.notes).toStrictEqual(['seal']);
   expect(readFileSync(ctx.logPath, 'utf8')).toBe('PATCH /vm {"state":"Resumed"}\n');
@@ -316,8 +322,9 @@ test('#resumeVm seals the run dir, then patches the VM to resumed', async () => 
 
 test('#resumeVm kills a VM whose seal finds anything planted in run/, and never resumes it', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
-  const vm = await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+  const vm = await startStubFirecracker({ apiSocket: paths.apiSocket, logPath: ctx.logPath });
 
   const stub = buildStubJails();
 
@@ -325,61 +332,61 @@ test('#resumeVm kills a VM whose seal finds anything planted in run/, and never 
     new Error('jail vm: the VM left planted in run/; a VM that writes there is compromised'),
   );
 
-  expect(createVmRunner(stub.jails).resumeVm(vm.pid, ctx.paths)).rejects.toThrow(
+  expect(createVmRunner(stub.jails).resumeVm(vm.pid, paths)).rejects.toThrow(
     'a VM that writes there is compromised',
   );
 
   expect(existsSync(ctx.logPath)).toBeFalse();
-  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
+  expect(isFirecrackerAlive(vm.pid, paths.apiSocket)).toBeFalse();
   expect(stub.notes).toStrictEqual(['seal', 'release vm']);
 });
 
 test('#stopVm releases the jail on a hard stop, as a checkpoint restore asks', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
-  const vm = await startStubFirecracker({ apiSocket: ctx.paths.apiSocket, logPath: ctx.logPath });
+  const vm = await startStubFirecracker({ apiSocket: paths.apiSocket, logPath: ctx.logPath });
 
   const stub = buildStubJails();
 
-  await createVmRunner(stub.jails).stopVm(vm.pid, ctx.paths, false);
+  await createVmRunner(stub.jails).stopVm(vm.pid, paths, false);
 
-  expect(isFirecrackerAlive(vm.pid, ctx.paths.apiSocket)).toBeFalse();
+  expect(isFirecrackerAlive(vm.pid, paths.apiSocket)).toBeFalse();
   expect(stub.notes).toStrictEqual(['release vm']);
 });
 
 test('#isVmAlive reads the liveness of a VM from the given /proc', () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
 
   mkdirSync(join(ctx.dir, 'proc', '42'), { recursive: true });
   writeFileSync(join(ctx.dir, 'proc', '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
 
   writeFileSync(
     join(ctx.dir, 'proc', '42', 'cmdline'),
-    `firecracker\0--api-sock\0${ctx.paths.apiSocket}\0`,
+    `firecracker\0--api-sock\0${paths.apiSocket}\0`,
   );
 
   const runner = createVmRunner(buildStubJails().jails, null, sendPing, join(ctx.dir, 'proc'));
 
-  expect(runner.isVmAlive(42, ctx.paths)).toBeTrue();
+  expect(runner.isVmAlive(42, paths)).toBeTrue();
 });
 
 test('#stopVm only releases the jail of a VM the given /proc shows gone', async () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
   const stub = buildStubJails();
 
   mkdirSync(join(ctx.dir, 'proc'));
 
-  await createVmRunner(stub.jails, null, sendPing, join(ctx.dir, 'proc')).stopVm(
-    42,
-    ctx.paths,
-    true,
-  );
+  await createVmRunner(stub.jails, null, sendPing, join(ctx.dir, 'proc')).stopVm(42, paths, true);
 
   expect(stub.notes).toStrictEqual(['release vm']);
 });
 
 test('#wakeVm releases the mounts of a jail prepare that fails partway, and restores the limit', () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
   const calls: string[] = [];
 
   const stub = buildStubJails({
@@ -393,7 +400,7 @@ test('#wakeVm releases the mounts of a jail prepare that fails partway, and rest
   expect(
     createVmRunner(stub.jails).wakeVm({
       firecrackerBin: 'firecracker',
-      paths: ctx.paths,
+      paths,
       cgroup: {
         procsPath: '/nonexistent',
         liftLimit: () => {
@@ -418,6 +425,7 @@ test('#wakeVm releases the mounts of a jail prepare that fails partway, and rest
 
 test('#wakeVm starts a jailed VM through the merge wrapper, which runs the jailer outside the chroot', () => {
   const ctx = setupTest();
+  const paths = ctx.createImpDir('vm');
   const wrapper = createStubKsmExec(ctx.dir);
 
   const command = buildJailerCommand({
@@ -426,13 +434,13 @@ test('#wakeVm starts a jailed VM through the merge wrapper, which runs the jaile
     chrootBase: join(ctx.dir, 'jail'),
     impId: 'vm',
     user: { uid: 900_000, gid: 900_000 },
-    apiSocket: ctx.paths.apiSocket,
+    apiSocket: paths.apiSocket,
   });
 
   expect(
     createVmRunner(buildStubJails({ argv: command }).jails, wrapper.path).wakeVm({
       firecrackerBin: 'firecracker',
-      paths: ctx.paths,
+      paths,
       cgroup: null,
       jail: { uid: 900_000, gid: 900_000 },
       readOnlyFiles: [],

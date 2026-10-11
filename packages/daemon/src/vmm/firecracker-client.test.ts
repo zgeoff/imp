@@ -463,5 +463,6 @@ test('it rejects an instance state Firecracker does not have', () => {
 
   expect(createFirecrackerClient(ctx.socket).getInstanceState()).rejects.toMatchObject({
     name: 'ZodError',
+    issues: expect.toPartiallyContain({ path: ['state'], code: 'invalid_value' }),
   });
 });

@@ -20,10 +20,11 @@ test('it holds a second acquireConnection while the first is held', async () => 
 
   const second = ctx.driver.acquireConnection();
 
-  // two microtask drains: enough for the waiting acquire to resume if
-  // nothing held the connection
-  await Promise.resolve();
-  await Promise.resolve();
+  // an unheld acquire resumes on microtasks alone, and the event loop runs a
+  // setImmediate callback only once the microtask queue is empty
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 
   expect(Bun.peek.status(second)).toBe('pending');
 });
@@ -47,7 +48,11 @@ test('it closes the handle on destroy only after the held connection is released
 
   const destroyed = ctx.driver.destroy();
 
-  await Promise.resolve();
+  // a destroy that did not wait would close on microtasks alone, and the event
+  // loop runs a setImmediate callback only once the microtask queue is empty
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 
   // still open: the holder can finish its write
   await connection.executeQuery(CompiledQuery.raw('select 1 as one'));

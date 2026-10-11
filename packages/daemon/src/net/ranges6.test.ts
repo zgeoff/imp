@@ -24,12 +24,12 @@ test.each([
   ['2001:0:4136:e378::1', 'Teredo'],
   ['8.8.8.8', 'an IPv4 address'],
   ['example.com', 'a name'],
-])('it blocks %s, %s', (address) => {
+])('#createRangeChecker6 blocks %s, %s', (address) => {
   expect(createRangeChecker6(BLOCKED_RANGES6)(address)).toBeTrue();
 });
 
 test.each(['2606:4700:4700::1111', '2001:db8:b::1'])(
-  'it passes the public or documentation address %s through the blocklist',
+  '#createRangeChecker6 passes the public or documentation address %s through the blocklist',
   (address) => {
     expect(createRangeChecker6(BLOCKED_RANGES6)(address)).toBeFalse();
   },
@@ -71,7 +71,7 @@ test.each([
   ['febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe80::/10'],
   ['ff00::', 'ff00::/8'],
   ['ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'ff00::/8'],
-])('it refuses %s at an end of the registry block %s', (address) => {
+])('#createRangeChecker6 refuses %s at an end of the registry block %s', (address) => {
   const isRefused = createRangeChecker6([...BLOCKED_RANGES6, ...DOCUMENTATION_RANGES6]);
 
   expect(isRefused(address)).toBeTrue();
@@ -84,11 +84,14 @@ test.each([
   '2001:4:112::1',
   '2001:20::1',
   '2606:4700::1111',
-])('it keeps %s reachable, a globally reachable service in 2001::/23 or outside it', (address) => {
-  const isRefused = createRangeChecker6([...BLOCKED_RANGES6, ...DOCUMENTATION_RANGES6]);
+])(
+  '#createRangeChecker6 keeps %s reachable, a globally reachable service in 2001::/23 or outside it',
+  (address) => {
+    const isRefused = createRangeChecker6([...BLOCKED_RANGES6, ...DOCUMENTATION_RANGES6]);
 
-  expect(isRefused(address)).toBeFalse();
-});
+    expect(isRefused(address)).toBeFalse();
+  },
+);
 
 test.each([
   '2001::',
@@ -104,7 +107,7 @@ test.each([
   '2001:40::1',
   '2001:1ff::1',
   '2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff',
-])('it refuses a public imp %s, in the rest of 2001::/23', (address) => {
+])('#createRangeChecker6 refuses a public imp %s, in the rest of 2001::/23', (address) => {
   const isPublicRefused = createRangeChecker6([
     ...BLOCKED_RANGES6,
     ...DOCUMENTATION_RANGES6,
@@ -123,23 +126,29 @@ test.each([
   '2001:3f::1',
   '2001:200::1',
   '2606:4700:4700::1111',
-])('it keeps the global block address %s reachable for a public imp', (address) => {
-  const isPublicRefused = createRangeChecker6([
-    ...BLOCKED_RANGES6,
-    ...DOCUMENTATION_RANGES6,
-    ...RESERVED_RANGES6,
-  ]);
+])(
+  '#createRangeChecker6 keeps the global block address %s reachable for a public imp',
+  (address) => {
+    const isPublicRefused = createRangeChecker6([
+      ...BLOCKED_RANGES6,
+      ...DOCUMENTATION_RANGES6,
+      ...RESERVED_RANGES6,
+    ]);
 
-  expect(isPublicRefused(address)).toBeFalse();
-});
+    expect(isPublicRefused(address)).toBeFalse();
+  },
+);
 
 test.each([
   ['::ffff:169.254.169.254', '169.254.169.254'],
   ['::ffff:a9fe:a9fe', '169.254.169.254'],
-])('it reads the IPv4-mapped address %s as %s', (address, ipv4) => {
+])('#readMappedIpv4 reads the IPv4-mapped address %s as %s', (address, ipv4) => {
   expect(readMappedIpv4(address)).toBe(ipv4);
 });
 
-test.each(['2001:db8::1', 'example.com'])('it reads %p as holding no IPv4 address', (address) => {
-  expect(readMappedIpv4(address)).toBeNull();
-});
+test.each(['2001:db8::1', 'example.com'])(
+  '#readMappedIpv4 reads %p as holding no IPv4 address',
+  (address) => {
+    expect(readMappedIpv4(address)).toBeNull();
+  },
+);
