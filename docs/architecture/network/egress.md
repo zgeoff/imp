@@ -44,9 +44,11 @@ destroyed imp's chain out before its slot is free. Where nft cannot run, no `pub
 
 A `public`, `box` or `none` imp's DNS goes to impd's own resolver: a redirect on the guest's port 53
 to anything outside the imp range sends it to the resolver on the imp's gateway, and impd knows the
-imp by the source address. A name the policy does not allow gets REFUSED with a "prohibited"
-extended error and never leaves the host, and a query past the imp's rate limit gets plain REFUSED,
-so the two can be told apart.
+imp by the source address. Only IPv4 DNS is redirected, because the guest's resolver names IPv4
+servers; port 53 over IPv6 meets the policy as any other port does, so a `public` imp can ask a
+global IPv6 resolver directly, and a `box` imp only one its list allows. A name the policy does not
+allow gets REFUSED with a "prohibited" extended error and never leaves the host, and a query past
+the imp's rate limit gets plain REFUSED, so the two can be told apart.
 
 For an allowed name, the resolver asks upstream, puts the addresses on the answer's CNAME chain into
 the imp's set, and only then replies, so the guest's first connection finds its address already

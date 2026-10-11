@@ -41,12 +41,17 @@ RAM and its snapshot. It does not keep the imp off, because the next request boo
 
 ## The lock
 
-Each imp has one lifecycle lock, a FIFO queue in impd's memory keyed by the imp's ID. Every change
-to one imp's VM or state runs under it, so two calls never change one imp at once, and a second wake
-that queues behind the first finds the imp running and returns. Under the lock the caller gets the
-imp's record read again, as a type only the lock module can make, and the VM operations take only
-that type. So no boot, sleep or wake can run without the lock. A new imp's row is written under the
-lock it is created with, and nothing else reaches the imp before its create holds it.
+Each imp has one lifecycle lock, a FIFO queue in impd's memory keyed by the imp's ID. Every boot,
+sleep, wake, stop and destroy of one imp runs under it, so two calls never change one imp's VM at
+once, and a second wake that queues behind the first finds the imp running and returns. Under the
+lock the caller gets the imp's record read again, as a type only the lock module can make, and the
+VM operations take only that type. So no boot, sleep or wake can run without the lock. A new imp's
+row is written under the lock it is created with, and nothing else reaches the imp before its create
+holds it.
+
+One state change runs outside the lock: a liveness repair. A read that finds an imp's VM dead, or
+its snapshot lost, marks it stopped with a conditional update, and skips the repair while the imp's
+lock is taken, so it never hides a VM that a start under the lock just booted.
 
 Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
 controller try the lock and skip the imp when anything holds it or waits for it. The governor holds
@@ -133,6 +138,6 @@ impd then settles each imp under its lock:
 - Half-written snapshot and identity files go, and so do the jails and cgroups of imps that no
   longer exist.
 
-A VM that will not die keeps its pid on the record, and impd starts anyway, so one stuck process
-never keeps impd down; the next start or destroy kills it again. Sleeping imps stay asleep, and each
-wakes on its next request.
+A VM that will not die never keeps impd from starting: impd logs it and goes on. Where it is a
+running or creating imp's own VM, the record keeps its pid, so the next start or destroy kills it
+again. Sleeping imps stay asleep, and each wakes on its next request.

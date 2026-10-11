@@ -35,9 +35,10 @@ impd copies the guest kernel and the system drive into the data directory at sta
 is written beside the old one and renamed over it, so a running VM keeps its inode, and only a cold
 boot reads the kernel. Each system drive goes under its own hash and is never written over: a
 snapshot reopens its drive by path, and the guest's page cache holds blocks of those bytes, so the
-bytes at that path must not change. So after an agent change the old drive stays, and a sleeping imp
-wakes with its memory and its old agent. At start impd deletes every drive that is not the current
-one and that no snapshot, live VM or boot template names.
+bytes at that path must not change. So after an agent change the old drive stays, and an unjailed
+sleeping imp wakes with its memory and its old agent; a jailed one boots cold
+([snapshot identity](../lifecycle/sleep-and-wake.md#snapshot-identity)). At start impd deletes every
+drive that is not the current one and that no snapshot, live VM or boot template names.
 
 ## Checkpoints, restores and forks
 

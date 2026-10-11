@@ -43,11 +43,11 @@ every tap, makes it again before the next wake.
 1. impd reads `meta.json` and checks the snapshot against this host
    ([snapshot identity](#snapshot-identity)). With no snapshot, or one this host cannot load, the
    wake boots the disk cold instead.
-2. It renames `meta.json` to `meta.json.loading`. From here the guest may run and write its disk, so
-   after a crash this snapshot must never load again.
-3. It sets up the imp's cgroup and asks the governor for room: the larger of what the VM owned at
+2. It sets up the imp's cgroup and asks the governor for room: the larger of what the VM owned at
    its sleep and a floor for a fresh wake. A wake the budget turns away keeps the imp asleep with
    its snapshot.
+3. It renames `meta.json` to `meta.json.loading`. From here the guest may run and write its disk, so
+   after a crash this snapshot must never load again.
 4. It makes the tap if it is gone, starts Firecracker in the jail, and loads the snapshot as the
    first API call, paused. It seals the jail, so no guest code runs while the VM can still change
    its files ([isolation](../isolation.md#the-jailer)), and resumes the VM.
@@ -77,11 +77,13 @@ because the guest kernel picked its code paths from the CPU's flags at boot, and
 on a CPU without one of them faults later, not at the load. That covers a cloud host whose CPU
 changes at a reboot, and a move to another machine.
 
-A new guest kernel or system drive does not force a cold boot. The snapshot holds the kernel in
-memory, and it reopens the system drive by path, so impd keeps every drive file a snapshot names
-([storage](../storage/storage.md#system-files)). After the load the agent must answer with the
-protocol version the snapshot recorded, or the VM is not the one that slept, and impd boots cold. So
-a woken imp runs its old agent and kernel until its next cold boot.
+A new guest kernel does not force a cold boot, because the snapshot holds the kernel in memory. The
+snapshot reopens the system drive by path, so impd keeps every drive file a snapshot names
+([storage](../storage/storage.md#system-files)). An unjailed wake reopens an older drive in place. A
+jailed wake binds only the current drive into the jail, so a snapshot that names an older drive
+fails its load there and boots cold. After the load the agent must answer with the protocol version
+the snapshot recorded, or the VM is not the one that slept, and impd boots cold. So a woken imp runs
+its old agent and kernel until its next cold boot.
 
 ## What survives a sleep
 
