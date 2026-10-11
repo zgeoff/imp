@@ -454,7 +454,10 @@ The flake's two checks test `deploy/nixos/module.nix`:
   since nix-unit runs only attributes whose names start with `test` and recurses into every other
   attribute set; each holds the observed value as `expr` and the literal as `expected`. A refusal
   case expects the module's exact failed assertion messages. The hosts that several cases read sit
-  in the file's `let`; a host that one case reads is written in that case. `check` runs
+  in the file's `let`, because each host is a full `nixosSystem` evaluation and building it again in
+  every case would slow the check. Each case that reads a shared host has a comment above it that
+  names the host and the option its expected value depends on, so the option that decides the case
+  stays beside it. A host that one case reads is written in that case. `check` runs
   `nix-unit --flake ${self}#tests` inside its build, against a store of its own in the build
   directory, with `--override-input nixpkgs` pointing at the pinned nixpkgs in the store, as
   nix-unit's flake-parts module does; nix-unit is the pinned nixpkgs' `pkgs.nix-unit` (2.34.2, built
@@ -493,6 +496,20 @@ the package changes it:
 A test in each package checks the constructor's default. The session manager's `recorded` hook is
 nil outside tests. It gets each retired run once the manager has kept or passed over it, so a test
 waits on it for a run that ended after its replacement.
+
+## Agent Go golden and boundary tests
+
+The session history's replay suite opens with a literal golden test and a determinism test, as for
+any deterministic pipeline. Beside them, `TestHistoryReplayMatchesTheGolden` feeds a large seeded
+output past the real history limit and pins the replay by its length and SHA-256, because that
+replay is too large to write inline. The seed and the generator live in the test file, so the input
+changes only by an edit there, and a changed replay means editing the pinned constants on purpose.
+
+The server's freeze tests swap `waitAndGrow` for a recorder of the sizes `grow` asks for. The real
+`disk.WaitAndGrow` resizes the guest's own disk through sysfs and an ioctl, and `disk_test.go`
+covers that kernel edge through stand-ins inside the disk package. A recorder at an own package's
+boundary fits when that package's kernel edge has its own tests and the test asserts only whether
+and how the call was made.
 
 ## CI
 
@@ -894,6 +911,10 @@ file leaves every host on its real origin.
   `build-unshare.ts` there adds a user namespace (`-r`) only when the uid is not 0.
   `deploy/bootstrap.test.ts`'s `nft -c` check of the rendered firewall reads it too; plain
   `bun test` skips that check where `unshare -rn nft` fails.
+- A test that needs a disk feature that tmpfs lacks, such as the XFS backend's FIEMAP test, makes
+  its directory under `/var/tmp`, the disk-backed temp root, because `tmpdir()` is a tmpfs on some
+  hosts. It never uses the checkout. Where `/var/tmp` is a tmpfs too, the test fails rather than
+  passing on the wrong filesystem.
 - `scripts/check-kvm.sh` checks for `vmx` or `svm` and that `/dev/kvm` opens for read and write. The
   dev container gets `/dev/kvm` and `/dev/net/tun` from `deploy/imp-host.args.json`, plus
   `/dev/loop-control` and loop devices for its XFS file.

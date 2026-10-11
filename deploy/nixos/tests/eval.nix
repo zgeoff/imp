@@ -43,7 +43,8 @@ let
     "services.imp.settings sets ${key}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, dnsApiTokenFile, publicPorts, egressDeny) instead";
 
   # Hosts that several cases read, and that `check` reads too. A host that one
-  # case reads is written in that case.
+  # case reads is written in that case. Each case that reads one of these
+  # names, in a comment above it, the host and the option its value depends on.
   zfsHost = host {
     services.imp.tailscaleAuthKeyFile = "/run/secrets/imp-authkey";
     services.imp.environmentFile = "/run/secrets/imp-host.env";
@@ -124,10 +125,12 @@ let
 
   # nix-unit runs only the attributes whose names start with "test".
   cases = {
+    # zfsHost: module defaults (storage = "zfs"), with the networking.hostId that host sets
     "test a ZFS host passes every assertion" = {
       expr = failed zfsHost;
       expected = [ ];
     };
+    # xfsHost sets services.imp.storage = "xfs" and fileSystems."/var/lib/imp"
     "test an XFS host with a mount passes every assertion" = {
       expr = failed xfsHost;
       expected = [ ];
@@ -173,22 +176,27 @@ let
         "services.imp: hostFirewall = \"own\" needs networking.firewall.enable = false; two firewalls each drop what the other admits"
       ];
     };
+    # ownFirewall sets services.imp.hostFirewall = "own" and networking.firewall.enable = false
     "test own without networking.firewall passes every assertion" = {
       expr = failed ownFirewall;
       expected = [ ];
     };
+    # ownFirewall sets services.imp.hostFirewall = "own"
     "test own loads the imp table" = {
       expr = ownCfg.systemd.services ? imp-firewall;
       expected = true;
     };
+    # zfsHost: module defaults (hostFirewall = "none")
     "test none loads no imp table" = {
       expr = zfsCfg.systemd.services ? imp-firewall;
       expected = false;
     };
+    # zfsHost: module defaults (storage = "zfs"), on the boot.kernelPackages that host sets
     "test the kernel's ZFS module builds" = {
       expr = zfsCfg.boot.zfs.modulePackage.meta.broken;
       expected = false;
     };
+    # zfsHost: host sets services.imp.zfs.arcMaxMiB = 1024
     "test arcMaxMiB caps the ARC in modprobe" = {
       expr = lib.filter (lib.hasInfix "zfs_arc_max") (
         lib.splitString "\n" zfsCfg.boot.extraModprobeConfig
@@ -202,22 +210,27 @@ let
       );
       expected = [ ];
     };
+    # zfsHost: module defaults
     "test a failing start stops after five tries" = {
       expr = unit.unitConfig.StartLimitBurst;
       expected = 5;
     };
+    # poolElsewhere sets services.imp.zfs.importPool = false
     "test importPool = false imports nothing" = {
       expr = poolElsewhere.config.boot.zfs.extraPools;
       expected = [ ];
     };
+    # zfsHost: module defaults (storage = "zfs", zfs.importPool = true)
     "test the pool imports by partuuid, which virtio disks have" = {
       expr = zfsCfg.boot.zfs.devNodes;
       expected = "/dev/disk/by-partuuid";
     };
+    # poolElsewhere sets services.imp.zfs.importPool = false
     "test importPool = false keeps the default devNodes" = {
       expr = poolElsewhere.config.boot.zfs.devNodes;
       expected = "/dev/disk/by-id";
     };
+    # zfsHost: module defaults (storage = "zfs")
     "test the dataset waits for the pools" = {
       expr = lib.elem "zfs-import.target" zfsCfg.systemd.services.imp-zfs-dataset.after;
       expected = true;
@@ -231,14 +244,17 @@ let
         "services.imp: networking.nftables.flushRuleset would flush Docker's rules on every reload; leave it false"
       ];
     };
+    # zfsHost: module defaults
     "test overcommit_memory is 1" = {
       expr = zfsCfg.boot.kernel.sysctl."vm.overcommit_memory";
       expected = 1;
     };
+    # zfsHost: module defaults
     "test swappiness is 1" = {
       expr = zfsCfg.boot.kernel.sysctl."vm.swappiness";
       expected = 1;
     };
+    # zfsHost: module defaults (storage = "zfs")
     "test ZFS loads kvm, tun, loop and zfs" = {
       expr = lib.subtractLists zfsCfg.boot.kernelModules [
         "kvm"
@@ -248,96 +264,119 @@ let
       ];
       expected = [ ];
     };
+    # xfsHost sets services.imp.storage = "xfs"
     "test XFS loads no zfs module" = {
       expr = lib.elem "zfs" xfsCfg.boot.kernelModules;
       expected = false;
     };
+    # zfsHost: module defaults (storage = "zfs", zfs.pool = "tank", zfs.importPool = true)
     "test the pool is imported" = {
       expr = zfsCfg.boot.zfs.extraPools;
       expected = [ "tank" ];
     };
+    # zfsHost: module defaults
     "test Docker is on" = {
       expr = zfsCfg.virtualisation.docker.enable;
       expected = true;
     };
+    # zfsHost: module defaults (storage = "zfs")
     "test imp-host needs the dataset" = {
       expr = lib.elem "imp-zfs-dataset.service" unit.requires;
       expected = true;
     };
+    # zfsHost: module defaults
     "test imp-host wants the proxy" = {
       expr = lib.elem "imp-docker-proxy.service" unit.wants;
       expected = true;
     };
+    # zfsHost: module defaults
     "test imp-host starts after the proxy" = {
       expr = lib.elem "imp-docker-proxy.service" unit.after;
       expected = true;
     };
+    # zfsHost: module defaults
     "test imp-host needs its image" = {
       expr = lib.elem "imp-host-image.service" unit.requires;
       expected = true;
     };
+    # zfsHost: module defaults
     "test the proxy needs the image" = {
       expr = lib.elem "imp-host-image.service" proxyUnit.requires;
       expected = true;
     };
+    # zfsHost: module defaults
     "test the proxy starts after the image" = {
       expr = lib.elem "imp-host-image.service" proxyUnit.after;
       expected = true;
     };
+    # zfsHost: module defaults (image)
     "test the default image is the module's own release" = {
       expr = zfsCfg.services.imp.image;
       expected = releaseImage;
     };
+    # zfsHost: module defaults (image)
     "test the proxy gets the host image" = {
       expr = proxyUnit.environment.IMP_HOST_IMAGE;
       expected = releaseImage;
     };
+    # zfsHost: module defaults
     "test the proxy restarts always" = {
       expr = proxyUnit.serviceConfig.Restart;
       expected = "always";
     };
+    # zfsHost: module defaults
     "test imp-host binds no docker.sock" = {
       expr = lib.hasInfix "/var/run/docker.sock" unit.serviceConfig.ExecStart;
       expected = false;
     };
+    # zfsHost: module defaults
     "test imp-host reaches Docker through the proxy's socket" = {
       expr = lib.hasInfix "DOCKER_HOST=unix:///run/imp-docker/docker.sock" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost: module defaults
     "test imp-host runs docker run --init" = {
       expr = lib.hasPrefix "/bin/docker run --init " (
         lib.removePrefix "${zfsCfg.virtualisation.docker.package}" unit.serviceConfig.ExecStart
       );
       expected = true;
     };
+    # zfsHost: module defaults (publicPorts = [ ], ipv6.enable = false)
     "test the args come from deploy/imp-host.args.json" = {
       expr = lib.hasInfix " ${sharedArgs} " unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost: module defaults
     "test imp-host runs without --privileged" = {
       expr = lib.hasInfix "--privileged" unit.serviceConfig.ExecStart;
       expected = false;
     };
+    # zfsHost: module defaults
     "test the env file, not -e, carries IMP_HOST_ADDRESSES" = {
       expr = lib.hasInfix "-e IMP_HOST_ADDRESSES" unit.serviceConfig.ExecStart;
       expected = false;
     };
+    # zfsHost: module defaults
     "test the privileges come from deploy/imp-host.args.json" = {
       expr = lib.hasInfix "--cap-drop ALL --cap-add SYS_ADMIN" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost: module defaults
     "test the seccomp profile comes from the store" = {
       expr = lib.hasInfix "seccomp=/nix/store/" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost: module defaults, with NixOS's default networking.enableIPv6 = true
     "test imp-host gets the IPv6 sysctls by default" = {
       expr = lib.hasInfix "net.ipv6.conf.default.accept_ra=0" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost: module defaults (storage = "zfs")
     "test ZFS passes /dev/zfs" = {
       expr = lib.hasInfix "--device /dev/zfs" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # xfsHost sets services.imp.storage = "xfs"
     "test XFS passes no /dev/zfs" = {
       expr = lib.hasInfix "/dev/zfs" xfsCfg.systemd.services.imp-host.serviceConfig.ExecStart;
       expected = false;
@@ -353,6 +392,7 @@ let
           }).config.systemd.services.imp-host.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost sets services.imp.backupPasswordFile
     "test the backup password is mounted read-only, by path" = {
       expr = lib.hasInfix "-v /run/imp-host/backup-password:/run/imp/backup-password:ro" unit.serviceConfig.ExecStart;
       expected = true;
@@ -375,46 +415,57 @@ let
       });
       expected = [ (settingsRefusal "IMP_EGRESS_DENY") ];
     };
+    # zfsHost sets services.imp.tailscaleAuthKeyFile
     "test the key file is mounted read-only, by path" = {
       expr = lib.hasInfix "-v /run/imp-host/tailscale-authkey:/run/imp/tailscale-authkey:ro -e 'IMP_TAILSCALE_AUTHKEY_FILE=/run/imp/tailscale-authkey'" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # xfsHost: module defaults (tailscaleAuthKeyFile = null)
     "test no key file mounts no key" = {
       expr = lib.hasInfix "tailscale-authkey" xfsCfg.systemd.services.imp-host.serviceConfig.ExecStart;
       expected = false;
     };
+    # zfsHost: module defaults (hostFirewall = "none")
     "test none puts no imp table on the host" = {
       expr = zfsCfg.networking.nftables.tables ? imp_host;
       expected = false;
     };
+    # zfsHost: module defaults (hostFirewall = "none"), with NixOS's default networking.firewall.enable
     "test the platform firewall stays on" = {
       expr = zfsCfg.networking.firewall.enable;
       expected = true;
     };
+    # zfsHost: module defaults
     "test the ports listen on loopback only" = {
       expr = lib.hasInfix "-p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080" unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # ipv6Host sets services.imp.ipv6.enable = true, networking.defaultGateway6 and networking.nftables.enable
     "test an IPv6 host passes every assertion" = {
       expr = failed ipv6Host;
       expected = [ ];
     };
+    # ipv6Host sets services.imp.ipv6.enable = true
     "test with ipv6, imp-host joins the imp-host network" = {
       expr = lib.hasInfix "--env-file /etc/imp/imp-host.env --network imp-host " ipv6Unit.serviceConfig.ExecStart;
       expected = true;
     };
+    # zfsHost: module defaults (ipv6.enable = false)
     "test without ipv6, imp-host runs on Docker's default bridge" = {
       expr = lib.hasInfix "--network" unit.serviceConfig.ExecStart;
       expected = false;
     };
+    # ipv6Host sets services.imp.ipv6.enable = true
     "test with ipv6, the network is made after the old container goes" = {
       expr = lib.hasSuffix "-imp-host-network" (toString (lib.last ipv6Unit.serviceConfig.ExecStartPre));
       expected = true;
     };
+    # ipv6Host: module defaults (ipv6.subnet, from the networking.hostId that host sets)
     "test with ipv6, the subnet is a unique local /64" = {
       expr = builtins.match "fd[0-9a-f]{2}:[0-9a-f]{4}:[0-9a-f]{4}::/64" ipv6Cfg.services.imp.ipv6.subnet;
       expected = [ ];
     };
+    # ipv6Host sets services.imp.forwardDeny and services.imp.ipv6.enable = true
     "test denied ranges drop in their own chain, ahead of networking.firewall's, by family" = {
       expr = lib.hasInfix ''
         chain forward {
@@ -424,30 +475,37 @@ let
         }'' ipv6Cfg.networking.nftables.tables.imp-forward.content;
       expected = true;
     };
+    # ipv6Host sets services.imp.forwardDeny
     "test the denied ranges' table is inet" = {
       expr = ipv6Cfg.networking.nftables.tables.imp-forward.family;
       expected = "inet";
     };
+    # ipv6Host sets services.imp.ipv6.enable = true, networking.nftables.enable and networking.firewall.filterForward
     "test with ipv6, forwarding from imp-host's bridge alone is admitted" = {
       expr = ipv6Cfg.networking.firewall.extraForwardRules;
       expected = ''iifname { "br-imphost" } accept comment "imp: imp-host's egress"'';
     };
+    # filterOnly: module defaults (forwardDeny = [ ])
     "test no forwardDeny makes no table" = {
       expr = filterOnly.config.networking.nftables.tables ? imp-forward;
       expected = false;
     };
+    # ipv6Host sets services.imp.ipv6.enable = true
     "test br-imphost is not trusted for input" = {
       expr = lib.elem "br-imphost" ipv6Cfg.networking.firewall.trustedInterfaces;
       expected = false;
     };
+    # ipv6Host sets services.imp.ipv6.enable = true
     "test docker0 is not trusted for input" = {
       expr = lib.elem "docker0" ipv6Cfg.networking.firewall.trustedInterfaces;
       expected = false;
     };
+    # filterOnly sets networking.nftables.enable and networking.firewall.filterForward, and leaves ipv6.enable off
     "test filterForward without ipv6 admits docker0 alone, with no deny" = {
       expr = filterOnly.config.networking.firewall.extraForwardRules;
       expected = ''iifname { "docker0" } accept comment "imp: imp-host's egress"'';
     };
+    # zfsHost: module defaults, with NixOS's default networking.firewall.filterForward = false
     "test no forward filter writes no forward rules" = {
       expr = zfsCfg.networking.firewall.extraForwardRules;
       expected = "";
@@ -473,10 +531,12 @@ let
       });
       expected = [ ];
     };
+    # ipv6Kernel sets services.imp.ipv6.routerAdverts = "kernel", ipv6.uplink and networking.dhcpcd.IPv6rs = false
     "test kernel router adverts on an uplink pass every assertion" = {
       expr = failed ipv6Kernel;
       expected = [ ];
     };
+    # ipv6Kernel sets services.imp.ipv6.routerAdverts = "kernel" and ipv6.uplink = "eth0.100"
     "test kernel router adverts set accept_ra 2 on the uplink, by the slash form" = {
       expr = ipv6Kernel.config.boot.kernel.sysctl."net/ipv6/conf/eth0.100/accept_ra";
       expected = 2;
@@ -522,48 +582,59 @@ let
       });
       expected = [ "services.imp.forwardDeny needs networking.nftables.enable = true, for its table" ];
     };
+    # dnsHost sets services.imp.dnsApiTokenFile
     "test a dnsApiTokenFile host passes every assertion" = {
       expr = failed dnsHost;
       expected = [ ];
     };
+    # dnsHost sets services.imp.dnsApiTokenFile
     "test the DNS token's directory is mounted read-only, and impd reads the token there" = {
       expr = lib.hasInfix "-v /run/imp-host/dns:/run/imp/dns:ro -e 'IMP_DNS_API_TOKEN_FILE=/run/imp/dns/token'" dnsUnit.serviceConfig.ExecStart;
       expected = true;
     };
+    # dnsHost sets services.imp.dnsApiTokenFile
     "test the DNS token is staged before each start" = {
       expr = lib.any (
         pre: lib.hasSuffix "-imp-host-dns-token" (toString pre)
       ) dnsUnit.serviceConfig.ExecStartPre;
       expected = true;
     };
+    # dnsHost sets services.imp.dnsApiTokenFile = "/run/secrets/imp-dns-api-token"
     "test a change to the token file stages it again" = {
       expr = dnsCfg.systemd.paths.imp-host-dns-token.pathConfig.PathChanged;
       expected = "/run/secrets/imp-dns-api-token";
     };
+    # dnsHost sets services.imp.dnsApiTokenFile
     "test the token's path unit starts with the system" = {
       expr = lib.elem "multi-user.target" dnsCfg.systemd.paths.imp-host-dns-token.wantedBy;
       expected = true;
     };
+    # dnsHost sets services.imp.dnsApiTokenFile
     "test the token is staged again every 5 minutes" = {
       expr = dnsCfg.systemd.timers.imp-host-dns-token.timerConfig.OnUnitActiveSec;
       expected = "5min";
     };
+    # dnsHost sets services.imp.dnsApiTokenFile
     "test the token's timer starts with the timers" = {
       expr = lib.elem "timers.target" dnsCfg.systemd.timers.imp-host-dns-token.wantedBy;
       expected = true;
     };
+    # zfsHost: module defaults (dnsApiTokenFile = null)
     "test no DNS token file mounts no token directory" = {
       expr = lib.hasInfix "/run/imp/dns" unit.serviceConfig.ExecStart;
       expected = false;
     };
+    # zfsHost: module defaults (dnsApiTokenFile = null)
     "test no DNS token file makes no path unit" = {
       expr = zfsCfg.systemd.paths ? imp-host-dns-token;
       expected = false;
     };
+    # zfsHost: module defaults (dnsApiTokenFile = null)
     "test no DNS token file makes no timer" = {
       expr = zfsCfg.systemd.timers ? imp-host-dns-token;
       expected = false;
     };
+    # zfsHost: module defaults (dnsApiTokenFile = null)
     "test no DNS token file makes no staging service" = {
       expr = zfsCfg.systemd.services ? imp-host-dns-token;
       expected = false;
