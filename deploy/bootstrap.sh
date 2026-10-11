@@ -980,21 +980,23 @@ check_env_image() {
   return 1
 }
 
-# resolve_host_firewall: the flag, else the env file, else own.
+# resolve_host_firewall [ENV_FILE]: the flag, else the env file (default
+# $ENV_FILE), else own.
 resolve_host_firewall() {
-  local env_value=""
-  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_FIREWALL=//p' "$ENV_FILE" | tail -n 1)
+  local env_file=${1:-$ENV_FILE} env_value=""
+  [ -f "$env_file" ] && env_value=$(sed -n 's/^IMP_HOST_FIREWALL=//p' "$env_file" | tail -n 1)
   host_firewall=${host_firewall:-${env_value:-own}}
-  case $host_firewall in own | none) ;; *) die "$ENV_FILE says IMP_HOST_FIREWALL=$host_firewall; want own or none" ;; esac
+  case $host_firewall in own | none) ;; *) die "$env_file says IMP_HOST_FIREWALL=$host_firewall; want own or none" ;; esac
   log "host firewall: $host_firewall"
 }
 
-# resolve_ipv6: the flag, else the env file's choice, else auto. The env
-# file keeps on or off, never auto, so a later run on a host whose IPv6
-# route is down for a moment does not take imps' IPv6 away.
+# resolve_ipv6 [ENV_FILE]: the flag, else the env file's (default
+# $ENV_FILE) choice, else auto. The env file keeps on or off, never auto,
+# so a later run on a host whose IPv6 route is down for a moment does not
+# take imps' IPv6 away.
 resolve_ipv6() {
-  local env_value="" uplink
-  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_IPV6=//p' "$ENV_FILE" | tail -n 1)
+  local env_file=${1:-$ENV_FILE} env_value="" uplink
+  [ -f "$env_file" ] && env_value=$(sed -n 's/^IMP_HOST_IPV6=//p' "$env_file" | tail -n 1)
   ipv6=${ipv6:-${env_value:-auto}}
   case $ipv6 in
     on | off) log "ipv6: $ipv6" ;;
@@ -1008,7 +1010,7 @@ resolve_ipv6() {
         log "ipv6: off (auto: the host has no global IPv6 default route)"
       fi
       ;;
-    *) die "$ENV_FILE says IMP_HOST_IPV6=$ipv6; want on or off" ;;
+    *) die "$env_file says IMP_HOST_IPV6=$ipv6; want on or off" ;;
   esac
 }
 
@@ -1543,6 +1545,14 @@ ensure_ipv6() {
     return
   fi
 
+  settle_host_network "$existing" "$inspect"
+}
+
+# settle_host_network EXISTING INSPECT: create the network with
+# $ipv6_subnet, or recreate one that differs, unless other containers use
+# it. EXISTING: the network is there already, as INSPECT describes it.
+settle_host_network() {
+  local existing=$1 inspect=$2
   if [ -z "$existing" ]; then
     change "create the $HOST_NETWORK network: $ipv6_subnet on the bridge $HOST_BRIDGE" create_host_network
     return
@@ -1688,21 +1698,22 @@ recreate_host_network() {
   docker network rm "$HOST_NETWORK" >/dev/null && create_host_network
 }
 
-# remove_ipv6: with off, take out what an earlier run with on put in, but
+# remove_ipv6 [RA_FILE]: with off, take out what an earlier run with on put in, but
 # only when --ipv6 off asks for it, as with the firewall: an env file that
 # says off beside the network is drift for the operator to settle.
+# RA_FILE defaults to $RA_FILE.
 remove_ipv6() {
-  local network="" file=""
+  local ra_file=${1:-$RA_FILE} network="" file=""
   if command -v docker >/dev/null && docker network inspect "$HOST_NETWORK" >/dev/null 2>&1; then
     network=1
   fi
-  [ ! -f "$RA_FILE" ] || file=1
+  [ ! -f "$ra_file" ] || file=1
   if [ -z "$network$file" ]; then
     log "ipv6: off; imp-host runs on Docker's default bridge"
     return
   fi
   if [ -z "$ipv6_set" ]; then
-    local msg="IMP_HOST_IPV6=off, but the $HOST_NETWORK network or $RA_FILE is still there; run with --ipv6 off to remove them"
+    local msg="IMP_HOST_IPV6=off, but the $HOST_NETWORK network or $ra_file is still there; run with --ipv6 off to remove them"
     dry || die "$msg"
     warn "$msg"
     changes=$((changes + 1))
@@ -1716,7 +1727,7 @@ remove_ipv6() {
     change "stop imp-host and remove the $HOST_NETWORK network" remove_host_network
   fi
   # accept_ra stays 2 until a reboot, as forwarding stays on until then.
-  [ -z "$file" ] || change "remove $RA_FILE (accept_ra keeps its value until a reboot)" rm -f "$RA_FILE"
+  [ -z "$file" ] || change "remove $ra_file (accept_ra keeps its value until a reboot)" rm -f "$ra_file"
 }
 
 remove_host_network() {

@@ -1291,48 +1291,109 @@ test.each([
   expect(result.stderr).toEndWith(`bootstrap: ${message}\n`);
 });
 
-// the value an env file gave, set as resolve_* sees it after reading the file
-test('#resolve_host_firewall refuses a host firewall other than own or none', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+test('#resolve_host_firewall refuses an env file host firewall other than own or none, naming the file', () => {
+  const ctx = setupTest();
 
-  expect(
-    runSourcedFunction({ script, fn: 'eval', args: ['host_firewall=ufw; resolve_host_firewall'] }),
-  ).toStrictEqual({
-    exitCode: 1,
-    stdout: '',
-    stderr: 'bootstrap: /etc/imp/imp-host.env says IMP_HOST_FIREWALL=ufw; want own or none\n',
-  });
-});
-
-test('#resolve_host_firewall keeps none', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_FIREWALL=ufw\n');
 
   expect(
     runSourcedFunction({
-      script,
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'resolve_host_firewall',
+      args: [join(ctx.dir, 'imp-host.env')],
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `bootstrap: ${join(ctx.dir, 'imp-host.env')} says IMP_HOST_FIREWALL=ufw; want own or none\n`,
+  });
+});
+
+test('#resolve_host_firewall takes the env file host firewall without the flag', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_FIREWALL=none\n');
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
       fn: 'eval',
-      args: ['host_firewall=none; resolve_host_firewall; echo "$host_firewall"'],
+      args: [`resolve_host_firewall '${join(ctx.dir, 'imp-host.env')}'; echo "$host_firewall"`],
     }),
   ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: host firewall: none\nnone\n', stderr: '' });
 });
 
-test('#resolve_ipv6 refuses an IPv6 choice other than on, off or auto', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+test('#resolve_host_firewall keeps the flag none over an env file that says own', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_FIREWALL=own\n');
 
   expect(
-    runSourcedFunction({ script, fn: 'eval', args: ['ipv6=maybe; resolve_ipv6'] }),
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: [
+        `host_firewall=none; resolve_host_firewall '${join(ctx.dir, 'imp-host.env')}'; echo "$host_firewall"`,
+      ],
+    }),
+  ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: host firewall: none\nnone\n', stderr: '' });
+});
+
+test('#resolve_host_firewall takes own without the flag or an env file', () => {
+  const ctx = setupTest();
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: [`resolve_host_firewall '${join(ctx.dir, 'imp-host.env')}'; echo "$host_firewall"`],
+    }),
+  ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: host firewall: own\nown\n', stderr: '' });
+});
+
+test('#resolve_ipv6 refuses an env file IPv6 choice other than on or off, naming the file', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_IPV6=maybe\n');
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'resolve_ipv6',
+      args: [join(ctx.dir, 'imp-host.env')],
+    }),
   ).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: 'bootstrap: /etc/imp/imp-host.env says IMP_HOST_IPV6=maybe; want on or off\n',
+    stderr: `bootstrap: ${join(ctx.dir, 'imp-host.env')} says IMP_HOST_IPV6=maybe; want on or off\n`,
   });
 });
 
-test('#resolve_ipv6 keeps on', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+test('#resolve_ipv6 takes the env file IPv6 choice without the flag', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_IPV6=off\n');
 
   expect(
-    runSourcedFunction({ script, fn: 'eval', args: ['ipv6=on; resolve_ipv6; echo "$ipv6"'] }),
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: [`resolve_ipv6 '${join(ctx.dir, 'imp-host.env')}'; echo "$ipv6"`],
+    }),
+  ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: ipv6: off\noff\n', stderr: '' });
+});
+
+test('#resolve_ipv6 keeps the flag on over an env file that says off', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_IPV6=off\n');
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: [`ipv6=on; resolve_ipv6 '${join(ctx.dir, 'imp-host.env')}'; echo "$ipv6"`],
+    }),
   ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: ipv6: on\non\n', stderr: '' });
 });
 
@@ -2205,33 +2266,58 @@ test('#check_ruleset refuses a ruleset nft rejects', () => {
 
 // /etc/docker/daemon.json and /etc/imp/imp-host.env are the host's: neither may turn ip6tables
 // off or name a subnet
-test('#ensure_ipv6 refuses to recreate a network that differs while other containers use it', () => {
+test('#settle_host_network refuses to recreate a network that differs while other containers use it', () => {
   const ctx = setupTest();
 
-  createStubBin(
+  const docker = createStubBin(
     ctx.dir,
     'docker',
     buildStubBootstrapDocker({
-      serverVersion: '27.3.1',
       hostNetwork: 'true unnamed 172.18.0.0/16 fd12::/64',
       networkContainers: ['imp-host', 'web'],
     }),
   );
 
-  const ip = createStubBin(ctx.dir, 'ip');
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: ["ipv6_subnet=fd12::/64; settle_host_network 1 'true unnamed 172.18.0.0/16 fd12::/64'"],
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'bootstrap: the imp-host network differs (its bridge is unnamed, not br-imphost), and web use it; move them off it, then run again\n',
+  });
+});
+
+test('#settle_host_network keeps a network that is right', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubBootstrapDocker({
+      hostNetwork: 'true br-imphost 172.18.0.0/16 fd12::/64',
+      networkContainers: ['imp-host', 'web'],
+    }),
+  );
 
   expect(
     runSourcedFunction({
       script: new URL('bootstrap.sh', import.meta.url).pathname,
       fn: 'eval',
-      args: ['ipv6=on; ensure_ipv6'],
-      env: { PATH: `${ip.bin}:${process.env['PATH'] ?? ''}` },
+      args: [
+        "ipv6_subnet=fd12::/64; settle_host_network 1 'true br-imphost 172.18.0.0/16 fd12::/64'",
+      ],
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
     }),
   ).toStrictEqual({
-    exitCode: 1,
-    stdout: '== ipv6\nbootstrap: router adverts: the host has no IPv6 default route\n',
-    stderr:
-      'bootstrap: the imp-host network differs (its bridge is unnamed, not br-imphost), and web use it; move them off it, then run again\n',
+    exitCode: 0,
+    stdout: 'bootstrap: network: imp-host, fd12::/64 on the bridge br-imphost\n',
+    stderr: '',
   });
 });
 
@@ -2302,7 +2388,65 @@ test('#check_docker_ipv6 refuses IPv6 on with ip6tables off in the daemon config
   });
 });
 
-// /etc/sysctl.d/90-imp-ipv6.conf is the host's, which bootstrap.sh never ran on
+test('#check_docker_ipv6 accepts Docker 27.0 or later with a daemon config that leaves ip6tables on', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubBootstrapDocker({ serverVersion: '27.3.1' }),
+  );
+
+  writeFileSync(join(ctx.dir, 'daemon.json'), '{"log-driver": "journald"}\n');
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'check_docker_ipv6',
+      args: [join(ctx.dir, 'daemon.json')],
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+    }),
+  ).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
+});
+
+test('#remove_ipv6 refuses an accept_ra file left without --ipv6 off, naming it', () => {
+  const ctx = setupTest();
+  const docker = createStubBin(ctx.dir, 'docker', buildStubBootstrapDocker({}));
+
+  writeFileSync(join(ctx.dir, '90-imp-ipv6.conf'), 'net.ipv6.conf.eth0.accept_ra = 2\n');
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: [`mode=yes; remove_ipv6 '${join(ctx.dir, '90-imp-ipv6.conf')}'`],
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `bootstrap: IMP_HOST_IPV6=off, but the imp-host network or ${join(ctx.dir, '90-imp-ipv6.conf')} is still there; run with --ipv6 off to remove them\n`,
+  });
+});
+
+test('#remove_ipv6 leaves a host with no network and no accept_ra file as it is', () => {
+  const ctx = setupTest();
+  const docker = createStubBin(ctx.dir, 'docker', buildStubBootstrapDocker({}));
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'eval',
+      args: [`mode=yes; remove_ipv6 '${join(ctx.dir, '90-imp-ipv6.conf')}'`],
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+    }),
+  ).toStrictEqual({
+    exitCode: 0,
+    stdout: "bootstrap: ipv6: off; imp-host runs on Docker's default bridge\n",
+    stderr: '',
+  });
+});
+
 test('#remove_ipv6 refuses to remove the network while other containers use it', () => {
   const ctx = setupTest();
 
@@ -2319,7 +2463,7 @@ test('#remove_ipv6 refuses to remove the network while other containers use it',
     runSourcedFunction({
       script: new URL('bootstrap.sh', import.meta.url).pathname,
       fn: 'eval',
-      args: ['ipv6_set=1; remove_ipv6'],
+      args: [`ipv6_set=1; remove_ipv6 '${join(ctx.dir, '90-imp-ipv6.conf')}'`],
       env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
     }),
   ).toStrictEqual({
