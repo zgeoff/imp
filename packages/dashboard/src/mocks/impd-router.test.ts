@@ -451,6 +451,10 @@ test('#events.stream lets go of its listener once the caller aborts it', async (
 
   const stream = await client.events.stream(undefined, { signal: controller.signal });
 
+  onTestFinished(() => {
+    controller.abort();
+  });
+
   await stream.next();
 
   const listening = impdEventListeners.size;
@@ -1019,6 +1023,22 @@ test('#imps.create falls back to ubuntu when the default image of the host is go
   const imp = await client.imps.create({ name: 'box' });
 
   expect(imp.image).toBe('ubuntu');
+});
+
+test('#imps.create rejects with NOT_FOUND when neither the default image of the host nor ubuntu exists', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  await hostCollection.create({ defaultImage: 'node' });
+  await imageCollection.create({ name: 'alpine' });
+
+  expect(client.imps.create({ name: 'box' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    status: 404,
+    message: 'image node not found',
+    data: { kind: 'image', name: 'node' },
+  });
 });
 
 test('#imps.create rejects an image the host does not have with NOT_FOUND', async () => {
@@ -1650,6 +1670,54 @@ test('#tokens.create rejects one key given twice with CONFLICT', async () => {
   ).rejects.toMatchObject({
     code: 'CONFLICT',
     message: 'the same key is given twice',
+  });
+});
+
+test('#tokens.create rejects a line that is not an SSH public key with BAD_REQUEST', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  expect(
+    client.tokens.create({ name: 'laptop', scope: 'exec', sshKeys: ['ssh-dss AAAA'] }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    status: 400,
+    message: 'not an SSH public key: ssh-dss keys are not supported',
+  });
+});
+
+test('#tokens.create rejects a key that another token holds with CONFLICT', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  const fingerprint = 'SHA256:Ad9PY3TqrUqeUrPtnjq6hcU/iVuI0uFl0nX1TMjYDT8';
+
+  await tokenCollection.create({
+    name: 'desktop',
+    sshKeys: [
+      {
+        fingerprint,
+        type: 'ssh-ed25519',
+        comment: 'me@laptop',
+      },
+    ],
+  });
+
+  expect(
+    client.tokens.create({
+      name: 'laptop',
+      scope: 'exec',
+      sshKeys: [
+        'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8Q0IyQ2rdwp6vOtspiZQcfN8lSLLlEANfAEtg3e5yD me@laptop',
+      ],
+    }),
+  ).rejects.toMatchObject({
+    code: 'CONFLICT',
+    status: 409,
+    message: `key ${fingerprint} is bound to a token`,
+    data: { kind: 'ssh-key', name: fingerprint },
   });
 });
 

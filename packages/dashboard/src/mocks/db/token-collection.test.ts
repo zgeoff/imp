@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import type { Token } from '@imp/api';
 import { readTokenId, tokenCollection } from './token-collection';
 
-test('it creates a default manage token for every imp with its secret', async () => {
+test('#tokenCollection creates a default manage token for every imp with its secret', async () => {
   const token: Token & { readonly secret: string } = await tokenCollection.create({});
 
   expect(token).toStrictEqual({
@@ -16,7 +16,7 @@ test('it creates a default manage token for every imp with its secret', async ()
   });
 });
 
-test('it applies overrides on top of the defaults', async () => {
+test('#tokenCollection applies overrides on top of the defaults', async () => {
   const token: Token & { readonly secret: string } = await tokenCollection.create({
     name: 'ci',
     scope: 'exec',

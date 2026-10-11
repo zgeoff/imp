@@ -12,6 +12,13 @@ interface StreamSession {
   readonly expiresAt: Date;
 }
 
+// the clock the expiry runs on: impd's wall clock and setTimeout by default;
+// a test passes a stub's
+interface StreamClock {
+  readonly now?: () => number;
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+}
+
 // The subscribers of the mock impd's event bus, one per open stream; the
 // preload clears it after each test
 export const impdEventListeners = new Set<ImpdEventListener>();
@@ -47,6 +54,7 @@ export function openImpdEventStream(
   session: StreamSession,
   readImps: () => readonly Imp[],
   signal: AbortSignal | undefined,
+  clock: StreamClock = {},
 ): AsyncGenerator<ImpEvent> {
   const ends = impdLogouts.readSignal();
   const stops = signal === undefined ? ends : AbortSignal.any([signal, ends]);
@@ -70,7 +78,8 @@ export function openImpdEventStream(
     },
     signal: stops,
     endsAt: session.expiresAt.getTime(),
-    now: Date.now,
+    now: clock.now ?? Date.now,
+    ...(clock.startTimer !== undefined && { startTimer: clock.startTimer }),
     accepts: (event) => {
       const name = 'imp' in event ? event.imp.name : event.name;
 
