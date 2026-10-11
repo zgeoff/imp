@@ -84,7 +84,7 @@ jobs:
         run: bun run format:check
 
       - name: Lint
-        run: bun run lint
+        run: bun run lint:full
 
       - name: Doc links
         run: bun run lint:docs

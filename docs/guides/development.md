@@ -231,16 +231,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                                                                                      |
-| ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                   |
-| `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `scripts/test-go.sh` (`go test -race` through gotestsum) in `agent/`; uploads the JSON results.                                       |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                             |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                         |
-| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                  |
-| `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                              |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                 |
+| Job          | Required | What it runs                                                                                                                                                           |
+| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                        |
+| `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint:full`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `scripts/test-go.sh` (`go test -race` through gotestsum) in `agent/`; uploads the JSON results.                                            |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                                  |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                              |
+| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                       |
+| `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                                   |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                      |
 
 The `checks` job also runs the docs-writing skill's scripts. `bun run lint:docs` runs
 `check-links.sh`, which fails on a broken relative link or anchor in a README or a page under
