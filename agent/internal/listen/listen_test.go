@@ -248,7 +248,25 @@ func TestServeAgentClosesAClientTheHostNeverPairs(t *testing.T) {
 	assert.Check(t, cmp.ErrorIs(readEnd(client), io.EOF))
 }
 
-func TestAllowsOnlyTheSocketsOwner(t *testing.T) {
+func TestAllowsAClientThatIsTheSocketsOwner(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(shortDir(t), "s")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	assert.NilError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	dialSocket(t, path)
+	c, err := ln.AcceptUnix()
+	assert.NilError(t, err)
+	t.Cleanup(func() { c.Close() })
+	owner := &listener{uid: uint32(os.Getuid())}
+
+	allowed := owner.allows(c)
+
+	assert.Check(t, allowed, "the owner is refused")
+}
+
+// The client is this test's user; the socket belongs to nobody (65534).
+func TestRefusesAClientThatIsAnotherUserThanTheSocketsOwner(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("root is always allowed")
@@ -261,12 +279,11 @@ func TestAllowsOnlyTheSocketsOwner(t *testing.T) {
 	c, err := ln.AcceptUnix()
 	assert.NilError(t, err)
 	t.Cleanup(func() { c.Close() })
+	nobodys := &listener{uid: 65534}
 
-	owner := &listener{uid: uint32(os.Getuid())}
-	other := &listener{uid: 65534}
+	allowed := nobodys.allows(c)
 
-	assert.Check(t, owner.allows(c), "the owner is refused")
-	assert.Check(t, !other.allows(c), "another user is allowed")
+	assert.Check(t, !allowed, "another user is allowed")
 }
 
 func TestServeAgentRefusesAnUnknownUserAndLeavesNoDirectory(t *testing.T) {
@@ -280,9 +297,7 @@ func TestServeAgentRefusesAnUnknownUserAndLeavesNoDirectory(t *testing.T) {
 	h.next(t, proto.TypeResponse, &got)
 	assert.Check(t, got.Error != nil, "got %+v, want an error", got)
 	entries, err := os.ReadDir(filepath.Join(dir, "agents"))
-	if !errors.Is(err, os.ErrNotExist) {
-		assert.NilError(t, err)
-	}
+	assert.Check(t, err == nil || errors.Is(err, os.ErrNotExist), "read the agents directory: %v", err)
 	assert.Check(t, cmp.Len(entries, 0))
 }
 
@@ -549,23 +564,40 @@ func TestServeClosesTheLoopbackTCPPortWhenTheHostCloses(t *testing.T) {
 // such as Debian's /var/run -> /run leads onto a tmpfs.
 func TestOnTmpfsJudgesADirectoryByWhereItIs(t *testing.T) {
 	t.Parallel()
-	// /dev/shm is the tmpfs the system provides; a fresh directory in it is
-	// this test's own.
-	tmpfs, err := os.MkdirTemp("/dev/shm", "imp-listen-")
-	if err != nil {
-		t.Skip("no tmpfs at /dev/shm:", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(tmpfs) })
-	disk := t.TempDir()
-	if onDir(t, disk) {
-		t.Skip("the test's temp dir is itself on a tmpfs")
-	}
-	varRun := filepath.Join(disk, "var-run")
-	assert.NilError(t, os.Symlink(tmpfs, varRun))
+	for _, tc := range []struct {
+		name string
+		// dir picks the directory to judge from the case's tmpfs and disk
+		// directories
+		dir  func(t *testing.T, tmpfs, disk string) string
+		want bool
+	}{
+		{name: "a tmpfs directory", dir: func(_ *testing.T, tmpfs, _ string) string { return tmpfs }, want: true},
+		{name: "a link onto a tmpfs", dir: func(t *testing.T, tmpfs, disk string) string {
+			varRun := filepath.Join(disk, "var-run")
+			assert.NilError(t, os.Symlink(tmpfs, varRun))
+			return varRun
+		}, want: true},
+		{name: "a disk directory", dir: func(_ *testing.T, _, disk string) string { return disk }, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// /dev/shm is the tmpfs the system provides; a fresh directory in
+			// it is this case's own.
+			tmpfs, err := os.MkdirTemp("/dev/shm", "imp-listen-")
+			if err != nil {
+				t.Skip("no tmpfs at /dev/shm:", err)
+			}
+			t.Cleanup(func() { os.RemoveAll(tmpfs) })
+			disk := t.TempDir()
+			if onDir(t, disk) {
+				t.Skip("the test's temp dir is itself on a tmpfs")
+			}
+			dir := tc.dir(t, tmpfs, disk)
 
-	assert.Check(t, onDir(t, tmpfs), "the tmpfs directory")
-	assert.Check(t, onDir(t, varRun), "a link onto the tmpfs")
-	assert.Check(t, !onDir(t, disk), "the disk directory")
+			got := onDir(t, dir)
+
+			assert.Check(t, cmp.Equal(got, tc.want))
+		})
+	}
 }
 
 func onDir(t *testing.T, dir string) bool {
