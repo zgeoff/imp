@@ -120,15 +120,44 @@ test('#resolveCaller makes a token, its dashboard session and its bound key one 
   const blob = Buffer.from(line.split(' ')[1] ?? '', 'base64');
   const ssh = tokens.findSshKey(blob)?.caller;
 
-  expect(api).toMatchObject({ kind: 'token', principal: `token:${tokenId}`, display: 'ci' });
-
-  expect(dashboard).toMatchObject({
-    kind: 'dashboard',
+  expect(api).toStrictEqual({
+    kind: 'token',
+    name: 'ci',
+    scope: 'exec',
+    imps: null,
+    grantable: [],
+    tokenId,
+    grantId: null,
+    expiresAt: null,
     principal: `token:${tokenId}`,
     display: 'ci',
   });
 
-  expect(ssh).toMatchObject({ kind: 'ssh', principal: `token:${tokenId}`, display: 'ci' });
+  expect(dashboard).toStrictEqual({
+    kind: 'dashboard',
+    name: 'ci',
+    scope: 'exec',
+    imps: null,
+    grantable: [],
+    tokenId,
+    grantId: null,
+    expiresAt: 1_800_000_060_000,
+    principal: `token:${tokenId}`,
+    display: 'ci',
+  });
+
+  expect(ssh).toStrictEqual({
+    kind: 'ssh',
+    name: 'ci',
+    scope: 'exec',
+    imps: null,
+    grantable: [],
+    tokenId,
+    grantId: null,
+    expiresAt: null,
+    principal: `token:${tokenId}`,
+    display: 'ci',
+  });
 });
 
 test('#resolveCaller makes a new token under a removed token’s name another principal', async () => {

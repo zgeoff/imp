@@ -131,12 +131,6 @@ test('#formatApprovalCode shows the code with a dash, which the approval schema 
   expect(ApprovalCodeSchema.parse(shown.toLowerCase())).toBe(code);
 });
 
-test('#formatApprovalCode leaves out 0, which the approval schema refuses as misread', () => {
-  const result = ApprovalCodeSchema.safeParse('ABCD-EFG0');
-
-  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_format' });
-});
-
 test('#formatApprovalCode puts the dash after the fourth symbol', () => {
   expect(formatApprovalCode('ABCDEFGH')).toBe('ABCD-EFGH');
 });

@@ -42,25 +42,26 @@ async function setupTest() {
   // the fake API host, with its own CA the broker is told to trust
   const apiSeen: { path: string; authorization: string | null }[] = [];
 
+  // a test's own answer for a path; any other path gets a 500 that names it
+  const apiAnswers = new Map<string, () => Response>();
+
   const api = await startStubBrokerTlsUpstream(stack, {
     dir: join(dataDir, 'api'),
     fetch: (request) => {
-      apiSeen.push({
-        path: new URL(request.url).pathname,
-        authorization: request.headers.get('authorization'),
-      });
+      const path = new URL(request.url).pathname;
 
-      return new Response('from the api');
+      apiSeen.push({ path, authorization: request.headers.get('authorization') });
+
+      const answer = apiAnswers.get(path);
+
+      return answer === undefined
+        ? new Response(`the api has no answer for ${path}`, { status: 500 })
+        : answer();
     },
   });
 
-  // the broker reads the file when a request comes
+  // the broker reads the file when a request comes; a test writes it
   const upstreamsFile = join(dataDir, 'upstreams.json');
-
-  await writeFile(
-    upstreamsFile,
-    JSON.stringify({ ca: api.caPem, upstreams: { 'api.example.com': api.origin } }),
-  );
 
   // a loopback subnet, so a local address stands for a guest; the stub VMM
   // runs no jailer; each impd's resolver takes a free port
@@ -84,6 +85,8 @@ async function setupTest() {
 
   const impd = await createImpd(config, {
     db,
+
+    // the bearer the test's root client sends
     rootToken: 'root-token',
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
@@ -167,6 +170,9 @@ async function setupTest() {
     impd,
     client,
     apiSeen,
+    apiAnswers,
+    apiOrigin: api.origin,
+    apiCaPem: api.caPem,
 
     // slot 0's guest
     guest: buildStubBrokerGuest({
@@ -179,6 +185,13 @@ async function setupTest() {
 
 test('it sends the current access token to the granted host', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.apiCaPem, upstreams: { 'api.example.com': ctx.apiOrigin } }),
+  );
+
+  ctx.apiAnswers.set('/v1', () => new Response('from the api'));
 
   const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
@@ -213,6 +226,13 @@ test('it sends the current access token to the granted host', async () => {
 
 test('it sends the new access token after a refresh that used the rotated refresh token', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.apiCaPem, upstreams: { 'api.example.com': ctx.apiOrigin } }),
+  );
+
+  ctx.apiAnswers.set('/v2', () => new Response('from the api'));
 
   const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
@@ -255,6 +275,11 @@ test('it sends the new access token after a refresh that used the rotated refres
 test('it gives no credential for a secret with no access token', async () => {
   const ctx = await setupTest();
 
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.apiCaPem, upstreams: { 'api.example.com': ctx.apiOrigin } }),
+  );
+
   // no answer is issued, so the first sign-in gets invalid_grant
   server.use(buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token').handler);
 
@@ -283,6 +308,13 @@ test('it gives no credential for a secret with no access token', async () => {
 
 test('it keeps sending the valid access token of a secret that needs a new sign-in', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.apiCaPem, upstreams: { 'api.example.com': ctx.apiOrigin } }),
+  );
+
+  ctx.apiAnswers.set('/v2', () => new Response('from the api'));
 
   const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
@@ -317,6 +349,11 @@ test('it keeps sending the valid access token of a secret that needs a new sign-
 
 test('it answers a websocket upgrade 426 and never reaches the upstream', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.apiCaPem, upstreams: { 'api.example.com': ctx.apiOrigin } }),
+  );
 
   const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 

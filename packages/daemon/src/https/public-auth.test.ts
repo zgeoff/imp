@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { buildMockPublicImp } from '../test-utils/build-mock-public-imp';
 import { buildMockStoredPublicAuth } from '../test-utils/build-mock-stored-public-auth';
 import { buildCredentialHash, createCredential, createPublicRoute } from './public-auth';
 import { createPublicLimits } from './public-limits';
@@ -35,10 +36,8 @@ test('#createPublicRoute routes basic auth whose password holds colons, split at
     hash: buildCredentialHash('a:password:with:colons'),
   });
 
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -58,11 +57,8 @@ test('#createPublicRoute routes basic auth whose password holds colons, split at
 
 test('#createPublicRoute takes the basic scheme in lowercase', async () => {
   const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
-
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -83,11 +79,8 @@ test.each([
   ['Bearer secret', 'a bearer token'],
 ])('#createPublicRoute challenges basic auth given %s, %s', async (authorization) => {
   const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
-
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -102,11 +95,8 @@ test.each([
 
 test('#createPublicRoute challenges a basic auth imp when the request has no credential', async () => {
   const stored = buildMockStoredPublicAuth();
-
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route('web', new Request('https://web.imp.test/'));
 
@@ -123,10 +113,8 @@ test('#createPublicRoute routes a token imp given its bearer token', async () =>
     hash: buildCredentialHash('app-token'),
   });
 
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -147,10 +135,8 @@ test('#createPublicRoute challenges a token imp given another token', async () =
     hash: buildCredentialHash('app-token'),
   });
 
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -165,11 +151,8 @@ test('#createPublicRoute challenges a token imp given another token', async () =
 
 test('#createPublicRoute lets nobody in through a stored hash impd did not write', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'token', user: null, hash: 'short' });
-
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -181,11 +164,8 @@ test('#createPublicRoute lets nobody in through a stored hash impd did not write
 
 test('#createPublicRoute passes the authorization header on for an imp without auth', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
-
-  const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
-    createPublicLimits(),
-  );
+  const imp = buildMockPublicImp({ stored });
+  const route = createPublicRoute(() => Promise.resolve(imp), createPublicLimits());
 
   const answer = await route(
     'web',
@@ -201,9 +181,10 @@ test('#createPublicRoute passes the authorization header on for an imp without a
 
 test('#createPublicRoute limits sign-ins after 20 failures', async () => {
   const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+  const imp = buildMockPublicImp({ stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -233,9 +214,10 @@ test('#createPublicRoute limits sign-ins after 20 failures', async () => {
 
 test('#createPublicRoute routes the right credential after the failure limit is hit', async () => {
   const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+  const imp = buildMockPublicImp({ stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -259,9 +241,10 @@ test('#createPublicRoute routes the right credential after the failure limit is 
 
 test('#createPublicRoute still challenges a request with no credential after the failure limit is hit', async () => {
   const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+  const imp = buildMockPublicImp({ stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -280,9 +263,10 @@ test('#createPublicRoute still challenges a request with no credential after the
 
 test('#createPublicRoute counts no failure for requests with no credential', async () => {
   const stored = buildMockStoredPublicAuth({ user: 'ann', hash: buildCredentialHash('secret') });
+  const imp = buildMockPublicImp({ stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -302,9 +286,10 @@ test('#createPublicRoute counts no failure for requests with no credential', asy
 
 test('#createPublicRoute wakes a sleeping imp 10 times in a burst', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = buildMockPublicImp({ state: 'sleeping', stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'sleeping', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -319,9 +304,10 @@ test('#createPublicRoute wakes a sleeping imp 10 times in a burst', async () => 
 
 test('#createPublicRoute limits the 11th wake of a sleeping imp in a burst', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = buildMockPublicImp({ state: 'sleeping', stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'sleeping', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -340,7 +326,7 @@ test('#createPublicRoute limits the 11th wake of a sleeping imp in a burst', asy
 
 test('#createPublicRoute routes a running imp once the wake limit is hit', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
-  const imp = { id: 'i1', state: 'sleeping' as const, stored };
+  const imp = buildMockPublicImp({ state: 'sleeping', stored });
   const limits = createPublicLimits(() => 0);
   const sleeping = createPublicRoute(() => Promise.resolve(imp), limits);
   const running = createPublicRoute(() => Promise.resolve({ ...imp, state: 'running' }), limits);
@@ -356,10 +342,11 @@ test('#createPublicRoute routes a running imp once the wake limit is hit', async
 
 test('#createPublicRoute wakes a sleeping imp again 6 seconds after the wake limit is hit', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = buildMockPublicImp({ state: 'sleeping', stored });
   const clock = { ms: 0 };
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'sleeping', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => clock.ms),
   );
 
@@ -376,9 +363,10 @@ test('#createPublicRoute wakes a sleeping imp again 6 seconds after the wake lim
 
 test('#createPublicRoute limits the 65th open request to one imp', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = buildMockPublicImp({ stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -397,9 +385,10 @@ test('#createPublicRoute limits the 65th open request to one imp', async () => {
 
 test('#createPublicRoute frees one open slot for a release, however often it runs', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
+  const imp = buildMockPublicImp({ stored });
 
   const route = createPublicRoute(
-    () => Promise.resolve({ id: 'i1', state: 'running', stored }),
+    () => Promise.resolve(imp),
     createPublicLimits(() => 0),
   );
 
@@ -425,7 +414,7 @@ test('#createPublicRoute frees one open slot for a release, however often it run
 
 test('#createPublicRoute gives back the open slot of a wake it limits', async () => {
   const stored = buildMockStoredPublicAuth({ auth: 'none', user: null, hash: null });
-  const imp = { id: 'i1', state: 'sleeping' as const, stored };
+  const imp = buildMockPublicImp({ state: 'sleeping', stored });
   const limits = createPublicLimits(() => 0);
   const sleeping = createPublicRoute(() => Promise.resolve(imp), limits);
   const running = createPublicRoute(() => Promise.resolve({ ...imp, state: 'running' }), limits);

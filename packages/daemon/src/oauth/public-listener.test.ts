@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,11 +61,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // this impd's own root token, which its root client sends
+  const rootToken = randomUUID();
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the test's root client sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -142,7 +144,7 @@ async function setupTest() {
   const client: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
       url: 'http://impd.test/rpc',
-      headers: { authorization: 'Bearer root-token' },
+      headers: { authorization: `Bearer ${rootToken}` },
       fetch: (request) => impd.api.app.handle(request),
     }),
   );
@@ -152,6 +154,7 @@ async function setupTest() {
     db,
     dataDir,
     impd,
+    rootToken,
     client,
     publicMcp,
 
@@ -225,7 +228,7 @@ test.each([['/rpc/system/info'], ['/health'], ['/auth/login'], ['/exec'], ['/'],
 
     const response = await ctx.handle(
       new Request(`http://127.0.0.1:7171${path}`, {
-        headers: { host: '127.0.0.1:7171', authorization: 'Bearer root-token' },
+        headers: { host: '127.0.0.1:7171', authorization: `Bearer ${ctx.rootToken}` },
       }),
       null,
     );
@@ -255,7 +258,6 @@ test.each([['evil.example'], ['127.0.0.1:7070'], ['localhost:7171']])(
 
 test.each([
   ['no credentials', {}],
-  ['the root token', { authorization: 'Bearer root-token' }],
   [
     'a peer and forwarded headers',
     { 'x-forwarded-for': '100.101.102.103', 'x-imp-peer': '100.101.102.103' },
@@ -272,6 +274,32 @@ test.each([
     new Request('http://127.0.0.1:7171/mcp', {
       method: 'POST',
       headers: { host: '127.0.0.1:7171', 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' }),
+    }),
+    null,
+  );
+
+  expect({
+    status: response.status,
+    challenge: response.headers.get('www-authenticate'),
+  }).toStrictEqual({
+    status: 401,
+    challenge:
+      'Bearer resource_metadata="http://127.0.0.1:7171/.well-known/oauth-protected-resource/mcp", scope="read"',
+  });
+});
+
+test('it refuses /mcp with the root token, as it takes only an OAuth access token', async () => {
+  const ctx = await setupTest();
+
+  const response = await ctx.handle(
+    new Request('http://127.0.0.1:7171/mcp', {
+      method: 'POST',
+      headers: {
+        host: '127.0.0.1:7171',
+        'content-type': 'application/json',
+        authorization: `Bearer ${ctx.rootToken}`,
+      },
       body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' }),
     }),
     null,
@@ -345,12 +373,8 @@ test('it sends the sign-in page with headers that keep it from being framed, cac
     referrer: 'same-origin',
     frame: 'DENY',
     cache: 'no-store',
-    policy: expect.toSatisfy(
-      (text: string | null) =>
-        text !== null &&
-        text.includes("default-src 'none'") &&
-        text.includes("form-action 'self' https://client.example"),
-    ),
+    policy:
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'; base-uri 'none'",
   });
 });
 
@@ -499,8 +523,11 @@ test.each([
 
   const page = await opened.text();
 
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'];
+  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'];
+
+  invariant(id);
+  invariant(signature);
 
   const posted = await ctx.handle(
     new Request('http://127.0.0.1:7171/oauth/authorize', {
@@ -1978,20 +2005,46 @@ test('it logs where the listener serves the route', async () => {
   expect(logs).toStrictEqual([`impd: public mcp on :0 for ${ctx.publicMcp.origin}`]);
 });
 
-test('it keeps a tool call’s slot until the tool ends, though its client goes', async () => {
+test('it answers a request that throws with a bare 500, and logs the reason', async () => {
   const ctx = await setupTest();
 
-  const transport = buildStubMcpTransport();
+  const logs: string[] = [];
+
+  const listener = startPublicListener(
+    {
+      config: { ...ctx.publicMcp, port: 0 },
+      oauth: ctx.impd.oauth,
+      mcp: buildStubMcpTransport({ failure: new Error('the transport broke') }),
+    },
+    (line) => {
+      logs.push(line);
+    },
+  );
+
+  ctx.stack.defer(() => listener.stop());
+
+  const response = await fetch(`http://127.0.0.1:${String(listener.port)}/mcp`, {
+    method: 'POST',
+    headers: { host: '127.0.0.1:7171' },
+  });
+
+  const body = await response.text();
+
+  expect(response.status).toBe(500);
+  expect(body).toBe('internal error');
+  expect(logs).toContain('impd: public mcp: the transport broke');
+});
+
+test('it takes 64 open tool calls at once', async () => {
+  const ctx = await setupTest();
 
   const handle = createPublicHandler({
     config: ctx.publicMcp,
     oauth: ctx.impd.oauth,
-    mcp: transport,
+    mcp: buildStubMcpTransport(),
   });
 
-  // 64 long calls whose clients go away at once fill every slot
-
-  const filled = await Promise.all(
+  const statuses = await Promise.all(
     Array.from({ length: 64 }, async () => {
       const response = await handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2007,7 +2060,35 @@ test('it keeps a tool call’s slot until the tool ends, though its client goes'
     }),
   );
 
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
+  expect(statuses).toStrictEqual(Array.from({ length: 64 }, () => 200));
+});
+
+test('it keeps a tool call’s slot until the tool ends, though its client goes', async () => {
+  const ctx = await setupTest();
+
+  const transport = buildStubMcpTransport();
+
+  const handle = createPublicHandler({
+    config: ctx.publicMcp,
+    oauth: ctx.impd.oauth,
+    mcp: transport,
+  });
+
+  // 64 long calls whose clients go away at once fill every slot
+
+  await Promise.all(
+    Array.from({ length: 64 }, async () => {
+      const response = await handle(
+        new Request(`http://127.0.0.1:7171/mcp`, {
+          method: 'POST',
+          headers: { host: '127.0.0.1:7171' },
+        }),
+        null,
+      );
+
+      await response.body?.cancel();
+    }),
+  );
 
   const refused = await handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2033,7 +2114,7 @@ test('it frees a tool call’s slot once the tool ends', async () => {
 
   // 64 long calls whose clients go away at once fill every slot
 
-  const filled = await Promise.all(
+  await Promise.all(
     Array.from({ length: 64 }, async () => {
       const response = await handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2044,12 +2125,8 @@ test('it frees a tool call’s slot once the tool ends', async () => {
       );
 
       await response.body?.cancel();
-
-      return response.status;
     }),
   );
-
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
 
   const refused = await handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2096,7 +2173,7 @@ test('it reads at most 16 bodies at once for requests past every slot', async ()
 
   // 64 calls that never end hold every slot
 
-  const filled = await Promise.all(
+  await Promise.all(
     Array.from({ length: 64 }, async () => {
       const response = await handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2107,12 +2184,8 @@ test('it reads at most 16 bodies at once for requests past every slot', async ()
       );
 
       await response.body?.cancel();
-
-      return response.status;
     }),
   );
-
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
 
   // 33 bodies that never finish; each records whether anything read it
   const reads = Array.from({ length: 33 }, () => false);
@@ -2277,7 +2350,7 @@ test('it lets a cancel through with every slot held, which stops its tool and fr
 
   // 64 long calls whose clients go away at once fill every slot
 
-  const filled = await Promise.all(
+  await Promise.all(
     Array.from({ length: 64 }, async (_, offset) => {
       const response = await ctx.handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2300,12 +2373,8 @@ test('it lets a cancel through with every slot held, which stops its tool and fr
       );
 
       await response.body?.cancel();
-
-      return response.status;
     }),
   );
-
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
 
   await waitFor(() => {
     expect(guest.requests).toHaveLength(64);
@@ -2391,7 +2460,7 @@ test('it refuses a request that starts work with every slot held', async () => {
 
   // 64 long calls whose clients go away at once fill every slot
 
-  const filled = await Promise.all(
+  await Promise.all(
     Array.from({ length: 64 }, async () => {
       const response = await handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2402,12 +2471,8 @@ test('it refuses a request that starts work with every slot held', async () => {
       );
 
       await response.body?.cancel();
-
-      return response.status;
     }),
   );
-
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
 
   const refused = await handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2546,7 +2611,7 @@ test('it refuses a signed-in notification too large for the allowance with every
 
   // 64 long calls whose clients go away at once fill every slot
 
-  const filled = await Promise.all(
+  await Promise.all(
     Array.from({ length: 64 }, async (_, offset) => {
       const response = await ctx.handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2569,12 +2634,8 @@ test('it refuses a signed-in notification too large for the allowance with every
       );
 
       await response.body?.cancel();
-
-      return response.status;
     }),
   );
-
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
 
   await waitFor(() => {
     expect(guest.requests).toHaveLength(64);
@@ -2730,7 +2791,7 @@ test('it ends a signed-in session with its DELETE with every slot held', async (
 
   // 64 long calls whose clients go away at once fill every slot
 
-  const filled = await Promise.all(
+  await Promise.all(
     Array.from({ length: 64 }, async (_, offset) => {
       const response = await ctx.handle(
         new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2753,12 +2814,8 @@ test('it ends a signed-in session with its DELETE with every slot held', async (
       );
 
       await response.body?.cancel();
-
-      return response.status;
     }),
   );
-
-  expect(filled).toStrictEqual(Array.from({ length: 64 }, () => 200));
 
   await waitFor(() => {
     expect(guest.requests).toHaveLength(64);

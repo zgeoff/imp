@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
-import { startPebbleStack, stopPebbleStack } from '../../../../../test/e2e/lib/pebble';
+import { startPebbleStack } from '../../../../../test/e2e/lib/pebble';
 import { buildStubCloudflareApi } from '../../test-utils/build-stub-cloudflare-api';
 import { createChalltestsrvProvider } from '../dns/challtestsrv-provider';
 import { createCloudflareProvider } from '../dns/cloudflare-provider';
@@ -25,12 +25,11 @@ async function setupTest() {
   // an earlier test left behind ever holds this test's container names
   const prefix = `imp-acme-it-${String(process.pid)}-${randomUUID().slice(0, 8)}`;
 
-  stack.defer(() => stopPebbleStack(prefix));
-
-  const pebble = await startPebbleStack(prefix);
   const dir = await mkdtemp(join(tmpdir(), 'imp-acme-it-'));
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
+
+  const pebble = await startPebbleStack(stack, prefix, { minicaDir: dir });
 
   return { pebble, dir };
 }

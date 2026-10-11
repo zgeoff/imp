@@ -591,6 +591,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Connector upstreams          | `test-utils/start-stub-broker-tls-upstream.ts` (6); `test/e2e/lib/start-stub-upstream.ts`          | github.com, api.github.com, an OAuth token endpoint                                |
 | Git over SSH                 | `test/e2e/lib/start-stub-git-ssh-server.ts` (`startStubGitSshServer`)                              | A forge's SSH git: one allowed key, push to `repo.git` only                        |
 | Cloudflare API               | `test-utils/build-stub-cloudflare-api.ts` (15)                                                     | `api.cloudflare.com/client/v4`, with each token scoped to its zones                |
+| ACME server                  | `test-utils/start-stub-acme-server.ts` (`startStubAcmeServer`)                                     | A CA up to the challenge, on loopback: acme-client's axios is outside MSW          |
 | Host networks                | `test-utils/build-stub-public-network.ts` (8)                                                      | Guests on taps, an uplink to the internet, a tailnet peer                          |
 | GitHub releases              | `packages/test-utils/src/start-stub-github-releases.ts` (9)                                        | The releases pages `install.sh` fetches with curl                                  |
 | gh and uname                 | `packages/test-utils/src/create-stub-gh-attestation.ts`, `create-stub-uname.ts` (9)                | `gh auth status`, `gh attestation verify`, `uname -s -m`                           |
@@ -737,10 +738,15 @@ ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in
 
 The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
 each test through `test/e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
-`imp-acme-it-<pid>-<random>`, with a cert store in a temp dir. `startPebbleStack` returns once
-Pebble's directory and challtestsrv's management API both answer, and logs each phase's time to
-stderr (containers started, Pebble ready, challtestsrv ready); the first test also logs its issue
-time. `bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
+`imp-acme-it-<pid>-<random>`, with a cert store and Pebble's minica PEM in a temp dir.
+`startPebbleStack(stack, prefix, { minicaDir })` refuses a container or network name that docker
+already shows before it makes anything, defers the removal of each container and the network into
+the caller's stack as soon as it exists, so only what the run made goes, and returns once Pebble's
+directory and challtestsrv's management API both answer. It logs each phase's time to stderr
+(containers started, Pebble ready, challtestsrv ready); the first test also logs its issue time. The
+e2e harness's own stack (`startPebble`, `stopPebble`) is named after the instance, keeps its minica
+PEM under `.cache/e2e`, and takes again a network that a dev instance still holds.
+`bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
 `scripts/pull-pebble-images.ts`, so no test pays for a pull.
 
 ### Booting impd
@@ -814,8 +820,9 @@ file leaves every host on its real origin.
 
 - **Daemon tests.** `broker.test.ts` and `broker-oauth.test.ts` boot impd with `createImpd` and pass
   the file through `loadConfig({ IMP_BROKER_TEST_UPSTREAMS })`, with `IMP_SUBNET` `127.0.0.0/16` so
-  a loopback address stands for a guest. The OAuth token endpoint and a rule's plain-HTTP upstream
-  are MSW handlers, not entries in the file.
+  a loopback address stands for a guest. Each test writes the file with the host it routes, and sets
+  each answer it asserts; a TLS stand-in answers any other path with a 500 that names it. The OAuth
+  token endpoint and a rule's plain-HTTP upstream are MSW handlers, not entries in the file.
 - **End to end.** `scripts/dev.sh` sets
   `IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json`. The `connectors` suite starts
   `test/e2e/lib/start-stub-upstream.ts` (`startStubUpstream`, tested in

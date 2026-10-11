@@ -7,6 +7,7 @@ import { server } from '@imp/test-utils/mock-server';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { HttpResponse, http } from 'msw';
 import { buildMockCertificate } from '../test-utils/build-mock-certificate';
+import { buildMockPublicImp } from '../test-utils/build-mock-public-imp';
 import { buildStubCloudflareApi } from '../test-utils/build-stub-cloudflare-api';
 import { buildStubProxyListen } from '../test-utils/build-stub-proxy-listen';
 import { buildStubTickerTimer } from '../test-utils/build-stub-ticker-timer';
@@ -84,7 +85,7 @@ test('it serves nothing until the first certificate arrives', async () => {
     issued.resolve(arrived);
 
     await waitFor(() => {
-      expect(ctx.logs).toSatisfyAny((line: string) => line.includes('got a certificate'));
+      invariant(ctx.store.readCertificate());
     });
   });
 
@@ -517,11 +518,7 @@ test('it serves nothing on any port without a DNS token file', async () => {
     log: ctx.log,
     listPublicImps: () => Promise.resolve(['web']),
     findPublicImp: () =>
-      Promise.resolve({
-        id: 'i1',
-        state: 'running',
-        stored: { auth: 'none', user: null, hash: null },
-      }),
+      Promise.resolve(buildMockPublicImp({ stored: { auth: 'none', user: null, hash: null } })),
     publicAddress: '127.0.0.1',
     timer: ctx.timer.timer,
   });
@@ -1635,7 +1632,7 @@ test('it cancels every pending tick when it stops', async () => {
 
   await service.stop();
 
-  expect(Object.keys(delaysBefore)).toIncludeSameMembers([
+  expect(delaysBefore).toContainAllKeys([
     'https renewal',
     'https public records',
     'https addresses',

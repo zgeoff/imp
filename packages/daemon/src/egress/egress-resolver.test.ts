@@ -882,6 +882,10 @@ test('#startResolverServer stays up when a guest goes before its reply, and logs
 
   const gone = await Bun.udpSocket({ hostname: '127.0.0.2' });
 
+  onTestFinished(() => {
+    gone.close();
+  });
+
   gone.send(buildMockDnsQuery({ name: 'a.example', type: 'A' }), server.port, '127.0.0.1');
 
   await reached.promise;

@@ -8,6 +8,17 @@ const TC = 0x02_00;
 // sends the query to an upstream resolver and returns its reply
 export type DnsForward = (query: Uint8Array) => Promise<Uint8Array>;
 
+// starts a timer and returns its cancel
+type StartTimer = (fire: () => void, ms: number) => () => void;
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
+}
+
 // The upstreams in order (IMP_DNS, port 53 unless given), over UDP, then TCP
 // for a truncated reply. A fresh random id per upstream query keeps a guest
 // from choosing the id a forger must guess; the guest gets its own back.
@@ -15,6 +26,9 @@ export function createDnsForward(
   servers: readonly string[],
   port = 53,
   timeoutMs = UPSTREAM_TIMEOUT_MS,
+
+  // the UDP wait's timer, setTimeout by default; a test passes a fake one
+  startTimer: StartTimer = startRealTimer,
 ): DnsForward {
   return async (guestQuery) => {
     const failures: string[] = [];
@@ -23,7 +37,7 @@ export function createDnsForward(
       try {
         const query = toFreshId(guestQuery);
 
-        const udpReply = await sendUdp({ server, port, timeoutMs }, query);
+        const udpReply = await sendUdp({ server, port, timeoutMs }, query, startTimer);
 
         const reply =
           ((udpReply[2] ?? 0) * 256 + (udpReply[3] ?? 0)) & TC
@@ -66,7 +80,11 @@ interface Upstream {
   readonly timeoutMs: number;
 }
 
-async function sendUdp(upstream: Upstream, query: Uint8Array): Promise<Uint8Array> {
+async function sendUdp(
+  upstream: Upstream,
+  query: Uint8Array,
+  startTimer: StartTimer,
+): Promise<Uint8Array> {
   const server = upstream.server;
   const reply = Promise.withResolvers<Uint8Array>();
 
@@ -89,7 +107,7 @@ async function sendUdp(upstream: Upstream, query: Uint8Array): Promise<Uint8Arra
     },
   });
 
-  const timer = setTimeout(() => {
+  const stopTimer = startTimer(() => {
     reply.reject(new Error('timed out'));
   }, upstream.timeoutMs);
 
@@ -98,7 +116,7 @@ async function sendUdp(upstream: Upstream, query: Uint8Array): Promise<Uint8Arra
 
     return await reply.promise;
   } finally {
-    clearTimeout(timer);
+    stopTimer();
 
     socket.close();
   }

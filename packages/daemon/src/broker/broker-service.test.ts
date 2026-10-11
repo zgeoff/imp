@@ -35,6 +35,7 @@ import { findSecret } from '../db/secrets';
 import { parsePrefix64 } from '../net/addressing6';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewAuditEntry } from '../test-utils/build-mock-new-audit-entry';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -702,18 +703,10 @@ test('it keeps the newest audit rows of each imp', async () => {
 
   // one past the cap, oldest first
   for (let index = 0; index < AUDIT_ROWS_PER_IMP + 5; index += 1) {
-    await writeAuditEntry(ctx.db, {
-      impId: dev.id,
-      secretName: 'gh',
-      at: new Date(),
-      method: 'GET',
-      host: 'api.github.com',
-      path: `/${String(index)}`,
-      status: 200,
-      requestBytes: 0,
-      responseBytes: 0,
-      durationMs: 1,
-    });
+    await writeAuditEntry(
+      ctx.db,
+      buildMockNewAuditEntry({ impId: dev.id, path: `/${String(index)}` }),
+    );
   }
 
   const rows = await listAuditEntries(ctx.db, dev.id, 2000, null);
@@ -727,18 +720,7 @@ test('it lists the audit rows of an imp newest first, up to the limit', async ()
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
   for (const path of ['/a', '/b', '/c']) {
-    await writeAuditEntry(ctx.db, {
-      impId: dev.id,
-      secretName: 'gh',
-      at: new Date(),
-      method: 'GET',
-      host: 'api.github.com',
-      path,
-      status: 200,
-      requestBytes: 0,
-      responseBytes: 0,
-      durationMs: 1,
-    });
+    await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId: dev.id, path }));
   }
 
   const listed = await ctx.client.audit.list({ name: 'dev', limit: 2 });
@@ -754,18 +736,7 @@ test('it caps an audit listing at 1000 rows whatever the limit asked', async () 
   // two imps, each under its own cap, together past 1000
   for (const impId of [dev.id, other.id]) {
     for (let index = 0; index < 550; index += 1) {
-      await writeAuditEntry(ctx.db, {
-        impId,
-        secretName: 'gh',
-        at: new Date(),
-        method: 'GET',
-        host: 'api.github.com',
-        path: `/${String(index)}`,
-        status: 200,
-        requestBytes: 0,
-        responseBytes: 0,
-        durationMs: 1,
-      });
+      await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId }));
     }
   }
 
@@ -780,18 +751,7 @@ test('it lists only the audit rows of imps within the patterns', async () => {
   const other = await ctx.client.imps.create({ name: 'other' });
 
   for (const impId of [dev.id, other.id]) {
-    await writeAuditEntry(ctx.db, {
-      impId,
-      secretName: 'gh',
-      at: new Date(),
-      method: 'GET',
-      host: 'api.github.com',
-      path: '/user',
-      status: 200,
-      requestBytes: 0,
-      responseBytes: 0,
-      durationMs: 1,
-    });
+    await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId }));
   }
 
   const rows = await ctx.impd.broker.listAudit(null, 10, ['de*']);
@@ -803,18 +763,7 @@ test('it removes the audit rows of a destroyed imp', async () => {
   const ctx = await setupTest();
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
-  await writeAuditEntry(ctx.db, {
-    impId: dev.id,
-    secretName: 'gh',
-    at: new Date(),
-    method: 'GET',
-    host: 'api.github.com',
-    path: '/user',
-    status: 200,
-    requestBytes: 0,
-    responseBytes: 0,
-    durationMs: 1,
-  });
+  await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId: dev.id }));
 
   await ctx.client.imps.destroy({ name: 'dev' });
 

@@ -52,17 +52,27 @@ async function setupTest() {
   // must see a certificate the broker CA did not sign
   const tunnelled: { method: string; path: string; authorization: string | null }[] = [];
 
+  // a test's own answer for a path on the real host; any other path gets a
+  // 500 that names it
+  const tunnelAnswers = new Map<string, () => Response>();
+
   const realHost = await startStubBrokerTlsUpstream(stack, {
     dir: join(dataDir, 'real-host'),
     host: 'api.github.com',
     fetch: (request) => {
+      const path = new URL(request.url).pathname;
+
       tunnelled.push({
         method: request.method,
-        path: new URL(request.url).pathname,
+        path,
         authorization: request.headers.get('authorization'),
       });
 
-      return new Response('from the real host');
+      const answer = tunnelAnswers.get(path);
+
+      return answer === undefined
+        ? new Response(`the real host has no answer for ${path}`, { status: 500 })
+        : answer();
     },
   });
 
@@ -70,7 +80,7 @@ async function setupTest() {
   const seen: { method: string; path: string; authorization: string | null; bodyBytes: number }[] =
     [];
 
-  // a test's own answer for a path; any other path gets 'from upstream'
+  // a test's own answer for a path; any other path gets a 500 that names it
   const answers = new Map<string, () => Response | Promise<Response>>();
 
   const upstream = await startStubBrokerTlsUpstream(stack, {
@@ -80,7 +90,12 @@ async function setupTest() {
 
       const path = new URL(request.url).pathname;
 
-      const response = await (answers.get(path) ?? (() => new Response('from upstream')))();
+      const answer = answers.get(path);
+
+      const response =
+        answer === undefined
+          ? new Response(`the upstream has no answer for ${path}`, { status: 500 })
+          : await answer();
 
       seen.push({
         method: request.method,
@@ -93,14 +108,8 @@ async function setupTest() {
     },
   });
 
-  // the broker reads the file when a request comes
+  // the broker reads the file when a request comes; a test writes it
   const upstreamsFile = join(dataDir, 'upstreams.json');
-  const upstreamOrigin = upstream.origin;
-
-  await writeFile(
-    upstreamsFile,
-    JSON.stringify({ ca: upstream.caPem, upstreams: { 'api.github.com': upstreamOrigin } }),
-  );
 
   // a loopback subnet, so a local address stands for a guest; the stub VMM
   // runs no jailer; each impd's resolver takes a free port
@@ -130,6 +139,8 @@ async function setupTest() {
 
   const impd = await createImpd(config, {
     db,
+
+    // the bearer the test's root client sends
     rootToken: 'root-token',
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
@@ -220,9 +231,11 @@ async function setupTest() {
     seen,
     tunnelled,
     answers,
+    tunnelAnswers,
     ruleRead,
     upstreamsFile,
-    upstreamOrigin,
+    upstreamOrigin: upstream.origin,
+    upstreamCaPem: upstream.caPem,
     proxyPort,
     caFile,
 
@@ -233,6 +246,13 @@ async function setupTest() {
 
 test('it sends the real credential in place of the placeholder to a granted host', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/user', () => new Response('from upstream'));
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
@@ -252,6 +272,14 @@ test('it sends the real credential in place of the placeholder to a granted host
 
 test('it records an audit row for a forwarded request', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/user', () => new Response('from upstream'));
+
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
@@ -285,6 +313,13 @@ test('it records an audit row for a forwarded request', async () => {
 test('it streams a large upload through and counts its bytes', async () => {
   const ctx = await setupTest();
 
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/upload', () => new Response('from upstream'));
+
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.impd.broker.addGrant('dev', 'gh');
@@ -310,6 +345,11 @@ test('it streams a large upload through and counts its bytes', async () => {
 test('it tunnels an ungranted host, whose real certificate the guest does not trust', async () => {
   const ctx = await setupTest();
 
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
   await ctx.client.imps.create({ name: 'dev' });
 
   const result = await ctx.guest.curl('https://api.github.com/user');
@@ -321,6 +361,13 @@ test('it tunnels an ungranted host, whose real certificate the guest does not tr
 
 test('it adds no credential to an ungranted host the guest reaches past the certificate', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.tunnelAnswers.set('/user', () => new Response('from the real host'));
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -498,6 +545,11 @@ test('it closes the connection of a guest on another imp’s gateway without a r
 test('it refuses a proxy request that is not a CONNECT', async () => {
   const ctx = await setupTest();
 
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.impd.broker.addGrant('dev', 'gh');
@@ -510,6 +562,13 @@ test('it refuses a proxy request that is not a CONNECT', async () => {
 
 test('it stops sending the credential as soon as the grant is revoked', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/a', () => new Response('from upstream'));
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
@@ -529,6 +588,11 @@ test('it stops sending the credential as soon as the grant is revoked', async ()
 test('it passes a 204 through without a body', async () => {
   const ctx = await setupTest();
 
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.impd.broker.addGrant('dev', 'gh');
@@ -546,6 +610,11 @@ test('it passes a 204 through without a body', async () => {
 test('it passes a 304 through without a body', async () => {
   const ctx = await setupTest();
 
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
   await ctx.impd.broker.addGrant('dev', 'gh');
@@ -562,6 +631,11 @@ test('it passes a 304 through without a body', async () => {
 
 test('it passes a redirect through without following it', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
@@ -589,6 +663,12 @@ test('it passes a redirect through without following it', async () => {
 
 test('it gives no credential to the next request on a connection whose grant is gone', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
@@ -620,6 +700,12 @@ test('it gives no credential to the next request on a connection whose grant is 
 
 test('it lets the request under way finish on a revoke, and the next gets no credential', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
@@ -663,6 +749,11 @@ test('it lets the request under way finish on a revoke, and the next gets no cre
 
 test('it never sends a rebound value to the host the secret had before', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -723,6 +814,14 @@ test('it never sends a rebound value to the host the secret had before', async (
 
 test('it sends the rotated value on the next request, with the grant kept', async () => {
   const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/one', () => new Response('from upstream'));
+  ctx.answers.set('/two', () => new Response('from upstream'));
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });

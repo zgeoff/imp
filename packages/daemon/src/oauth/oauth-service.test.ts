@@ -1516,11 +1516,31 @@ test('#exchange still takes a code after five refusals that did not spend it', a
     }),
   );
 
-  expect(byRedirect.body).toMatchObject({ error: 'invalid_grant' });
-  expect(byVerifier.body).toMatchObject({ error: 'invalid_grant' });
-  expect(byOtherClient.body).toMatchObject({ error: 'invalid_grant' });
-  expect(byUnknownClient.body).toMatchObject({ error: 'invalid_client' });
-  expect(byResource.body).toMatchObject({ error: 'invalid_target' });
+  expect(byRedirect.body).toStrictEqual({
+    error: 'invalid_grant',
+    error_description: 'the code is not valid for this request',
+  });
+
+  expect(byVerifier.body).toStrictEqual({
+    error: 'invalid_grant',
+    error_description: 'the code is not valid for this request',
+  });
+
+  expect(byOtherClient.body).toStrictEqual({
+    error: 'invalid_grant',
+    error_description: 'the code is not valid for this request',
+  });
+
+  expect(byUnknownClient.body).toStrictEqual({
+    error: 'invalid_client',
+    error_description: 'no such client',
+  });
+
+  expect(byResource.body).toStrictEqual({
+    error: 'invalid_target',
+    error_description: 'the resource is http://127.0.0.1:7171/mcp',
+  });
+
   expect(outcome.status).toBe(200);
 });
 
