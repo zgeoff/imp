@@ -412,7 +412,7 @@ all of them. Check an asset or the image against them:
 ```sh
 sha256sum -c SHA256SUMS
 gh attestation verify imp-linux-x64 -R zgeoff/imp
-gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
+gh attestation verify oci://ghcr.io/zgeoff/imp-host:<version> -R zgeoff/imp
 ```
 
 <!-- x-release-please-start-version -->
