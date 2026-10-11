@@ -42,6 +42,9 @@ type Manager struct {
 	launcher *launch.Launcher
 	// bootID is the guest's boot_id, which every session's output names
 	bootID string
+	// killGrace is the package's killGrace; a test sets its own before it
+	// starts a session
+	killGrace time.Duration
 
 	// starting serializes starts, so a spawn needs no hold on mu, which List
 	// and Kill take. It guards seq too.
@@ -64,7 +67,7 @@ type ended struct {
 }
 
 func NewManager(l *launch.Launcher, bootID string) *Manager {
-	return &Manager{launcher: l, bootID: bootID, sessions: make(map[string]*session), previous: make(map[string]ended)}
+	return &Manager{launcher: l, bootID: bootID, killGrace: killGrace, sessions: make(map[string]*session), previous: make(map[string]ended)}
 }
 
 // Attached returns the number of open session connections.
@@ -106,7 +109,7 @@ func (m *Manager) Kill(name string) error {
 	safe.Go("session "+name+" kill", func() {
 		select {
 		case <-s.done:
-		case <-time.After(killGrace):
+		case <-time.After(m.killGrace):
 			s.proc.Signal(syscall.SIGKILL)
 		}
 	}, nil)

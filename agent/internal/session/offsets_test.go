@@ -10,14 +10,13 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
-
-const testBootID = "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11"
 
 var generationPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
@@ -70,20 +69,20 @@ func startQuiet(t *testing.T, m *Manager, name, script string, n uint64) proto.O
 }
 
 func TestStartReportsAGenerationAndTheBootID(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90")
 
 	h := start(t, m, "main", "exec sleep 60")
 
 	_, out := h.output(t)
 	assert.Check(t, cmp.Regexp(generationPattern, out.Generation))
-	assert.Check(t, cmp.Equal(out.BootID, testBootID))
+	assert.Check(t, cmp.Equal(out.BootID, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90"))
 }
 
 // A fresh attach sends the history's replay as before offsets, as one frame
 // (TestHistoryReplayMatchesTheGolden pins the history), and places it:
 // offset is its first byte after the prelude.
 func TestFreshAttachSendsTheReplayAndPlacesIt(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	fixture := bytes.Join(goldenOutput(), nil)
 	path := filepath.Join(t.TempDir(), "output")
 	assert.NilError(t, os.WriteFile(path, fixture, 0o600))
@@ -117,7 +116,7 @@ func TestFreshAttachSendsTheReplayAndPlacesIt(t *testing.T) {
 // The ring holds exactly ringSize bytes even when its start falls inside an
 // escape sequence, which a fresh replay would skip.
 func TestFreshAttachReportsTheExactBufferStartInsideASequence(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	// an OSC string that never ends: a fresh replay finds no ground state
 	n := uint64(ringSize + 1000)
 	startQuiet(t, m, "main", `printf '\033]0;'; head -c `+strconv.FormatUint(n-4, 10)+` /dev/zero | tr '\0' t`, n)
@@ -130,7 +129,7 @@ func TestFreshAttachReportsTheExactBufferStartInsideASequence(t *testing.T) {
 }
 
 func TestResumeAtTheBufferStartInsideASequenceReadsTheRawRing(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	n := uint64(ringSize + 1000)
 	first := startQuiet(t, m, "main", `printf '\033]0;'; head -c `+strconv.FormatUint(n-4, 10)+` /dev/zero | tr '\0' t`, n)
 
@@ -144,7 +143,7 @@ func TestResumeAtTheBufferStartInsideASequenceReadsTheRawRing(t *testing.T) {
 }
 
 func TestResumeInsideTheRingIsExact(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	out := startQuiet(t, m, "main", "printf 0123456789", 10)
 
 	h := resumeFrom(t, m, "main", out.Generation, 4)
@@ -161,7 +160,7 @@ func TestResumeInsideTheRingIsExact(t *testing.T) {
 
 // At the end there is nothing to send; live output follows.
 func TestResumeAtTheEndIsExact(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	out := startQuiet(t, m, "main", "printf 0123456789", 10)
 
 	again := resumeFrom(t, m, "main", out.Generation, 10)
@@ -172,7 +171,7 @@ func TestResumeAtTheEndIsExact(t *testing.T) {
 }
 
 func TestResumeBelowTheRingIsAGap(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	const n = 1 << 20
 	out := startQuiet(t, m, "main", "head -c 1048576 /dev/zero | tr '\\0' g", n)
 
@@ -186,7 +185,7 @@ func TestResumeBelowTheRingIsAGap(t *testing.T) {
 }
 
 func TestResumeOfAnotherGenerationReadsFromTheStart(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	out := startQuiet(t, m, "main", "printf abc", 3)
 
 	h := resumeFrom(t, m, "main", strings.Repeat("0", 32), 1)
@@ -200,7 +199,7 @@ func TestResumeOfAnotherGenerationReadsFromTheStart(t *testing.T) {
 // A resume past the end is a client bug: an error with the place, and the
 // viewer attached keeps the session.
 func TestResumePastTheEndIsInvalidAndKeepsTheViewer(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	out := startQuiet(t, m, "main", "printf abc", 3)
 	viewer := attach(t, m, "main")
 	viewer.output(t)
@@ -221,7 +220,7 @@ func TestResumePastTheEndIsInvalidAndKeepsTheViewer(t *testing.T) {
 
 // A start with a resume for a name with no process starts one, from 0.
 func TestStartWithAResumeStartsAGenerationFromZero(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 
 	h := connect(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sleep", "60"},
 		ResumeFrom: &proto.ResumeFrom{Generation: strings.Repeat("a", 32), Offset: 7}})
@@ -234,7 +233,7 @@ func TestStartWithAResumeStartsAGenerationFromZero(t *testing.T) {
 // A resume of a generation that exited, whose EXIT no viewer got, attaches
 // to it: the tail, then the EXIT.
 func TestResumeOfAnExitedGenerationGetsTheTailThenTheExit(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	ready := filepath.Join(t.TempDir(), "go")
 	h := start(t, m, "job", "stty -opost; printf 'one two'; "+waitOnFile(ready)+"; exit 3")
 	_, out := h.output(t)
@@ -259,7 +258,7 @@ func TestResumeOfAnExitedGenerationGetsTheTailThenTheExit(t *testing.T) {
 // A start without a resume replaces an exited generation, and reports it as
 // the name's previous one.
 func TestStartAfterAnExitReportsThePreviousGeneration(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	ready := filepath.Join(t.TempDir(), "go")
 	h := start(t, m, "job", "stty -opost; printf done; "+waitOnFile(ready)+"; exit 5")
 	_, first := h.output(t)
@@ -280,7 +279,7 @@ func TestStartAfterAnExitReportsThePreviousGeneration(t *testing.T) {
 
 // previous is written once the process ends, not at the kill.
 func TestPreviousIsUnsetWhileAKilledProcessRuns(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "job", `trap '' HUP; stty -opost; printf ready; while :; do sleep 0.05; done`)
 	h.output(t)
 	h.until(t, "ready")
@@ -294,34 +293,36 @@ func TestPreviousIsUnsetWhileAKilledProcessRuns(t *testing.T) {
 // previous is final: a killed process that outlives its replacement's own
 // end does not hide the replacement.
 func TestPreviousIsFinalAfterAKill(t *testing.T) {
-	// It waits out the real kill grace; it owns its manager and changes no
-	// package setting, so it waits beside the other such test.
-	t.Parallel()
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+	// the kill grace never runs out here: the test ends the killed process
+	// itself, once the replacement is previous, so the end order is certain
+	m.killGrace = time.Hour
 	h := start(t, m, "job", `trap '' HUP; stty -opost; printf ready; while :; do sleep 0.05; done`)
 	killed, _ := h.output(t)
+	t.Cleanup(func() { syscall.Kill(killed.Pid, syscall.SIGKILL) })
 	h.until(t, "ready")
 	h.detach(t)
 	assert.NilError(t, m.Kill("job"))
 	// the name is free at once; the replacement ends first
 	b := start(t, m, "job", "stty -opost; printf b; exit 2")
 	_, second := b.output(t)
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, b.last(t)), proto.Exit{Code: 2}))
+	replacementExit := decode[proto.Exit](t, b.last(t))
 	b.detach(t)
 	waitFor(t, "the replacement as previous", func() bool {
 		p := m.previousOf("job")
 		return p != nil && p.Generation == second.Generation
 	})
 
-	// SIGKILL after the kill grace; the older run must not take over
+	assert.NilError(t, syscall.Kill(killed.Pid, syscall.SIGKILL))
 	waitFor(t, "the killed process", func() bool { return syscall.Kill(killed.Pid, 0) != nil })
 
+	assert.Check(t, cmp.Equal(replacementExit, proto.Exit{Code: 2}))
 	assert.Check(t, cmp.DeepEqual(m.previousOf("job"), &proto.Previous{Generation: second.Generation, End: 1, Exit: proto.Exit{Code: 2}}))
 }
 
 // NO_SESSION carries the boot and the name's previous generation.
 func TestNoSessionCarriesTheBootAndThePreviousGeneration(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90")
 	h := start(t, m, "job", "exit 0")
 	_, out := h.output(t)
 	h.last(t)
@@ -336,13 +337,13 @@ func TestNoSessionCarriesTheBootAndThePreviousGeneration(t *testing.T) {
 	}](t, attach(t, m, "job").next(t))
 
 	assert.Check(t, cmp.Equal(resp.Error.Code, proto.ErrNoSession))
-	assert.Check(t, cmp.Equal(resp.Error.Data.BootID, testBootID))
+	assert.Check(t, cmp.Equal(resp.Error.Data.BootID, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90"))
 	assert.Assert(t, resp.Error.Data.Previous != nil)
 	assert.Check(t, cmp.Equal(resp.Error.Data.Previous.Generation, out.Generation))
 }
 
 func TestNoSessionForANameThatNeverRanHasNoPrevious(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 
 	data := m.noSession("other").Data.(proto.NoSessionData)
 
