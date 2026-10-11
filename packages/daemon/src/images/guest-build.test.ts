@@ -3,12 +3,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { buildStubGuest } from '../test-utils/build-stub-guest';
 import {
   STUB_BUILDER_CONTAINER,
   buildStubImageBuilder,
 } from '../test-utils/build-stub-image-builder';
+import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { DockerBuildError } from './docker-build';
 import { loadGuestImage, runGuestBuild, writeGuestTree } from './guest-build';
 import { createGuestExec } from './guest-exec';
@@ -487,16 +489,26 @@ test('#writeGuestTree ends an export that sends nothing for its idle limit', asy
     isExportStalled: true,
   });
 
+  const timers = buildStubTimers();
+
   const writing = writeGuestTree(
     createGuestExec(builder.guest.open),
     ctx.root,
-    { maxBytes: 1024 ** 3, maxFiles: 1000, idleMs: 50 },
+    { maxBytes: 1024 ** 3, maxFiles: 1000 },
     new AbortController().signal,
+    () => Promise.resolve(),
+    timers.startTimer,
   );
+
+  await waitFor(() => {
+    expect(timers.readPendingMs()).toStrictEqual([120_000]);
+  });
+
+  timers.firePending();
 
   expect(writing).rejects.toThrowWithMessage(
     Error,
-    'docker export in the builder sent nothing in 0.05 s',
+    'docker export in the builder sent nothing in 120 s',
   );
 
   expect(builder.guest.runs.at(-1)?.closed).toBeTrue();

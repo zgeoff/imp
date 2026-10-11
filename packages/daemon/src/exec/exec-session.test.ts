@@ -880,7 +880,10 @@ test('it closes the socket and the stream when the client socket drops output', 
   });
 
   expect(socket.sent.slice(1)).toStrictEqual([[EXEC_CHANNELS.stdout, 'one']]);
-  expect(fake.input).toContain('close');
+
+  // the drop closes the stream, and the output pump closes it again as it
+  // ends; no stdin, resize or signal reaches the agent
+  expect(fake.input).toStrictEqual(['close', 'close']);
 });
 
 test('it sends a plain exec whose output was dropped no failure after the close', async () => {

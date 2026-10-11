@@ -6,10 +6,12 @@ import { z } from 'zod';
 import type { ContainerSchema as ProxyContainerSchema } from '../docker-proxy/proxy';
 import type { PinInspectSchema } from '../images/image-pin';
 
-// a container a test adds: its full ID and its labels
+// a container a test adds: its full ID, its labels, and what its export
+// streams (nothing by default)
 interface StubEngineContainer {
   readonly id: string;
   readonly labels: Readonly<Record<string, string>>;
+  readonly exportBytes?: Uint8Array<ArrayBuffer>;
 }
 
 // one request as the engine got it
@@ -36,9 +38,6 @@ export interface StubDockerEngineOptions {
   // a directory of the test's own, where the socket goes
   readonly dir: string;
 
-  // what GET /containers/<id>/export streams
-  readonly exportBytes?: Uint8Array;
-
   // the ID a build answers with
   readonly builtImageId?: string;
 }
@@ -55,10 +54,12 @@ function buildEngineId(): string {
   return faker.string.hexadecimal({ length: 64, casing: 'lower', prefix: '' });
 }
 
-// a container the engine holds: its full ID and the labels of its create
+// a container the engine holds: its full ID, the labels of its create, and
+// the bytes GET /containers/<id>/export streams
 const ContainerSchema = z.object({
   id: z.string().default(buildEngineId),
   labels: z.record(z.string(), z.string()).default({}),
+  exportBytes: z.instanceof(Uint8Array).default(() => new Uint8Array()),
 });
 
 // an image the engine holds, by one reference in its normalised form,
@@ -234,7 +235,7 @@ export function startStubDockerEngine(options: Readonly<StubDockerEngineOptions>
     }
 
     if (rest === '/export') {
-      return new Response(options.exportBytes ?? new Uint8Array());
+      return new Response(container.exportBytes);
     }
 
     containers.delete((where) => where.where({ id: container.id }));
@@ -317,7 +318,11 @@ export function startStubDockerEngine(options: Readonly<StubDockerEngineOptions>
 
     // a container as if created earlier, with these labels
     addContainer: (container: Readonly<StubEngineContainer>) =>
-      containers.create({ id: container.id, labels: { ...container.labels } }),
+      containers.create({
+        id: container.id,
+        labels: { ...container.labels },
+        exportBytes: container.exportBytes ?? new Uint8Array(),
+      }),
 
     // an image the engine has, as `name:tag` or `name@digest`
     addImage: (ref?: string) => {

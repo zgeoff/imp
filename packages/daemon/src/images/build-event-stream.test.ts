@@ -3,6 +3,7 @@ import type { ImageBuildEvent } from '@imp/api';
 import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { buildStubRepeat } from '../test-utils/build-stub-repeat';
 import { createBuildEventStream, runOnInterval } from './build-event-stream';
 
 test('#createBuildEventStream answers with the build stream content type', () => {
@@ -58,32 +59,24 @@ test('#createBuildEventStream sends progress as soon as the build moves to anoth
 test('#createBuildEventStream repeats the progress at each keepalive while the build is silent', async () => {
   const clock = { now: 0 };
   const done = Promise.withResolvers<ImageBuildEvent>();
-  const timers: { ms: number; tick: () => void }[] = [];
+  const keepalive = buildStubRepeat();
 
   const response = createBuildEventStream(new AbortController().signal, () => done.promise, {
     keepaliveMs: 15_000,
     now: () => clock.now,
-    repeat: (ms, tick) => {
-      timers.push({ ms, tick });
-
-      return () => {};
-    },
+    repeat: keepalive.repeat,
   });
 
-  const timer = await waitFor(() => {
-    invariant(timers[0]);
-
-    return timers[0];
+  await waitFor(() => {
+    expect(keepalive.countRunning(15_000)).toBe(1);
   });
 
   clock.now = 15_000;
 
-  timer.tick();
+  keepalive.tick(15_000);
   done.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
 
   const text = await response.text();
-
-  expect(timer.ms).toBe(15_000);
 
   expect(text.split('\n')[1]).toBe(
     JSON.stringify({ type: 'progress', phase: 'upload', elapsedMs: 15_000 }),
@@ -91,41 +84,46 @@ test('#createBuildEventStream repeats the progress at each keepalive while the b
 });
 
 test('#createBuildEventStream stops the keepalive when the build ends', async () => {
-  const stopped = Promise.withResolvers<void>();
+  const done = Promise.withResolvers<ImageBuildEvent>();
+  const keepalive = buildStubRepeat();
 
-  const response = createBuildEventStream(
-    new AbortController().signal,
-    () => Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' }),
-    {
-      keepaliveMs: 10_000,
-      now: () => 0,
-      repeat: () => () => {
-        stopped.resolve();
-      },
-    },
-  );
+  const response = createBuildEventStream(new AbortController().signal, () => done.promise, {
+    keepaliveMs: 10_000,
+    now: () => 0,
+    repeat: keepalive.repeat,
+  });
+
+  await waitFor(() => {
+    expect(keepalive.countRunning(10_000)).toBe(1);
+  });
+
+  done.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
 
   await response.text();
 
-  expect(stopped.promise).resolves.toBeUndefined();
+  expect(keepalive.countRunning(10_000)).toBe(0);
 });
 
-test('#createBuildEventStream stops the keepalive when the client goes', () => {
+test('#createBuildEventStream stops the keepalive when the client goes', async () => {
   const client = new AbortController();
 
-  const stopped = Promise.withResolvers<void>();
+  const keepalive = buildStubRepeat();
 
   createBuildEventStream(client.signal, () => Promise.withResolvers<ImageBuildEvent>().promise, {
     keepaliveMs: 10_000,
     now: () => 0,
-    repeat: () => () => {
-      stopped.resolve();
-    },
+    repeat: keepalive.repeat,
+  });
+
+  await waitFor(() => {
+    expect(keepalive.countRunning(10_000)).toBe(1);
   });
 
   client.abort();
 
-  expect(stopped.promise).resolves.toBeUndefined();
+  await waitFor(() => {
+    expect(keepalive.countRunning(10_000)).toBe(0);
+  });
 });
 
 test('#createBuildEventStream aborts the build signal when the client cancels the stream', async () => {
@@ -167,8 +165,7 @@ test('#runOnInterval ticks a repeat again and again on its interval', async () =
 // a served stream, as impd's route answers a build: the client goes between
 // two progress lines
 test('#createBuildEventStream sends nothing more and stops its keepalive once a served client leaves mid-stream', async () => {
-  const ticks: (() => void)[] = [];
-  const stopped = Promise.withResolvers<void>();
+  const keepalive = buildStubRepeat();
 
   const server = Bun.serve({
     port: 0,
@@ -176,17 +173,7 @@ test('#createBuildEventStream sends nothing more and stops its keepalive once a 
       createBuildEventStream(
         request.signal,
         () => Promise.withResolvers<ImageBuildEvent>().promise,
-        {
-          keepaliveMs: 10_000,
-          now: () => 0,
-          repeat: (_ms, tick) => {
-            ticks.push(tick);
-
-            return () => {
-              stopped.resolve();
-            };
-          },
-        },
+        { keepaliveMs: 10_000, now: () => 0, repeat: keepalive.repeat },
       ),
   });
 
@@ -204,9 +191,12 @@ test('#createBuildEventStream sends nothing more and stops its keepalive once a 
 
   client.abort();
 
-  await stopped.promise;
+  await waitFor(() => {
+    expect(keepalive.countRunning(10_000)).toBe(0);
+  });
 
-  const [tick] = ticks;
+  // the stopped keepalive's tick, as an interval that fell due as it stopped
+  const [tick] = keepalive.listStartedTicks(10_000);
 
   invariant(tick);
 

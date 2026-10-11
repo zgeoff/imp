@@ -17,7 +17,7 @@ async function setupTest() {
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const engine = startStubDockerEngine({ dir, exportBytes: new TextEncoder().encode('tar bytes') });
+  const engine = startStubDockerEngine({ dir });
 
   stack.defer(() => engine.stop());
 
@@ -152,7 +152,11 @@ test('it answers 404 for the inspect of a container it does not have', async () 
 test('it streams the export bytes of a container it has', async () => {
   const ctx = await setupTest();
 
-  await ctx.engine.addContainer({ id: 'a'.repeat(64), labels: {} });
+  await ctx.engine.addContainer({
+    id: 'a'.repeat(64),
+    labels: {},
+    exportBytes: new TextEncoder().encode('tar bytes'),
+  });
 
   const response = await fetch(`http://docker/v1.55/containers/${'a'.repeat(64)}/export`, {
     unix: ctx.engine.socket,
@@ -259,7 +263,15 @@ test('it answers the inspect of an image with a pin that impd parses', async () 
 
   const answer: unknown = await response.json();
 
-  expect(PinInspectSchema.safeParse(answer).success).toBeTrue();
+  const pin: unknown = PinInspectSchema.safeParse(answer).data;
+
+  expect(pin).toStrictEqual({
+    Id: expect.stringMatching(/^sha256:[0-9a-f]{64}$/v) as unknown,
+    RepoDigests: [],
+    Os: 'linux',
+    Architecture: 'amd64',
+    OnBuild: null,
+  });
 });
 
 test.each([

@@ -13,16 +13,15 @@ import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
-import type { KyselyPlugin } from 'kysely';
 import { loadConfig } from '../config';
 import { createImage, findImageByName, listImages } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
-import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFilesTar } from '../test-utils/build-files-tar';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildQueryGate } from '../test-utils/build-query-gate';
 import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
 import {
@@ -32,117 +31,68 @@ import {
 import { buildStubImageMkfs } from '../test-utils/build-stub-image-mkfs';
 import { buildTreeTar } from '../test-utils/build-tree-tar';
 import { startDiskSampler } from '../test-utils/start-disk-sampler';
-import type { Builders } from './builder-imps';
 import { createImageService } from './image-service';
 
-async function setupTest(
-  config: {
-    // IMP_* settings the image service reads
-    readonly env?: Readonly<Record<string, string>>;
-
-    // the data dir on this filesystem, whose real free space less
-    // reserveBytes is the room, in place of the stub disk's usage
-    readonly disk?: { readonly mount: string; readonly reserveBytes: number };
-  } = {},
-) {
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const root = await mkdtemp(join(tmpdir(), 'isolated-build-'));
+  const dir = await mkdtemp(join(tmpdir(), 'isolated-build-'));
 
-  stack.defer(() => rm(root, { recursive: true, force: true }));
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const dataDir = await mkdtemp(join(config.disk?.mount ?? root, 'data-'));
+  const dataDir = join(dir, 'data');
 
-  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+  await mkdir(dataDir);
 
   const db = await openDatabase(':memory:');
 
   stack.defer(() => db.destroy());
 
   // a host docker that logs every call: an isolated build makes none
-  const docker = buildStubDockerCli({ dir: root });
+  const docker = buildStubDockerCli({ dir });
 
   updateEnv('PATH', docker.path);
 
-  const xfs = createXfsBackend({ dataDir });
-
-  // the stub disk's reading; a test that needs a full disk lowers it
+  // the stub disk's reading, a petabyte free; a test that needs a full disk
+  // lowers it
   const usage = { usedBytes: 0, availableBytes: 1024 ** 5 };
 
   const diskBudget = createDiskBudget({
-    storage: config.disk === undefined ? { readUsage: () => Promise.resolve(usage) } : xfs,
-    reserveBytes: config.disk?.reserveBytes ?? 0,
+    storage: { readUsage: () => Promise.resolve(usage) },
+    reserveBytes: 0,
     log: () => {},
   });
 
   // each hold a build's growing export asks for
   const grows: number[] = [];
 
-  // the image service on the test's builders; a gate's plugin may hold a
-  // select, and a storage may stand in for the data dir's
-  const createImages = (
-    builders: Builders,
-    wiring: {
-      readonly plugin?: Readonly<KyselyPlugin>;
-      readonly storage?: StorageBackend;
-    } = {},
-  ) => {
-    const images = createImageService({
-      config: loadConfig({ ...config.env, IMP_DATA_DIR: dataDir }),
-      db: db.withPlugin(wiring.plugin ?? buildQueryGate('').plugin),
-      storage: wiring.storage ?? xfs,
-      storageGate: createStorageGate(),
-      diskBudget: {
-        withRoom: diskBudget.withRoom,
-        withGrowingRoom: (task) =>
-          diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
-              grows.push(totalBytes);
+  // the budget the image service holds disk through, which records each hold
+  const recordedBudget = {
+    withRoom: diskBudget.withRoom,
+    withGrowingRoom: <T>(task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>) =>
+      diskBudget.withGrowingRoom((grow) =>
+        task(async (totalBytes) => {
+          grows.push(totalBytes);
 
-              await grow(totalBytes);
-            }),
-          ),
-      },
-      readBuilders: () => builders,
-      log: () => {},
-    });
-
-    // a build of a context holding only this Dockerfile, as an upload is
-    const runBuild = async (
-      dockerfile: string,
-      options: { readonly signal?: AbortSignal; readonly name?: string } = {},
-    ) => {
-      const context = await mkdtemp(join(root, 'context-'));
-
-      await writeFile(join(context, 'Dockerfile'), dockerfile);
-
-      await Bun.write(
-        `${context}.tar`,
-        Bun.spawnSync(['tar', '-C', context, '-c', 'Dockerfile']).stdout,
-      );
-
-      return images.buildImageFromContext(`${context}.tar`, options.name ?? 'web', undefined, {
-        signal: options.signal ?? new AbortController().signal,
-      });
-    };
-
-    return { images, runBuild };
+          await grow(totalBytes);
+        }),
+      ),
   };
 
   return {
     // a release deferred here runs before the database closes
     stack,
-    dir: root,
+    dir,
     dataDir,
     db,
     docker,
-    storage: xfs,
+    storage: createXfsBackend({ dataDir }),
     usage,
     diskBudget,
+    recordedBudget,
     grows,
-    createImages,
   };
 }
 
@@ -154,9 +104,25 @@ test('it pins, builds and exports in its builder, with no host engine call', asy
     repoDigest: `sha256:${'a'.repeat(64)}`,
   });
 
-  const build = ctx.createImages(builder.builders);
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
 
-  const image = await build.runBuild('FROM base.test/a:1\nRUN true\n');
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const image = await images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
   const saved = await findImageByName(ctx.db, 'web');
 
   // the digest's own form: no Docker image ID is one
@@ -194,14 +160,29 @@ test('it pins, builds and exports in its builder, with no host engine call', asy
 test('it holds disk in 256 MiB steps as the export grows, not at the image cap', async () => {
   const ctx = await setupTest();
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  await build.runBuild('FROM base.test/a:1\nRUN true\n');
+  await images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   // one 256 MiB step, where the cap would hold 16 GiB
   expect(ctx.grows).toStrictEqual([256 * 1024 ** 2]);
@@ -213,18 +194,31 @@ test('it refuses with DISK_FULL an export that outgrows the free disk', async ()
   // 256 MiB free
   ctx.usage.availableBytes = 256 * 1024 ** 2;
 
-  const big = 'x'.repeat(200 * 1024 ** 2);
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { big: 'x'.repeat(200 * 1024 ** 2) })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, { big })],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  expect(build.runBuild('FROM base.test/a:1\nRUN true\n')).rejects.toMatchObject({
-    code: 'DISK_FULL',
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
   });
+
+  expect(building).rejects.toMatchObject({ code: 'DISK_FULL' });
 });
 
 test('it stops the export at the step the free disk refuses', async () => {
@@ -233,14 +227,29 @@ test('it stops the export at the step the free disk refuses', async () => {
   // 256 MiB free
   ctx.usage.availableBytes = 256 * 1024 ** 2;
 
-  const big = 'x'.repeat(200 * 1024 ** 2);
-
   const builder = buildStubImageBuilder({
-    exported: [buildFilesTar(ctx.dir, { big })],
+    exported: [buildFilesTar(ctx.dir, { big: 'x'.repeat(200 * 1024 ** 2) })],
     repoDigest: `sha256:${'a'.repeat(64)}`,
   });
 
-  const building = ctx.createImages(builder.builders).runBuild('FROM base.test/a:1\nRUN true\n');
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
@@ -255,58 +264,111 @@ test('it stops the export at the step the free disk refuses', async () => {
 test('it releases the disk hold once a build succeeds', async () => {
   const ctx = await setupTest();
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  await build.runBuild('FROM base.test/a:1\nRUN true\n');
+  await images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   const status = await ctx.diskBudget.readStatus();
 
-  expect(ctx.grows.length).toBe(1);
+  expect(ctx.grows).toHaveLength(1);
   expect(status.pendingBytes).toBe(0);
 });
 
 test('it releases the disk hold when the export is over the file limit', async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_FILES: '5' } });
+  const ctx = await setupTest();
 
   const many = Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`f${String(n)}`, 'x']));
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, many)],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, many)],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_IMAGE_MAX_FILES: '5' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  const building = build.runBuild('FROM base.test/a:1\nRUN true\n');
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
-  expect(building).rejects.toThrow('is over 5 files');
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    "the built image's filesystem is over 5 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
 
   const status = await ctx.diskBudget.readStatus();
 
-  expect(ctx.grows.length).toBe(1);
+  expect(ctx.grows).toHaveLength(1);
   expect(status.pendingBytes).toBe(0);
 });
 
 test('it refuses an export over IMP_BUILD_IMAGE_MAX_FILES', async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_FILES: '5' } });
+  const ctx = await setupTest();
 
   const many = Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`f${String(n)}`, 'x']));
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, many)],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, many)],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_IMAGE_MAX_FILES: '5' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  expect(build.runBuild('FROM base.test/a:1\nRUN true\n')).rejects.toThrow('is over 5 files');
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    "the built image's filesystem is over 5 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
 });
 
 test('it releases the disk hold when the free disk refuses the export', async () => {
@@ -315,16 +377,29 @@ test('it releases the disk hold when the free disk refuses the export', async ()
   // 256 MiB free
   ctx.usage.availableBytes = 256 * 1024 ** 2;
 
-  const big = 'x'.repeat(200 * 1024 ** 2);
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { big: 'x'.repeat(200 * 1024 ** 2) })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, { big })],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  const building = build.runBuild('FROM base.test/a:1\nRUN true\n');
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
@@ -332,7 +407,7 @@ test('it releases the disk hold when the free disk refuses the export', async ()
 
   const status = await ctx.diskBudget.readStatus();
 
-  expect(ctx.grows.length).toBe(1);
+  expect(ctx.grows).toHaveLength(1);
   expect(status.pendingBytes).toBe(0);
 });
 
@@ -345,9 +420,24 @@ test('it releases the disk hold when the client goes while the builder holds its
     isExportStalled: true,
   });
 
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
   const client = new AbortController();
 
-  const building = ctx.createImages(builder.builders).runBuild('FROM base.test/a:1\nRUN true\n', {
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
     signal: client.signal,
   });
 
@@ -360,7 +450,7 @@ test('it releases the disk hold when the client goes while the builder holds its
 
   await building.catch(() => {});
 
-  expect(building).rejects.toThrow('the client went');
+  expect(building).rejects.toThrowWithMessage(Error, 'the client went');
 
   const status = await ctx.diskBudget.readStatus();
 
@@ -376,19 +466,35 @@ test('it fails the build when the client goes while the builder holds its export
     isExportStalled: true,
   });
 
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
   const client = new AbortController();
 
-  const building = ctx.createImages(builder.builders).runBuild('FROM base.test/a:1\nRUN true\n', {
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
     signal: client.signal,
   });
 
+  // the export's output is in, and its exit never comes
   await waitFor(() => {
     expect(ctx.grows).not.toBeEmpty();
   });
 
   client.abort(new Error('the client went'));
 
-  expect(building).rejects.toThrow('the client went');
+  expect(building).rejects.toThrowWithMessage(Error, 'the client went');
 });
 
 test('it leaves no new row and no rootfs when a template takes the name during the build', async () => {
@@ -407,24 +513,36 @@ test('it leaves no new row and no rootfs when a template takes the name during t
     },
   });
 
-  const building = ctx.createImages(builder.builders).runBuild('FROM base.test/a:1\nRUN true\n');
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await exporting.promise;
-
-  await createImage(ctx.db, {
-    name: 'web',
-    ref: 'imp:dev',
-    digest: `sha256:${'b'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', source: 'imp', sourceImp: 'dev' }));
 
   templated.resolve(null);
 
   await building.catch(() => {});
 
-  expect(building).rejects.toThrow('image web is a template');
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'image web is a template; make it again from an imp, or pick another name',
+  );
 
   const rows = await listImages(ctx.db);
   const status = await ctx.diskBudget.readStatus();
@@ -454,22 +572,34 @@ test('it refuses a build whose name a template took during the build', async () 
     },
   });
 
-  const building = ctx.createImages(builder.builders).runBuild('FROM base.test/a:1\nRUN true\n');
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await exporting.promise;
-
-  await createImage(ctx.db, {
-    name: 'web',
-    ref: 'imp:dev',
-    digest: `sha256:${'b'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', source: 'imp', sourceImp: 'dev' }));
 
   templated.resolve(null);
 
-  expect(building).rejects.toThrow('image web is a template');
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    'image web is a template; make it again from an imp, or pick another name',
+  );
 });
 
 test('it keeps the rootfs another build of the digest is writing when its own row fails', async () => {
@@ -484,10 +614,34 @@ test('it keeps the rootfs another build of the digest is writing when its own ro
     repoDigest: `sha256:${'a'.repeat(64)}`,
   });
 
-  const build = ctx.createImages(builder.builders);
-  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
-  const failing = build.runBuild(dockerfile);
-  const kept = build.runBuild(dockerfile, { name: 'web2' });
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  // each build reads its own upload
+  await Bun.write(
+    join(ctx.dir, 'web.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  await Bun.write(
+    join(ctx.dir, 'web2.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const failing = images.buildImageFromContext(join(ctx.dir, 'web.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  const kept = images.buildImageFromContext(join(ctx.dir, 'web2.tar'), 'web2', undefined, {
+    signal: new AbortController().signal,
+  });
 
   // both exports are in, so both builds wait on the one mkfs.ext4
   await mkfs.waitForStart();
@@ -498,18 +652,14 @@ test('it keeps the rootfs another build of the digest is writing when its own ro
     );
   });
 
-  await createImage(ctx.db, {
-    name: 'web',
-    ref: 'imp:dev',
-    digest: `sha256:${'b'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', source: 'imp', sourceImp: 'dev' }));
 
   mkfs.release();
 
-  expect(failing).rejects.toThrow('image web is a template');
+  expect(failing).rejects.toThrowWithMessage(
+    Error,
+    'image web is a template; make it again from an imp, or pick another name',
+  );
 
   const image = await kept;
 
@@ -543,16 +693,38 @@ test('it keeps the rootfs when an image rm runs while a build of its digest is b
     },
   });
 
-  const build = ctx.createImages(builder.builders, { plugin: gate.plugin });
-  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db.withPlugin(gate.plugin),
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
 
-  const first = await build.runBuild(dockerfile);
+  // each build reads its own upload
+  await Bun.write(
+    join(ctx.dir, 'web.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
 
-  const second = build.runBuild(dockerfile, { name: 'web2' });
+  await Bun.write(
+    join(ctx.dir, 'web2.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const first = await images.buildImageFromContext(join(ctx.dir, 'web.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  const second = images.buildImageFromContext(join(ctx.dir, 'web2.tar'), 'web2', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await gate.reached;
 
-  await build.images.removeImage('web');
+  await images.removeImage('web');
 
   gate.release();
 
@@ -576,6 +748,7 @@ test("it removes that rootfs after all when the build's row then fails", async (
 
   const exports = { count: 0 };
 
+  // the second build's export arms the gate, after its name check
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
     repoDigest: `sha256:${'a'.repeat(64)}`,
@@ -590,25 +763,43 @@ test("it removes that rootfs after all when the build's row then fails", async (
     },
   });
 
-  const build = ctx.createImages(builder.builders, { plugin: gate.plugin });
-  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db.withPlugin(gate.plugin),
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
 
-  const first = await build.runBuild(dockerfile);
+  // each build reads its own upload
+  await Bun.write(
+    join(ctx.dir, 'web.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
 
-  const second = build.runBuild(dockerfile, { name: 'web2' });
+  await Bun.write(
+    join(ctx.dir, 'web2.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const first = await images.buildImageFromContext(join(ctx.dir, 'web.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  const second = images.buildImageFromContext(join(ctx.dir, 'web2.tar'), 'web2', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await gate.reached;
 
-  await build.images.removeImage('web');
+  await images.removeImage('web');
 
-  await createImage(ctx.db, {
-    name: 'web2',
-    ref: 'imp:dev',
-    digest: `sha256:${'b'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  // a template takes the build's name while its row waits
+  const template = buildMockNewImage({ name: 'web2', source: 'imp', sourceImp: 'dev' });
+
+  await createImage(ctx.db, template);
 
   gate.release();
 
@@ -616,39 +807,49 @@ test("it removes that rootfs after all when the build's row then fails", async (
 
   const rows = await listImages(ctx.db);
 
-  expect(rows.map((row) => [row.name, row.digest])).toStrictEqual([
-    ['web2', `sha256:${'b'.repeat(64)}`],
-  ]);
-
+  expect(rows.map((row) => [row.name, row.digest])).toStrictEqual([['web2', template.digest]]);
   expect(existsSync(buildImagePaths(ctx.dataDir, first.digest).rootfs)).toBeFalse();
 });
 
 test('it removes a rootfs whose write fails after it is published', async () => {
   const ctx = await setupTest();
 
-  // a mount that fails once the rootfs is in place, as a ZFS dataset's can
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
-    {
-      storage: {
-        ...ctx.storage,
-        createImage: async (digest, write) => {
-          await ctx.storage.createImage(digest, write);
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
 
-          throw new Error('the mount failed');
-        },
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+
+    // a mount that fails once the rootfs is in place, as a ZFS dataset's can
+    storage: {
+      ...ctx.storage,
+      createImage: async (digest, write) => {
+        await ctx.storage.createImage(digest, write);
+
+        throw new Error('the mount failed');
       },
     },
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  const building = build.runBuild('FROM base.test/a:1\nRUN true\n');
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
-  expect(building).rejects.toThrow('the mount failed');
+  expect(building).rejects.toThrowWithMessage(Error, 'the mount failed');
 
   const rows = await listImages(ctx.db);
 
@@ -662,24 +863,40 @@ test('it removes a rootfs whose write fails after it is published', async () => 
 test('it returns the error of a rootfs write that fails after it is published', async () => {
   const ctx = await setupTest();
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
-    {
-      storage: {
-        ...ctx.storage,
-        createImage: async (digest, write) => {
-          await ctx.storage.createImage(digest, write);
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
 
-          throw new Error('the mount failed');
-        },
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+
+    // a mount that fails once the rootfs is in place, as a ZFS dataset's can
+    storage: {
+      ...ctx.storage,
+      createImage: async (digest, write) => {
+        await ctx.storage.createImage(digest, write);
+
+        throw new Error('the mount failed');
       },
     },
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  expect(build.runBuild('FROM base.test/a:1\nRUN true\n')).rejects.toThrow('the mount failed');
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toThrowWithMessage(Error, 'the mount failed');
 });
 
 test('it leaves no row, rootfs or hold when the client goes while mkfs.ext4 runs', async () => {
@@ -689,23 +906,40 @@ test('it leaves no row, rootfs or hold when the client goes while mkfs.ext4 runs
 
   updateEnv('PATH', `${mkfs.bin}:${process.env['PATH'] ?? ''}`);
 
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
   const client = new AbortController();
 
-  const building = ctx
-    .createImages(
-      buildStubImageBuilder({
-        exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
-        repoDigest: `sha256:${'a'.repeat(64)}`,
-      }).builders,
-    )
-    .runBuild('FROM base.test/a:1\nRUN true\n', { signal: client.signal });
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: client.signal,
+  });
 
   await mkfs.waitForStart();
 
   client.abort(new Error('the client went'));
   mkfs.release();
 
-  expect(building).rejects.toThrow('the client went');
+  await building.catch(() => {});
+
+  expect(building).rejects.toThrowWithMessage(Error, 'the client went');
 
   const rows = await listImages(ctx.db);
   const status = await ctx.diskBudget.readStatus();
@@ -720,7 +954,7 @@ test('it leaves no row, rootfs or hold when the client goes while mkfs.ext4 runs
 });
 
 test('it ends a stalled export over a limit at once, with its builder and its disk hold', async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_FILES: '5' } });
+  const ctx = await setupTest();
 
   const many = Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`f${String(n)}`, 'x']));
 
@@ -730,11 +964,31 @@ test('it ends a stalled export over a limit at once, with its builder and its di
     isExportStalled: true,
   });
 
-  const building = ctx.createImages(builder.builders).runBuild('FROM base.test/a:1\nRUN true\n');
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_BUILD_IMAGE_MAX_FILES: '5' }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
+  );
+
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
-  expect(building).rejects.toThrow('is over 5 files');
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    "the built image's filesystem is over 5 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
 
   const status = await ctx.diskBudget.readStatus();
 
@@ -746,13 +1000,28 @@ test('it ends a stalled export over a limit at once, with its builder and its di
 test('it refuses a Dockerfile the input guard refuses', async () => {
   const ctx = await setupTest();
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'a'.repeat(64)}` });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nADD https://example.com/x /x\n' }),
   );
 
-  expect(
-    build.runBuild('FROM base.test/a:1\nADD https://example.com/x /x\n'),
-  ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 });
 
 test('it boots no builder for a Dockerfile the input guard refuses', async () => {
@@ -760,9 +1029,24 @@ test('it boots no builder for a Dockerfile the input guard refuses', async () =>
 
   const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'a'.repeat(64)}` });
 
-  const building = ctx
-    .createImages(builder.builders)
-    .runBuild('FROM base.test/a:1\nADD https://example.com/x /x\n');
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nADD https://example.com/x /x\n' }),
+  );
+
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
@@ -782,14 +1066,29 @@ test("it changes no host file through a built image's image.json link", async ()
 
   symlinkSync(hostFile, join(tree, 'etc', 'imp', 'image.json'));
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  await build.runBuild('FROM base.test/a:1\nRUN true\n');
+  await images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   expect(readFileSync(hostFile, 'utf8')).toBe("the host's\n");
 });
@@ -805,14 +1104,31 @@ test('it refuses an image whose /etc/imp is a link to a host directory', async (
 
   symlinkSync(hostDir, join(tree, 'etc', 'imp'));
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  expect(build.runBuild('FROM base.test/a:1\nRUN true\n')).rejects.toMatchObject({
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toMatchObject({
     code: 'BAD_REQUEST',
     message: expect.stringContaining("the image's /etc/imp is a symlink") as unknown,
   });
@@ -829,14 +1145,29 @@ test('it writes nothing into the host directory an /etc/imp link names', async (
 
   symlinkSync(hostDir, join(tree, 'etc', 'imp'));
 
-  const build = ctx.createImages(
-    buildStubImageBuilder({
-      exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
-      repoDigest: `sha256:${'a'.repeat(64)}`,
-    }).builders,
+  const builder = buildStubImageBuilder({
+    exported: [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+  });
+
+  await Bun.write(
+    join(ctx.dir, 'context.tar'),
+    buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
   );
 
-  const building = build.runBuild('FROM base.test/a:1\nRUN true\n');
+  const building = images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+    signal: new AbortController().signal,
+  });
 
   await building.catch(() => {});
 
@@ -854,14 +1185,26 @@ test('it writes nothing into the host directory an /etc/imp link names', async (
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for a one-file image on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     const exported = buildTreeTar(ctx.dir, (tree) => {
       writeFileSync(join(tree, 'hello'), 'from the builder\n');
@@ -872,25 +1215,52 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -906,14 +1276,26 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for many empty files on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     const exported = buildTreeTar(ctx.dir, (tree) => {
       for (let d = 0; d < 30; d += 1) {
@@ -930,25 +1312,52 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -964,14 +1373,26 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for a deep tree on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     const exported = buildTreeTar(ctx.dir, (tree) => {
       for (let chain = 0; chain < 300; chain += 1) {
@@ -986,25 +1407,52 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -1020,14 +1468,26 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for a sparse file stored in full on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     // as docker export sends it
     const exported = buildTreeTar(ctx.dir, (tree) => {
@@ -1043,25 +1503,52 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -1077,14 +1564,26 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for a sparse file in a GNU sparse member on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     const exported = buildTreeTar(
       ctx.dir,
@@ -1103,25 +1602,52 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -1137,14 +1663,26 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for random data on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     // random data, which no tool can store as holes
     const exported = buildTreeTar(ctx.dir, (tree) => {
@@ -1161,25 +1699,52 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -1195,14 +1760,26 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it holds the rootfs journal on a small filesystem',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
+
+    const grows: number[] = [];
 
     // twice the archive just under a 256 MiB step: held at twice the archive
     // alone, it held 512 MiB and took 536 on XFS
@@ -1224,28 +1801,56 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
-    // the sampler reads the disk once each rootfs is written, while its tree
-    // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
 
-            sampler.markWritten();
-          },
+    // each hold is recorded; the sampler reads the disk once each rootfs is
+    // written, while its tree is still on disk
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
+
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget: {
+        withRoom: diskBudget.withRoom,
+        withGrowingRoom: (task) =>
+          diskBudget.withGrowingRoom((grow) =>
+            task(async (totalBytes) => {
+              grows.push(totalBytes);
+
+              await grow(totalBytes);
+            }),
+          ),
+      },
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    // the archive is in the window the comment above names
+    invariant(2 * exported.byteLength > 500 * 1024 ** 2);
+    invariant(2 * exported.byteLength < 512 * 1024 ** 2);
 
-    expect(2 * exported.byteLength).toBeGreaterThan(500 * 1024 ** 2);
-    expect(2 * exported.byteLength).toBeLessThan(512 * 1024 ** 2);
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
-    const hold = ctx.grows.at(-1);
+    const hold = grows.at(-1);
 
     invariant(hold);
 
@@ -1261,13 +1866,23 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it refuses a file bigger than the room on a nearly full small filesystem before the reserve',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
 
     // one file that tar lists in full at once
@@ -1282,23 +1897,40 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
+
     // the sampler reads the disk once each rootfs is written, while its tree
     // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
 
-            sampler.markWritten();
-          },
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget,
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
     expect(trial.outcome).toBe('DISK_FULL');
     expect(trial.peakBytes).toBeLessThanOrEqual(300 * 1024 ** 2);
@@ -1312,13 +1944,23 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it refuses files bigger than the room on a nearly full small filesystem before the reserve',
   async () => {
+    const ctx = await setupTest();
+
     const mount = process.env['IMP_TEST_SMALL_FS'] ?? '';
 
     const sampler = await startDiskSampler(mount);
 
     // the data dir on the small filesystem, 128 MiB of it held back
-    const ctx = await setupTest({
-      disk: { mount, reserveBytes: 128 * 1024 ** 2 },
+    const dataDir = await mkdtemp(join(mount, 'data-'));
+
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+
+    const storage = createXfsBackend({ dataDir });
+
+    const diskBudget = createDiskBudget({
+      storage,
+      reserveBytes: 128 * 1024 ** 2,
+      log: () => {},
     });
 
     // files that tar lists as they come
@@ -1338,23 +1980,40 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
       exported.subarray(index * 1024 ** 2, (index + 1) * 1024 ** 2),
     );
 
+    const builder = buildStubImageBuilder({
+      exported: chunks,
+      repoDigest: `sha256:${'a'.repeat(64)}`,
+    });
+
     // the sampler reads the disk once each rootfs is written, while its tree
     // is still on disk
-    const build = ctx.createImages(
-      buildStubImageBuilder({ exported: chunks, repoDigest: `sha256:${'a'.repeat(64)}` }).builders,
-      {
-        storage: {
-          ...ctx.storage,
-          createImage: async (digest, write) => {
-            await ctx.storage.createImage(digest, write);
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: ctx.db,
+      storage: {
+        ...storage,
+        createImage: async (digest, write) => {
+          await storage.createImage(digest, write);
 
-            sampler.markWritten();
-          },
+          sampler.markWritten();
         },
       },
+      storageGate: createStorageGate(),
+      diskBudget,
+      readBuilders: () => builder.builders,
+      log: () => {},
+    });
+
+    await Bun.write(
+      join(ctx.dir, 'context.tar'),
+      buildFilesTar(ctx.dir, { Dockerfile: 'FROM base.test/a:1\nRUN true\n' }),
     );
 
-    const trial = await sampler.measure(() => build.runBuild('FROM base.test/a:1\nRUN true\n'));
+    const trial = await sampler.measure(() =>
+      images.buildImageFromContext(join(ctx.dir, 'context.tar'), 'web', undefined, {
+        signal: new AbortController().signal,
+      }),
+    );
 
     expect(trial.outcome).toBe('DISK_FULL');
     expect(trial.peakBytes).toBeLessThanOrEqual(300 * 1024 ** 2);

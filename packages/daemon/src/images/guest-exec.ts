@@ -78,10 +78,23 @@ async function sendStdin(
   }
 }
 
+// starts a timer and returns its cancel
+type StartTimer = (fire: () => void, ms: number) => () => void;
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
+}
+
 // Runs each step through `open`, which reaches the builder's agent: stdin
-// from a file, stdout kept or streamed, stderr's tail kept.
+// from a file, stdout kept or streamed, stderr's tail kept. A step's
+// timeout runs on `startTimer`, setTimeout by default.
 export function createGuestExec(
   open: (request: AgentExecRequest) => Promise<ExecStream>,
+  startTimer: StartTimer = startRealTimer,
 ): GuestExec {
   return async (argv, options) => {
     options.signal.throwIfAborted();
@@ -103,10 +116,10 @@ export function createGuestExec(
 
     const timeout = { hit: false };
 
-    const timer =
+    const cancelTimeout =
       options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
+        ? () => {}
+        : startTimer(() => {
             timeout.hit = true;
 
             stopStep();
@@ -170,7 +183,7 @@ export function createGuestExec(
 
       throw new Error(`${argv.join(' ')}: the builder's agent closed the exec before its exit`);
     } finally {
-      clearTimeout(timer);
+      cancelTimeout();
 
       options.signal.removeEventListener('abort', stopStep);
       stream.close();

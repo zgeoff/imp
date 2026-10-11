@@ -13,7 +13,9 @@ import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { BUILDER_IMAGE } from './builder-imps';
 import { createImageService, normalizeDockerfilePath, parseDuCount } from './image-service';
 
 async function setupTest() {
@@ -247,6 +249,50 @@ test('#buildImageFromContext answers SERVICE_UNAVAILABLE while the builders are 
   });
 });
 
+test('#addImage refuses the name imp-builder, which is impd’s', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const adding = images.addImage('busybox:latest', BUILDER_IMAGE);
+
+  expect(adding).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: `the image name ${BUILDER_IMAGE} is impd's, for its image builders; pick another`,
+  });
+});
+
+test('#buildImageFromContext refuses the name imp-builder, which is impd’s', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImageFromContext('/nowhere.tar', BUILDER_IMAGE, undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: `the image name ${BUILDER_IMAGE} is impd's, for its image builders; pick another`,
+  });
+});
+
 test('#buildImage refuses a context that is not on the impd host', async () => {
   const ctx = await setupTest();
 
@@ -455,8 +501,8 @@ test('#removeImage keeps the rootfs while another image uses its digest', async 
 
   await Bun.write(rootfs, 'rootfs');
 
-  await createImage(ctx.db, { name: 'web', ref: 'web:1', digest, sizeBytes: 6 });
-  await createImage(ctx.db, { name: 'web-copy', ref: 'web:1', digest, sizeBytes: 6 });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', digest }));
+  await createImage(ctx.db, buildMockNewImage({ name: 'web-copy', digest }));
 
   const images = createImageService({
     config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
@@ -481,7 +527,7 @@ test('#removeImage removes the rootfs once no image uses its digest', async () =
 
   await Bun.write(rootfs, 'rootfs');
 
-  await createImage(ctx.db, { name: 'web', ref: 'web:1', digest, sizeBytes: 6 });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', digest }));
 
   const images = createImageService({
     config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),

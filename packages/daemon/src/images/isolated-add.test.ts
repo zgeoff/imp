@@ -5,8 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
-import type { KyselyPlugin } from 'kysely';
-import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import type { ImpdDeps } from '../create-impd';
@@ -19,9 +17,9 @@ import {
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '../storage/data-layout';
-import type { StorageBackend } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFilesTar } from '../test-utils/build-files-tar';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildQueryGate } from '../test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
@@ -34,15 +32,7 @@ import { findFreePorts } from '../test-utils/find-free-ports';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { HOST_ADD_WARNING, createImageService } from './image-service';
 
-async function setupTest(
-  config: {
-    // IMP_* settings impd and the image service read
-    readonly env?: Readonly<Record<string, string>>;
-
-    // how long the builder image's pull may take
-    readonly builderImagePullMs?: number;
-  } = {},
-) {
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -61,19 +51,13 @@ async function setupTest(
 
   updateEnv('PATH', docker.path);
 
-  // the builder image pulls' limits, which expirePullLimits ends
-  const pullLimits: AbortController[] = [];
-
   // the stub VMM runs no jailer and builds no boot template; the resolver
-  // binds its port on every address; a builder takes 512 MiB and 4 GiB
+  // binds its port on every address
   const impdConfig = loadConfig({
     IMP_DATA_DIR: dataDir,
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-    IMP_BUILD_MEMORY_MIB: '512',
-    IMP_BUILD_DISK_GIB: '4',
-    ...config.env,
   });
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
@@ -170,86 +154,61 @@ async function setupTest(
     impd.diskUsage.stop();
   });
 
-  // The image service under test, on the builder imps impd runs, whose
-  // agent is the test's; a gate's plugin may hold a select, and a storage
-  // may stand in for impd's
-  const createImages = (
-    open: (request: AgentExecRequest) => Promise<ExecStream>,
-    wiring: {
-      readonly plugin?: Readonly<KyselyPlugin>;
-      readonly storage?: StorageBackend;
-    } = {},
-  ) => {
-    const images = createImageService({
-      config: impdConfig,
-      db: db.withPlugin(wiring.plugin ?? buildQueryGate('').plugin),
-      storage: wiring.storage ?? storage,
-      storageGate: impd.storageGate,
-      diskBudget: impd.diskBudget,
-      readBuilders: () => builders,
-      log: (message) => {
-        logs.push(message);
-      },
-      builderImagePullMs: config.builderImagePullMs,
-
-      // a limit that ends only when the test expires it
-      startPullLimit: () => {
-        const limit = new AbortController();
-
-        pullLimits.push(limit);
-
-        return limit.signal;
-      },
-    });
-
-    const builders = createBuilders({
-      config: impdConfig,
-      db,
-      imps: { ...impd.imps, openBuilderExec: (_name, request) => open(request) },
-      ensureImage: (signal) => images.ensureBuilderImage(signal),
-      log: (message) => {
-        logs.push(message);
-      },
-    });
-
-    return { images };
-  };
-
   return {
     // a release deferred here runs before impd stops and its database closes
     stack,
-    config: impdConfig,
-
-    // ends every builder image pull limit started so far, as its timeout would
-    expirePullLimits: () => {
-      for (const limit of pullLimits) {
-        limit.abort(new DOMException('The operation timed out.', 'TimeoutError'));
-      }
-    },
     db,
     dataDir,
     storage,
-    diskBudget: impd.diskBudget,
+
+    // the builder imps run on impd's imps, storage gate and disk budget
+    impd,
     docker,
     logs,
-    createImages,
   };
 }
 
 test('it adds an image through a builder for one platform, with no host engine call', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  const add = ctx.createImages(builder.guest.open);
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
   const resolved: string[] = [];
 
-  const image = await add.images.addImage('busybox', 'box', {
+  const image = await images.addImage('busybox', 'box', {
     onResolved: (reference) => {
       resolved.push(reference);
     },
@@ -297,7 +256,13 @@ test('it adds an image through a builder for one platform, with no host engine c
 test('it returns a failed pull in the builder as the client error', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [],
@@ -305,9 +270,29 @@ test('it returns a failed pull in the builder as the client error', async () => 
     onPull: () => ({ code: 1, stderr: 'Error response from daemon: manifest unknown' }),
   });
 
-  const add = ctx.createImages(builder.guest.open);
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  expect(add.images.addImage('busybox:nope', 'box')).rejects.toMatchObject({
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  expect(images.addImage('busybox:nope', 'box')).rejects.toMatchObject({
     code: 'BAD_REQUEST',
     message:
       'the pull of busybox:nope in the builder failed: Error response from daemon: manifest unknown',
@@ -317,7 +302,13 @@ test('it returns a failed pull in the builder as the client error', async () => 
 test("it returns a registry's refusal of a pull in the builder as the client error", async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [],
@@ -329,9 +320,29 @@ test("it returns a registry's refusal of a pull in the builder as the client err
     }),
   });
 
-  const add = ctx.createImages(builder.guest.open);
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  expect(add.images.addImage('private.test/x:1', 'box')).rejects.toMatchObject({
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  expect(images.addImage('private.test/x:1', 'box')).rejects.toMatchObject({
     code: 'BAD_REQUEST',
     message: expect.stringContaining('requested access to the resource is denied') as unknown,
   });
@@ -340,7 +351,13 @@ test("it returns a registry's refusal of a pull in the builder as the client err
 test('it leaves no builder, row or work directory after a failed pull', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [],
@@ -348,7 +365,29 @@ test('it leaves no builder, row or work directory after a failed pull', async ()
     onPull: () => ({ code: 1, stderr: 'Error response from daemon: manifest unknown' }),
   });
 
-  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:nope', 'box');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:nope', 'box');
 
   await adding.catch(() => {});
 
@@ -372,34 +411,90 @@ test('it leaves no builder, row or work directory after a failed pull', async ()
 });
 
 test('it refuses an export over IMP_BUILD_IMAGE_MAX_MIB', async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_MIB: '1' } });
+  const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+    IMP_BUILD_IMAGE_MAX_MIB: '1',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { big: 'x'.repeat(2 * 1024 ** 2) })],
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  const add = ctx.createImages(builder.guest.open);
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  expect(add.images.addImage('busybox:1.37', 'box')).rejects.toMatchObject({
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  expect(images.addImage('busybox:1.37', 'box')).rejects.toMatchObject({
     code: 'BAD_REQUEST',
     message: expect.stringContaining('IMP_BUILD_IMAGE_MAX_MIB') as unknown,
   });
 });
 
 test('it leaves no builder, row or work directory after an export over the limit', async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_IMAGE_MAX_MIB: '1' } });
+  const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+    IMP_BUILD_IMAGE_MAX_MIB: '1',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { big: 'x'.repeat(2 * 1024 ** 2) })],
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await adding.catch(() => {});
 
@@ -423,7 +518,13 @@ test('it leaves no builder, row or work directory after an export over the limit
 test("it changes no host file through an added image's image.json link", async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const canary = join(ctx.dataDir, 'canary');
   const tree = join(ctx.dataDir, 'linked-tree');
@@ -438,7 +539,29 @@ test("it changes no host file through an added image's image.json link", async (
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  await ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  await images.addImage('busybox:1.37', 'box');
 
   const content = await readFile(canary, 'utf8');
 
@@ -448,7 +571,13 @@ test("it changes no host file through an added image's image.json link", async (
 test('it ends the pull in the builder, and the builder, when the client goes', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const pulling = Promise.withResolvers<null>();
   const never = Promise.withResolvers<StubAnswer>();
@@ -463,17 +592,37 @@ test('it ends the pull in the builder, and the builder, when the client goes', a
     },
   });
 
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
   const client = new AbortController();
 
-  const adding = ctx
-    .createImages(builder.guest.open)
-    .images.addImage('busybox:1.37', 'box', { signal: client.signal });
+  const adding = images.addImage('busybox:1.37', 'box', { signal: client.signal });
 
   await pulling.promise;
 
   client.abort(new Error('the client went'));
 
-  expect(adding).rejects.toThrow('the client went');
+  expect(adding).rejects.toThrowWithMessage(Error, 'the client went');
 
   const imps = await listImps(ctx.db);
   const box = await findImageByName(ctx.db, 'box');
@@ -497,10 +646,37 @@ test.each([
 ])('it refuses %s before any builder boots', async (ref, problem) => {
   const ctx = await setupTest();
 
-  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
-  const add = ctx.createImages(builder.guest.open);
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
-  expect(add.images.addImage(ref, 'box')).rejects.toMatchObject({
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  expect(images.addImage(ref, 'box')).rejects.toMatchObject({
     code: 'BAD_REQUEST',
     message: expect.stringContaining(problem) as unknown,
   });
@@ -513,14 +689,45 @@ test.each([
 });
 
 test('it fails the add of a builder the governor refuses, with no host engine call', async () => {
-  const ctx = await setupTest({ env: { IMP_RAM_BUDGET_MIB: '256' } });
+  const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  // a builder larger than impd's whole RAM budget, 16384 MiB by default
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '32768',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
-  const add = ctx.createImages(builder.guest.open);
 
-  expect(add.images.addImage('busybox:1.37', 'box')).rejects.toThrow('the whole RAM budget');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  expect(images.addImage('busybox:1.37', 'box')).rejects.toThrowWithMessage(
+    Error,
+    /is larger than the whole RAM budget \(16384 MiB\)/v,
+  );
 
   const box = await findImageByName(ctx.db, 'box');
 
@@ -532,13 +739,40 @@ test('it fails the add of a builder the governor refuses, with no host engine ca
 test('it fails the add with SERVICE_UNAVAILABLE when the host engine cannot give the builder image', async () => {
   const ctx = await setupTest();
 
-  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
-  const add = ctx.createImages(builder.guest.open);
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
-  expect(add.images.addImage('busybox:1.37', 'box')).rejects.toMatchObject({
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  expect(images.addImage('busybox:1.37', 'box')).rejects.toMatchObject({
     code: 'SERVICE_UNAVAILABLE',
     message: expect.stringContaining(
-      `impd cannot add its builder image ${ctx.config.build.image}`,
+      `impd cannot add its builder image ${config.build.image}`,
     ) as unknown,
   });
 });
@@ -546,8 +780,37 @@ test('it fails the add with SERVICE_UNAVAILABLE when the host engine cannot give
 test('it asks the host engine only for the builder image when it cannot give it', async () => {
   const ctx = await setupTest();
 
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
   const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
-  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await adding.catch(() => {});
 
@@ -557,8 +820,8 @@ test('it asks the host engine only for the builder image when it cannot give it'
 
   // the inspect that found no image, then the pull, both by its digest
   expect(ctx.docker.readCalls()).toStrictEqual([
-    `image inspect ${ctx.config.build.image}`,
-    `pull --quiet ${ctx.config.build.image}`,
+    `image inspect ${config.build.image}`,
+    `pull --quiet ${config.build.image}`,
   ]);
 
   expect(builder.guest.runs).toStrictEqual([]);
@@ -568,13 +831,17 @@ test('it asks the host engine only for the builder image when it cannot give it'
 test('it adds a bumped IMP_BUILD_IMAGE once, by its digest, and moves the row', async () => {
   const ctx = await setupTest();
 
-  // the builder image of an older release
-  await createImage(ctx.db, {
-    name: BUILDER_IMAGE,
-    ref: 'ghcr.io/zgeoff/imp-base:0.1.0',
-    digest: `sha256:${'0'.repeat(64)}`,
-    sizeBytes: 6,
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
   });
+
+  // the builder image of an older release
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: BUILDER_IMAGE, ref: 'ghcr.io/zgeoff/imp-base:0.1.0' }),
+  );
 
   // the host engine as the proxy's lock leaves it: the builder image pulls
   // by its digest, and create and export serve a small tree
@@ -582,7 +849,7 @@ test('it adds a bumped IMP_BUILD_IMAGE once, by its digest, and moves the row', 
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
         isOnHost: false,
       },
@@ -591,31 +858,57 @@ test('it adds a bumped IMP_BUILD_IMAGE once, by its digest, and moves the row', 
     exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
   });
 
-  const add = ctx.createImages(
-    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
-  );
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
   // what each add and build calls first; the second finds the row current
-  await add.images.ensureBuilderImage();
-  await add.images.ensureBuilderImage();
+  await images.ensureBuilderImage();
+  await images.ensureBuilderImage();
 
   const row = await findImageByName(ctx.db, BUILDER_IMAGE);
 
   const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
 
-  expect(row?.ref).toStrictEqual(ctx.config.build.image);
+  expect(row?.ref).toStrictEqual(config.build.image);
   expect(row?.digest).toStrictEqual(`sha256:${'f'.repeat(64)}`);
-  expect(pulls).toStrictEqual([`pull --quiet ${ctx.config.build.image}`]);
+  expect(pulls).toStrictEqual([`pull --quiet ${config.build.image}`]);
 });
 
 test('it seeds the default image at first start through a builder', async () => {
   const ctx = await setupTest();
 
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
   buildStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
         isOnHost: false,
       },
@@ -629,11 +922,33 @@ test('it seeds the default image at first start through a builder', async () => 
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  await ctx.createImages(builder.guest.open).images.seedDefaultImage();
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  await images.seedDefaultImage();
 
   const seeded = await findImageByName(ctx.db, 'ubuntu');
 
-  const image = ctx.config.build.image;
+  const image = config.build.image;
 
   // the host engine gives only the builder image; ubuntu comes in a builder
   expect(seeded?.ref).toBe('ubuntu:24.04');
@@ -651,14 +966,42 @@ test('it seeds the default image at first start through a builder', async () => 
 test('it seeds the default image at the next start once the builder image has landed', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  await ctx.createImages(builder.guest.open).images.seedDefaultImage();
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  await images.seedDefaultImage();
 
   const seeded = await findImageByName(ctx.db, 'ubuntu');
 
@@ -667,16 +1010,57 @@ test('it seeds the default image at the next start once the builder image has la
 });
 
 test('it sends an add to the host engine, with a warning and no builder, under IMP_BUILD_ISOLATION=host', async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_ISOLATION: 'host' } });
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+    IMP_BUILD_ISOLATION: 'host',
+  });
+
+  // a host engine whose registry knows no such tag
+  buildStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      {
+        refs: ['busybox:1.37'],
+        inspects: [{ Id: `sha256:${'c'.repeat(64)}`, Config: {}, Size: 4096 }],
+        isOnHost: false,
+        pull: { stderr: 'Error response from daemon: manifest unknown' },
+      },
+    ],
+  });
 
   const builder = buildStubImageBuilder({ exported: [], repoDigest: `sha256:${'b'.repeat(64)}` });
 
-  // the host docker models no call, so the add fails there
-  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await adding.catch(() => {});
 
-  expect(adding).rejects.toThrow('stub docker: pull --quiet busybox:1.37 is not modelled');
+  expect(adding).rejects.toThrowWithMessage(Error, /Error response from daemon: manifest unknown/v);
 
   expect(ctx.docker.readCalls()).toStrictEqual([
     'image inspect busybox:1.37',
@@ -688,13 +1072,19 @@ test('it sends an add to the host engine, with a warning and no builder, under I
 });
 
 test('it fails a builder image pull that hangs at its limit, naming IMP_BUILD_IMAGE', async () => {
-  const ctx = await setupTest({ builderImagePullMs: 300 });
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
   buildStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
         isOnHost: false,
         pull: 'hang',
@@ -702,18 +1092,51 @@ test('it fails a builder image pull that hangs at its limit, naming IMP_BUILD_IM
     ],
   });
 
-  const add = ctx.createImages(
-    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
-  );
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
 
-  const image = ctx.config.build.image;
-  const ensuring = add.images.ensureBuilderImage();
+  // each pull's limit, which ends only when the test expires it
+  const pullLimits: AbortController[] = [];
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    builderImagePullMs: 300,
+    startPullLimit: () => {
+      const limit = new AbortController();
+
+      pullLimits.push(limit);
+
+      return limit.signal;
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const image = config.build.image;
+  const ensuring = images.ensureBuilderImage();
 
   await waitFor(() => {
     expect(ctx.docker.readCalls()).toContain(`pull --quiet ${image}`);
   });
 
-  ctx.expirePullLimits();
+  for (const limit of pullLimits) {
+    limit.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+  }
 
   expect(ensuring).rejects.toMatchObject({
     code: 'SERVICE_UNAVAILABLE',
@@ -722,13 +1145,19 @@ test('it fails a builder image pull that hangs at its limit, naming IMP_BUILD_IM
 });
 
 test('it makes no host engine call beyond the inspect and the pull when the pull hangs', async () => {
-  const ctx = await setupTest({ builderImagePullMs: 300 });
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
   buildStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
         isOnHost: false,
         pull: 'hang',
@@ -736,52 +1165,125 @@ test('it makes no host engine call beyond the inspect and the pull when the pull
     ],
   });
 
-  const ensuring = ctx
-    .createImages(buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open)
-    .images.ensureBuilderImage();
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
 
-  await waitFor(() => {
-    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${ctx.config.build.image}`);
+  // each pull's limit, which ends only when the test expires it
+  const pullLimits: AbortController[] = [];
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    builderImagePullMs: 300,
+    startPullLimit: () => {
+      const limit = new AbortController();
+
+      pullLimits.push(limit);
+
+      return limit.signal;
+    },
   });
 
-  ctx.expirePullLimits();
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const ensuring = images.ensureBuilderImage();
+
+  await waitFor(() => {
+    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${config.build.image}`);
+  });
+
+  for (const limit of pullLimits) {
+    limit.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+  }
 
   await ensuring.catch(() => {});
 
   expect(ensuring).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
 
   expect(ctx.docker.readCalls()).toStrictEqual([
-    `image inspect ${ctx.config.build.image}`,
-    `pull --quiet ${ctx.config.build.image}`,
+    `image inspect ${config.build.image}`,
+    `pull --quiet ${config.build.image}`,
   ]);
 });
 
 test('it pulls the builder image again on the add after a pull that failed', async () => {
-  const ctx = await setupTest({ builderImagePullMs: 300 });
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
   const host = {
-    refs: [ctx.config.build.image],
+    refs: [config.build.image],
     inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
     isOnHost: false,
   };
 
   buildStubDockerCli({ dir: ctx.dataDir, images: [{ ...host, pull: 'hang' }] });
 
-  const add = ctx.createImages(
-    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
-  );
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
 
-  const failing = add.images.ensureBuilderImage();
+  // each pull's limit, which ends only when the test expires it
+  const pullLimits: AbortController[] = [];
 
-  await waitFor(() => {
-    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${ctx.config.build.image}`);
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    builderImagePullMs: 300,
+    startPullLimit: () => {
+      const limit = new AbortController();
+
+      pullLimits.push(limit);
+
+      return limit.signal;
+    },
   });
 
-  ctx.expirePullLimits();
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  await failing.catch(() => {});
+  const failing = images.ensureBuilderImage();
 
-  expect(failing).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+  await waitFor(() => {
+    expect(ctx.docker.readCalls()).toContain(`pull --quiet ${config.build.image}`);
+  });
+
+  for (const limit of pullLimits) {
+    limit.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+  }
+
+  // the first pull's failure, which the test checks at the end
+  const [first] = await Promise.allSettled([failing]);
 
   // the registry answers now
   buildStubDockerCli({
@@ -791,24 +1293,35 @@ test('it pulls the builder image again on the add after a pull that failed', asy
     exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
   });
 
-  await add.images.ensureBuilderImage();
+  await images.ensureBuilderImage();
 
   const row = await findImageByName(ctx.db, BUILDER_IMAGE);
 
   const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
 
-  expect(row?.ref).toStrictEqual(ctx.config.build.image);
-  expect(pulls.length).toBe(2);
+  expect(first).toMatchObject({
+    status: 'rejected',
+    reason: { code: 'SERVICE_UNAVAILABLE' },
+  });
+
+  expect(row?.ref).toStrictEqual(config.build.image);
+  expect(pulls).toHaveLength(2);
 });
 
 test('it stops the wait of a caller that goes, and the pull it shared goes on for the others', async () => {
   const ctx = await setupTest();
 
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
   buildStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
         isOnHost: false,
       },
@@ -817,18 +1330,38 @@ test('it stops the wait of a caller that goes, and the pull it shared goes on fo
     exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
   });
 
-  const add = ctx.createImages(
-    buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open,
-  );
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
   const client = new AbortController();
 
-  const leaving = add.images.ensureBuilderImage(client.signal);
-  const staying = add.images.ensureBuilderImage();
+  const leaving = images.ensureBuilderImage(client.signal);
+  const staying = images.ensureBuilderImage();
 
   client.abort(new Error('the client went'));
 
-  expect(leaving).rejects.toThrow('the client went');
+  expect(leaving).rejects.toThrowWithMessage(Error, 'the client went');
 
   await staying;
 
@@ -836,19 +1369,25 @@ test('it stops the wait of a caller that goes, and the pull it shared goes on fo
 
   const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
 
-  expect(row?.ref).toStrictEqual(ctx.config.build.image);
-  expect(pulls.length).toBe(1);
+  expect(row?.ref).toStrictEqual(config.build.image);
+  expect(pulls).toHaveLength(1);
 });
 
 test('it does not pull a builder image the host engine has already', async () => {
-  const ctx = await setupTest({ builderImagePullMs: 300 });
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
   // the operator's own `docker pull` of IMP_BUILD_IMAGE; a pull would hang
   buildStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
         pull: 'hang',
       },
@@ -857,26 +1396,55 @@ test('it does not pull a builder image the host engine has already', async () =>
     exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
   });
 
-  await ctx
-    .createImages(buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open)
-    .images.ensureBuilderImage();
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    builderImagePullMs: 300,
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  await images.ensureBuilderImage();
 
   const row = await findImageByName(ctx.db, BUILDER_IMAGE);
 
   const pulls = ctx.docker.readCalls().filter((call) => call.startsWith('pull '));
 
-  expect(row?.ref).toStrictEqual(ctx.config.build.image);
+  expect(row?.ref).toStrictEqual(config.build.image);
   expect(pulls).toStrictEqual([]);
 });
 
 test('it names the error of a step after the pull that fails past the limit, not the pull', async () => {
-  const ctx = await setupTest({ builderImagePullMs: 300 });
+  const ctx = await setupTest();
+
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
 
   buildStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
-        refs: [ctx.config.build.image],
+        refs: [config.build.image],
         inspects: [{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }],
       },
     ],
@@ -885,15 +1453,50 @@ test('it names the error of a step after the pull that fails past the limit, not
   });
 
   const mkfs = buildStubImageMkfs(ctx.dataDir);
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
 
-  const ensuring = ctx
-    .createImages(buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' }).guest.open)
-    .images.ensureBuilderImage();
+  // each pull's limit, which ends only when the test expires it
+  const pullLimits: AbortController[] = [];
+
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+    builderImagePullMs: 300,
+    startPullLimit: () => {
+      const limit = new AbortController();
+
+      pullLimits.push(limit);
+
+      return limit.signal;
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const ensuring = images.ensureBuilderImage();
 
   await mkfs.waitForStart();
 
   // the rootfs write outlasts the pull's limit, then fails
-  ctx.expirePullLimits();
+  for (const limit of pullLimits) {
+    limit.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+  }
+
   mkfs.fail('no space left on device');
 
   expect(ensuring).rejects.toMatchObject({
@@ -907,7 +1510,13 @@ test('it names the error of a step after the pull that fails past the limit, not
 test('it leaves no row, rootfs, hold or builder when the client leaves an add while mkfs.ext4 runs', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const mkfs = buildStubImageMkfs(ctx.dataDir);
 
@@ -916,21 +1525,41 @@ test('it leaves no row, rootfs, hold or builder when the client leaves an add wh
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
   const client = new AbortController();
 
-  const adding = ctx
-    .createImages(builder.guest.open)
-    .images.addImage('busybox:1.37', 'box', { signal: client.signal });
+  const adding = images.addImage('busybox:1.37', 'box', { signal: client.signal });
 
   await mkfs.waitForStart();
 
   client.abort(new Error('the client went'));
   mkfs.release();
 
-  expect(adding).rejects.toThrow('the client went');
+  expect(adding).rejects.toThrowWithMessage(Error, 'the client went');
 
   const box = await findImageByName(ctx.db, 'box');
-  const status = await ctx.diskBudget.readStatus();
+  const status = await ctx.impd.diskBudget.readStatus();
   const imps = await listImps(ctx.db);
 
   const built = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
@@ -946,7 +1575,13 @@ test('it leaves no row, rootfs, hold or builder when the client leaves an add wh
 test('it leaves no new row and no rootfs when a template takes the name during an add', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const exporting = Promise.withResolvers<null>();
   const templated = Promise.withResolvers<null>();
@@ -961,25 +1596,42 @@ test('it leaves no new row and no rootfs when a template takes the name during a
     },
   });
 
-  const adding = ctx.createImages(builder.guest.open).images.addImage('busybox:1.37', 'box');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await exporting.promise;
-
-  await createImage(ctx.db, {
-    name: 'box',
-    ref: 'imp:dev',
-    digest: `sha256:${'d'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'box', source: 'imp', sourceImp: 'dev' }));
 
   templated.resolve(null);
 
-  expect(adding).rejects.toThrow('image box is a template');
+  expect(adding).rejects.toThrowWithMessage(
+    Error,
+    'image box is a template; make it again from an imp, or pick another name',
+  );
 
   const box = await findImageByName(ctx.db, 'box');
-  const status = await ctx.diskBudget.readStatus();
+  const status = await ctx.impd.diskBudget.readStatus();
 
   const built = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
     entry.startsWith('imp-build-'),
@@ -993,7 +1645,13 @@ test('it leaves no new row and no rootfs when a template takes the name during a
 test("it keeps the other's row and rootfs when an add and a build of one digest run at once and one row fails", async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const mkfs = buildStubImageMkfs(ctx.dataDir);
 
@@ -1002,8 +1660,29 @@ test("it keeps the other's row and rootfs when an add and a build of one digest 
     repoDigest: `sha256:${'b'.repeat(64)}`,
   });
 
-  const service = ctx.createImages(builder.guest.open);
-  const adding = service.images.addImage('busybox:1.37', 'box');
+  const images = createImageService({
+    config,
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:1.37', 'box');
   const context = join(ctx.dataDir, 'context');
 
   await mkdir(context);
@@ -1014,7 +1693,7 @@ test("it keeps the other's row and rootfs when an add and a build of one digest 
     Bun.spawnSync(['tar', '-C', context, '-c', 'Dockerfile']).stdout,
   );
 
-  const building = service.images.buildImageFromContext(`${context}.tar`, 'web', undefined, {
+  const building = images.buildImageFromContext(`${context}.tar`, 'web', undefined, {
     signal: new AbortController().signal,
   });
 
@@ -1027,21 +1706,17 @@ test("it keeps the other's row and rootfs when an add and a build of one digest 
     );
   });
 
-  await createImage(ctx.db, {
-    name: 'box',
-    ref: 'imp:dev',
-    digest: `sha256:${'d'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'box', source: 'imp', sourceImp: 'dev' }));
 
   mkfs.release();
 
-  expect(adding).rejects.toThrow('image box is a template');
+  expect(adding).rejects.toThrowWithMessage(
+    Error,
+    'image box is a template; make it again from an imp, or pick another name',
+  );
 
   const built = await building;
-  const status = await ctx.diskBudget.readStatus();
+  const status = await ctx.impd.diskBudget.readStatus();
 
   const rootfs = readdirSync(join(ctx.dataDir, 'images')).filter((entry) =>
     entry.startsWith('imp-build-'),
@@ -1055,7 +1730,13 @@ test("it keeps the other's row and rootfs when an add and a build of one digest 
 test('it keeps the rootfs when an image rm runs while an add of its digest is between rootfs and row', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const gate = buildQueryGate('box');
 
@@ -1081,15 +1762,35 @@ test('it keeps the rootfs when an image rm runs while an add of its digest is be
     },
   });
 
-  const add = ctx.createImages(builder.guest.open, { plugin: gate.plugin });
+  const images = createImageService({
+    config,
+    db: ctx.db.withPlugin(gate.plugin),
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  const first = await add.images.addImage('busybox:1.37', 'one');
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  const adding = add.images.addImage('busybox:1.37', 'box');
+  const first = await images.addImage('busybox:1.37', 'one');
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await gate.reached;
 
-  await add.images.removeImage('one');
+  await images.removeImage('one');
 
   gate.release();
 
@@ -1107,7 +1808,13 @@ test('it keeps the rootfs when an image rm runs while an add of its digest is be
 test("it removes that rootfs after all when the add's row then fails", async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const gate = buildQueryGate('box');
 
@@ -1118,6 +1825,7 @@ test("it removes that rootfs after all when the add's row then fails", async () 
 
   const exports = { count: 0 };
 
+  // the second add's export arms the gate, after its name check
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
     repoDigest: `sha256:${'b'.repeat(64)}`,
@@ -1132,24 +1840,40 @@ test("it removes that rootfs after all when the add's row then fails", async () 
     },
   });
 
-  const add = ctx.createImages(builder.guest.open, { plugin: gate.plugin });
+  const images = createImageService({
+    config,
+    db: ctx.db.withPlugin(gate.plugin),
+    storage: ctx.storage,
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  const first = await add.images.addImage('busybox:1.37', 'one');
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
 
-  const adding = add.images.addImage('busybox:1.37', 'box');
+  const first = await images.addImage('busybox:1.37', 'one');
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await gate.reached;
 
-  await add.images.removeImage('one');
+  await images.removeImage('one');
 
-  await createImage(ctx.db, {
-    name: 'box',
-    ref: 'imp:dev',
-    digest: `sha256:${'d'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  // a template takes the add's name while its row waits
+  const template = buildMockNewImage({ name: 'box', source: 'imp', sourceImp: 'dev' });
+
+  await createImage(ctx.db, template);
 
   gate.release();
 
@@ -1159,7 +1883,7 @@ test("it removes that rootfs after all when the add's row then fails", async () 
 
   expect(
     rows.filter((row) => row.name !== BUILDER_IMAGE).map((row) => [row.name, row.digest]),
-  ).toStrictEqual([['box', `sha256:${'d'.repeat(64)}`]]);
+  ).toStrictEqual([['box', template.digest]]);
 
   expect(existsSync(buildImagePaths(ctx.dataDir, first.digest).rootfs)).toBe(false);
 });
@@ -1167,7 +1891,13 @@ test("it removes that rootfs after all when the add's row then fails", async () 
 test('it logs a cleanup removal that fails, and returns the add its own error', async () => {
   const ctx = await setupTest();
 
-  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
+  const config = loadConfig({
+    IMP_DATA_DIR: ctx.dataDir,
+    IMP_BUILD_MEMORY_MIB: '512',
+    IMP_BUILD_DISK_GIB: '4',
+  });
+
+  await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
   const exporting = Promise.withResolvers<null>();
   const templated = Promise.withResolvers<null>();
@@ -1182,30 +1912,44 @@ test('it logs a cleanup removal that fails, and returns the add its own error', 
     },
   });
 
-  // a storage whose removals fail, as on a disk gone read-only
-  const add = ctx.createImages(builder.guest.open, {
+  const images = createImageService({
+    config,
+    db: ctx.db,
+
+    // a storage whose removals fail, as on a disk gone read-only
     storage: {
       ...ctx.storage,
       removeImage: () => Promise.reject(new Error('the disk is read-only')),
     },
+    storageGate: ctx.impd.storageGate,
+    diskBudget: ctx.impd.diskBudget,
+    readBuilders: () => builders,
+    log: (message) => {
+      ctx.logs.push(message);
+    },
   });
 
-  const adding = add.images.addImage('busybox:1.37', 'box');
+  const builders = createBuilders({
+    config,
+    db: ctx.db,
+    imps: { ...ctx.impd.imps, openBuilderExec: (_name, request) => builder.guest.open(request) },
+    ensureImage: (signal) => images.ensureBuilderImage(signal),
+    log: (message) => {
+      ctx.logs.push(message);
+    },
+  });
+
+  const adding = images.addImage('busybox:1.37', 'box');
 
   await exporting.promise;
-
-  await createImage(ctx.db, {
-    name: 'box',
-    ref: 'imp:dev',
-    digest: `sha256:${'d'.repeat(64)}`,
-    sizeBytes: 1,
-    source: 'imp',
-    sourceImp: 'dev',
-  });
+  await createImage(ctx.db, buildMockNewImage({ name: 'box', source: 'imp', sourceImp: 'dev' }));
 
   templated.resolve(null);
 
-  expect(adding).rejects.toThrow('image box is a template');
+  expect(adding).rejects.toThrowWithMessage(
+    Error,
+    'image box is a template; make it again from an imp, or pick another name',
+  );
 
   expect(ctx.logs).toSatisfyAny((line: string) =>
     /^impd: image box: could not remove the unused rootfs of imp-build-[a-f0-9]{64}: the disk is read-only$/v.test(
