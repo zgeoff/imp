@@ -1186,8 +1186,9 @@ device_source() {
 # check_device_free DEV: refuse a device that may hold data in use.
 check_device_free() {
   local dev=$1
-  # stat, not test -b, so a test can stand in for the device
-  [ "$(stat -L -c %F "$dev" 2>/dev/null)" = "block special file" ] || die "$dev is not a block device"
+  # stat, not test -b, so a test can stand in for the device; LC_ALL=C keeps
+  # the file type in English whatever the host's locale
+  [ "$(LC_ALL=C stat -L -c %F "$dev" 2>/dev/null)" = "block special file" ] || die "$dev is not a block device"
   dev=$(readlink -f "$dev")
   local root_disk
   root_disk=$(findmnt -n -o SOURCE / | sed 's/\[.*//')
