@@ -61,7 +61,7 @@
 #      the container off the tailnet whatever key there is.
 #      IMP_MOVE_TEST_CIDR and IMP_PEER_URL pass through for the moves suite.
 #      IMP_UPLINK_MTU overrides the MTU read from this machine's default route.
-#      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
+#      IMP_BACKUP_* pass through too (docs/architecture/storage/backups.md), and
 #      IMP_DEV_BACKUP_ENV_FILE is a docker --env-file with the repository's
 #      AWS_* keys, so this shell's own AWS_* never reach the container.
 #      IMP_DEV_READY_TIMEOUT_S (default 600 for up, 60 for restart) bounds the

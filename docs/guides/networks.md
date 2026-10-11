@@ -21,8 +21,8 @@ network the imp is not on do nothing.
 ## What a network allows
 
 - Every member reaches every other member on any port, over TCP, UDP and ICMP, whatever either one's
-  [egress policy](../architecture/networking.md#egress) is. The firewall still holds a `public`,
-  `box` or `none` imp to its policy for every address outside the network.
+  [egress policy](../architecture/network/egress.md) is. The firewall still holds a `public`, `box`
+  or `none` imp to its policy for every address outside the network.
 - A non-member reaches no member, and no member reaches it. A packet between two imps that share no
   network is refused: TCP gets a reset, the rest ICMP admin-prohibited.
 - IPv4 only: two members do not reach each other over IPv6, and names answer A records only.
@@ -31,8 +31,8 @@ network the imp is not on do nothing.
   entries. A pair that still shares another network keeps its connections.
 - A sleeping imp does not wake for a packet from a peer. Hold it (`imp hold`), or wake it first.
 - A fork joins no network: a join is a choice made for each imp. A
-  [backup](../architecture/backups.md) keeps each imp's network names, and a restore puts the imp
-  back on them, making any network that is gone.
+  [backup](../architecture/storage/backups.md) keeps each imp's network names, and a restore puts
+  the imp back on them, making any network that is gone.
 
 ## A network is a trust boundary
 
@@ -88,5 +88,5 @@ them. `imp net ls` needs `read`; the other `imp net` commands need `manage`.
 
 ## How it works
 
-The [networking page](../architecture/networking.md#networks) covers the firewall rules and the
+The [networking page](../architecture/network/egress.md#networks) covers the firewall rules and the
 resolver's part.

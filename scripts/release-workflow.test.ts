@@ -9,7 +9,7 @@ import { createStubBin } from './test-utils/create-stub-bin';
 import { parseReleaseWorkflow } from './test-utils/parse-release-workflow';
 
 // The base job publishes imp-base, which other images pin by digest, so a published tag must
-// never move (RELEASING.md). The Plan step's tests run its shell as Actions does (bash -eo
+// never move (docs/runbooks/releasing.md). The Plan step's tests run its shell as Actions does (bash -eo
 // pipefail), with a stub docker and gh on PATH and a checked-out tree in a scratch directory.
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-release-workflow-'));

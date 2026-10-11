@@ -218,7 +218,7 @@ export const SUITES: readonly Suite[] = [
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
-// `fast` is what CI runs; docs/guides/development.md#end-to-end-tests lists
+// `fast` is what CI runs; docs/runbooks/development.md#end-to-end-tests lists
 // its suites.
 export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),

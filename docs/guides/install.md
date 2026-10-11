@@ -1,6 +1,6 @@
 # Install
 
-imp runs on one Linux machine, in one host container, in one of two ways:
+impz runs on one Linux machine, in one host container, in one of two ways:
 
 - **The release image** for a server: impd, the `imp` CLI, the guest kernel and the system drive are
   baked in, and nothing from the repo is mounted. [Bootstrap a server](#bootstrap-a-server) sets up
@@ -13,10 +13,10 @@ imp runs on one Linux machine, in one host container, in one of two ways:
 
 - `/dev/kvm`: bare metal, or a VM with nested virtualization (WSL2 works).
 - Docker. The host container runs as root with the capabilities in
-  [privileges](../architecture/host-contract.md#privileges). It reaches Docker through
-  `imp-docker-proxy`, a second container, never the host's socket
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). That closes the Docker
-  socket path only: `SYS_ADMIN` still lets root out of the container.
+  [privileges](../architecture/host.md#privileges). It reaches Docker through `imp-docker-proxy`, a
+  second container, never the host's socket
+  ([the Docker socket](../architecture/host.md#the-docker-socket)). That closes the Docker socket
+  path only: `SYS_ADMIN` still lets root out of the container.
 - A host kernel with the iptables `rpfilter` and `addrtype` matches (`xt_rpfilter`, `xt_addrtype`).
   The host container loads its rules into its own network namespace, and the guard against spoofed
   guest addresses and the broker's port rule need both. Most distribution kernels and WSL2 have
@@ -79,10 +79,10 @@ restarts and day-to-day care.
 ## What `dev.sh up` does
 
 - Builds the `dev` target of `host/Dockerfile` as the host image, tagged for this checkout
-  ([worktrees](./development.md#worktrees)), and rebuilds `build/imp-system.squashfs` (the agent's
-  system drive) from `agent/`, so a changed agent reaches the next imp. The Docker cache makes the
-  rebuild take about half a second when the agent is unchanged. With `IMP_SYSTEM_DRIVE` set, it uses
-  that drive as it is.
+  ([worktrees](../runbooks/development.md#worktrees)), and rebuilds `build/imp-system.squashfs` (the
+  agent's system drive) from `agent/`, so a changed agent reaches the next imp. The Docker cache
+  makes the rebuild take about half a second when the agent is unchanged. With `IMP_SYSTEM_DRIVE`
+  set, it uses that drive as it is.
 - Starts `<name>-docker-proxy` first: this checkout's proxy, compiled with `bun build --compile` as
   the release image compiles it, with the proxy's privileges from `deploy/imp-host.args.json`. Its
   socket directory and token are Docker volumes of their own, which `dev.sh down` removes.
@@ -154,8 +154,7 @@ The phases run in order:
   refuses in a container and on a kernel older than 6.10. `--no-ksm` removes the rule, writes 2 to
   `/sys/kernel/mm/ksm/run`, which stops ksmd and unmerges every merged page, and sets `IMP_KSM=0`. A
   running imp keeps its merge flag until it restarts, and impd logs each such VM it adopts. Off by
-  default: read the caution in
-  [KSM](../architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages) first.
+  default: read the caution in [KSM](../architecture/lifecycle/ram-governor.md#ksm) first.
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
   `imp-firewall.service`, after `nft -c` accepts the ruleset. It refuses while `nftables.service` is
   enabled. With `--host-firewall none`, it does none of this ([Firewall](#firewall)).
@@ -166,7 +165,7 @@ The phases run in order:
   the env file (or loads `--image-archive`), and refuses an image whose `imp.host-contract` label is
   not `socket-proxy`. It starts the proxy, then imp-host. The proxy is the only Docker socket
   imp-host sees, and closes that path only: `SYS_ADMIN` still lets root out of the container
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The unit has
+  ([the Docker socket](../architecture/host.md#the-docker-socket)). The unit has
   `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
   orders it after `zfs.target`.
 - **tailscale:** With a key in the env file, waits for the node to be `Running`, then blanks the key
@@ -178,7 +177,7 @@ The phases run in order:
 
 ### Disk layout
 
-Give imp a disk or a partition of its own. Put the OS on the rest:
+Give impz a disk or a partition of its own. Put the OS on the rest:
 
 | Mount          | Size                              | Notes                                                            |
 | -------------- | --------------------------------- | ---------------------------------------------------------------- |
@@ -188,7 +187,7 @@ Give imp a disk or a partition of its own. Put the OS on the rest:
 
 OVH Rise and Vultr bare metal ship two NVMe disks, and their installers can put the OS on a RAID 1
 of both. Either keep the second disk out of the RAID and give it as `--data-device`, or make a RAID
-array or partition for imp in the installer and give that (`--data-device /dev/md2`). The script
+array or partition for impz in the installer and give that (`--data-device /dev/md2`). The script
 does not partition disks. OVH's default template gives the free space to `/home`; the script refuses
 that partition while it is mounted, so pick a layout without it in the installer.
 
@@ -201,7 +200,7 @@ one. ZFS needs a device; the script makes no pool on a file.
 
 ### ZFS
 
-`--storage zfs` puts imp on a ZFS pool instead ([storage](../architecture/storage.md#zfs)):
+`--storage zfs` puts impz on a ZFS pool instead ([storage](../architecture/storage/storage.md#zfs)):
 
 ```sh
 bash bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1   # pool tank, dataset tank/imp
@@ -218,7 +217,8 @@ bash bootstrap.sh --yes --storage zfs --zfs-pool fast              # an existing
   backends, since the imps would stay behind on the old one.
 - ZFS takes no `--loop-file`.
 - The host image ships the 2.4 tools, which match Ubuntu 26.04's module. On Ubuntu 24.04 (module
-  2.2) impd starts and warns about the minor skew ([versions](../architecture/storage.md#versions)).
+  2.2) impd starts and warns about the minor skew
+  ([versions](../architecture/storage/storage.md#zfs)).
 
 ### RAM budget
 
@@ -234,8 +234,8 @@ to half of RAM. On a 64 GB box:
 | ZFS ARC cap (`zfs_arc_max`)             | none    | 6,400   |
 | `IMP_RAM_BUDGET_MIB`                    | 54,400  | 48,000  |
 
-On XFS that is about 170 awake imps at the 317 MiB that `STATUS.md` measured for an imp filling 256
-MiB, or 26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
+On XFS that is about 170 awake imps at the 317 MiB that the end-to-end scale test measured for an
+imp filling 256 MiB, or 26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
 
 The script writes the budget when the env file holds the template's `16384` or nothing. Any other
 value is yours and stays. On a host too small for the formula, where the budget comes out below 512
@@ -276,14 +276,14 @@ On a host whose platform owns the firewall, run with `--host-firewall none`. The
 host rules and leaves `ufw` and `firewalld` alone, and the env file records
 `IMP_HOST_FIREWALL=none`, so later runs keep it. On a host that an earlier run gave the `imp_host`
 table, the flag removes the table and `imp-firewall.service`. Without the flag, a table that is
-still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. imp
-needs no inbound port either way ([host contract](../architecture/host-contract.md#firewall)).
+still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. impz
+needs no inbound port either way ([host contract](../architecture/host.md#the-host-firewall)).
 
 ### IPv6
 
 Imps get IPv6 only when the `imp-host` container has an IPv6 default route
-([IPv6](../architecture/networking.md#ipv6)). Docker's default bridge is IPv4 only, so with IPv6 on,
-`imp-host` runs on its own Docker network instead:
+([IPv6](../architecture/network/networking.md#ipv6)). Docker's default bridge is IPv4 only, so with
+IPv6 on, `imp-host` runs on its own Docker network instead:
 
 ```sh
 docker network create --ipv6 --subnet <IMP_HOST_SUBNET6> \
@@ -310,7 +310,7 @@ admit it; on NixOS the module does ([IPv6 on NixOS](./nixos.md#ipv6)).
   only creates the network when it is missing, so after a manual change run the script.
 - **Off again:** `--ipv6 off` stops `imp-host`, removes the network and the router advert file
   below, and `imp-host` comes back on the default bridge. Every imp that has an IPv6 prefix boots
-  cold at its next start ([a new prefix](../architecture/networking.md#a-new-prefix)). An env file
+  cold at its next start ([a new prefix](../architecture/network/networking.md#ipv6)). An env file
   that says off beside the network is drift: `--check` exits 2, and `--yes` refuses.
 
 **CAUTION:** Docker turns on `net.ipv6.conf.all.forwarding` for an IPv6 network. With forwarding on,
@@ -321,7 +321,7 @@ the host's IPv6 with it. The ipv6 phase settles this before it creates the netwo
 - **The kernel takes the adverts** (`accept_ra` is 1): the script writes
   `/etc/sysctl.d/90-imp-ipv6.conf` with `net/ipv6/conf/<uplink>/accept_ra = 2`, which keeps them
   with forwarding on, and applies it. The slash form keeps a dotted name such as `eth0.100` whole.
-  The file stays when you roll the host back or remove imp; `--ipv6 off` removes it, and the live
+  The file stays when you roll the host back or remove impz; `--ipv6 off` removes it, and the live
   value stays until a reboot.
 - **A client takes them** (`accept_ra` is 0): systemd-networkd (and netplan, which uses it),
   NetworkManager or dhcpcd. networkd keeps them with forwarding on when the uplink's `.network` file
@@ -343,7 +343,7 @@ bridges to host services that imps must not reach, such as a k3s API or a databa
 address.
 
 A routed /64 instead of NAT66 is not automated: set `IMP_SUBNET6=<prefix>` and route the prefix to
-the container's address on `imp-host` ([IPv6](../architecture/networking.md#ipv6)).
+the container's address on `imp-host` ([IPv6](../architecture/network/networking.md#ipv6)).
 
 ### Test it
 
@@ -407,8 +407,13 @@ Each release pushes the image to `ghcr.io/zgeoff/imp-host`, tagged with its vers
 for linux/amd64 only. The GitHub release has the CLI for Linux and macOS (`imp-linux-x64`,
 `imp-linux-arm64`, `imp-darwin-x64`, `imp-darwin-arm64`), the guest kernel `vmlinux` and the system
 drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and `SHA256SUMS` over
-all of them. [RELEASING.md](../../RELEASING.md) shows how to check the checksums and the provenance
-attestations.
+all of them. Check an asset or the image against them:
+
+```sh
+sha256sum -c SHA256SUMS
+gh attestation verify imp-linux-x64 -R zgeoff/imp
+gh attestation verify oci://ghcr.io/zgeoff/imp-host:<version> -R zgeoff/imp
+```
 
 <!-- x-release-please-start-version -->
 
@@ -421,8 +426,8 @@ sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.loc
 <!-- x-release-please-end -->
 
 The deploy files run the image of their own release: `deploy/bootstrap.sh`, both units and
-`deploy/compose.yaml` name `ghcr.io/zgeoff/imp-host:X.Y.Z`, the version in imp's `package.json`, and
-`deploy/upgrade.sh` moves the host to the release it comes from
+`deploy/compose.yaml` name `ghcr.io/zgeoff/imp-host:X.Y.Z`, the version in impz's `package.json`,
+and `deploy/upgrade.sh` moves the host to the release it comes from
 ([upgrade](./operations.md#upgrade)). On `main`, `package.json` holds the last release until the
 next one, so the files there can name an image older than their own code. Files from a release tag
 name that release's image, which is why [bootstrap a server](#bootstrap-a-server) fetches
@@ -489,7 +494,7 @@ hand.
 
 Use one of the two, not both. Both run the container with the privileges of
 [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json)
-([privileges](../architecture/host-contract.md#privileges)) in a private cgroup namespace (for
+([privileges](../architecture/host.md#privileges)) in a private cgroup namespace (for
 [CPU limits](./cpu-limits.md)), the socket of `imp-docker-proxy` and `/var/lib/imp`, and give impd
 120 seconds to sleep every imp on stop. Both need the seccomp profile at
 `/etc/imp/imp-host.seccomp.json`:
@@ -501,7 +506,7 @@ install -D -m 0644 deploy/imp-host.seccomp.json /etc/imp/imp-host.seccomp.json
 - **systemd:** [`deploy/imp-host.service`](../../deploy/imp-host.service) runs `docker run` in the
   foreground, so systemd supervises it. It wants and starts after
   [`deploy/imp-docker-proxy.service`](../../deploy/imp-docker-proxy.service), the only Docker socket
-  imp-host sees ([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
+  imp-host sees ([the Docker socket](../architecture/host.md#the-docker-socket)).
 
   ```sh
   install -m 0644 deploy/imp-host.service deploy/imp-docker-proxy.service /etc/systemd/system/
@@ -522,7 +527,7 @@ install -D -m 0644 deploy/imp-host.seccomp.json /etc/imp/imp-host.seccomp.json
 
   Compose does not read the host's addresses into `IMP_HOST_ADDRESSES`, as the unit does at each
   start. With `public` imps, list the host's addresses and networks (`ip -o addr show scope global`)
-  in `IMP_EGRESS_DENY` in the env file ([public](../architecture/networking.md#public)).
+  in `IMP_EGRESS_DENY` in the env file ([public](../architecture/network/egress.md#public)).
 
   With `IMP_STORAGE_BACKEND=zfs`, add `-f deploy/compose.zfs.yaml` for `/dev/zfs`. On a host booted
   with `ipv6.disable=1`, delete the `net.ipv6` sysctls from the compose file: Docker refuses a

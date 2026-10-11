@@ -33,7 +33,7 @@ import { buildStats } from '../lib/stats';
 import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-// The RAM governor at scale (docs/guides/development.md): more imps than the
+// The RAM governor at scale (docs/runbooks/development.md): more imps than the
 // budget holds, each with a tmpfs of random data, so the governor must sleep
 // the least recently active to admit the next.
 

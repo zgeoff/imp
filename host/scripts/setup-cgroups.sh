@@ -1,5 +1,5 @@
 #!/bin/bash
-# A cgroup per imp for CPU and memory limits (docs/architecture/daemon.md#cgroups).
+# A cgroup per imp for CPU and memory limits (docs/architecture/isolation.md#cgroups).
 # Only in a private cgroup v2 namespace, where /sys/fs/cgroup is this
 # container's own subtree; anywhere else impd stores limits without enforcing
 # them. Never fails the container: CPU limits are not worth an outage.

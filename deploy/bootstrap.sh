@@ -68,7 +68,7 @@ Options:
   --ksm                       let KSM merge identical guest pages: ksmd runs
                               at boot and IMP_KSM=1. Linux 6.10 or later, not
                               in a container. Off by default: merged pages let
-                              guests time each other (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
+                              guests time each other (docs/architecture/lifecycle/ram-governor.md#ksm).
   --no-ksm                    turn it off again: remove the boot rule, stop
                               ksmd, unmerge its pages and set IMP_KSM=0;
                               running imps keep the merge flag until they
@@ -575,7 +575,7 @@ EnvironmentFile=-/run/imp-host/probed.env
 ExecStartPre=/bin/sh -c 'a=; [ -e /dev/zfs ] && a="$$a --device /dev/zfs"; [ -e /proc/sys/net/ipv6 ] && a="$$a --sysctl net.ipv6.conf.all.forwarding=1 --sysctl net.ipv6.conf.default.accept_ra=0 --sysctl net.ipv6.conf.default.accept_redirects=0 --sysctl net.ipv6.conf.default.disable_ipv6=0"; { echo "IMP_HOST_PROBED=$$a"; echo "IMP_HOST_ADDRESSES=$$(ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,)"; } >/run/imp-host/probed.env'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
-# --hostname: restic's backup locks name the host (docs/architecture/backups.md)
+# --hostname: restic's backup locks name the host (docs/architecture/storage/backups.md)
 # $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
 # public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps);
 # $IMP_HOST_NETWORK too: with IPv6, `--network imp-host`
@@ -618,7 +618,7 @@ unit_imp_docker_proxy() {
   cat <<'EOF'
 # imp-docker-proxy: the only Docker socket imp-host sees. It passes the
 # calls impd makes (pull, build, create, export, rm) and refuses every other
-# (docs/architecture/host-contract.md#the-docker-socket). It closes the
+# (docs/architecture/host.md#the-docker-socket). It closes the
 # Docker socket path only: imp-host keeps SYS_ADMIN, which still lets root
 # out of the container.
 #
@@ -629,7 +629,7 @@ unit_imp_docker_proxy() {
 # and deploy/upgrade.sh install both.
 [Unit]
 Description=imp Docker socket proxy (the Docker API calls impd makes)
-Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host-contract.md
+Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host.md
 Requires=docker.service
 After=docker.service
 
@@ -727,7 +727,7 @@ IMP_ACME_EMAIL=
 IMP_PUBLIC_IP=
 IMP_PUBLIC_PORTS=
 
-# The public egress policy (docs/architecture/networking.md#public): more
+# The public egress policy (docs/architecture/network/egress.md#public): more
 # addresses no public imp may reach, IPv4 and IPv6, comma-separated. The
 # systemd unit writes this host's global addresses into IMP_HOST_ADDRESSES at
 # each start; list what that misses. With deploy/compose.yaml, list every
@@ -744,12 +744,12 @@ IMP_DEFAULT_MEMORY_MIB=2048
 
 # Where disks live: xfs (a reflink XFS mount at /var/lib/imp) or zfs. With
 # zfs, IMP_ZFS_ROOT is a dataset with mountpoint=legacy that the container
-# mounts itself (docs/architecture/storage.md#zfs). The host's zfs module must
+# mounts itself (docs/architecture/storage/storage.md#zfs). The host's zfs module must
 # be OpenZFS 2.x; impd warns when its minor version differs from the image's.
 IMP_STORAGE_BACKEND=xfs
 IMP_ZFS_ROOT=
 
-# Who owns the host's inbound firewall (docs/architecture/host-contract.md):
+# Who owns the host's inbound firewall (docs/architecture/host.md):
 # own, deploy/bootstrap.sh loads an nft table that admits SSH only; none, the
 # platform does (NixOS networking.firewall), and imp adds no host rules.
 # impd needs no inbound host port either way.
@@ -765,14 +765,14 @@ IMP_HOST_SUBNET6=
 IMP_HOST_NETWORK=
 
 # KSM merges identical guest pages
-# (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
+# (docs/architecture/lifecycle/ram-governor.md#ksm).
 # Off by default: merged pages let guests time each other. bootstrap.sh --ksm
 # sets IMP_KSM=1 on a host with Linux 6.10 or later, not in a container. The governor
 # keeps this share of KSM's saving free, for pages that writes split again.
 IMP_KSM=
 IMP_KSM_HEADROOM_PERCENT=100
 
-# Off-host backups with restic (docs/architecture/backups.md): unset
+# Off-host backups with restic (docs/architecture/storage/backups.md): unset
 # IMP_BACKUP_REPOSITORY means none. The container sees /etc/imp read-only;
 # keep the password there, mode 0600, and a copy off the host.
 IMP_BACKUP_REPOSITORY=
@@ -1226,7 +1226,7 @@ prepare_device() {
 # storage_zfs: the pool (created on --data-device, imported, or already
 # there) and the dataset imp mounts, with mountpoint=legacy. The host never
 # mounts it: the container mounts it on /var/lib/imp, and impd creates the
-# children (docs/architecture/storage.md#zfs).
+# children (docs/architecture/storage/storage.md#zfs).
 storage_zfs() {
   if command -v zpool >/dev/null && zpool list -H -o name "$zfs_pool" >/dev/null 2>&1; then
     log "pool $zfs_pool is imported"
@@ -1481,7 +1481,7 @@ uninstall_firewall() {
   if ! grep -q 'hook input' <<<"$rules" \
     && ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } \
     && ! systemctl -q is-active firewalld 2>/dev/null; then
-    warn "the host now has no inbound firewall; the platform must give one (docs/architecture/host-contract.md#firewall)"
+    warn "the host now has no inbound firewall; the platform must give one (docs/architecture/host.md#the-host-firewall)"
   fi
 }
 
@@ -1787,7 +1787,7 @@ ensure_imp() {
   fi
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host | strip_markers)" && changed=1
-  # imp-host reaches Docker through this proxy only (docs/architecture/host-contract.md#the-docker-socket)
+  # imp-host reaches Docker through this proxy only (docs/architecture/host.md#the-docker-socket)
   local proxy_changed=
   put_file /etc/systemd/system/imp-docker-proxy.service 644 "$(unit_imp_docker_proxy | strip_markers)" && proxy_changed=1
   if [ "$storage" = zfs ]; then
@@ -1795,7 +1795,7 @@ ensure_imp() {
   fi
 
   # The unit's seccomp profile, from the image it runs: Docker's default plus
-  # pivot_root for the jailer (docs/architecture/host-contract.md#privileges).
+  # pivot_root for the jailer (docs/architecture/host.md#privileges).
   # A dry run pulls nothing, so it may have no image to read.
   local seccomp
   if dry && ! docker image inspect "$run_image" >/dev/null 2>&1; then
@@ -1903,7 +1903,7 @@ check_storage_live() {
 }
 
 # check_ipv6_live: with IPv6 on, the container has an IPv6 default route,
-# and impd took it (docs/architecture/networking.md#ipv6).
+# and impd took it (docs/architecture/network/networking.md#ipv6).
 check_ipv6_live() {
   [ -n "$(docker exec imp-host ip -6 route show default)" ] \
     || die "imp-host has no IPv6 default route on the $HOST_NETWORK network"

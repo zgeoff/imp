@@ -2,10 +2,10 @@
 
 An imp boots from any OCI image. impd exports the image's filesystem into a sparse ext4 file once
 per image ID, and each imp disk is a reflink clone of it
-([storage](../architecture/storage.md#images-any-oci-image) covers the pipeline). The image needs no
-imp bits and no init system: the guest kernel boots `imp-agent` from the read-only imp system drive
-(`/dev/vdb`), stays PID 1 there, and runs the image filesystem in an
-[inner container](../architecture/agent.md#the-inner-container).
+([storage](../architecture/storage/images.md) covers the pipeline). The image needs no imp bits and
+no init system: the guest kernel boots `imp-agent` from the read-only imp system drive (`/dev/vdb`),
+stays PID 1 there, and runs the image filesystem in an
+[inner container](../architecture/guest/agent.md#the-inner-container).
 
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
@@ -21,7 +21,7 @@ Each release also publishes `images/base` as `ghcr.io/zgeoff/imp-base:X.Y.Z`, li
 a provenance attestation. A published tag never moves, but pin it by digest anyway
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`): the digest names the exact bytes, and
 `gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp` checks where they came
-from ([releasing](../../RELEASING.md#what-a-release-ships)).
+from.
 
 ## Add an image
 
@@ -39,7 +39,7 @@ engine never has the image:
    which needs no resolver to reach the host. A registry name that resolves to a private address
    fails in the builder's resolver; one that resolves to the host's public address meets the
    `public` policy's deny list, which `IMP_HOST_ADDRESSES` fills
-   ([public](../architecture/networking.md#public)).
+   ([public](../architecture/network/egress.md#public)).
 3. impd streams `docker export` out of the builder into the host's `tar` unpack, with every limit of
    an isolated build's step 5, and computes the image's `imp-build-` digest as a build does.
 4. impd destroys the builder, on success, failure or a client that goes.
@@ -112,8 +112,8 @@ digest as `images/examples/hello` names it, works on both.
   the stream with an error event. The disk budget holds room for the tar, its rewrite, and, as the
   export streams, twice what it has written so far for the unpacked image and its ext4 file, in 256
   MiB steps; a disk that fills stops the export with `DISK_FULL`
-  ([storage](../architecture/storage.md#disk-budget)). Each build's builder imp takes a slot, its
-  memory and its disk like any imp.
+  ([storage](../architecture/storage/disk-space.md#the-budget)). Each build's builder imp takes a
+  slot, its memory and its disk like any imp.
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
   build leaves an audit row.
 - **What the build may do.** impd runs one fixed BuildKit build: in a builder, `docker build -` with
@@ -125,8 +125,8 @@ digest as `images/examples/hello` names it, works on both.
   `RUN --security=insecure` fail the build. A failed host build shows BuildKit's error, without the
   `RUN` step's output. The engine pulls the frontend from Docker Hub when it lacks it.
   `imp-docker-proxy` allows only this build
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
-  Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
+  ([the Docker socket](../architecture/host.md#the-docker-socket)). The proxy closes the Docker
+  socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
 - **Images the build names.** Before the build, impd pulls each image that a `FROM`, a `COPY --from`
   or a `RUN --mount=from=` names and the engine that builds does not have yet. In a builder that is
   a cold pull with no credentials. A host build has no session, so BuildKit cannot ask for
@@ -211,7 +211,7 @@ when the build ends. Two separate things hold for a build, and neither stands in
    on the host and refuses what the engine would fetch or run on its own, before any builder boots
    (the list above). It rejects inputs; it isolates nothing.
 2. **The isolation:** the build runs in a Firecracker VM under the
-   [`public` egress policy](../architecture/networking.md#public). A `RUN` step, a pull and the
+   [`public` egress policy](../architecture/network/egress.md#public). A `RUN` step, a pull and the
    frontend's fetch reach the internet only: not the host, impd, other imps, the tailnet, link-local
    or private networks. The firewall does not restrict the builder's own loopback.
 
@@ -303,10 +303,10 @@ When the client goes, impd stops what it can:
 - **File capabilities and `user.*` attributes.** Of a file's extended attributes, the image keeps
   `security.capability` (what `setcap` writes, such as `cap_net_bind_service+ep` on a server that
   binds a port below 1024 without root) and `user.*`; every other one is dropped. impd needs
-  `CAP_SETFCAP` for the first ([host contract](../architecture/host-contract.md#privileges)):
-  without it, an image with a file capability fails to add or build. An image added by impd 0.25.1
-  or older lost its file capabilities, and impd keeps that rootfs for the same image ID:
-  `imp image rm <name>` and add or build it again.
+  `CAP_SETFCAP` for the first ([host contract](../architecture/host.md#privileges)): without it, an
+  image with a file capability fails to add or build. An image added by impd 0.25.1 or older lost
+  its file capabilities, and impd keeps that rootfs for the same image ID: `imp image rm <name>` and
+  add or build it again.
 - **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`, in
   place of any file the image has there. `/etc` and `/etc/imp` must be directories: an image with a
   symlink or a file at either fails to add or build.
@@ -393,7 +393,7 @@ ENV APP_ENV=production
 
 `examples/hello/` is the smallest real case: busybox `httpd` on :8080 as a service. Inside the
 guest, `curl localhost:8080` answers. The acceptance test uses it for the bring-your-own path and as
-the target of the [wake proxy](../architecture/networking.md#the-wake-proxy)
+the target of the [wake proxy](../architecture/network/ingress.md#the-wake-proxy)
 (`http://<name>.imp.localhost:7080`).
 
 Notes for images that are not FROM `imp/base`:

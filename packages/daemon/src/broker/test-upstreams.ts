@@ -6,7 +6,7 @@ import type { Upstream } from './forward-request';
 
 // Tests only (IMP_BROKER_TEST_UPSTREAMS): a file that sends granted hosts to
 // fake servers whose certificates verify against its extra CA; never a way
-// to turn verification off. docs/guides/development.md has the format.
+// to turn verification off. docs/runbooks/development.md has the format.
 
 const FileSchema = z.object({
   ca: z.string().includes('-----BEGIN CERTIFICATE-----'),

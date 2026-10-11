@@ -50,7 +50,7 @@ func userMemoryCurrent() (int64, error) {
 }
 
 // memoryFollower is the loop that moves the container's limit with an
-// elastic guest's memory (docs/architecture/memory.md#how-the-guest-grows);
+// elastic guest's memory (docs/architecture/lifecycle/elastic-memory.md#how-the-guest-grows);
 // nil for a guest whose memory never changes, which keeps its boot limit.
 func memoryFollower(p cmdline.Params) func() {
 	if !p.HotplugMemory {

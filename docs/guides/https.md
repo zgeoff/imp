@@ -4,8 +4,8 @@ With `IMP_DOMAIN=imp.example.com`, every imp is at `https://<name>.imp.example.c
 API is at `https://imp.example.com`. Both answer on the tailnet only, except the imps you make
 [public](#public-imps). impd gets one wildcard certificate from Let's Encrypt with the ACME DNS-01
 challenge, renews it, and keeps the DNS records pointed at the host's tailnet IP. Without
-`IMP_DOMAIN`, nothing changes: the [per-port URLs](../architecture/networking.md#urls) stay the only
-tailnet URLs.
+`IMP_DOMAIN`, nothing changes: the
+[per-port URLs](../architecture/network/ingress.md#the-wake-proxy) stay the only tailnet URLs.
 
 This is the recommended way to give imps names. Tailscale Services can give each imp a name instead
 ([per-imp names](./tailscale.md#per-imp-names)), but that needs an API credential that reaches every
@@ -38,7 +38,7 @@ You need a domain in a Cloudflare zone and an API token for it.
    before the local and tailnet URLs; a script that wants one of those picks it by its form.
    `imp login https://imp.example.com` reaches the API, and `https://imp.example.com` opens the
    [dashboard](./dashboard.md). Over HTTPS its session cookie is `__Host-imp_session`, which no imp
-   under the domain can set ([daemon](../architecture/daemon.md#dashboard)).
+   under the domain can set ([daemon](../architecture/control/auth.md#the-dashboard-session)).
 
 The host must be on a tailnet (`TAILSCALE_AUTHKEY`). Without one, impd still gets the certificate,
 but the HTTPS listeners answer only on loopback inside the host container.
@@ -130,7 +130,7 @@ reaches these listeners. impd checks the tailnet IP every 30 seconds and moves t
 changes. A failed check keeps them where they are, so it never cuts open connections.
 
 - **443** terminates TLS and hands the request to the
-  [wake proxy](../architecture/networking.md#the-wake-proxy). The Host header must be exactly
+  [wake proxy](../architecture/network/ingress.md#the-wake-proxy). The Host header must be exactly
   `<name>.<domain>` for an imp, or exactly `<domain>` for the API. Anything else, such as
   `a.b.<domain>`, gets a 404. The bare domain therefore never reaches an imp named after its first
   label. The upstream request carries `x-forwarded-proto: https`. The dashboard's session cookie

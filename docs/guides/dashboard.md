@@ -9,9 +9,9 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
 - **Imps**: every imp with its state, RAM, CPU, disk use, last activity and URL, and notes: why it
   failed, why its next wake boots cold, which parts it runs outdated, a hold that keeps it awake,
   and an agent that stopped answering
-  ([the watchdog](../architecture/sleep-and-wake.md#the-watchdog)). Each row has the buttons that
-  fit its state (sleep, wake, start, stop, restart), the console and destroy. **New imp** opens a
-  form for the name, image, memory, vCPUs and HTTP port; a blank field takes impd's default, as
+  ([the watchdog](../architecture/lifecycle/lifecycle.md#the-watchdog)). Each row has the buttons
+  that fit its state (sleep, wake, start, stop, restart), the console and destroy. **New imp** opens
+  a form for the name, image, memory, vCPUs and HTTP port; a blank field takes impd's default, as
   `imp new` does.
 - **One imp**: its details with disk use, both URLs, CPU use with a form for the limit and the
   weight, the checkpoints (take, restore, fork, delete) and a fork of its disk as it is now.
@@ -35,7 +35,8 @@ session cookie and the browser never keeps the token. The session acts with that
 lasts 30 days. Log out clears it in that browser; removing the token ends its sessions, and a new
 root token ends every session. A tailnet member that an
 [`IMP_TAILNET_IDENTITIES`](./tokens.md#tailnet-identity) rule matches needs no login.
-[The daemon](../architecture/daemon.md#dashboard) has the details and the security model.
+[The daemon](../architecture/control/auth.md#the-dashboard-session) has the details and the security
+model.
 
 ## Build and run it
 
@@ -61,9 +62,9 @@ query goes through the SDK and oRPC's wire format. They run in their own `bun te
 register must not reach the daemon's tests, and the root `bun test` skips the package.
 
 The end-to-end test logs in, creates an imp, runs a command in its console, sleeps and destroys it,
-then logs out. The `dashboard` suite of the [end-to-end harness](./development.md#end-to-end-tests)
-builds the dashboard, installs Playwright's pinned Chromium and runs it; it is in the `fast` set CI
-runs:
+then logs out. The `dashboard` suite of the
+[end-to-end harness](../runbooks/development.md#end-to-end-tests) builds the dashboard, installs
+Playwright's pinned Chromium and runs it; it is in the `fast` set CI runs:
 
 ```sh
 scripts/test-e2e.sh --only dashboard

@@ -53,4 +53,4 @@ Stop and start the imp to update it ([operations](./operations.md#upgrade)).
 `openReverseForward` in `@zgeoff/imp-client` opens a forward over impd's `/tunnel` socket. Its
 `onConnection` gets each client in the imp, for the caller to relay where it likes; `ended` says
 `lost` when a sleep ended the forward, and the caller listens again once the imp runs. The protocol
-is in [daemon](../architecture/daemon.md#reverse-forwards).
+is in [daemon](../architecture/network/ingress.md#tunnels-and-reverse-forwards).

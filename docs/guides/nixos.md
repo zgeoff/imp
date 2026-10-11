@@ -1,7 +1,7 @@
 # NixOS
 
-imp's flake exports `nixosModules.imp`, which sets a NixOS host up for the `imp-host` container. It
-meets the [host contract](../architecture/host-contract.md), as
+impz's flake exports `nixosModules.imp`, which sets a NixOS host up for the `imp-host` container. It
+meets the [host contract](../architecture/host.md), as
 [`deploy/bootstrap.sh`](./install.md#bootstrap-a-server) does on Ubuntu and Debian. The module is
 [`deploy/nixos/module.nix`](../../deploy/nixos/module.nix).
 
@@ -11,7 +11,7 @@ meets the [host contract](../architecture/host-contract.md), as
 {
   # a release tag: the module runs that release's image (see "The image")
   inputs.imp.url = "github:zgeoff/imp/vX.Y.Z";
-  # The module takes pkgs from your system; imp's own pin is for its checks only.
+  # The module takes pkgs from your system; impz's own pin is for its checks only.
   inputs.imp.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = { nixpkgs, imp, ... }: {
@@ -56,8 +56,8 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   `imp-zfs-dataset.service` runs after `zfs-import.target` and creates `zfs.root` (default
   `tank/imp`) with `mountpoint=legacy` only when it is missing. With `storage = "xfs"`, declare
   `/var/lib/imp` in `fileSystems`, as XFS with reflink and `options = [ "nosuid" ]` (the host
-  contract's [privileges](../architecture/host-contract.md#privileges) say why); the module refuses
-  the build without it.
+  contract's [privileges](../architecture/host.md#privileges) say why); the module refuses the build
+  without it.
 - **`imp-host.service`:** runs the image with the arguments in
   [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json), the same file
   [`deploy/imp-host.service`](../../deploy/imp-host.service) comes from. Before each start it writes
@@ -65,24 +65,24 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   when the image is missing, before each start of either container. With ZFS, it needs
   `imp-zfs-dataset.service`.
 - **`imp-docker-proxy.service`:** the only Docker socket imp-host sees, from the `proxy` section of
-  the same file ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). imp-host
-  wants it and starts after it; a proxy that stops fails image work only. It closes the Docker
-  socket path only: `SYS_ADMIN` still lets root out of the container. The module and the image must
-  come from the same release ([the image](#the-image)). The module runs the image without
-  `--privileged`, so an image from before that change
-  ([#75](https://github.com/zgeoff/imp/issues/75)) fails at start, in `setup-storage`.
+  the same file ([the Docker socket](../architecture/host.md#the-docker-socket)). imp-host wants it
+  and starts after it; a proxy that stops fails image work only. It closes the Docker socket path
+  only: `SYS_ADMIN` still lets root out of the container. The module and the image must come from
+  the same release ([the image](#the-image)). The module runs the image without `--privileged`, so
+  an image from before that change ([#75](https://github.com/zgeoff/imp/issues/75)) fails at start,
+  in `setup-storage`.
 - **Public imps:** `publicPorts`, such as `[ "443:7443" "80:7480" ]`, publishes the public
   listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
   ([public imps](./https.md#public-imps)). Set `IMP_PUBLIC_IP` in `settings`, and open the ports in
   `networking.firewall`. The module refuses `IMP_PUBLIC_PORTS` in `settings`.
 - **The public egress policy:** `egressDeny` lists the addresses no `public` imp reaches beyond the
-  private ranges, as `IMP_EGRESS_DENY` ([public](../architecture/networking.md#public)). The module
-  writes this host's own global addresses into `IMP_HOST_ADDRESSES` at each start, so list only what
-  that misses, such as an address the host gains later. The module refuses `IMP_EGRESS_DENY` in
-  `settings`.
+  private ranges, as `IMP_EGRESS_DENY` ([public](../architecture/network/egress.md#public)). The
+  module writes this host's own global addresses into `IMP_HOST_ADDRESSES` at each start, so list
+  only what that misses, such as an address the host gains later. The module refuses
+  `IMP_EGRESS_DENY` in `settings`.
 - **Firewall:** `hostFirewall`, by default `none`. The env file says `IMP_HOST_FIREWALL=none`,
-  `networking.firewall` stays the host's firewall, and imp adds no host rules; it needs no inbound
-  port ([Firewall](../architecture/host-contract.md#firewall)). With `own`, the module loads
+  `networking.firewall` stays the host's firewall, and impz adds no host rules; it needs no inbound
+  port ([Firewall](../architecture/host.md#the-host-firewall)). With `own`, the module loads
   `bootstrap.sh`'s `imp_host` table for `services.openssh.ports`, and refuses the build unless
   `networking.firewall.enable = false`. Either way it refuses
   `networking.nftables.flushRuleset = true`, which would flush Docker's rules.
@@ -96,7 +96,7 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
 
 ## The image
 
-`image` defaults to `ghcr.io/zgeoff/imp-host:X.Y.Z`, where `X.Y.Z` is the version in imp's
+`image` defaults to `ghcr.io/zgeoff/imp-host:X.Y.Z`, where `X.Y.Z` is the version in impz's
 `package.json`, so the module runs the image of its own release:
 
 - Pin `inputs.imp` to a release tag, such as `github:zgeoff/imp/vX.Y.Z`, and the image is pinned
@@ -189,8 +189,8 @@ not the file:
 - `environmentFile`: a file outside the store, such as a sops or agenix secret, copied in at each
   start.
 - `IMP_RAM_BUDGET_MIB`: `ramBudgetMiB`, else measured at each start, as `bootstrap.sh` does, less
-  the ARC cap ([RAM](../architecture/host-contract.md#ram)). When the formula gives less than 512
-  MiB, `imp-host` refuses to start and logs the RAM and the formula: set `ramBudgetMiB`. A start
+  the ARC cap ([RAM](../architecture/host.md#what-the-host-gives)). When the formula gives less than
+  512 MiB, `imp-host` refuses to start and logs the RAM and the formula: set `ramBudgetMiB`. A start
   that keeps failing stops after five tries in five minutes.
 - The ARC cap: `zfs.arcMaxMiB`, set through `boot.extraModprobeConfig` so it holds from boot. Do not
   also set `zfs_arc_max` in your own `boot.extraModprobeConfig` or `boot.kernelParams`: two values
@@ -200,12 +200,12 @@ not the file:
 ## Backups
 
 `backupPasswordFile` names the restic repository password, outside the Nix store
-([backups](../architecture/backups.md)). Keep it at `/var/lib/imp-host/secrets/backup-password`,
-owned by root, mode 0400. Like the Tailscale key, a copy goes to `/run/imp-host` before each start
-and is mounted read-only into the container at `/run/imp/backup-password`, and
-`IMP_BACKUP_PASSWORD_FILE` names it; the password never goes into the env file. A missing or empty
-file only warns, and the module blanks `IMP_BACKUP_REPOSITORY`, so backups stay off. Put
-`IMP_BACKUP_REPOSITORY` and the `AWS_*` keys in `environmentFile`, such as
+([backups](../architecture/storage/backups.md)). Keep it at
+`/var/lib/imp-host/secrets/backup-password`, owned by root, mode 0400. Like the Tailscale key, a
+copy goes to `/run/imp-host` before each start and is mounted read-only into the container at
+`/run/imp/backup-password`, and `IMP_BACKUP_PASSWORD_FILE` names it; the password never goes into
+the env file. A missing or empty file only warns, and the module blanks `IMP_BACKUP_REPOSITORY`, so
+backups stay off. Put `IMP_BACKUP_REPOSITORY` and the `AWS_*` keys in `environmentFile`, such as
 `/var/lib/imp-host/secrets/imp-host.env` (root, 0400).
 
 ## The DNS API token

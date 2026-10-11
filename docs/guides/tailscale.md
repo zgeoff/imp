@@ -1,8 +1,8 @@
 # Tailscale
 
 The host container joins the tailnet as one node, tagged `tag:imp`. Every imp is reachable through
-that node on its own port. [Networking](../architecture/networking.md#urls) covers the URLs, and
-[configuration](./configuration.md#host-container) lists the variables.
+that node on its own port. [Networking](../architecture/network/ingress.md#the-wake-proxy) covers
+the URLs, and [configuration](./configuration.md#host-container) lists the variables.
 
 ## How it works
 
@@ -40,7 +40,7 @@ API for [moves](./hosts.md#the-acl). Guests never use it: their egress refuses `
 
 State lives in `/var/lib/imp/tailscale` (`IMP_TAILSCALE_STATE_DIR`; `mem` keeps it in memory).
 
-imp keeps the node state even with an ephemeral key, because the name matters more than the node
+impz keeps the node state even with an ephemeral key, because the name matters more than the node
 lifetime:
 
 - With persisted state, a restart reuses the same node: same IP, same name. Checked: kill
@@ -124,9 +124,9 @@ name that this host serves. It is off by default.
 
 **CAUTION:** Per-imp names have not run against a live tailnet yet. Before anyone turns
 `IMP_TAILNET_NAMES` on, run the live test once with the OAuth client
-([development](./development.md#end-to-end-tests)), and replace the unit tests' fake API answers and
-`tailscale serve status` output with what the live run returned for a name a device holds and for a
-served name.
+([development](../runbooks/development.md#end-to-end-tests)), and replace the unit tests' fake API
+answers and `tailscale serve status` output with what the live run returned for a name a device
+holds and for a served name.
 
 **NOTE:** [A domain of your own](./https.md) is the recommended way to give imps names. It needs no
 API credential, puts no name in the tailnet's service list, and one wildcard certificate covers

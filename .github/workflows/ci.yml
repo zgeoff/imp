@@ -93,7 +93,7 @@ jobs:
       # its findings without failing the run.
       - name: Doc length and prose
         continue-on-error: true
-        run: bash .claude/skills/docs-writing/scripts/check-length.sh
+        run: bash .claude/skills/docs-writing/scripts/check-length.sh --package README.md
 
       - name: Typecheck
         run: bun run typecheck
@@ -579,7 +579,7 @@ jobs:
         run: |
           {
             echo "Nested KVM on a shared runner, a pool in a sparse file and a 1 GiB ARC: these"
-            echo "numbers do not compare directly with the XFS ones in STATUS.md."
+            echo "numbers do not compare directly with XFS ones."
             echo
             echo '```text'
             cat "$IMP_ZFS_TEST_DIR/summary.txt" 2>/dev/null || echo "no summary: the run stopped before it"
@@ -607,7 +607,7 @@ jobs:
   # Main-only jobs go below with `if: github.event_name == 'push'` and
   # `needs:` on the gates above.
 
-  # A release takes two runs of this job (RELEASING.md):
+  # A release takes two runs of this job (docs/runbooks/releasing.md):
   # - after a releasable commit lands on main, release-please opens or updates
   #   the release PR (version bump and changelog), and the sync step makes
   #   that PR pass the checks job

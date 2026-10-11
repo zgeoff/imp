@@ -1,6 +1,6 @@
 // Package boot brings the guest up. The agent stays on the read-only system
 // drive, mounts the user disk at /user, and runs user code in the inner
-// container over it (docs/architecture/agent.md#boot).
+// container over it (docs/architecture/guest/agent.md#boot).
 package boot
 
 import (

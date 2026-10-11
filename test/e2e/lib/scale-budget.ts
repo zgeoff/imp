@@ -71,7 +71,7 @@ export function buildOvershootLimits(input: Readonly<OvershootLimitsInput>): Ove
 
 // Breaches in impd's figure and in what the VMs own per smaps, so a wrong
 // figure cannot hide one; full PSS adds clean file pages the governor leaves
-// out, so it is only reported (docs/guides/development.md).
+// out, so it is only reported (docs/runbooks/development.md).
 export function findBudgetViolations(
   samples: readonly BudgetSample[],
   sleeps: readonly SleepSpan[],

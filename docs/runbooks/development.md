@@ -1,7 +1,7 @@
 # Development
 
 How to check a change before you push it, and what CI and the branch rules do with it. The
-[install guide](./install.md) sets up the dev instance.
+[install guide](../guides/install.md) sets up the dev instance.
 
 ## Checks
 
@@ -19,8 +19,7 @@ scripts/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
 `bun run lint:shell` needs shellcheck 0.11.0 on `PATH`, the version CI pins. Run the end-to-end
-harness against a real instance when a change touches the lifecycle, the agent or the host;
-[STATUS.md](../../STATUS.md) has the latest results.
+harness against a real instance when a change touches the lifecycle, the agent or the host.
 
 ## End-to-end tests
 
@@ -92,14 +91,15 @@ scripts/test-e2e.sh --clean                  # wipe the dev instance's data firs
 | `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                                                                |
 
 The `acceptance` set is the definition of done: the tailscale suite fails without a Tailscale key
-(from the env, 1Password or `.env`, as [configuration](./configuration.md#dev-instance) lists), and
-the timing limits fail the run. Any other set skips tailscale without a key and only warns about a
-missed limit. The harness starts Pebble for the https suite, which needs no domain and reboots the
-instance with HTTPS on, then off again ([HTTPS](./https.md#testing-with-pebble)). The `fast` set
-takes about 4.5 minutes, most of it idle timeouts in the sleep suite and the jail suite's two
-reboots. The full set adds docker, images, scale, tailscale, sessions, ssh-wake, proxy-wake, cp,
-connectors, https, egress, ipv6, networks, moves, moves-tailnet, chaos and backups; at its defaults
-the scale suite alone took about 75 seconds in the last acceptance run.
+(from the env, 1Password or `.env`, as [configuration](../guides/configuration.md#dev-instance)
+lists), and the timing limits fail the run. Any other set skips tailscale without a key and only
+warns about a missed limit. The harness starts Pebble for the https suite, which needs no domain and
+reboots the instance with HTTPS on, then off again
+([HTTPS](../guides/https.md#testing-with-pebble)). The `fast` set takes about 4.5 minutes, most of
+it idle timeouts in the sleep suite and the jail suite's two reboots. The full set adds docker,
+images, scale, tailscale, sessions, ssh-wake, proxy-wake, cp, connectors, https, egress, ipv6,
+networks, moves, moves-tailnet, chaos and backups; at its defaults the scale suite alone took about
+75 seconds in the last acceptance run.
 
 The moves suites start a second instance, `<IMP_DEV_NAME>-mv-b`, with its data in
 `<IMP_DEV_DATA>-mv-b`, and reboot the run's instance onto a network of their own and back. Each
@@ -109,7 +109,7 @@ instance gets a 2 GiB RAM budget there, so a run stays inside one ordinary run's
 The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
 Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
 `op://cloud/imp-tailscale-oauth`, fields `client-id` and `client-secret`) and the tailnet policy in
-[per-imp names](./tailscale.md#per-imp-names).
+[per-imp names](../guides/tailscale.md#per-imp-names).
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
 `scripts/dev.sh`. These variables tune a run:
@@ -136,14 +136,14 @@ about 280 MiB at the default sizes, so 9 fit in 2560 MiB, and a cold-booted one 
 suite holds what the Firecrackers own (`Pss_Anon` + `Pss_Shmem`, read from `smaps_rollup` without
 impd) to the budget, and reports their full PSS, which also has clean file pages the governor does
 not count
-([what the governor measures](../architecture/sleep-and-wake.md#5-ram-what-the-governor-measures)).
-A guest grows past its boot reserve after admission, so use may pass the budget until a governor
-sleep ends. The suite follows every imp's sleep in the event stream (`ImpChanged slept`, which
-started `detail.durationMs` plus `detail.prepareMs` before its time). Use may fall back under the
-budget for any reason. It fails when impd's figure or the owned figure goes over by more than a
-guest can grow past its reserve, or stays over for one enforce period plus one sample with no
-enforce sleep (`detail.trigger` `RAM over budget`) started by then, or is still over after that
-sleep ends, or when the sleep takes more than 30 s.
+([what the governor measures](../architecture/lifecycle/ram-governor.md#what-it-measures)). A guest
+grows past its boot reserve after admission, so use may pass the budget until a governor sleep ends.
+The suite follows every imp's sleep in the event stream (`ImpChanged slept`, which started
+`detail.durationMs` plus `detail.prepareMs` before its time). Use may fall back under the budget for
+any reason. It fails when impd's figure or the owned figure goes over by more than a guest can grow
+past its reserve, or stays over for one enforce period plus one sample with no enforce sleep
+(`detail.trigger` `RAM over budget`) started by then, or is still over after that sleep ends, or
+when the sleep takes more than 30 s.
 
 The connectors suite runs a fake github.com on this machine, which the dev container reaches on its
 default gateway. A dev instance reads `<IMP_DEV_DATA>/broker-test-upstreams.json` when it exists
@@ -164,9 +164,9 @@ measure. A suite file also runs on its own against a running instance:
 
 `scripts/bench-wake.sh` is a manual check, not part of the harness or CI. It times wakes of an imp
 put to sleep right after a cold boot, which a host kernel before Linux 6.7 makes slow
-([young guests](../architecture/sleep-and-wake.md#young-guests)). It drives impd through the CLI
-only, so it runs against any host, and it fails when the median wake passes `--limit-ms` (default
-500):
+([young guests](../architecture/lifecycle/sleep-and-wake.md#young-guests)). It drives impd through
+the CLI only, so it runs against any host, and it fails when the median wake passes `--limit-ms`
+(default 500):
 
 ```sh
 scripts/bench-wake.sh --cycles 3       # IMP_URL and IMP_TOKEN, or the saved login
@@ -211,7 +211,8 @@ the case.
 
 ## Dashboard tests
 
-The [dashboard guide](./dashboard.md#tests) covers its component tests and its Playwright run.
+The [dashboard guide](../guides/dashboard.md#tests) covers its component tests and its Playwright
+run.
 
 ## Git hooks
 
@@ -258,7 +259,7 @@ it ships.
 through vite and postcss. Bun's exemption takes a package name only, so the exact pin holds it to
 that one version. Remove the exemption after 2026-10-07 14:08 UTC, when 1.2.2 passes the gate.
 
-On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
+On `main`, the `release-please` job makes releases ([releasing](./releasing.md)).
 
 ### The e2e job
 
@@ -306,8 +307,8 @@ a run still waiting behind it is cancelled when a newer push comes, so only the 
 next.
 
 `.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub --zfs` when a pull request
-or a push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It
-is not a required check.
+or a push to `main` changes `deploy/` or the test
+([Bootstrap a server](../guides/install.md#test-it)). It is not a required check.
 
 `deploy/imp-host.args.json` holds the `docker run` arguments of imp-host and, under `proxy`, of
 imp-docker-proxy. After an edit, `bun run render:deploy` writes them into both units, their copies
@@ -316,7 +317,7 @@ has (`scripts/render-imp-host.test.ts`). The NixOS module reads the file itself.
 
 `.github/workflows/nix.yml` checks the format of the `.nix` files and runs `nix flake check` when
 `flake.nix`, `flake.lock`, `deploy/` or `tailscale-up.sh` change: the NixOS module's eval check, and
-a NixOS VM test that needs KVM ([NixOS](./nixos.md#test-it)). It is not a required check.
+a NixOS VM test that needs KVM ([NixOS](../guides/nixos.md#test-it)). It is not a required check.
 
 `.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
 system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:

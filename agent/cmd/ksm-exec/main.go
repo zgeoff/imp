@@ -9,7 +9,7 @@
 // so every anonymous mapping Firecracker makes, guest memory included, is
 // mergeable. ksm-exec runs outside the jail's chroot. Firecracker's seccomp
 // filter traps prctl, so it cannot set the flag itself
-// (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
+// (docs/architecture/lifecycle/ram-governor.md#ksm).
 package main
 
 import (

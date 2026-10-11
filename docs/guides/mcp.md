@@ -93,7 +93,8 @@ stop it: only a stop of the command that started it does. On an agent at protoco
 that stop also reaches a child that left the process group with `setsid` or a double fork; such a
 child gets no SIGTERM, only SIGKILL at the end of the 2 s. It does not reach a process that moved
 itself to another cgroup (commands run as root unless the image says otherwise), or the containers
-of a `dockerd` started from an exec ([exec cgroups](../architecture/agent.md#exec-cgroups)).
+of a `dockerd` started from an exec
+([exec cgroups](../architecture/guest/agent.md#execs-and-services)).
 
 `require: ["broker"]` starts the command only once impd set the credential broker's variables and CA
 bundle for this boot; otherwise the call fails with `PRECONDITION_FAILED` and nothing runs
@@ -152,7 +153,7 @@ claude mcp add --transport http imp https://imp.example.com/mcp \
   count. impd resolves the caller on every POST, and every tool call goes to the API as that caller,
   so the same scope, imp patterns and audit rows apply as for the CLI.
 - **Browsers.** A request with `Sec-Fetch-Site` or `Origin` comes from a browser, and impd applies
-  the dashboard's rule ([daemon](../architecture/daemon.md#api-and-auth)): `Sec-Fetch-Site` must be
+  the dashboard's rule ([daemon](../architecture/control/api.md)): `Sec-Fetch-Site` must be
   `same-origin`, or without it `Origin` must name impd's host and port. Any other such request gets
   403 before impd looks at its token. A client that is not a browser sends neither header.
 - **Tools by scope.** `tools/list` shows only the tools the caller's scope allows: `read` gets
