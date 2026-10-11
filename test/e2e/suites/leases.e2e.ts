@@ -264,22 +264,18 @@ test.skipIf(config.ramBudgetMib > 2048)(
 
     const acquired = clientA.leases.acquire({ name: big, label: 'job', ttlSeconds: 60 });
 
-    // the two leased fillers are the protected imps it names as leased
+    // the two leased fillers, the only awake imps, are the protected imps it
+    // names, each as leased
     expect(acquired).rejects.toMatchObject({
       code: 'RAM_BUDGET_EXCEEDED',
       data: {
         budgetMib: budget,
         protectedHidden: 0,
         neededMib: expect.toBePositive(),
-        protected: expect.toSatisfy(
-          (imps: readonly Readonly<{ name: string; leased: boolean }>[]) =>
-            JSON.stringify(
-              imps
-                .filter((imp) => imp.leased)
-                .map((imp) => imp.name)
-                .toSorted(),
-            ) === JSON.stringify([fillA, fillB].toSorted()),
-        ),
+        protected: expect.toIncludeSameMembers([
+          { name: fillA, ramMib: expect.toBePositive(), leased: true, busy: expect.toBeBoolean() },
+          { name: fillB, ramMib: expect.toBePositive(), leased: true, busy: expect.toBeBoolean() },
+        ]),
       },
     });
 

@@ -138,7 +138,7 @@ test('it copies a file both ways with scp, and serves sftp without an sftp-serve
 
   expect(up.exitCode).toBe(0);
   expect(down.exitCode).toBe(0);
-  expect(readFileSync(back).equals(blob)).toBeTrue();
+  expect(readFileSync(back)).toStrictEqual(blob);
 
   expect(sftp).toStrictEqual({
     exitCode: 0,
