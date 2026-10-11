@@ -90,7 +90,7 @@
     "prepare": "command -v git > /dev/null 2>&1 && lefthook install --force || true",
     "files:branch": "bun scripts/collect-branch-files.ts",
     "lint:files": "oxlint --no-error-on-unmatched-pattern",
-    "test:related": "bun scripts/run-related-tests.ts"
+    "test:related": "bun scripts/run-branch-tests.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",

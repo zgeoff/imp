@@ -221,8 +221,11 @@ Lefthook installs the hooks with `bun install`.
   gitleaks must be on `PATH`.
 - **commit-msg** runs commitlint: conventional commits, lowercase, a header of 72 characters or
   fewer.
-- **pre-push** runs the gates over the whole tree: format, lint, shellcheck, typecheck, deadcode and
-  tests.
+- **pre-push** runs one job at a time: `lint:docs` and shellcheck, then the shared baseline in
+  `.lefthook/pre-push-baseline.yml`, which repo-sync delivers from zgeoff/tools. The baseline checks
+  the format and the types of the whole tree, and lints and tests only the files the branch changes
+  since its merge base with `origin/main`. A dashboard file's tests run from its package. CI's
+  `checks` job runs type-aware lint, deadcode and every test.
 
 ## CI
 
