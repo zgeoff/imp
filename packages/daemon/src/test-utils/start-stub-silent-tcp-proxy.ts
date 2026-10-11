@@ -6,7 +6,7 @@ import type { Socket } from 'node:net';
 // machine that vanishes without a FIN: it drops the client's bytes, while
 // the target's still reach the client.
 export async function startStubSilentTcpProxy(targetPort: number) {
-  const link = { isSilent: false, dropped: 0 };
+  const link = { isSilent: false, dropped: 0, passedChunks: 0 };
 
   const sockets = new Set<Socket>();
 
@@ -30,6 +30,8 @@ export async function startStubSilentTcpProxy(targetPort: number) {
 
         return;
       }
+
+      link.passedChunks += 1;
 
       outbound.write(data);
     });
@@ -72,6 +74,10 @@ export async function startStubSilentTcpProxy(targetPort: number) {
 
     // the bytes the client sent since the proxy fell silent
     readDropped: (): number => link.dropped,
+
+    // the chunks of the client's bytes passed on to the target, so a test
+    // can wait for the client's next packets
+    readPassedChunks: (): number => link.passedChunks,
 
     // stops passing the client's bytes on, for every connection
     silence: (): void => {
