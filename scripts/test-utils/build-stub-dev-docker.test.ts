@@ -104,7 +104,7 @@ test('it answers ps with the container that uses an image, and nothing for anoth
   expect(result.stdout.toString()).toBe('c0ffee\n');
 });
 
-test('it fails the rm of a stuck image and removes another', () => {
+test('it fails the rm of a stuck image', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -116,12 +116,30 @@ test('it fails the rm of a stuck image and removes another', () => {
     ]),
   );
 
-  const env = { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` };
-  const stuck = Bun.spawnSync(['docker', 'image', 'rm', 'imp-host:dev-a-1'], { env });
-  const removed = Bun.spawnSync(['docker', 'image', 'rm', 'imp-host:dev-b-2'], { env });
+  const result = Bun.spawnSync(['docker', 'image', 'rm', 'imp-host:dev-a-1'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
 
-  expect(stuck.exitCode).toBe(1);
-  expect(removed.exitCode).toBe(0);
+  expect(result.exitCode).toBe(1);
+});
+
+test('it removes an image that is not stuck beside a stuck one', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevDocker([
+      { tag: 'imp-host:dev-a-1', id: 'id-a', labels: null, isStuck: true },
+      { tag: 'imp-host:dev-b-2', id: 'id-b', labels: null },
+    ]),
+  );
+
+  const result = Bun.spawnSync(['docker', 'image', 'rm', 'imp-host:dev-b-2'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.exitCode).toBe(0);
 });
 
 test('it fails a call that prune does not make', () => {
