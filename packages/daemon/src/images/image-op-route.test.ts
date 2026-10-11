@@ -20,8 +20,8 @@ import { runChecked } from '../process/run-command';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
 
@@ -170,7 +170,7 @@ test('it streams the phases of an add, then the image', async () => {
   await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
   // the image is not on the host: the add pulls it, then unpacks its export
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -209,7 +209,7 @@ test('it audits a streamed add as ok once it ends', async () => {
   await mkdir(join(ctx.dataDir, 'tree'));
   await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -250,7 +250,7 @@ test("it keeps the reference a streamed add's pull resolved in its audit row", a
   await mkdir(join(ctx.dataDir, 'tree'));
   await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -322,7 +322,7 @@ test('it streams the copy of a template and audits it with its imp', async () =>
 test('it throws a failed add through the stream with a code that keeps its message out', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -350,7 +350,7 @@ test('it throws a failed add through the stream with a code that keeps its messa
 test('it audits a failed streamed add with its code', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -454,7 +454,7 @@ test('it streams the pack, then the build, of a build from a directory', async (
   await writeFile(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
 
   // the Dockerfile frontend is on the host already
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -509,7 +509,7 @@ test('it stops the engine build of a streamed build whose client goes, and audit
   await mkdir(contextDir);
   await writeFile(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -568,7 +568,7 @@ test('it kills the host pull of a streamed add whose client goes, and audits it'
   const ctx = await setupTest();
 
   // the image is not on the host, and its pull hangs until it is killed
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -620,7 +620,7 @@ test('it stops the engine build of a plain build whose client goes', async () =>
   await mkdir(contextDir);
   await writeFile(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -670,7 +670,7 @@ test('it stops the engine build of a plain build whose client goes', async () =>
 test('it kills the host pull of a plain add whose client goes, and audits it', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {

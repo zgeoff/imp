@@ -23,8 +23,8 @@ import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layou
 import { createXfsBackend } from './storage/xfs-backend';
 import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
-import { buildStubDockerCli } from './test-utils/build-stub-docker-cli';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
+import { createStubDockerCli } from './test-utils/create-stub-docker-cli';
 import { findFreePorts } from './test-utils/find-free-ports';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 import type { CpuCgroups } from './vmm/cpu-cgroups';
@@ -1398,7 +1398,7 @@ test("it keeps the reference an image add's pull resolved in its audit row", asy
   await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
 
   // the image is not on the host: the add pulls it, then unpacks its export
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {

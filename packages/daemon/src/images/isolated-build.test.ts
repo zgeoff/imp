@@ -24,13 +24,13 @@ import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFilesTar } from '../test-utils/build-files-tar';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildQueryGate } from '../test-utils/build-query-gate';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
 import {
   STUB_BUILDER_CONTAINER,
   buildStubImageBuilder,
 } from '../test-utils/build-stub-image-builder';
-import { buildStubImageMkfs } from '../test-utils/build-stub-image-mkfs';
 import { buildTreeTar } from '../test-utils/build-tree-tar';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
+import { createStubImageMkfs } from '../test-utils/create-stub-image-mkfs';
 import { startDiskSampler } from '../test-utils/start-disk-sampler';
 import { createImageService } from './image-service';
 
@@ -52,7 +52,7 @@ async function setupTest() {
   stack.defer(() => db.destroy());
 
   // a host docker that logs every call: an isolated build makes none
-  const docker = buildStubDockerCli({ dir });
+  const docker = createStubDockerCli({ dir });
 
   updateEnv('PATH', docker.path);
 
@@ -606,7 +606,7 @@ test('it refuses a build whose name a template took during the build', async () 
 test('it keeps the rootfs another build of the digest is writing when its own row fails', async () => {
   const ctx = await setupTest();
 
-  const mkfs = buildStubImageMkfs(ctx.dir);
+  const mkfs = createStubImageMkfs(ctx.dir);
 
   updateEnv('PATH', `${mkfs.bin}:${process.env['PATH'] ?? ''}`);
 
@@ -903,7 +903,7 @@ test('it returns the error of a rootfs write that fails after it is published', 
 test('it leaves no row, rootfs or hold when the client goes while mkfs.ext4 runs', async () => {
   const ctx = await setupTest();
 
-  const mkfs = buildStubImageMkfs(ctx.dir);
+  const mkfs = createStubImageMkfs(ctx.dir);
 
   updateEnv('PATH', `${mkfs.bin}:${process.env['PATH'] ?? ''}`);
 

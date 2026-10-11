@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateEnv } from '@imp/test-utils/update-env';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { assertUnpacked, readSetfcapWarning, writeExportedTree } from './unpack-export';
 
 async function setupTest() {
@@ -151,7 +151,7 @@ test('#writeExportedTree unpacks the container export into the root', async () =
   mkdirSync(root);
   writeFileSync(join(tree, 'etc', 'hostname'), 'imp\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     exportTar: Bun.spawnSync(['tar', '-C', tree, '-c', 'etc']).stdout,
   });
@@ -166,7 +166,7 @@ test('#writeExportedTree unpacks the container export into the root', async () =
 test('#writeExportedTree fails the unpack when the export fails', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({ dir: ctx.dir });
+  const docker = createStubDockerCli({ dir: ctx.dir });
 
   updateEnv('PATH', docker.path);
 

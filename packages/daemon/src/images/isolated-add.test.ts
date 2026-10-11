@@ -23,12 +23,12 @@ import { buildFilesTar } from '../test-utils/build-files-tar';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildQueryGate } from '../test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
 import type { StubAnswer } from '../test-utils/build-stub-guest';
 import { buildStubImageBuilder } from '../test-utils/build-stub-image-builder';
-import { buildStubImageMkfs } from '../test-utils/build-stub-image-mkfs';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { createBuilderImage } from '../test-utils/create-builder-image';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
+import { createStubImageMkfs } from '../test-utils/create-stub-image-mkfs';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { HOST_ADD_WARNING, createImageService } from './image-service';
@@ -48,7 +48,7 @@ async function setupTest() {
 
   // a host docker that logs every call and models none: an isolated add
   // makes no call; a test that needs the host engine writes its own
-  const docker = buildStubDockerCli({ dir: dataDir });
+  const docker = createStubDockerCli({ dir: dataDir });
 
   updateEnv('PATH', docker.path);
 
@@ -846,7 +846,7 @@ test('it adds a bumped IMP_BUILD_IMAGE once, by its digest, and moves the row', 
 
   // the host engine as the proxy's lock leaves it: the builder image pulls
   // by its digest, and create and export serve a small tree
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -905,7 +905,7 @@ test('it seeds the default image at first start through a builder', async () => 
     IMP_BUILD_DISK_GIB: '4',
   });
 
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1021,7 +1021,7 @@ test('it sends an add to the host engine, with a warning and no builder, under I
   });
 
   // a host engine whose registry knows no such tag
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1081,7 +1081,7 @@ test('it fails a builder image pull that hangs at its limit, naming IMP_BUILD_IM
     IMP_BUILD_DISK_GIB: '4',
   });
 
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1154,7 +1154,7 @@ test('it makes no host engine call beyond the inspect and the pull when the pull
     IMP_BUILD_DISK_GIB: '4',
   });
 
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1236,7 +1236,7 @@ test('it pulls the builder image again on the add after a pull that failed', asy
     isOnHost: false,
   };
 
-  buildStubDockerCli({ dir: ctx.dataDir, images: [{ ...host, pull: 'hang' }] });
+  createStubDockerCli({ dir: ctx.dataDir, images: [{ ...host, pull: 'hang' }] });
 
   const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
 
@@ -1287,7 +1287,7 @@ test('it pulls the builder image again on the add after a pull that failed', asy
   const [first] = await Promise.allSettled([failing]);
 
   // the registry answers now
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ ...host, pull: 'ok' }],
     create: { id: 'e'.repeat(64) },
@@ -1318,7 +1318,7 @@ test('it stops the wait of a caller that goes, and the pull it shared goes on fo
     IMP_BUILD_DISK_GIB: '4',
   });
 
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1384,7 +1384,7 @@ test('it does not pull a builder image the host engine has already', async () =>
   });
 
   // the operator's own `docker pull` of IMP_BUILD_IMAGE; a pull would hang
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1441,7 +1441,7 @@ test('it names the error of a step after the pull that fails past the limit, not
     IMP_BUILD_DISK_GIB: '4',
   });
 
-  buildStubDockerCli({
+  createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1453,7 +1453,7 @@ test('it names the error of a step after the pull that fails past the limit, not
     exportTar: buildFilesTar(ctx.dataDir, { dockerd: 'builder\n' }),
   });
 
-  const mkfs = buildStubImageMkfs(ctx.dataDir);
+  const mkfs = createStubImageMkfs(ctx.dataDir);
   const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
 
   // each pull's limit, which ends only when the test expires it
@@ -1519,7 +1519,7 @@ test('it leaves no row, rootfs, hold or builder when the client leaves an add wh
 
   await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
-  const mkfs = buildStubImageMkfs(ctx.dataDir);
+  const mkfs = createStubImageMkfs(ctx.dataDir);
 
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],
@@ -1654,7 +1654,7 @@ test("it keeps the other's row and rootfs when an add and a build of one digest 
 
   await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: config.build.image });
 
-  const mkfs = buildStubImageMkfs(ctx.dataDir);
+  const mkfs = createStubImageMkfs(ctx.dataDir);
 
   const builder = buildStubImageBuilder({
     exported: [buildFilesTar(ctx.dataDir, { hello: 'pulled\n' })],

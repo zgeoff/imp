@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildStubImageMkfs } from './build-stub-image-mkfs';
+import { createStubImageMkfs } from './create-stub-image-mkfs';
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -19,7 +19,7 @@ async function setupTest() {
 test('it holds the write until the test releases it, then runs the real mkfs.ext4', async () => {
   const ctx = await setupTest();
 
-  const mkfs = buildStubImageMkfs(ctx.dir);
+  const mkfs = createStubImageMkfs(ctx.dir);
   const image = join(ctx.dir, 'rootfs.ext4');
 
   Bun.spawnSync(['truncate', '-s', '8M', image]);
@@ -47,7 +47,7 @@ test('it holds the write until the test releases it, then runs the real mkfs.ext
 test('it keeps the write waiting while the test holds it', async () => {
   const ctx = await setupTest();
 
-  const mkfs = buildStubImageMkfs(ctx.dir);
+  const mkfs = createStubImageMkfs(ctx.dir);
 
   const child = Bun.spawn([join(mkfs.bin, 'mkfs.ext4'), join(ctx.dir, 'none.ext4')], {
     stdout: 'ignore',
@@ -66,7 +66,7 @@ test('it keeps the write waiting while the test holds it', async () => {
 test('it fails the held write with the stderr the test gives', async () => {
   const ctx = await setupTest();
 
-  const mkfs = buildStubImageMkfs(ctx.dir);
+  const mkfs = createStubImageMkfs(ctx.dir);
 
   const child = Bun.spawn([join(mkfs.bin, 'mkfs.ext4'), join(ctx.dir, 'rootfs.ext4')], {
     stdout: 'ignore',
@@ -91,7 +91,7 @@ test('it ends a held write with no release once its directory is gone', async ()
   const ctx = await setupTest();
 
   const dir = join(ctx.dir, 'stub');
-  const mkfs = buildStubImageMkfs(dir);
+  const mkfs = createStubImageMkfs(dir);
 
   const child = Bun.spawn([join(mkfs.bin, 'mkfs.ext4'), join(ctx.dir, 'rootfs.ext4')], {
     stdout: 'ignore',
