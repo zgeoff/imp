@@ -758,23 +758,26 @@ default, and `keepaliveRepeat`, the timer of those events, `runOnInterval` by de
 memory control, egress, the broker (its CA and leaves, the leaf renewal check, its route caches,
 OAuth refreshes), tokens, OAuth, the audit log, moves and the API. It does not reach
 `buildTailnetNames`' services API, the template service's timings (`performance.now`), the disk
-usage cache, backups or the builders' engine wait, which stay on the wall clock: a known gap.
-`imps.sleepTiming` (`now` and `sleep`, `performance.now` and `Bun.sleep` by default) is the clock of
-a sleep's `prepareMs` and `durationMs` and the pause of its young-guest wait;
-`events/imp-events.test.ts` passes `buildStubClock`'s. A field left out takes the host's real one.
-With tailnet names configured, `runCommand` also reaches `buildTailnetNames`' `tailscale serve`
-calls, so `tailnet-names.test.ts` boots named impds on `buildStubTailscaleServe`'s `run`. Its parts
-(`buildImpdStorage`, `createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`,
-`buildImpdServices`, `createImpdMoves`, `buildImpdApp`) are exported for `createImpTest`, which
-wires them without the start steps into a caller's stack; the client smoke's `run-stub-impd.ts` runs
-it outside a test. `buildTestApp` builds impd's app with `buildImpdApp` over the harness's impd or
-one that `restartImpd` started. The app hands each unexpected RPC failure to the harness's
-`logRpcFailure`, as `createImpd` hands its deps' to `buildApp`: the harness keeps the failure in
-`rpcFailures` and writes an `impd: rpc failed:` line to its log, not to stderr. The harness's clock
-is the wall clock plus what `advance` adds; with `frozenClockMs` it starts there and is also
-`imps.sleepTiming`'s clock, and each young-guest pause moves it at once by the pause's length
-instead of waiting. `packages/daemon/src/create-impd.test.ts` boots `createImpd` whole on the stubs.
-The egress resolver binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
+usage cache, backups or the builders' engine wait, which stay on the wall clock: a known gap. Nor
+does it reach the storage gate: `createStorageGate(clock)` takes `now` and `startTimer` for a GC's
+wait on the operations in flight (the wall clock and `setTimeout` by default), createImpd passes
+none, and `storage/storage-gate.test.ts` passes `buildStubClock`'s. `imps.sleepTiming` (`now` and
+`sleep`, `performance.now` and `Bun.sleep` by default) is the clock of a sleep's `prepareMs` and
+`durationMs` and the pause of its young-guest wait; `events/imp-events.test.ts` passes
+`buildStubClock`'s. A field left out takes the host's real one. With tailnet names configured,
+`runCommand` also reaches `buildTailnetNames`' `tailscale serve` calls, so `tailnet-names.test.ts`
+boots named impds on `buildStubTailscaleServe`'s `run`. Its parts (`buildImpdStorage`,
+`createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`, `buildImpdServices`,
+`createImpdMoves`, `buildImpdApp`) are exported for `createImpTest`, which wires them without the
+start steps into a caller's stack; the client smoke's `run-stub-impd.ts` runs it outside a test.
+`buildTestApp` builds impd's app with `buildImpdApp` over the harness's impd or one that
+`restartImpd` started. The app hands each unexpected RPC failure to the harness's `logRpcFailure`,
+as `createImpd` hands its deps' to `buildApp`: the harness keeps the failure in `rpcFailures` and
+writes an `impd: rpc failed:` line to its log, not to stderr. The harness's clock is the wall clock
+plus what `advance` adds; with `frozenClockMs` it starts there and is also `imps.sleepTiming`'s
+clock, and each young-guest pause moves it at once by the pause's length instead of waiting.
+`packages/daemon/src/create-impd.test.ts` boots `createImpd` whole on the stubs. The egress resolver
+binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
 `test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's ephemeral
 range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands out with
 an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in parallel
