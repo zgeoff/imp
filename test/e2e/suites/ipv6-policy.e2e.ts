@@ -4,7 +4,7 @@ import { resolveImageName } from '../lib/fixtures';
 import { tryDialFromImp, tryGetFromImp, tryInImp } from '../lib/guest-probe';
 import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
-import { instance, runCommand, runDevScript } from '../lib/instance';
+import { instance, runCommand, runDevScript, runInContainer } from '../lib/instance';
 import {
   buildRaCounterTable,
   buildV6Names,
@@ -132,6 +132,11 @@ test('it holds box and none imps to their policies over IPv6, isolates every imp
     '-e',
     String.raw`Bun.listen({ hostname: '::', port: 7099, socket: { open: (s) => { s.end('hi\n'); }, data: () => {} } })`,
   ]);
+
+  // before the reboot back, while the container that runs it is there
+  ctx.stack.defer(async () => {
+    await runInContainer(['pkill', '-f', 'port: 7099']);
+  });
 
   // the router, not an imp, does reach the host's port
   const fromRouter = await waitFor('the host listener', async () => {

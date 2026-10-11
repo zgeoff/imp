@@ -81,12 +81,21 @@ test.skipIf(!isReady)(
       `linux/${hostArch}`,
     );
 
+    // gone already once the explicit rmi below ran
+    ctx.stack.defer(async () => {
+      await runCommand(['docker', 'rmi', host]);
+    });
+
     // a trigger impd would refuse, and that fails the build if it ran
     await buildPushedImage(
       writeContext(ctx.dir, 'other', `FROM ${busybox}\nCOPY v /v\nONBUILD RUN false\n`, otherArch),
       other,
       `linux/${otherArch}`,
     );
+
+    ctx.stack.defer(async () => {
+      await runCommand(['docker', 'rmi', other]);
+    });
 
     await writeRegistryIndex({
       registry: ctx.registry.address,
