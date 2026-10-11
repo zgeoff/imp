@@ -247,9 +247,23 @@ test('#buildTemplateVm releases the jail of a build before its files go to root,
 
   const calls = readFileSync(ctx.logPath, 'utf8').trim().split('\n');
 
-  expect(calls[0]).toBe('prepare build tpl-build');
-  expect(calls.indexOf('seal')).toBeLessThan(calls.indexOf('PUT /actions'));
-  expect(calls.at(-1)).toBe('release tpl-build');
+  // the jail seals before the boot, and the release comes after the snapshot
+  expect(calls).toStrictEqual([
+    'prepare build tpl-build',
+    'PUT /boot-source',
+    'PUT /machine-config',
+    'PUT /drives/rootfs',
+    'PUT /drives/system',
+    'PUT /vsock',
+    'PUT /network-interfaces/eth0',
+    'PUT /balloon',
+    'seal',
+    'PUT /actions',
+    'PATCH /vm',
+    'PUT /snapshot/create',
+    'release tpl-build',
+  ]);
+
   expect(memModes).toStrictEqual(['600']);
   expect(lstatSync(plan.memFile).mode & 0o777).toBe(0o644);
   expect(lstatSync(plan.vmstate).mode & 0o777).toBe(0o644);

@@ -67,10 +67,15 @@ function setupTest() {
     wait: () => Promise.resolve(),
   });
 
-  const paths = buildImpPaths(dataDir, 'i1');
+  // the dir of the imp a test names, which every jail binds, and where the
+  // jailer chroots that imp
+  const createImpDir = (impId: string) => {
+    const paths = buildImpPaths(dataDir, impId);
 
-  // the imp's dir, which every jail binds
-  mkdirSync(paths.dir, { recursive: true });
+    mkdirSync(paths.dir, { recursive: true });
+
+    return { paths, root: join(dataDir, 'jail', 'firecracker', impId, 'root') };
+  };
 
   return {
     dataDir,
@@ -79,10 +84,7 @@ function setupTest() {
     logs,
     steps,
     jails,
-    paths,
-
-    // where the jailer chroots the imp i1
-    root: join(dataDir, 'jail', 'firecracker', 'i1', 'root'),
+    createImpDir,
 
     // the test's own uid, so the chowns work without root
     user: { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 },
@@ -145,37 +147,39 @@ test('#listMountsUnder lists the mounts at or under a root, shallowest first, wi
 
 test('#prepare binds the imp in at its own path, read-only files after, then makes the root rprivate', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
   const kernel = join(ctx.dataDir, 'vmlinux');
 
   writeFileSync(kernel, '');
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare({
     impId: 'i1',
     user: ctx.user,
-    paths: ctx.paths,
+    paths: imp.paths,
     readOnlyFiles: [kernel],
   });
 
   expect(ctx.mounts.calls).toStrictEqual([
-    `mount --bind ${ctx.root} ${ctx.root}`,
-    `mount --make-private ${ctx.root}`,
-    `mount --rbind -o nosuid=recursive,nodev=recursive ${ctx.paths.dir} ${ctx.root}${ctx.paths.dir}`,
-    `mount --bind ${kernel} ${ctx.root}${kernel}`,
-    `mount -o remount,bind,ro,nosuid,nodev ${ctx.root}${kernel}`,
-    `mount --make-rprivate ${ctx.root}`,
+    `mount --bind ${imp.root} ${imp.root}`,
+    `mount --make-private ${imp.root}`,
+    `mount --rbind -o nosuid=recursive,nodev=recursive ${imp.paths.dir} ${imp.root}${imp.paths.dir}`,
+    `mount --bind ${kernel} ${imp.root}${kernel}`,
+    `mount -o remount,bind,ro,nosuid,nodev ${imp.root}${kernel}`,
+    `mount --make-rprivate ${imp.root}`,
   ]);
 });
 
 test('#prepare returns the jailer command for the imp', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   const command = await ctx.jails.prepare({
     impId: 'i1',
     user: ctx.user,
-    paths: ctx.paths,
+    paths: imp.paths,
     readOnlyFiles: [],
   });
 
@@ -193,26 +197,28 @@ test('#prepare returns the jailer command for the imp', async () => {
     join(ctx.dataDir, 'jail'),
     '--',
     '--api-sock',
-    ctx.paths.apiSocket,
+    imp.paths.apiSocket,
   ]);
 });
 
 test('#prepare makes the run and snapshot dirs of the imp', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  expect(lstatSync(ctx.paths.runDir).isDirectory()).toBeTrue();
-  expect(lstatSync(ctx.paths.snapshotDir).isDirectory()).toBeTrue();
+  expect(lstatSync(imp.paths.runDir).isDirectory()).toBeTrue();
+  expect(lstatSync(imp.paths.snapshotDir).isDirectory()).toBeTrue();
 });
 
 test('#prepare unmounts the binds of the last jail deepest first before it binds again', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
@@ -221,43 +227,45 @@ test('#prepare unmounts the binds of the last jail deepest first before it binds
   await ctx.jails.prepare(plan);
 
   expect(ctx.mounts.calls).toStrictEqual([
-    `umount ${ctx.root}${ctx.paths.dir}`,
-    `umount ${ctx.root}`,
-    `mount --bind ${ctx.root} ${ctx.root}`,
-    `mount --make-private ${ctx.root}`,
-    `mount --rbind -o nosuid=recursive,nodev=recursive ${ctx.paths.dir} ${ctx.root}${ctx.paths.dir}`,
-    `mount --make-rprivate ${ctx.root}`,
+    `umount ${imp.root}${imp.paths.dir}`,
+    `umount ${imp.root}`,
+    `mount --bind ${imp.root} ${imp.root}`,
+    `mount --make-private ${imp.root}`,
+    `mount --rbind -o nosuid=recursive,nodev=recursive ${imp.paths.dir} ${imp.root}${imp.paths.dir}`,
+    `mount --make-rprivate ${imp.root}`,
   ]);
 });
 
 test('#prepare removes what the last jailer made in the chroot', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
-
-  await ctx.jails.prepare(plan);
-
-  mkdirSync(join(ctx.root, 'dev', 'net'), { recursive: true });
-  mkdirSync(join(ctx.root, 'firecracker'));
-  writeFileSync(join(ctx.root, 'firecracker.pid'), '1');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  expect(existsSync(join(ctx.root, 'dev'))).toBeFalse();
-  expect(existsSync(join(ctx.root, 'firecracker'))).toBeFalse();
-  expect(existsSync(join(ctx.root, 'firecracker.pid'))).toBeFalse();
+  mkdirSync(join(imp.root, 'dev', 'net'), { recursive: true });
+  mkdirSync(join(imp.root, 'firecracker'));
+  writeFileSync(join(imp.root, 'firecracker.pid'), '1');
+
+  await ctx.jails.prepare(plan);
+
+  expect(existsSync(join(imp.root, 'dev'))).toBeFalse();
+  expect(existsSync(join(imp.root, 'firecracker'))).toBeFalse();
+  expect(existsSync(join(imp.root, 'firecracker.pid'))).toBeFalse();
 });
 
 test('#prepare rebuilds the chroot so a symlink the last VM planted leads nowhere', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
   const elsewhere = join(ctx.dataDir, 'elsewhere');
 
   // the first segment of the imp dir's absolute path, as it sits in the chroot
-  const top = join(ctx.root, ctx.paths.dir.split('/')[1] ?? '');
+  const top = join(imp.root, imp.paths.dir.split('/')[1] ?? '');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
   await ctx.jails.release('i1');
@@ -269,136 +277,144 @@ test('#prepare rebuilds the chroot so a symlink the last VM planted leads nowher
 
   await ctx.jails.prepare(plan);
 
-  expect(lstatSync(join(ctx.root, ctx.paths.dir)).isDirectory()).toBeTrue();
+  expect(lstatSync(join(imp.root, imp.paths.dir)).isDirectory()).toBeTrue();
   expect(readdirSync(elsewhere)).toStrictEqual([]);
 });
 
 test('#prepare refuses a planted symlink as a snapshot file before any mount', () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
   const outside = join(ctx.dataDir, 'outside');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
   writeFileSync(outside, '');
-  mkdirSync(ctx.paths.snapshotDir, { recursive: true });
-  writeFileSync(ctx.paths.memFile, '');
-  symlinkSync(outside, ctx.paths.vmstate);
+  mkdirSync(imp.paths.snapshotDir, { recursive: true });
+  writeFileSync(imp.paths.memFile, '');
+  symlinkSync(outside, imp.paths.vmstate);
 
   expect(
-    ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] }),
-  ).rejects.toThrowWithMessage(Error, `${ctx.paths.vmstate} is not a regular file`);
+    ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] }),
+  ).rejects.toThrowWithMessage(Error, `${imp.paths.vmstate} is not a regular file`);
 
   expect(ctx.mounts.mounted).toStrictEqual([]);
 });
 
 test('#prepare replaces a symlink in place of run/ with a directory', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
-  symlinkSync(ctx.dataDir, ctx.paths.runDir);
+  writeFileSync(imp.paths.disk, '');
+  symlinkSync(ctx.dataDir, imp.paths.runDir);
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  expect(lstatSync(ctx.paths.runDir).isDirectory()).toBeTrue();
+  expect(lstatSync(imp.paths.runDir).isDirectory()).toBeTrue();
 });
 
 test('#prepare keeps the snapshot dir readable by all and writable by impd only', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  expect(lstatSync(ctx.paths.snapshotDir).mode & 0o777).toBe(0o755);
+  expect(lstatSync(imp.paths.snapshotDir).mode & 0o777).toBe(0o755);
 });
 
 test('#prepare empties run/ and keeps the snapshot readable by the jail group before a wake', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
-  mkdirSync(ctx.paths.snapshotDir, { recursive: true });
-  writeFileSync(ctx.paths.vmstate, 'vmstate');
-  writeFileSync(ctx.paths.memFile, 'mem');
+  writeFileSync(imp.paths.disk, '');
+  mkdirSync(imp.paths.snapshotDir, { recursive: true });
+  writeFileSync(imp.paths.vmstate, 'vmstate');
+  writeFileSync(imp.paths.memFile, 'mem');
 
   // planted by the last VM, after its seal and before its kill
-  mkdirSync(join(ctx.paths.runDir, 'planted'), { recursive: true });
-  writeFileSync(join(ctx.paths.runDir, 'planted', 'payload'), 'x');
-  writeFileSync(join(ctx.paths.runDir, 'api.sock'), 'not a socket');
+  mkdirSync(join(imp.paths.runDir, 'planted'), { recursive: true });
+  writeFileSync(join(imp.paths.runDir, 'planted', 'payload'), 'x');
+  writeFileSync(join(imp.paths.runDir, 'api.sock'), 'not a socket');
 
-  Bun.spawnSync(['mkfifo', join(ctx.paths.runDir, 'fifo')]);
+  Bun.spawnSync(['mkfifo', join(imp.paths.runDir, 'fifo')]);
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  expect(readdirSync(ctx.paths.runDir)).toStrictEqual([]);
-  expect(lstatSync(ctx.paths.vmstate).mode & 0o777).toBe(0o640);
-  expect(lstatSync(ctx.paths.memFile).mode & 0o777).toBe(0o640);
+  expect(readdirSync(imp.paths.runDir)).toStrictEqual([]);
+  expect(lstatSync(imp.paths.vmstate).mode & 0o777).toBe(0o640);
+  expect(lstatSync(imp.paths.memFile).mode & 0o777).toBe(0o640);
 });
 
 test('#prepare refuses a new jail while a mount stays after its umount', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  ctx.mounts.keepAfterUmount(ctx.root);
+  ctx.mounts.keepAfterUmount(imp.root);
 
   expect(ctx.jails.prepare(plan)).rejects.toThrowWithMessage(
     Error,
-    `jail i1: ${ctx.root} still has mounts`,
+    `jail i1: ${imp.root} still has mounts`,
   );
 });
 
 test('#prepare fails with the stderr of a mount that fails', () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  ctx.mounts.failMount(ctx.root, `mount: ${ctx.root}: permission denied.\n`);
+  ctx.mounts.failMount(imp.root, `mount: ${imp.root}: permission denied.\n`);
 
   expect(
-    ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] }),
+    ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] }),
   ).rejects.toThrowWithMessage(
     Error,
-    `mount --bind ${ctx.root} ${ctx.root}: mount: ${ctx.root}: permission denied.`,
+    `mount --bind ${imp.root} ${imp.root}: mount: ${imp.root}: permission denied.`,
   );
 });
 
 test('#prepare kills the jail cgroup and each process of the jail uid before it touches a mount', () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   ctx.processes.start(900_001, 4242);
 
   // a mount that never goes, so the prepare stops right after the kills
-  ctx.mounts.addMount(ctx.root);
-  ctx.mounts.refuseUmount(ctx.root);
+  ctx.mounts.addMount(imp.root);
+  ctx.mounts.refuseUmount(imp.root);
 
   expect(
     ctx.jails.prepare({
       impId: 'i1',
       user: { uid: 900_001, gid: 900_001 },
-      paths: ctx.paths,
+      paths: imp.paths,
       readOnlyFiles: [],
     }),
   ).rejects.toThrowWithMessage(
     Error,
-    `umount --lazy ${ctx.root}: umount: ${ctx.root}: target is busy.`,
+    `umount --lazy ${imp.root}: umount: ${imp.root}: target is busy.`,
   );
 
   expect(ctx.steps).toStrictEqual([
     'kill cgroup i1',
     'kill 4242',
-    `umount ${ctx.root}`,
-    `umount --lazy ${ctx.root}`,
+    `umount ${imp.root}`,
+    `umount --lazy ${imp.root}`,
   ]);
 });
 
 test('#prepare refuses a start while a process of the jail uid survives the kills', () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   ctx.processes.start(900_001, 4242);
   ctx.processes.surviveKills(4242);
@@ -407,7 +423,7 @@ test('#prepare refuses a start while a process of the jail uid survives the kill
     ctx.jails.prepare({
       impId: 'i1',
       user: { uid: 900_001, gid: 900_001 },
-      paths: ctx.paths,
+      paths: imp.paths,
       readOnlyFiles: [],
     }),
   ).rejects.toThrowWithMessage(Error, 'jail i1: uid 900001 still runs processes');
@@ -417,15 +433,16 @@ test('#prepare refuses a start while a process of the jail uid survives the kill
 
 test('#prepare refuses a scratch file inside a bound dir, where it would land in the real one', () => {
   const ctx = setupTest();
-  const scratch = join(ctx.paths.dir, 'placeholder.ext4');
+  const imp = ctx.createImpDir('i1');
+  const scratch = join(imp.paths.dir, 'placeholder.ext4');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   expect(
     ctx.jails.prepare({
       impId: 'i1',
       user: ctx.user,
-      paths: ctx.paths,
+      paths: imp.paths,
       readOnlyFiles: [],
       scratchFiles: [scratch],
     }),
@@ -436,12 +453,13 @@ test('#prepare refuses a scratch file inside a bound dir, where it would land in
 
 test('#prepare makes a restore jail before its disk exists', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
   await expect(
     ctx.jails.prepare({
       impId: 'i1',
       user: ctx.user,
-      paths: ctx.paths,
+      paths: imp.paths,
       readOnlyFiles: [],
       isDiskLate: true,
     }),
@@ -450,40 +468,42 @@ test('#prepare makes a restore jail before its disk exists', async () => {
 
 test('#setupDiskOwner refuses a disk the clone left as a symlink', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
   const outside = join(ctx.dataDir, 'outside');
 
   await ctx.jails.prepare({
     impId: 'i1',
     user: ctx.user,
-    paths: ctx.paths,
+    paths: imp.paths,
     readOnlyFiles: [],
     isDiskLate: true,
   });
 
   writeFileSync(outside, '');
-  symlinkSync(outside, ctx.paths.disk);
+  symlinkSync(outside, imp.paths.disk);
 
   expect(() => {
-    ctx.jails.setupDiskOwner(ctx.paths, ctx.user);
-  }).toThrowWithMessage(Error, `${ctx.paths.disk} is not a regular file`);
+    ctx.jails.setupDiskOwner(imp.paths, ctx.user);
+  }).toThrowWithMessage(Error, `${imp.paths.disk} is not a regular file`);
 });
 
 test('#setupDiskOwner hands a regular disk to the jail user', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
   await ctx.jails.prepare({
     impId: 'i1',
     user: ctx.user,
-    paths: ctx.paths,
+    paths: imp.paths,
     readOnlyFiles: [],
     isDiskLate: true,
   });
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  ctx.jails.setupDiskOwner(ctx.paths, ctx.user);
+  ctx.jails.setupDiskOwner(imp.paths, ctx.user);
 
-  expect(lstatSync(ctx.paths.disk).uid).toBe(ctx.user.uid);
+  expect(lstatSync(imp.paths.disk).uid).toBe(ctx.user.uid);
 });
 
 test('#prepareBuild binds the work dir and the read-only files of a template build', async () => {
@@ -555,21 +575,22 @@ test('#prepareBuild gives the build a placeholder of its own in the chroot and l
 
 test('#release detaches a busy mount lazily', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  ctx.mounts.refusePlainUmount(ctx.root);
+  ctx.mounts.refusePlainUmount(imp.root);
 
   ctx.mounts.calls.length = 0;
 
   await ctx.jails.release('i1');
 
   expect(ctx.mounts.calls).toStrictEqual([
-    `umount ${ctx.root}${ctx.paths.dir}`,
-    `umount ${ctx.root}`,
-    `umount --lazy ${ctx.root}`,
+    `umount ${imp.root}${imp.paths.dir}`,
+    `umount ${imp.root}`,
+    `umount --lazy ${imp.root}`,
   ]);
 
   expect(ctx.mounts.mounted).toStrictEqual([]);
@@ -577,25 +598,27 @@ test('#release detaches a busy mount lazily', async () => {
 
 test('#release fails with the stderr of a lazy umount that fails too', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  ctx.mounts.refuseUmount(ctx.root);
+  ctx.mounts.refuseUmount(imp.root);
 
   expect(ctx.jails.release('i1')).rejects.toThrowWithMessage(
     Error,
-    `umount --lazy ${ctx.root}: umount: ${ctx.root}: target is busy.`,
+    `umount --lazy ${imp.root}: umount: ${imp.root}: target is busy.`,
   );
 });
 
 test('#remove unmounts a jail and deletes its dir', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
   await ctx.jails.remove('i1');
 
   expect(ctx.mounts.mounted).toStrictEqual([]);
@@ -604,23 +627,25 @@ test('#remove unmounts a jail and deletes its dir', async () => {
 
 test('#remove never deletes a jail that still has mounts', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  ctx.mounts.keepAfterUmount(ctx.root);
+  ctx.mounts.keepAfterUmount(imp.root);
 
   await ctx.jails.remove('i1');
 
-  expect(existsSync(ctx.root)).toBeTrue();
+  expect(existsSync(imp.root)).toBeTrue();
 });
 
 test('#removeOrphans removes the jails of ids it is not given and returns those ids', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
   await ctx.jails.prepare({ ...plan, impId: 'i2' });
@@ -634,21 +659,23 @@ test('#removeOrphans removes the jails of ids it is not given and returns those 
 
 test('#removeOrphans never touches the files of the imp an orphan jail bound', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, 'disk');
+  writeFileSync(imp.paths.disk, 'disk');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
   await ctx.jails.removeOrphans(new Set());
 
-  expect(readFileSync(ctx.paths.disk, 'utf8')).toBe('disk');
+  expect(readFileSync(imp.paths.disk, 'utf8')).toBe('disk');
 });
 
 test('#removeOrphans logs and keeps an orphan jail that will not unmount, and removes the rest', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
-  const deepest = `${ctx.root}${ctx.paths.dir}`;
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
+  const deepest = `${imp.root}${imp.paths.dir}`;
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
   await ctx.jails.prepare({ ...plan, impId: 'i2' });
@@ -663,298 +690,309 @@ test('#removeOrphans logs and keeps an orphan jail that will not unmount, and re
     `impd: jail i1: umount --lazy ${deepest}: umount: ${deepest}: target is busy.`,
   ]);
 
-  expect(existsSync(ctx.root)).toBeTrue();
+  expect(existsSync(imp.root)).toBeTrue();
 });
 
 test('#seal hands run/ back to impd with its log and a new pid file', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  chmodSync(ctx.paths.runDir, 0o700);
+  chmodSync(imp.paths.runDir, 0o700);
 
   // what a start leaves: impd's log and pid file
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
 
-  ctx.jails.seal(ctx.paths, 4242);
+  ctx.jails.seal(imp.paths, 4242);
 
-  expect(lstatSync(ctx.paths.runDir).mode & 0o777).toBe(0o755);
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
-  expect(readFileSync(ctx.paths.pidFile, 'utf8')).toBe('4242\n');
+  expect(lstatSync(imp.paths.runDir).mode & 0o777).toBe(0o755);
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
+  expect(readFileSync(imp.paths.pidFile, 'utf8')).toBe('4242\n');
 });
 
 test('#seal refuses a dir the VM left in run/ and deletes nothing', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
-  mkdirSync(join(ctx.paths.runDir, 'planted', 'deep'), { recursive: true });
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
+  mkdirSync(join(imp.paths.runDir, 'planted', 'deep'), { recursive: true });
 
   expect(() => {
-    ctx.jails.seal(ctx.paths, 4242);
+    ctx.jails.seal(imp.paths, 4242);
   }).toThrowWithMessage(
     Error,
-    `${ctx.paths.runDir}: the VM left planted there; a VM that writes there is compromised`,
+    `${imp.paths.runDir}: the VM left planted there; a VM that writes there is compromised`,
   );
 
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual([
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual([
     'firecracker.log',
     'pid',
     'planted',
   ]);
 
-  expect(readFileSync(ctx.paths.pidFile, 'utf8')).toBe('1\n');
+  expect(readFileSync(imp.paths.pidFile, 'utf8')).toBe('1\n');
 });
 
 test('#seal leaves run/ readable by all when it refuses what the VM left there', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  chmodSync(ctx.paths.runDir, 0o700);
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
-  mkdirSync(join(ctx.paths.runDir, 'planted'));
+  chmodSync(imp.paths.runDir, 0o700);
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
+  mkdirSync(join(imp.paths.runDir, 'planted'));
 
   expect(() => {
-    ctx.jails.seal(ctx.paths, 4242);
+    ctx.jails.seal(imp.paths, 4242);
   }).toThrowWithMessage(
     Error,
-    `${ctx.paths.runDir}: the VM left planted there; a VM that writes there is compromised`,
+    `${imp.paths.runDir}: the VM left planted there; a VM that writes there is compromised`,
   );
 
-  expect(lstatSync(ctx.paths.runDir).mode & 0o777).toBe(0o755);
+  expect(lstatSync(imp.paths.runDir).mode & 0o777).toBe(0o755);
 });
 
 test('#seal refuses a FIFO the VM left in run/ and deletes nothing', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
 
-  Bun.spawnSync(['mkfifo', join(ctx.paths.runDir, 'fifo')]);
+  Bun.spawnSync(['mkfifo', join(imp.paths.runDir, 'fifo')]);
 
   expect(() => {
-    ctx.jails.seal(ctx.paths, 4242);
+    ctx.jails.seal(imp.paths, 4242);
   }).toThrowWithMessage(
     Error,
-    `${ctx.paths.runDir}: the VM left fifo there; a VM that writes there is compromised`,
+    `${imp.paths.runDir}: the VM left fifo there; a VM that writes there is compromised`,
   );
 
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual([
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual([
     'fifo',
     'firecracker.log',
     'pid',
   ]);
 
-  expect(readFileSync(ctx.paths.pidFile, 'utf8')).toBe('1\n');
+  expect(readFileSync(imp.paths.pidFile, 'utf8')).toBe('1\n');
 });
 
 test('#seal refuses a second link to the log in run/ and deletes nothing', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
-  linkSync(ctx.paths.logFile, join(ctx.paths.runDir, 'log-link'));
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
+  linkSync(imp.paths.logFile, join(imp.paths.runDir, 'log-link'));
 
   expect(() => {
-    ctx.jails.seal(ctx.paths, 4242);
+    ctx.jails.seal(imp.paths, 4242);
   }).toThrowWithMessage(
     Error,
     /: the VM left .*log-link.* there; a VM that writes there is compromised$/,
   );
 
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual([
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual([
     'firecracker.log',
     'log-link',
     'pid',
   ]);
 
-  expect(readFileSync(ctx.paths.pidFile, 'utf8')).toBe('1\n');
+  expect(readFileSync(imp.paths.pidFile, 'utf8')).toBe('1\n');
 });
 
 test('#seal refuses a symlink as the pid file and leaves it unwritten', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
   const outside = join(ctx.dataDir, 'outside');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.logFile, 'boot\n');
   writeFileSync(outside, 'untouched');
-  symlinkSync(outside, ctx.paths.pidFile);
+  symlinkSync(outside, imp.paths.pidFile);
 
   expect(() => {
-    ctx.jails.seal(ctx.paths, 4242);
+    ctx.jails.seal(imp.paths, 4242);
   }).toThrowWithMessage(
     Error,
-    `${ctx.paths.runDir}: the VM left pid there; a VM that writes there is compromised`,
+    `${imp.paths.runDir}: the VM left pid there; a VM that writes there is compromised`,
   );
 
-  expect(lstatSync(ctx.paths.pidFile).isSymbolicLink()).toBeTrue();
+  expect(lstatSync(imp.paths.pidFile).isSymbolicLink()).toBeTrue();
   expect(readFileSync(outside, 'utf8')).toBe('untouched');
 });
 
 test('#prepare sweeps a dir the last VM left in run/', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
-  mkdirSync(join(ctx.paths.runDir, 'planted', 'deep'), { recursive: true });
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
+  mkdirSync(join(imp.paths.runDir, 'planted', 'deep'), { recursive: true });
 
   await ctx.jails.release('i1');
   await ctx.jails.prepare(plan);
 
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
 });
 
 test('#prepare sweeps a FIFO the last VM left in run/', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
 
-  Bun.spawnSync(['mkfifo', join(ctx.paths.runDir, 'fifo')]);
+  Bun.spawnSync(['mkfifo', join(imp.paths.runDir, 'fifo')]);
 
   await ctx.jails.release('i1');
   await ctx.jails.prepare(plan);
 
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
 });
 
 test('#prepare sweeps a second link to the log out of run/', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
-  linkSync(ctx.paths.logFile, join(ctx.paths.runDir, 'log-link'));
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
+  linkSync(imp.paths.logFile, join(imp.paths.runDir, 'log-link'));
 
   await ctx.jails.release('i1');
   await ctx.jails.prepare(plan);
 
-  expect(readdirSync(ctx.paths.runDir)).not.toContain('log-link');
-  expect(readdirSync(ctx.paths.runDir)).toContain('pid');
+  expect(readdirSync(imp.paths.runDir)).not.toContain('log-link');
+  expect(readdirSync(imp.paths.runDir)).toContain('pid');
 });
 
 test('#prepare keeps only regular files in run/ after it sweeps what the last VM left', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
-  writeFileSync(ctx.paths.pidFile, '1\n');
-  mkdirSync(join(ctx.paths.runDir, 'planted'));
-  symlinkSync('/etc/hostname', join(ctx.paths.runDir, 'link'));
+  writeFileSync(imp.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.pidFile, '1\n');
+  mkdirSync(join(imp.paths.runDir, 'planted'));
+  symlinkSync('/etc/hostname', join(imp.paths.runDir, 'link'));
 
-  const mkfifo = Bun.spawnSync(['mkfifo', join(ctx.paths.runDir, 'fifo')]);
+  const mkfifo = Bun.spawnSync(['mkfifo', join(imp.paths.runDir, 'fifo')]);
 
   expect(mkfifo.exitCode).toBe(0);
 
   await ctx.jails.release('i1');
   await ctx.jails.prepare(plan);
 
-  expect(
-    readdirSync(ctx.paths.runDir).filter(
-      (name) => !lstatSync(join(ctx.paths.runDir, name)).isFile(),
-    ),
-  ).toStrictEqual([]);
+  expect(readdirSync(imp.paths.runDir)).toSatisfyAll((name: string) =>
+    lstatSync(join(imp.paths.runDir, name)).isFile(),
+  );
 });
 
 test('#prepare sweeps a symlink the last VM left as the pid file', async () => {
   const ctx = setupTest();
-  const plan = { impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] };
+  const imp = ctx.createImpDir('i1');
+  const plan = { impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] };
   const outside = join(ctx.dataDir, 'outside');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
 
   await ctx.jails.prepare(plan);
 
-  writeFileSync(ctx.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.logFile, 'boot\n');
   writeFileSync(outside, 'untouched');
-  symlinkSync(outside, ctx.paths.pidFile);
+  symlinkSync(outside, imp.paths.pidFile);
 
   await ctx.jails.release('i1');
   await ctx.jails.prepare(plan);
 
-  expect(readdirSync(ctx.paths.runDir)).toStrictEqual(['firecracker.log']);
+  expect(readdirSync(imp.paths.runDir)).toStrictEqual(['firecracker.log']);
   expect(readFileSync(outside, 'utf8')).toBe('untouched');
 });
 
 test('#sweepRunDir unmounts the jail and empties run/ of what a jailed VM planted', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
   const outside = join(ctx.dataDir, 'outside');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
   writeFileSync(outside, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
-  mkdirSync(join(ctx.paths.runDir, 'planted', 'deep'), { recursive: true });
-  symlinkSync(outside, ctx.paths.pidFile);
+  mkdirSync(join(imp.paths.runDir, 'planted', 'deep'), { recursive: true });
+  symlinkSync(outside, imp.paths.pidFile);
 
-  await ctx.jails.sweepRunDir(ctx.paths);
+  await ctx.jails.sweepRunDir(imp.paths);
 
   expect(ctx.mounts.mounted).toStrictEqual([]);
-  expect(readdirSync(ctx.paths.runDir)).toStrictEqual([]);
+  expect(readdirSync(imp.paths.runDir)).toStrictEqual([]);
 });
 
 test('#seal passes for an unjailed start after a sweep of what a jailed VM planted', async () => {
   const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
   const outside = join(ctx.dataDir, 'outside');
 
-  writeFileSync(ctx.paths.disk, '');
+  writeFileSync(imp.paths.disk, '');
   writeFileSync(outside, '');
 
-  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: ctx.paths, readOnlyFiles: [] });
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
 
   // the jailed VM's leftovers, then a switch to IMP_JAILER=false
-  mkdirSync(join(ctx.paths.runDir, 'planted', 'deep'), { recursive: true });
-  symlinkSync(outside, ctx.paths.pidFile);
+  mkdirSync(join(imp.paths.runDir, 'planted', 'deep'), { recursive: true });
+  symlinkSync(outside, imp.paths.pidFile);
 
-  await ctx.jails.sweepRunDir(ctx.paths);
+  await ctx.jails.sweepRunDir(imp.paths);
 
   // what an unjailed start leaves before its seal
-  writeFileSync(ctx.paths.logFile, 'boot\n');
+  writeFileSync(imp.paths.logFile, 'boot\n');
 
-  ctx.jails.seal(ctx.paths, 4242);
+  ctx.jails.seal(imp.paths, 4242);
 
-  expect(readdirSync(ctx.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
+  expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual(['firecracker.log', 'pid']);
 });
 
 test('#setupTemplateFile refuses a template file with a second name', () => {
