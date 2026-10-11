@@ -1,6 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -15,17 +14,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createStubBin } from './test-utils/create-stub-bin';
+import { createStubInstanceDocker } from './test-utils/create-stub-instance-docker';
+import { createStubRepoScript } from './test-utils/create-stub-repo-script';
+import { createStubZfs } from './test-utils/create-stub-zfs';
 import { createStubZpool } from './test-utils/create-stub-zpool';
-
-// a repo script that logs its call, then runs body
-function writeStandIn(scripts: string, name: string, calls: string, body = ''): void {
-  writeFileSync(
-    join(scripts, name),
-    `#!/bin/bash\nprintf '%s\\n' "${name} $*" >>'${calls}'\n${body}\n`,
-  );
-
-  chmodSync(join(scripts, name), 0o755);
-}
 
 // The script runs from a copy of the repo's scripts dir, beside the lib.sh it
 // sources and stand-ins for the repo scripts it calls, which log to the same
@@ -45,16 +37,14 @@ function setupTest() {
     copyFileSync(new URL(name, import.meta.url).pathname, join(scripts, name));
   }
 
-  // sudo runs what it is given; no container is there, and the docker log
-  // is empty
+  // sudo runs what it is given
   const stubs = join(dir, 'stubs');
   const sudo = createStubBin(stubs, 'sudo', 'exec "$@"');
 
-  createStubBin(stubs, 'docker', 'if [ "$1" = container ]; then exit 1; fi');
-  createStubBin(stubs, 'zfs');
+  createStubZfs(stubs);
 
   for (const name of ['dev.sh', 'test-e2e.sh', 'test-zfs.sh']) {
-    writeStandIn(scripts, name, sudo.calls);
+    createStubRepoScript(scripts, name, sudo.calls);
   }
 
   // the script reads the loaded module's version before it does anything
@@ -75,6 +65,9 @@ function setupTest() {
 
 test('it runs the unit tests and suites on a bench pool, then releases all it made', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -138,6 +131,9 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
 
 test('it refuses a bench pool name that is taken and touches nothing', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -166,6 +162,9 @@ test('it refuses a bench pool name that is taken and touches nothing', () => {
 
 test('it refuses a work dir that already holds a bench.img and leaves the file as it was', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -195,6 +194,9 @@ test('it refuses a work dir that already holds a bench.img and leaves the file a
 
 test('it refuses a bench.img that is a symlink and leaves the link and its target as they were', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
   const target = join(ctx.dir, 'another-bench.img');
 
@@ -224,6 +226,9 @@ test('it refuses a bench.img that is a symlink and leaves the link and its targe
 
 test('it never destroys a pool or stops an instance when its own pool create fails', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -264,6 +269,9 @@ test('it never destroys a pool or stops an instance when its own pool create fai
 
 test('it fails and keeps the pool file, saying so, when the pool will not go', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -290,6 +298,9 @@ test('it fails and keeps the pool file, saying so, when the pool will not go', (
 
 test('it refuses a work dir that already holds a data dir and leaves it as it was', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(join(work, 'data'), { recursive: true });
@@ -325,7 +336,7 @@ test('it refuses an imp-zfs container that is already there and touches nothing'
   createStubZpool(ctx.stubs);
 
   // another run's instance answers inspect
-  createStubBin(ctx.stubs, 'docker');
+  createStubInstanceDocker(ctx.stubs, { containers: ['imp-zfs'] });
 
   const result = Bun.spawnSync([ctx.script], {
     env: {
@@ -353,6 +364,9 @@ test('it refuses an imp-zfs container that is already there and touches nothing'
 
 test('it makes a work dir that does not exist yet, parents included', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'not', 'yet', 'work');
 
   createStubZpool(ctx.stubs);
@@ -372,6 +386,9 @@ test('it makes a work dir that does not exist yet, parents included', () => {
 
 test('it stops the suites, the instance and the pool when it gets SIGTERM during the run', async () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
   const started = join(ctx.dir, 'suites-started');
 
@@ -379,7 +396,7 @@ test('it stops the suites, the instance and the pool when it gets SIGTERM during
   createStubZpool(ctx.stubs);
 
   // a run that holds the instance until something stops it
-  writeStandIn(ctx.scripts, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
+  createStubRepoScript(ctx.scripts, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
 
   const proc = Bun.spawn([ctx.script], {
     stdout: 'ignore',
@@ -430,11 +447,15 @@ test('it stops the suites, the instance and the pool when it gets SIGTERM during
 
 test('it destroys the pool and removes its file when SIGTERM comes during the pool create', async () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
   const startedMarker = join(ctx.dir, 'create-started');
+  const release = join(ctx.dir, 'create-release');
 
   mkdirSync(work);
-  createStubZpool(ctx.stubs, { create: { startedMarker } });
+  createStubZpool(ctx.stubs, { create: { startedMarker, release } });
 
   const proc = Bun.spawn([ctx.script], {
     stdout: 'ignore',
@@ -454,7 +475,10 @@ test('it destroys the pool and removes its file when SIGTERM comes during the po
 
   await waitFor(() => readFileSync(startedMarker), { timeoutMs: 10_000 });
 
+  // the create holds until the release, so the signal lands inside it
   proc.kill('SIGTERM');
+
+  writeFileSync(release, '');
 
   const exitCode = await proc.exited;
 
@@ -483,6 +507,9 @@ test('it destroys the pool and removes its file when SIGTERM comes during the po
 
 test('it keeps the pool file and fails while a pool still uses it', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -509,6 +536,9 @@ test('it keeps the pool file and fails while a pool still uses it', () => {
 
 test('it destroys its pool and removes the file when the work dir path holds spaces', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work dir');
 
   mkdirSync(work);
@@ -531,6 +561,9 @@ test('it destroys its pool and removes the file when the work dir path holds spa
 
 test('it keeps the pool file and fails when zpool cannot say what uses it', () => {
   const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
@@ -553,4 +586,29 @@ test('it keeps the pool file and fails when zpool cannot say what uses it', () =
   );
 
   expect(existsSync(join(work, 'bench.img'))).toBeTrue();
+});
+
+test('it refuses to run when the zfs module is not loaded and touches nothing', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+  createStubZpool(ctx.stubs);
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: join(ctx.dir, 'no-zfs-module', 'version'),
+    },
+  });
+
+  expect({ exitCode: result.exitCode, stderr: result.stderr.toString() }).toStrictEqual({
+    exitCode: 1,
+    stderr: 'zfs-host-test: load the zfs module first (sudo modprobe zfs)\n',
+  });
+
+  expect(readFileSync(ctx.calls, 'utf8')).toBe('');
+  expect(existsSync(work)).toBeFalse();
 });

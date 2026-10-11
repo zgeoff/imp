@@ -124,8 +124,9 @@ Utils that take a caller's stack and register nothing themselves:
   behind the HTTPS listeners, which answers with the headers it got and echoes WebSocket messages.
 
 `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
-`packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source)`) runs one test file in a
-child `bun test` with `dir` as its working and temp dir.
+`packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source, timeoutMs = 4000)`) runs
+one test file in a child `bun test` with `dir` as its working and temp dir, and kills it at
+`timeoutMs`.
 
 Plain `bun test` does not match `*.e2e.ts` or `*.pebble.ts`; each of those runs only when its `./`
 path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain `bun test`
@@ -330,6 +331,11 @@ sources, so a changed fixture builds anew.
 | `IMP_DEV_NAME`                       | `imp-dev`   | the dev container                                  |
 | `IMP_DEV_PORT_OFFSET`                | 0           | shifts every published port; needs `IMP_DEV_NAME`  |
 | `IMP_DEV_DATA`                       | `.data/dev` | the instance's data dir, mounted at `/data`        |
+| `IMP_DEV_READY_TIMEOUT_S`            | 600, 60     | `dev.sh`'s wait for /health on up, on restart      |
+| `IMP_DEV_STOP_TIMEOUT_S`             | 30          | `dev.sh restart`'s wait for the old impd to exit   |
+
+`scripts/dev.test.ts` sets each of the two `dev.sh` deadlines to 1 s, against an impd that never
+gets ready or never exits, beside a run where it does.
 
 `main.ts` sets `E2E_KEEP`, `E2E_ACCEPTANCE`, and `E2E_METRICS_FILE` for each suite process. It no
 longer sets `E2E_SUITES`: `scale` read it to keep its imps for `restart`, and that choice is now the
@@ -404,11 +410,15 @@ this checkout whatever its `-C` says.
   is a symlink is refused too. The tests run in the background, so TERM (exit 143) or INT (130)
   stops them before cleanup. It reads the module's version from `IMP_ZFS_MODULE_VERSION_FILE`
   (default `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs the script against stub `id`,
-  `zfs`, `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), and a
-  `zpool` that keeps its pools in a state file (`create-stub-zpool.ts`), in a temp root: a normal
-  release, a work dir made with its parents, the collisions (a symlinked `pool.img` included), a
-  failed `zfs create`, a failed `zpool create`, a failed destroy, a pool that still uses the file, a
-  failed `zpool` query, a work dir path with spaces, and SIGTERM during the create and mid-run.
+  `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), a `zfs` that
+  prints its version and can fail a create (`create-stub-zfs.ts`), and a `zpool` that keeps its
+  pools in a state file (`create-stub-zpool.ts`), in a temp root: the refusals for a user other than
+  root, a missing module and a missing `zpool`, a normal release, a work dir made with its parents,
+  the collisions (a symlinked `pool.img` included), a failed `zfs create`, a failed `zpool create`,
+  a failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
+  spaces, and SIGTERM during the create and mid-run. For the create, the `zpool` stub writes a
+  marker and holds until the test writes a release file (or fails after 30 s), so the test sends
+  SIGTERM after the marker and before the release, inside the create.
 - **`scripts/zfs-host-test.sh`** runs `test-zfs.sh` (unless `IMP_ZFS_TEST_UNIT=0`), then starts a
   dev instance `imp-zfs` (port offset `IMP_DEV_PORT_OFFSET`, default 300) with
   `IMP_STORAGE_BACKEND=zfs` on a second sparse pool `impbench<pid>` of `IMP_ZFS_BENCH_GIB`
@@ -426,11 +436,13 @@ this checkout whatever its `-C` says.
   path), and removes that file only when no pool lists it and `zpool` could say so. A pool that will
   not go keeps its file and fails the run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in
   `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh`
-  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh`, with stub `sudo`, `zfs` and `docker` and
-  the stateful `zpool` on `PATH`: a normal release with its owner file, a work dir made with its
-  parents, the pool, file, symlink, data dir and container collisions, a failed `zpool create`, a
-  failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
-  spaces, and SIGTERM during the create and during the e2e run.
+  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh` (`create-stub-repo-script.ts`), with stub
+  `sudo`, the `zfs` stub, a `docker` that knows only the containers a test lists
+  (`create-stub-instance-docker.ts`) and the stateful `zpool` on `PATH`: the refusal for a missing
+  module, a normal release with its owner file, a work dir made with its parents, the pool, file,
+  symlink, data dir and container collisions, a failed `zpool create`, a failed destroy, a pool that
+  still uses the file, a failed `zpool` query, a work dir path with spaces, and SIGTERM during the
+  held create and during the e2e run.
 
 ## NixOS
 
@@ -456,7 +468,8 @@ The flake's two checks test `deploy/nixos/module.nix`:
   depend on each other. Every firewall there drops without a reject, so a dropped connection is the
   `timeout 5` exit: 124 on a node (GNU coreutils), and 143 inside the stand-in image, whose busybox
   `timeout` execs the command and kills it with SIGTERM. The driver's `fail` is kept for a refusal
-  whose cause the subtest checks another way, such as the journal.
+  whose cause the subtest checks another way, such as the journal. The stub image's `tailscale` is
+  `scripts/test-utils/run-stub-vm-tailscale.sh`, which `run-stub-vm-tailscale.test.ts` tests.
 
 `.github/workflows/nix.yml` checks the format with `nix fmt -- --check` and builds each check in its
 own job; the `vm` job opens `/dev/kvm` to the builders. The local `nixfmt` must be the pinned
@@ -518,6 +531,11 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | CLIs a script calls          | `scripts/test-utils/create-stub-bin.ts` (7)                                                        | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`                            |
 | Docker for upgrade           | `scripts/test-utils/build-stub-host-docker.ts`                                                     | The docker that `deploy/upgrade.sh` drives on a host                               |
 | Docker for dev.sh            | `scripts/test-utils/build-stub-dev-docker.ts`                                                      | The images, labels and containers `dev.sh prune` reads                             |
+| Docker for dev.sh up         | `scripts/test-utils/build-stub-dev-host-docker.ts`                                                 | Host image, containers, proxy build, socket and logs of `up` and `restart`         |
+| Docker for bootstrap.sh      | `scripts/test-utils/build-stub-bootstrap-docker.ts`                                                | The daemon, the imp-host network, images, seccomp and the container it reads       |
+| Block devices                | `scripts/test-utils/build-stub-block-devices.ts`                                                   | `stat`, `findmnt`, `lsblk` and `blkid` over a table of devices, for bootstrap.sh   |
+| tailscale for tailscale-up   | `scripts/test-utils/create-stub-tailscale.ts`                                                      | The `tailscale` CLI that `host/scripts/tailscale-up.sh` drives: status, up, down   |
+| tailscale in the NixOS VM    | `scripts/test-utils/run-stub-vm-tailscale.sh`                                                      | The `tailscale` CLI in `vm.nix`'s stub image: saved states, key files, a used key  |
 | Registry for base            | `scripts/test-utils/build-stub-registry-docker.ts`                                                 | `docker buildx imagetools inspect` in the release Plan step                        |
 | impd for the client          | `packages/client/smoke/run-stub-impd.ts`                                                           | impd's app on loopback, run by `check-client-runtimes.sh`                          |
 | nft                          | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                               | `nft` from the egress service                                                      |

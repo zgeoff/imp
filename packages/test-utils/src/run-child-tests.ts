@@ -1,9 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// under bun test's default 5 s test timeout, so the parent reports a hung child
-const CHILD_TIMEOUT_MS = 4000;
-
 interface ChildTestRun {
   // null when the run was killed at its deadline
   readonly exitCode: number | null;
@@ -11,16 +8,16 @@ interface ChildTestRun {
   readonly output: string;
 }
 
-// Writes `source` as one test file in `dir` and runs it with `bun test`, with
-// `dir` as its working and temp dir and no preload, so a later test there can
-// read what an earlier test's onTestFinished left.
-export function runChildTests(dir: string, source: string): ChildTestRun {
+// Runs `source` as one test file in `dir`, its working and temp dir, with no
+// preload, so a later test can read what an earlier onTestFinished left. It
+// kills the child at timeoutMs, by default under bun test's 5 s timeout.
+export function runChildTests(dir: string, source: string, timeoutMs = 4000): ChildTestRun {
   writeFileSync(join(dir, 'child.test.ts'), source);
 
   const result = Bun.spawnSync([process.execPath, 'test', './child.test.ts'], {
     cwd: dir,
     env: { ...process.env, TMPDIR: dir },
-    timeout: CHILD_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
 
   return {

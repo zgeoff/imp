@@ -3,9 +3,10 @@ import { createStubBin } from './create-stub-bin';
 import type { StubBin } from './create-stub-bin';
 
 export interface ZpoolStubOptions {
-  // fails: the create fails; startedMarker: it writes that file, then takes
-  // a second before the pool exists
-  readonly create?: 'fails' | { readonly startedMarker: string };
+  // fails: the create fails; held: it writes startedMarker, then holds until
+  // the release file exists before the pool exists, and fails the create
+  // without a pool when no release comes within 30 s
+  readonly create?: 'fails' | { readonly startedMarker: string; readonly release: string };
 
   // fails: the destroy fails; ignored: it exits 0 and the pool stays
   readonly destroy?: 'fails' | 'ignored';
@@ -24,7 +25,13 @@ export function createStubZpool(stubs: string, options: Readonly<ZpoolStubOption
   if (options.create === 'fails') {
     onCreate = 'echo "pool already exists" >&2; exit 1';
   } else if (options.create !== undefined) {
-    onCreate = `: >'${options.create.startedMarker}'; sleep 1`;
+    onCreate = String.raw`: >'${options.create.startedMarker}'
+    held=0
+    while [ ! -e '${options.create.release}' ]; do
+      [ "$held" -lt 600 ] || { echo "no release within 30 s" >&2; exit 1; }
+      held=$((held + 1))
+      sleep 0.05
+    done`;
   }
 
   const onDestroy = { fails: 'exit 1', ignored: 'exit 0', none: ':' }[options.destroy ?? 'none'];

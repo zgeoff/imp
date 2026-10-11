@@ -100,6 +100,8 @@ readonly TEMPLATE_BUDGET_MIB=16384
 readonly RAM_BUDGET_FLOOR_MIB=512
 # A loop file smaller than this is refused.
 readonly LOOP_MIN_GIB=20
+# apt's output goes here, shown only on failure.
+readonly APT_LOG=/var/log/imp-bootstrap-apt.log
 # With IPv6, imp-host runs on this Docker network. The bridge has a fixed
 # name so a host firewall can admit it; the name keeps clear of imp's own
 # interfaces (imp0, imp+).
@@ -875,22 +877,7 @@ preflight() {
     in_container=1
     warn "running in a container: kernel settings are written, not applied"
   fi
-  # The dev box is WSL2 Ubuntu; a stray run there must not touch it. A test
-  # container on that box shares its kernel but is allowed (see above).
-  if grep -qi microsoft /proc/sys/kernel/osrelease && [ -z "$in_container" ]; then
-    die "refusing to run on WSL; this script is for a bare-metal server"
-  fi
-
-  # shellcheck source=/dev/null
-  . /etc/os-release
-  case "${ID:-}:${VERSION_ID:-}" in
-    ubuntu:24.04 | ubuntu:26.04 | debian:13) log "OS: $PRETTY_NAME" ;;
-    *) die "unsupported OS ${PRETTY_NAME:-unknown}; use Ubuntu 24.04 or 26.04, or Debian 13" ;;
-  esac
-  [ "$(uname -m)" = x86_64 ] || die "the host image is x86_64 only"
-
-  [ -c /dev/kvm ] || die "/dev/kvm is missing; enable VT-x/AMD-V in the firmware"
-  grep -qwE 'vmx|svm' /proc/cpuinfo || die "the CPU reports neither vmx nor svm"
+  check_platform
 
   resolve_storage
   resolve_host_firewall
@@ -900,11 +887,41 @@ preflight() {
     local refusal
     refusal=$(check_env_image "$ENV_FILE" 2>&1) || die "$refusal; or pass --image"
   fi
-  if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
-    die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
-  fi
+  check_data_source
   if [ -z "$authkey" ] && ! tailnet_joined; then
     warn "no Tailscale key: the host stays local-only (docs/guides/tailscale.md)"
+  fi
+}
+
+# check_platform [OSRELEASE] [OS_RELEASE] [KVM] [CPUINFO]: a supported OS on
+# x86_64 with KVM, not WSL. The arguments default to the kernel's and the OS's
+# own files.
+check_platform() {
+  local osrelease=${1:-/proc/sys/kernel/osrelease} os_release=${2:-/etc/os-release}
+  local kvm=${3:-/dev/kvm} cpuinfo=${4:-/proc/cpuinfo}
+  # The dev box is WSL2 Ubuntu; a stray run there must not touch it. A test
+  # container on that box shares its kernel but is allowed (preflight).
+  if grep -qi microsoft "$osrelease" && [ -z "$in_container" ]; then
+    die "refusing to run on WSL; this script is for a bare-metal server"
+  fi
+
+  # shellcheck source=/dev/null
+  . "$os_release"
+  case "${ID:-}:${VERSION_ID:-}" in
+    ubuntu:24.04 | ubuntu:26.04 | debian:13) log "OS: $PRETTY_NAME" ;;
+    *) die "unsupported OS ${PRETTY_NAME:-unknown}; use Ubuntu 24.04 or 26.04, or Debian 13" ;;
+  esac
+  [ "$(uname -m)" = x86_64 ] || die "the host image is x86_64 only"
+
+  [ -c "$kvm" ] || die "$kvm is missing; enable VT-x/AMD-V in the firmware"
+  grep -qwE 'vmx|svm' "$cpuinfo" || die "the CPU reports neither vmx nor svm"
+}
+
+# check_data_source: XFS needs a device, a loop file, or a mount already on
+# $DATA_DIR.
+check_data_source() {
+  if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
+    die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
 }
 
@@ -963,21 +980,23 @@ check_env_image() {
   return 1
 }
 
-# resolve_host_firewall: the flag, else the env file, else own.
+# resolve_host_firewall [ENV_FILE]: the flag, else the env file (default
+# $ENV_FILE), else own.
 resolve_host_firewall() {
-  local env_value=""
-  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_FIREWALL=//p' "$ENV_FILE" | tail -n 1)
+  local env_file=${1:-$ENV_FILE} env_value=""
+  [ -f "$env_file" ] && env_value=$(sed -n 's/^IMP_HOST_FIREWALL=//p' "$env_file" | tail -n 1)
   host_firewall=${host_firewall:-${env_value:-own}}
-  case $host_firewall in own | none) ;; *) die "$ENV_FILE says IMP_HOST_FIREWALL=$host_firewall; want own or none" ;; esac
+  case $host_firewall in own | none) ;; *) die "$env_file says IMP_HOST_FIREWALL=$host_firewall; want own or none" ;; esac
   log "host firewall: $host_firewall"
 }
 
-# resolve_ipv6: the flag, else the env file's choice, else auto. The env
-# file keeps on or off, never auto, so a later run on a host whose IPv6
-# route is down for a moment does not take imps' IPv6 away.
+# resolve_ipv6 [ENV_FILE]: the flag, else the env file's (default
+# $ENV_FILE) choice, else auto. The env file keeps on or off, never auto,
+# so a later run on a host whose IPv6 route is down for a moment does not
+# take imps' IPv6 away.
 resolve_ipv6() {
-  local env_value="" uplink
-  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_IPV6=//p' "$ENV_FILE" | tail -n 1)
+  local env_file=${1:-$ENV_FILE} env_value="" uplink
+  [ -f "$env_file" ] && env_value=$(sed -n 's/^IMP_HOST_IPV6=//p' "$env_file" | tail -n 1)
   ipv6=${ipv6:-${env_value:-auto}}
   case $ipv6 in
     on | off) log "ipv6: $ipv6" ;;
@@ -991,7 +1010,7 @@ resolve_ipv6() {
         log "ipv6: off (auto: the host has no global IPv6 default route)"
       fi
       ;;
-    *) die "$ENV_FILE says IMP_HOST_IPV6=$ipv6; want on or off" ;;
+    *) die "$env_file says IMP_HOST_IPV6=$ipv6; want on or off" ;;
   esac
 }
 
@@ -1013,7 +1032,7 @@ ensure_packages() {
     dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
   done
   if [ ${#missing[@]} -gt 0 ]; then
-    change "apt-get install ${missing[*]}" apt_install "${missing[@]}"
+    change "apt-get install ${missing[*]}" apt_install "$APT_LOG" "${missing[@]}"
   fi
   [ "$storage" != zfs ] || ensure_zfs_packages
   ensure_docker
@@ -1033,7 +1052,7 @@ ensure_zfs_packages() {
     dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
   done
   if [ ${#missing[@]} -gt 0 ]; then
-    change "apt-get install ${missing[*]}" apt_install "${missing[@]}"
+    change "apt-get install ${missing[*]}" apt_install "$APT_LOG" "${missing[@]}"
   fi
 }
 
@@ -1048,9 +1067,10 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
 }
 
-# apt_install PKG...: apt's output goes to a log, shown only on failure.
+# apt_install LOG PKG...: apt's output goes to LOG, shown only on failure.
 apt_install() {
-  local apt_log=/var/log/imp-bootstrap-apt.log
+  local apt_log=$1
+  shift
   if ! {
     apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@"
   } >"$apt_log" 2>&1; then
@@ -1080,7 +1100,7 @@ ensure_docker() {
   [ ! -s "$key" ] || check_docker_key "$key"
   put_file /etc/apt/sources.list.d/docker.list 644 \
     "deb [arch=amd64 signed-by=$key] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" || true
-  change "apt-get install docker-ce" apt_install docker-ce docker-ce-cli containerd.io
+  change "apt-get install docker-ce" apt_install "$APT_LOG" docker-ce docker-ce-cli containerd.io
   ensure_service docker
 }
 
@@ -1166,7 +1186,9 @@ device_source() {
 # check_device_free DEV: refuse a device that may hold data in use.
 check_device_free() {
   local dev=$1
-  [ -b "$dev" ] || die "$dev is not a block device"
+  # stat, not test -b, so a test can stand in for the device; LC_ALL=C keeps
+  # the file type in English whatever the host's locale
+  [ "$(LC_ALL=C stat -L -c %F "$dev" 2>/dev/null)" = "block special file" ] || die "$dev is not a block device"
   dev=$(readlink -f "$dev")
   local root_disk
   root_disk=$(findmnt -n -o SOURCE / | sed 's/\[.*//')
@@ -1279,13 +1301,15 @@ xfsprogs_version() {
   fi
 }
 
+# ensure_fstab LINE [FSTAB]: FSTAB (default /etc/fstab) holds LINE for
+# $DATA_DIR, and no other entry for it.
 ensure_fstab() {
-  local line=$1
-  case $(fstab_entry_state /etc/fstab "$line") in
-    none) change "add $DATA_DIR to /etc/fstab" append_line /etc/fstab "$line" ;;
+  local line=$1 fstab=${2:-/etc/fstab}
+  case $(fstab_entry_state "$fstab" "$line") in
+    none) change "add $DATA_DIR to $fstab" append_line "$fstab" "$line" ;;
     same) ;;
-    old) warn "$DATA_DIR in /etc/fstab lacks nosuid; add it to the entry, then run: mount -o remount,nosuid $DATA_DIR" ;;
-    other) die "/etc/fstab has another entry for $DATA_DIR; fix or remove it first" ;;
+    old) warn "$DATA_DIR in $fstab lacks nosuid; add it to the entry, then run: mount -o remount,nosuid $DATA_DIR" ;;
+    other) die "$fstab has another entry for $DATA_DIR; fix or remove it first" ;;
   esac
 }
 
@@ -1342,27 +1366,28 @@ ksm_merges() {
     || [ "$(cat "$dir/pages_shared" 2>/dev/null || echo 0)" -gt 0 ]
 }
 
-# ensure_ksm: with --ksm, ksmd runs now and at boot; with --no-ksm, its boot
-# rule goes and run=2 stops ksmd and unmerges every merged page. A running imp
-# keeps its merge flag until it restarts. KSM is global to the kernel, so a
-# container refuses --ksm, and so does a kernel older than 6.10.
+# ensure_ksm [KSM_SYSFS]: with --ksm, ksmd runs now and at boot; with
+# --no-ksm, its boot rule goes and run=2 stops ksmd and unmerges every merged
+# page. A running imp keeps its merge flag until it restarts. KSM is global to
+# the kernel, so a container refuses --ksm, and so does a kernel older than
+# 6.10. KSM_SYSFS defaults to the kernel's /sys/kernel/mm/ksm.
 ensure_ksm() {
   [ -n "$ksm" ] || return 0
   phase ksm
-  local rule=/etc/tmpfiles.d/imp-ksm.conf
+  local rule=/etc/tmpfiles.d/imp-ksm.conf sysfs=${1:-/sys/kernel/mm/ksm}
   if [ "$ksm" = off ]; then
     [ ! -f "$rule" ] || change "remove $rule" rm -f "$rule"
     [ -n "$in_container" ] || ! ksm_merges \
-      || change "stop ksmd and unmerge its pages" write_param /sys/kernel/mm/ksm/run 2
+      || change "stop ksmd and unmerge its pages" write_param "$sysfs/run" 2
     return 0
   fi
   [ -z "$in_container" ] || die "--ksm cannot run in a container: KSM is global to the host's kernel"
   kernel_supports_ksm "$(uname -r)" || die "--ksm needs Linux 6.10 or later; this host runs $(uname -r)"
-  [ -d /sys/kernel/mm/ksm ] || die "--ksm needs a kernel built with CONFIG_KSM"
+  [ -d "$sysfs" ] || die "--ksm needs a kernel built with CONFIG_KSM"
   put_file "$rule" 644 "$(ksm_tmpfiles)" || true
   local key
   for key in use_zero_pages run; do
-    [ "$(cat "/sys/kernel/mm/ksm/$key")" = 1 ] || change "set KSM $key=1" write_param "/sys/kernel/mm/ksm/$key" 1
+    [ "$(cat "$sysfs/$key")" = 1 ] || change "set KSM $key=1" write_param "$sysfs/$key" 1
   done
 }
 
@@ -1521,6 +1546,14 @@ ensure_ipv6() {
     return
   fi
 
+  settle_host_network "$existing" "$inspect"
+}
+
+# settle_host_network EXISTING INSPECT: create the network with
+# $ipv6_subnet, or recreate one that differs, unless other containers use
+# it. EXISTING: the network is there already, as INSPECT describes it.
+settle_host_network() {
+  local existing=$1 inspect=$2
   if [ -z "$existing" ]; then
     change "create the $HOST_NETWORK network: $ipv6_subnet on the bridge $HOST_BRIDGE" create_host_network
     return
@@ -1550,18 +1583,19 @@ resolve_subnet6() {
   [ -n "$ipv6_subnet" ] || ipv6_subnet=$(random_ula64)
 }
 
-# check_docker_ipv6: Docker writes the NAT66 and forward rules for an IPv6
-# network itself from 27.0, where ip6tables became the default. A Docker
-# without them refuses on, and turns auto off with a warning.
+# check_docker_ipv6 [DAEMON_JSON]: Docker writes the NAT66 and forward rules
+# for an IPv6 network itself from 27.0, where ip6tables became the default. A
+# Docker without them refuses on, and turns auto off with a warning.
+# DAEMON_JSON defaults to /etc/docker/daemon.json.
 check_docker_ipv6() {
   # a dry run on a fresh host: the packages phase would install docker-ce
   command -v docker >/dev/null || return 0
-  local version why=""
+  local daemon_json=${1:-/etc/docker/daemon.json} version why=""
   version=$(docker version -f '{{.Server.Version}}' 2>/dev/null) || die "cannot read the Docker daemon's version"
   if ! version_ge "$version" 27.0; then
     why="Docker $version predates 27.0, which writes IPv6 NAT and forward rules by default"
-  elif [ -f /etc/docker/daemon.json ] && [ "$(jq -r '.ip6tables' /etc/docker/daemon.json 2>/dev/null)" = false ]; then
-    why="/etc/docker/daemon.json sets ip6tables to false, so imp-host's network would have no NAT66"
+  elif [ -f "$daemon_json" ] && [ "$(jq -r '.ip6tables' "$daemon_json" 2>/dev/null)" = false ]; then
+    why="$daemon_json sets ip6tables to false, so imp-host's network would have no NAT66"
   fi
   [ -n "$why" ] || return 0
   [ -n "$ipv6_auto" ] || die "$why; fix that, or give --ipv6 off"
@@ -1665,21 +1699,22 @@ recreate_host_network() {
   docker network rm "$HOST_NETWORK" >/dev/null && create_host_network
 }
 
-# remove_ipv6: with off, take out what an earlier run with on put in, but
+# remove_ipv6 [RA_FILE]: with off, take out what an earlier run with on put in, but
 # only when --ipv6 off asks for it, as with the firewall: an env file that
 # says off beside the network is drift for the operator to settle.
+# RA_FILE defaults to $RA_FILE.
 remove_ipv6() {
-  local network="" file=""
+  local ra_file=${1:-$RA_FILE} network="" file=""
   if command -v docker >/dev/null && docker network inspect "$HOST_NETWORK" >/dev/null 2>&1; then
     network=1
   fi
-  [ ! -f "$RA_FILE" ] || file=1
+  [ ! -f "$ra_file" ] || file=1
   if [ -z "$network$file" ]; then
     log "ipv6: off; imp-host runs on Docker's default bridge"
     return
   fi
   if [ -z "$ipv6_set" ]; then
-    local msg="IMP_HOST_IPV6=off, but the $HOST_NETWORK network or $RA_FILE is still there; run with --ipv6 off to remove them"
+    local msg="IMP_HOST_IPV6=off, but the $HOST_NETWORK network or $ra_file is still there; run with --ipv6 off to remove them"
     dry || die "$msg"
     warn "$msg"
     changes=$((changes + 1))
@@ -1693,7 +1728,7 @@ remove_ipv6() {
     change "stop imp-host and remove the $HOST_NETWORK network" remove_host_network
   fi
   # accept_ra stays 2 until a reboot, as forwarding stays on until then.
-  [ -z "$file" ] || change "remove $RA_FILE (accept_ra keeps its value until a reboot)" rm -f "$RA_FILE"
+  [ -z "$file" ] || change "remove $ra_file (accept_ra keeps its value until a reboot)" rm -f "$ra_file"
 }
 
 remove_host_network() {
@@ -1766,8 +1801,7 @@ ensure_imp() {
   if dry && ! docker image inspect "$run_image" >/dev/null 2>&1; then
     change "write $SECCOMP_FILE from the image" true
   else
-    seccomp=$(docker run --rm "$run_image" cat "$SECCOMP_IN_IMAGE") \
-      || die "$run_image has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
+    seccomp=$(read_seccomp "$run_image") || exit 1
     put_file "$SECCOMP_FILE" 644 "$seccomp" && changed=1
   fi
 
@@ -1780,6 +1814,13 @@ ensure_imp() {
     ensure_service imp-docker-proxy
     ensure_service imp-host
   fi
+}
+
+# read_seccomp REF: the seccomp profile in the image REF; refuses an image
+# without one.
+read_seccomp() {
+  docker run --rm "$1" cat "$SECCOMP_IN_IMAGE" \
+    || die "$1 has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
 }
 
 # check_image_contract REF: fails, and says why, unless REF runs as these

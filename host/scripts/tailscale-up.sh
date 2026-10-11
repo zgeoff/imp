@@ -23,8 +23,8 @@ set -euo pipefail
 
 hostname=${IMP_TAILSCALE_HOSTNAME:-imp}
 state_dir=${IMP_TAILSCALE_STATE_DIR:-/var/lib/imp/tailscale}
-sock=/var/run/tailscale/tailscaled.sock
-# a test points this at its own file
+# a test points these at its own files
+sock=${IMP_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}
 resolv_conf=${IMP_RESOLV_CONF:-/etc/resolv.conf}
 
 key_file=${IMP_TAILSCALE_AUTHKEY_FILE:-}
@@ -93,7 +93,7 @@ if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' "$r
 fi
 
 if ! alive; then
-  mkdir -p /var/run/tailscale
+  mkdir -p "$(dirname "$sock")"
   rm -f "$sock"
   if [ "$state_dir" = mem ]; then
     args=(--state=mem:)
