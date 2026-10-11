@@ -11,7 +11,7 @@ import type { PinInspectSchema } from '../images/image-pin';
 interface StubEngineContainer {
   readonly id: string;
   readonly labels: Readonly<Record<string, string>>;
-  readonly exportBytes?: Uint8Array;
+  readonly exportBytes?: Uint8Array<ArrayBuffer>;
 }
 
 // one request as the engine got it

@@ -15,6 +15,7 @@ import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { BUILDER_IMAGE } from './builder-imps';
 import { createImageService, normalizeDockerfilePath, parseDuCount } from './image-service';
 
 async function setupTest() {
@@ -245,6 +246,50 @@ test('#buildImageFromContext answers SERVICE_UNAVAILABLE while the builders are 
   expect(building).rejects.toMatchObject({
     code: 'SERVICE_UNAVAILABLE',
     message: 'impd is starting; try again',
+  });
+});
+
+test('#addImage refuses the name imp-builder, which is impd’s', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const adding = images.addImage('busybox:latest', BUILDER_IMAGE);
+
+  expect(adding).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: `the image name ${BUILDER_IMAGE} is impd's, for its image builders; pick another`,
+  });
+});
+
+test('#buildImageFromContext refuses the name imp-builder, which is impd’s', async () => {
+  const ctx = await setupTest();
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.diskBudget,
+    readBuilders: () => null,
+    log: () => {},
+  });
+
+  const building = images.buildImageFromContext('/nowhere.tar', BUILDER_IMAGE, undefined, {
+    signal: new AbortController().signal,
+  });
+
+  expect(building).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: `the image name ${BUILDER_IMAGE} is impd's, for its image builders; pick another`,
   });
 });
 

@@ -2,29 +2,33 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
-import { createORPCClient } from '@orpc/client';
-import { RPCLink } from '@orpc/client/fetch';
-import type { ContractRouterClient } from '@orpc/contract';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import type { ImpdDeps } from '../create-impd';
 import { createImage } from '../db/images';
 import { findImpByName, listImps } from '../db/imps';
 import { openDatabase } from '../db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubGuest } from '../test-utils/build-stub-guest';
 import {
   STUB_BUILDER_CONTAINER,
   buildStubImageBuilder,
 } from '../test-utils/build-stub-image-builder';
+import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { createBuilderImage } from '../test-utils/create-builder-image';
 import { findFreePorts } from '../test-utils/find-free-ports';
-import { BUILDER_IMAGE, createBuilders } from './builder-imps';
+import { createBuilders } from './builder-imps';
 import { writeGuestTree } from './guest-build';
 
 async function setupTest() {
@@ -61,7 +65,7 @@ async function setupTest() {
   const deps: ImpdDeps = {
     db,
 
-    // the bearer the test's client sends
+    // the bearer impd's API takes; no test here calls the API
     rootToken: 'root-token',
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
 
@@ -131,21 +135,12 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the root bearer's client, against impd's own app
-  const client: ContractRouterClient<ImpContract> = createORPCClient(
-    new RPCLink({
-      url: 'http://impd.test/rpc',
-      headers: { authorization: 'Bearer root-token' },
-      fetch: (request) => impd.api.app.handle(request),
-    }),
-  );
-
   return {
     config,
     db,
     dataDir,
+    vmm,
     impd,
-    client,
   };
 }
 
@@ -162,14 +157,7 @@ test('it gives a build a public builder of the build size', async () => {
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
@@ -201,14 +189,7 @@ test('it holds the public egress policy for the builder while the build runs', a
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
@@ -237,14 +218,7 @@ test('it removes the builder and its egress policy when the build ends', async (
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
@@ -281,23 +255,20 @@ test('it adds the builder image before the builder starts', async () => {
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      ensured.push(BUILDER_IMAGE);
-
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
+      const builderImage = await createBuilderImage({
+        db: ctx.db,
+        dataDir: ctx.dataDir,
+        ref: ctx.config.build.image,
       });
+
+      ensured.push(builderImage.name);
     },
     log: () => {},
   });
 
   await builders.withBuilder(new AbortController().signal, () => Promise.resolve());
 
-  expect(ensured).toStrictEqual([BUILDER_IMAGE]);
+  expect(ensured).toStrictEqual(['imp-builder']);
 });
 
 test('it asks the builder engine again, a poll later, until it answers, then runs the build', async () => {
@@ -316,7 +287,7 @@ test('it asks the builder engine again, a poll later, until it answers, then run
     return infos.count === 1 ? { code: 1, stderr: 'Cannot connect to the Docker daemon' } : {};
   });
 
-  const waits: number[] = [];
+  const clock = buildStubClock();
 
   const builders = createBuilders({
     config: ctx.config,
@@ -326,24 +297,10 @@ test('it asks the builder engine again, a poll later, until it answers, then run
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
-    engineClock: {
-      now: () => 0,
-      wait: (ms) => {
-        waits.push(ms);
-
-        return Promise.resolve();
-      },
-    },
+    engineClock: { now: clock.now, wait: clock.sleep },
   });
 
   const ran = await builders.withBuilder(new AbortController().signal, async (exec) => {
@@ -353,7 +310,7 @@ test('it asks the builder engine again, a poll later, until it answers, then run
   });
 
   expect(ran).toBe('ok');
-  expect(waits).toStrictEqual([500]);
+  expect(clock.sleeps).toStrictEqual([500]);
 
   expect(guest.runs.map((run) => run.argv.join(' '))).toStrictEqual([
     'docker info --format {{.ServerVersion}}',
@@ -367,8 +324,8 @@ test('it fails the build when the builder engine does not answer in 60 s, and re
 
   const guest = buildStubGuest(() => ({ code: 1, stderr: 'Cannot connect to the Docker daemon' }));
 
-  // each poll's wait moves the clock on by 20 s
-  const clock = { nowMs: 0 };
+  // each poll's wait moves the clock on by its 500 ms
+  const clock = buildStubClock();
 
   const builders = createBuilders({
     config: ctx.config,
@@ -378,24 +335,10 @@ test('it fails the build when the builder engine does not answer in 60 s, and re
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
-    engineClock: {
-      now: () => clock.nowMs,
-      wait: () => {
-        clock.nowMs += 20_000;
-
-        return Promise.resolve();
-      },
-    },
+    engineClock: { now: clock.now, wait: clock.sleep },
   });
 
   const building = builders.withBuilder(new AbortController().signal, () =>
@@ -425,14 +368,7 @@ test('it removes the builder of a failed build and rethrows the build error', as
       openBuilderExec: (_name, request) => guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
@@ -464,14 +400,13 @@ test('it removes the builders a stopped impd left, and never a user imp', async 
     log: () => {},
   });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  // a rootfs of the image's size, at the path its digest names
+  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   await ctx.impd.imps.createImp({ name: 'imp-build-left', image: 'base', kind: 'builder' });
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
@@ -486,6 +421,7 @@ test('it keeps the build of a builder that survives its removal, and logs the su
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
+  const timers = buildStubTimers();
   const logs: string[] = [];
 
   const builders = createBuilders({
@@ -494,25 +430,18 @@ test('it keeps the build of a builder that survives its removal, and logs the su
     imps: {
       ...ctx.impd.imps,
       openBuilderExec: (_name, request) => guest.open(request),
-
-      // the jailer never stops: every removal fails
-      destroyImpId: () => Promise.reject(new Error('the jailer did not stop')),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: (message) => {
       logs.push(message);
     },
-    removeRetryMs: 60_000,
+    startTimer: timers.startTimer,
   });
+
+  // the builder's Firecracker survives SIGKILL, so its removal fails
+  ctx.vmm.queue('stop', 'fail');
 
   const built = await builders.withBuilder(new AbortController().signal, () =>
     Promise.resolve('built'),
@@ -522,9 +451,12 @@ test('it keeps the build of a builder that survives its removal, and logs the su
 
   expect(built).toBe('built');
   expect(survivors.map((imp) => imp.kind)).toStrictEqual(['builder']);
+  expect(timers.readPendingMs()).toStrictEqual([30_000]);
 
   expect(logs).toSatisfyAny((line: string) =>
-    /^impd: image build: ERROR: builder imp-build-[a-z2-9]{8} survives/v.test(line),
+    /^impd: image build: ERROR: builder imp-build-[a-z2-9]{8} survives its removal, tried again every 30 s: firecracker \d+ survived SIGKILL$/v.test(
+      line,
+    ),
   );
 });
 
@@ -532,8 +464,8 @@ test('it removes a builder that survived its removal on a later retry', async ()
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
+  const timers = buildStubTimers();
   const logs: string[] = [];
-  const destroys = { failed: 0 };
 
   const builders = createBuilders({
     config: ctx.config,
@@ -541,48 +473,35 @@ test('it removes a builder that survived its removal on a later retry', async ()
     imps: {
       ...ctx.impd.imps,
       openBuilderExec: (_name, request) => guest.open(request),
-
-      // the first removal fails; the retry goes through
-      destroyImpId: async (id, kind) => {
-        if (destroys.failed === 0) {
-          destroys.failed += 1;
-          throw new Error('the jailer did not stop');
-        }
-
-        await ctx.impd.imps.destroyImpId(id, kind);
-      },
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: (message) => {
       logs.push(message);
     },
-    removeRetryMs: 10,
+    startTimer: timers.startTimer,
   });
+
+  // the first removal meets a Firecracker that survives SIGKILL; the
+  // retry's stop goes through
+  ctx.vmm.queue('stop', 'fail');
 
   await builders.withBuilder(new AbortController().signal, () => Promise.resolve());
 
-  const removed = await waitFor(() => {
-    const line = logs.find((each) => each.startsWith('impd: image build: removed builder'));
+  const survivors = await listImps(ctx.db);
 
-    if (line === undefined) {
-      throw new Error('no retry removed the builder yet');
-    }
+  timers.firePending();
 
-    return line;
+  await waitFor(() => {
+    expect(logs).toSatisfyAny((line: string) =>
+      /^impd: image build: removed builder imp-build-[a-z2-9]{8}$/v.test(line),
+    );
   });
 
   const imps = await listImps(ctx.db);
 
-  expect(removed).toMatch(/^impd: image build: removed builder imp-build-[a-z2-9]{8}$/v);
+  expect(survivors.map((imp) => imp.kind)).toStrictEqual(['builder']);
   expect(imps).toStrictEqual([]);
 });
 
@@ -590,8 +509,8 @@ test('it retries the removal of a leftover builder that survives it at start', a
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
+  const timers = buildStubTimers();
   const logs: string[] = [];
-  const destroys = { failed: 0 };
 
   const builders = createBuilders({
     config: ctx.config,
@@ -599,40 +518,40 @@ test('it retries the removal of a leftover builder that survives it at start', a
     imps: {
       ...ctx.impd.imps,
       openBuilderExec: (_name, request) => guest.open(request),
-
-      // the first two removals fail; the next goes through
-      destroyImpId: async (id, kind) => {
-        if (destroys.failed < 2) {
-          destroys.failed += 1;
-          throw new Error('the jailer did not stop');
-        }
-
-        await ctx.impd.imps.destroyImpId(id, kind);
-      },
     },
     ensureImage: () => Promise.resolve(),
     log: (message) => {
       logs.push(message);
     },
-    removeRetryMs: 10,
+    startTimer: timers.startTimer,
   });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  // a rootfs of the image's size, at the path its digest names
+  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   await ctx.impd.imps.createImp({ name: 'imp-build-left', image: 'base', kind: 'builder' });
+
+  // the removal at start and the first retry meet a Firecracker that
+  // survives SIGKILL; the second retry's stop goes through
+  ctx.vmm.queue('stop', 'fail', 'fail');
+
   await builders.removeLeftovers();
 
+  timers.firePending();
+
   await waitFor(() => {
-    if (!logs.includes('impd: image build: removed builder imp-build-left')) {
-      throw new Error('no retry removed the builder yet');
-    }
+    expect(timers.readPendingMs()).toStrictEqual([30_000]);
+  });
+
+  timers.firePending();
+
+  await waitFor(() => {
+    expect(logs).toContain('impd: image build: removed builder imp-build-left');
   });
 
   const imps = await listImps(ctx.db);
@@ -647,9 +566,8 @@ test('it never removes a user imp that took the id of a removed builder on a ret
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
+  const timers = buildStubTimers();
   const logs: string[] = [];
-  const released = Promise.withResolvers<void>();
-  const destroys = { failed: 0 };
 
   const builders = createBuilders({
     config: ctx.config,
@@ -657,34 +575,21 @@ test('it never removes a user imp that took the id of a removed builder on a ret
     imps: {
       ...ctx.impd.imps,
       openBuilderExec: (_name, request) => guest.open(request),
-
-      // the first removal fails; the retries wait for the test
-      destroyImpId: async (id, kind) => {
-        if (destroys.failed === 0) {
-          destroys.failed += 1;
-          throw new Error('the jailer did not stop');
-        }
-
-        await released.promise;
-
-        await ctx.impd.imps.destroyImpId(id, kind);
-      },
     },
     ensureImage: () => Promise.resolve(),
     log: (message) => {
       logs.push(message);
     },
-    removeRetryMs: 10,
+    startTimer: timers.startTimer,
   });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  // a rootfs of the image's size, at the path its digest names
+  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   const builder = await ctx.impd.imps.createImp({
     name: 'imp-build-left',
@@ -698,16 +603,19 @@ test('it never removes a user imp that took the id of a removed builder on a ret
 
   const id = record.id;
 
+  // the removal at start meets a Firecracker that survives SIGKILL
+  ctx.vmm.queue('stop', 'fail');
+
   await builders.removeLeftovers();
+
+  // before the retry, the builder goes, and a user imp takes its id
   await ctx.impd.imps.destroyImpId(id);
   await ctx.impd.imps.createImp({ id, name: 'mine', image: 'base' });
 
-  released.resolve();
+  timers.firePending();
 
   await waitFor(() => {
-    if (!logs.includes('impd: image build: removed builder imp-build-left')) {
-      throw new Error('no retry ran yet');
-    }
+    expect(logs).toContain('impd: image build: removed builder imp-build-left');
   });
 
   const imps = await listImps(ctx.db);
@@ -751,14 +659,7 @@ test('it ends an export over its file limit and removes its builder, with no cli
       openBuilderExec: (_name, request) => engine.guest.open(request),
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
@@ -772,7 +673,10 @@ test('it ends an export over its file limit and removes its builder, with no cli
     ),
   );
 
-  expect(exporting).rejects.toThrow('is over 1 files');
+  expect(exporting).rejects.toThrowWithMessage(
+    Error,
+    "the built image's filesystem is over 1 files (IMP_BUILD_IMAGE_MAX_FILES)",
+  );
 
   const imps = await listImps(ctx.db);
 
@@ -793,35 +697,29 @@ test('it ends an export stopped while its exec opens, closes the exec and remove
     isExportStalled: true,
   });
 
+  const timers = buildStubTimers();
+
+  // the export's exec opens only once the test lets it
+  const exportOpen = Promise.withResolvers<void>();
+  const reached = { isExportOpening: false };
+
   const builders = createBuilders({
     config: ctx.config,
     db: ctx.db,
     imps: {
       ...ctx.impd.imps,
-
-      // the export's exec opens only after its idle stop, a timer due before
-      // this one: timers fire in the order they fall due
       openBuilderExec: async (_name, request) => {
         if (request.argv[1] === 'export') {
-          const opened = Promise.withResolvers<void>();
+          reached.isExportOpening = true;
 
-          setTimeout(opened.resolve, 20);
-
-          await opened.promise;
+          await exportOpen.promise;
         }
 
         return engine.guest.open(request);
       },
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
@@ -830,12 +728,25 @@ test('it ends an export stopped while its exec opens, closes the exec and remove
     writeGuestTree(
       exec,
       join(tree, 'root'),
-      { maxBytes: 1024 ** 3, maxFiles: 1000, idleMs: 1 },
+      { maxBytes: 1024 ** 3, maxFiles: 1000 },
       new AbortController().signal,
+      () => Promise.resolve(),
+      timers.startTimer,
     ),
   );
 
-  expect(exporting).rejects.toThrow('docker export in the builder sent nothing in 0.001 s');
+  await waitFor(() => {
+    expect(reached.isExportOpening).toBeTrue();
+  });
+
+  // the idle limit falls due while the exec opens
+  timers.firePending();
+  exportOpen.resolve();
+
+  expect(exporting).rejects.toThrowWithMessage(
+    Error,
+    'docker export in the builder sent nothing in 120 s',
+  );
 
   const imps = await listImps(ctx.db);
 
@@ -850,14 +761,13 @@ test('it ends an export stopped while its exec opens, closes the exec and remove
 test('it refuses an exec in a builder', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  // a rootfs of the image's size, at the path its digest names
+  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
 
@@ -865,267 +775,8 @@ test('it refuses an exec in a builder', async () => {
 
   expect(opening).rejects.toMatchObject({
     code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
+    message: 'imp-build-x is an image builder that impd made for one build; only rm reaches it',
   });
-});
-
-test('it refuses a policy change of a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const setting = ctx.client.imps.setPolicy({
-    name: 'imp-build-x',
-    policy: { mode: 'open', allow: [] },
-  });
-
-  expect(setting).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it refuses an exec ticket for a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const ticketing = ctx.client.exec.ticket({ name: 'imp-build-x' });
-
-  expect(ticketing).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it refuses a fork of a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const forking = ctx.client.imps.fork({ source: 'imp-build-x', name: 'copy' });
-
-  expect(forking).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it refuses a stop of a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const stopping = ctx.client.imps.stop({ name: 'imp-build-x' });
-
-  expect(stopping).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it refuses a checkpoint of a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const checkpointing = ctx.client.checkpoints.create({ name: 'imp-build-x' });
-
-  expect(checkpointing).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it refuses a template of a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const adding = ctx.client.images.add({ imp: 'imp-build-x', name: 'tpl' });
-
-  expect(adding).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it refuses a move of a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const preparing = ctx.client.moves.prepare({ name: 'imp-build-x' });
-
-  expect(preparing).rejects.toMatchObject({
-    code: 'PRECONDITION_FAILED',
-    message: expect.stringContaining('imp-build-x is an image builder') as unknown,
-  });
-});
-
-test('it lists a builder only when the caller asks for builders', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-  await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
-
-  const listed = await ctx.client.imps.list();
-  const all = await ctx.client.imps.list({ builders: true });
-
-  expect(listed.map((imp) => imp.name)).toStrictEqual(['dev']);
-
-  expect(all.map((imp) => [imp.name, imp.kind])).toStrictEqual([
-    ['dev', 'user'],
-    ['imp-build-x', 'builder'],
-  ]);
-});
-
-test('it shows a builder by its name as a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-
-  const info = await ctx.client.imps.get({ name: 'imp-build-x' });
-
-  expect(info.kind).toBe('builder');
-});
-
-test('it lets a client remove a builder', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'imp-build-x', image: 'base', kind: 'builder' });
-  await ctx.client.imps.destroy({ name: 'imp-build-x' });
-
-  const gone = await findImpByName(ctx.db, 'imp-build-x');
-
-  expect(gone).toBeUndefined();
-});
-
-test('it refuses an add from a registry named imp-builder, which is impd’s', async () => {
-  const ctx = await setupTest();
-
-  const adding = ctx.client.images.add({ ref: 'busybox:latest', name: BUILDER_IMAGE });
-
-  expect(adding).rejects.toThrow(`the image name ${BUILDER_IMAGE} is impd's`);
-});
-
-test('it refuses a template named imp-builder, which is impd’s', async () => {
-  const ctx = await setupTest();
-
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
-
-  await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
-
-  const adding = ctx.client.images.add({ imp: 'dev', name: BUILDER_IMAGE });
-
-  expect(adding).rejects.toThrow(`the image name ${BUILDER_IMAGE} is impd's`);
-});
-
-test('it refuses a build named imp-builder, which is impd’s', async () => {
-  const ctx = await setupTest();
-
-  const building = ctx.impd.images.buildImageFromContext('/nowhere.tar', BUILDER_IMAGE, undefined, {
-    signal: new AbortController().signal,
-  });
-
-  expect(building).rejects.toThrow(`the image name ${BUILDER_IMAGE} is impd's`);
 });
 
 test('it leaves the imp that holds a name a builder create fails on', async () => {
@@ -1145,26 +796,18 @@ test('it leaves the imp that holds a name a builder create fails on', async () =
       },
     },
     ensureImage: async () => {
-      await Bun.write(join(ctx.dataDir, 'images', BUILDER_IMAGE, 'rootfs.ext4'), 'rootfs');
-
-      await createImage(ctx.db, {
-        name: BUILDER_IMAGE,
-        ref: `${BUILDER_IMAGE}:latest`,
-        digest: `sha256:${BUILDER_IMAGE}`,
-        sizeBytes: 6,
-      });
+      await createBuilderImage({ db: ctx.db, dataDir: ctx.dataDir, ref: ctx.config.build.image });
     },
     log: () => {},
   });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  // a rootfs of the image's size, at the path its digest names
+  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   const building = builders.withBuilder(new AbortController().signal, () =>
     Promise.resolve('built'),

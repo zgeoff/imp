@@ -39,11 +39,21 @@ export interface BuildersDeps {
   readonly ensureImage: (signal: AbortSignal) => Promise<void>;
   readonly log: (message: string) => void;
 
-  // REMOVE_RETRY_MS, but for tests
-  readonly removeRetryMs?: number;
+  // the removal retry's timer; setTimeout, unref'd, by default
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
 
   // the engine wait's clock; Date.now and Bun.sleep by default
   readonly engineClock?: EngineClock;
+}
+
+function startUnrefTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  timer.unref();
+
+  return () => {
+    clearTimeout(timer);
+  };
 }
 
 function pickBuilderName(): string {
@@ -87,7 +97,7 @@ async function waitForEngine(
 }
 
 export function createBuilders(deps: BuildersDeps): Builders {
-  const retryMs = deps.removeRetryMs ?? REMOVE_RETRY_MS;
+  const startTimer = deps.startTimer ?? startUnrefTimer;
   const engineClock = deps.engineClock ?? { now: Date.now, wait: Bun.sleep };
 
   const retrying = new Set<string>();
@@ -102,7 +112,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
       return true;
     } catch (error) {
       deps.log(
-        `impd: image build: ERROR: builder ${name} survives its removal, tried again every ${String(retryMs / 1000)} s: ${readErrorMessage(error)}`,
+        `impd: image build: ERROR: builder ${name} survives its removal, tried again every ${String(REMOVE_RETRY_MS / 1000)} s: ${readErrorMessage(error)}`,
       );
 
       return false;
@@ -126,10 +136,10 @@ export function createBuilders(deps: BuildersDeps): Builders {
         return;
       }
 
-      setTimeout(() => void tryAgain(), retryMs).unref();
+      startTimer(() => void tryAgain(), REMOVE_RETRY_MS);
     };
 
-    setTimeout(() => void tryAgain(), retryMs).unref();
+    startTimer(() => void tryAgain(), REMOVE_RETRY_MS);
   };
 
   // a builder that survives impd keeps trying to remove

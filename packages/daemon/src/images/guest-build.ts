@@ -134,13 +134,21 @@ export interface ExportLimits {
   // tar's own count of what it unpacked, so a stream cannot hide entries
   // from a second parser
   readonly maxFiles: number;
-
-  // how long the export may send nothing; EXPORT_IDLE_MS, but for tests
-  readonly idleMs?: number;
 }
 
 // how long a builder's export may send nothing before impd ends it
 const EXPORT_IDLE_MS = 120_000;
+
+// starts a timer and returns its cancel; the export's idle limit runs on it
+type StartTimer = (fire: () => void, ms: number) => () => void;
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
+}
 
 // how far ahead of the export the disk is held at a time
 const GROW_STEP_BYTES = 256 * 1024 ** 2;
@@ -225,6 +233,7 @@ export async function writeGuestTree(
   limits: Readonly<ExportLimits>,
   signal: AbortSignal,
   grow: (totalBytes: number) => Promise<void> = () => Promise.resolve(),
+  startTimer: StartTimer = startRealTimer,
 ): Promise<ExportedImage> {
   const maxBytes = limits.maxBytes;
 
@@ -260,11 +269,10 @@ export async function writeGuestTree(
   const unpacked: { over?: 'bytes' | 'files'; ended?: boolean } = {};
 
   // ends the export, which a stalled builder would keep open, as soon as
-  // its tar is gone or it sends nothing for idleMs
+  // its tar is gone or it sends nothing for EXPORT_IDLE_MS
   const stopExport = new AbortController();
 
   const readMax = (limit: 'bytes' | 'files') => (limit === 'bytes' ? maxBytes : limits.maxFiles);
-  const idleMs = limits.idleMs ?? EXPORT_IDLE_MS;
 
   // tar's listing may come only as it exits, which can be after the end of
   // the archive and before the end of the export
@@ -318,11 +326,12 @@ export async function writeGuestTree(
 
   const stopIdle = () => {
     stopExport.abort(
-      new Error(`docker export in the builder sent nothing in ${String(idleMs / 1000)} s`),
+      new Error(`docker export in the builder sent nothing in ${String(EXPORT_IDLE_MS / 1000)} s`),
     );
   };
 
-  const idle = { timer: setTimeout(stopIdle, idleMs) };
+  // each chunk starts the limit again
+  const idle = { cancel: startTimer(stopIdle, EXPORT_IDLE_MS) };
 
   const stderrText = new Response(tar.stderr).text();
 
@@ -330,8 +339,9 @@ export async function writeGuestTree(
     const exported = await exec(['docker', 'export', containerId], {
       signal: AbortSignal.any([signal, stopExport.signal]),
       onStdout: async (chunk) => {
-        idle.timer.refresh();
+        idle.cancel();
 
+        idle.cancel = startTimer(stopIdle, EXPORT_IDLE_MS);
         sent.bytes += chunk.byteLength;
 
         if (sent.bytes > maxBytes) {
@@ -378,7 +388,7 @@ export async function writeGuestTree(
 
     throw error;
   } finally {
-    clearTimeout(idle.timer);
+    idle.cancel();
   }
 
   return { digest: `${DIGEST_PREFIX}${hash.digest('hex')}`, config };
