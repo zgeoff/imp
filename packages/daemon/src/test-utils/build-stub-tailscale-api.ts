@@ -28,7 +28,7 @@ const PutServiceSchema = z.strictObject({
 // joined by spaces
 const StubTokenSchema = z.object({
   value: z.string().default(() => `tskey-api-${faker.string.alphanumeric(24)}`),
-  scope: z.string(),
+  scope: z.string().default('services'),
 });
 
 // one request as the API got it

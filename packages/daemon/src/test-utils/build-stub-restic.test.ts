@@ -15,7 +15,7 @@ function setupTest() {
   const treeDir = join(dir, 'tree');
 
   mkdirSync(repoDir);
-  mkdirSync(join(treeDir, 'imps', 'i1'), { recursive: true });
+  mkdirSync(treeDir);
 
   return { dir, repoDir, treeDir };
 }
@@ -91,6 +91,7 @@ test('it restores a snapshot’s dir into the target and records it', async () =
   const ctx = setupTest();
   const restic = buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() });
 
+  mkdirSync(join(ctx.treeDir, 'imps', 'i1'), { recursive: true });
   writeFileSync(join(ctx.treeDir, 'imps', 'i1', 'disk.ext4'), 'disk');
 
   const summary = await restic.restic.backup(ctx.treeDir, []);
