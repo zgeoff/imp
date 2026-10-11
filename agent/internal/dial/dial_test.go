@@ -167,16 +167,21 @@ func TestServeRelaysWithAHalfCloseBothWays(t *testing.T) {
 			assert.NilError(t, h.w.Write(proto.TypeStdin, []byte("world")))
 			assert.NilError(t, h.w.Write(proto.TypeStdinEOF, nil))
 			var out []byte
+			var others []proto.Type
 			for {
 				f := h.next(t)
 				if f.Type == proto.TypeStdoutEOF {
 					break
 				}
-				assert.Equal(t, f.Type, proto.TypeStdout)
+				if f.Type != proto.TypeStdout {
+					others = append(others, f.Type)
+					continue
+				}
 				out = append(out, f.Payload...)
 			}
 			served := h.waitServed(t)
 
+			assert.Check(t, cmp.Len(others, 0), "frames other than STDOUT before STDOUT_EOF: %v", others)
 			assert.Check(t, cmp.Equal(string(out), "got hello world"))
 			assert.Check(t, served, "Serve")
 		})
