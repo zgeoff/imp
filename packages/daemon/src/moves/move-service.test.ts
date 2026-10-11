@@ -466,7 +466,7 @@ test('it commits on resume after a lost commit, and the source copy goes', async
 
 // #167: main counts the received disk on this hook, so a repeat must not
 // fire it again
-test('it fires onCommitted once when a commit whose answer was lost resumes', async () => {
+test('it reports the commit on the target once when a commit whose answer was lost resumes', async () => {
   const ctx = await setupTest({ hook: buildStubDroppedCommit({ drops: 'answer' }) });
 
   await createUbuntuImage(ctx.source);
@@ -1705,13 +1705,13 @@ test('it sends the disk and its checkpoints between two ZFS hosts as ZFS streams
 });
 
 test.each([
-  ['source', false],
-  ['source', true],
-  ['target', false],
-  ['target', true],
+  ['source', false, 'sourceApp'],
+  ['source', true, 'sourceApp'],
+  ['target', false, 'targetApp'],
+  ['target', true, 'targetApp'],
 ] as const)(
   'it finds nothing for a GC on the %s to drop or keep after a ZFS move (orphans: %p)',
-  async (host, orphans) => {
+  async (_host, orphans, app) => {
     const sourceZfs = buildStubZfsStorage('tank/imp');
     const targetZfs = buildStubZfsStorage('tank/imp');
 
@@ -1727,9 +1727,7 @@ test.each([
     await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
     await ctx.runMove('dev', true);
 
-    const sweep = await (host === 'source' ? ctx.sourceApp : ctx.targetApp).client.system.gc({
-      orphans,
-    });
+    const sweep = await ctx[app].client.system.gc({ orphans });
 
     expect(sweep.dropped).toStrictEqual([]);
     expect(sweep.kept).toStrictEqual([]);

@@ -30,10 +30,13 @@ test('#encodeFile sends a sparse file as its FILE frame, its data blocks and its
   const path = join(ctx.dir, 'disk');
   const fd = openSync(path, 'w');
 
+  onTestFinished(() => {
+    closeSync(fd);
+  });
+
   ftruncateSync(fd, 8 * MOVE_BLOCK_BYTES);
   writeSync(fd, 'first', 0, 'utf8');
   writeSync(fd, 'sixth', 5 * MOVE_BLOCK_BYTES, 'utf8');
-  closeSync(fd);
 
   const frames = await Array.fromAsync(
     encodeFile(
@@ -69,10 +72,13 @@ test('#encodeFile places each data block of a sparse file at its offset', async 
   const path = join(ctx.dir, 'disk');
   const fd = openSync(path, 'w');
 
+  onTestFinished(() => {
+    closeSync(fd);
+  });
+
   ftruncateSync(fd, 8 * MOVE_BLOCK_BYTES);
   writeSync(fd, 'first', 0, 'utf8');
   writeSync(fd, 'sixth', 5 * MOVE_BLOCK_BYTES, 'utf8');
-  closeSync(fd);
 
   const frames = await Array.fromAsync(
     encodeFile(
@@ -132,10 +138,13 @@ test('#countDataBytes counts only the data blocks of a sparse file', async () =>
   const path = join(ctx.dir, 'disk');
   const fd = openSync(path, 'w');
 
+  onTestFinished(() => {
+    closeSync(fd);
+  });
+
   ftruncateSync(fd, 8 * MOVE_BLOCK_BYTES);
   writeSync(fd, 'first', 0, 'utf8');
   writeSync(fd, 'sixth', 5 * MOVE_BLOCK_BYTES, 'utf8');
-  closeSync(fd);
 
   const bytes = await countDataBytes(path);
 
