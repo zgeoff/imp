@@ -126,8 +126,8 @@ impd then settles each imp under its lock:
 - A running imp with a live VM is adopted as it is. One whose sleep was cut short left its VM
   paused, and impd resumes it.
 - A running imp with no live VM is marked `stopped`, and its next use boots cold. The exception is
-  an imp whose snapshot is newer than its last activity: impd died between the snapshot's commit and
-  the record, so the imp is marked `sleeping` and keeps its memory.
+  an imp whose snapshot is newer than the last activity on its row: impd died between the snapshot's
+  commit and the row's update, so the imp is marked `sleeping` and keeps its memory.
 - A wake cut short is settled from its snapshot's state ([wake](./sleep-and-wake.md#wake)).
 - A `creating` imp goes to `error`, and its VM is killed.
 - Half-written snapshot and identity files go, and so do the jails and cgroups of imps that no

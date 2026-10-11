@@ -36,11 +36,12 @@ beside what is measured and reserved, it is admitted. When it does not:
 
 The governor never waits for a victim's lock: it holds admission, and a boot that waits on admission
 may hold another imp's lock. A victim locked by the time its turn comes is skipped, as is one whose
-sleep fails or whose snapshot the disk cannot take. When the imps it may sleep cannot free enough,
-the request fails with `RAM_BUDGET_EXCEEDED` at once, before it sleeps any of them, and the error
-names the awake imps it could not sleep. An imp whose own memory is larger than the whole budget is
-never admitted. A refusal can still cost the sleeps done before a skip or failure, and each of those
-imps wakes on its next request.
+sleep fails or whose snapshot the disk cannot take. When the imps it may sleep could not free enough
+even all together, the request fails with `RAM_BUDGET_EXCEEDED` at once, before it sleeps any of
+them, and the error names the awake imps it could not sleep. An imp whose own memory is larger than
+the whole budget is never admitted. A refusal that comes later, once a skip or a failure leaves the
+rest short, still costs the sleeps done before it, and each of those imps wakes on its next request.
+A caller of the wake proxy gets a 503 for a refusal; an API caller gets the error.
 
 Work no caller waits on, such as a boot template's build, is admitted only into free room, never by
 sleeping an imp.

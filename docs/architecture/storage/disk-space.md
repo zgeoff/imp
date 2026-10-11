@@ -36,9 +36,9 @@ it arrives; a backup restore; and each new segment of a session log. A create an
 nothing, because a thin clone writes nothing, and a checkpoint or a resize is refused only once the
 reserve is already reached.
 
-A wake is never refused: its disk and memory already exist, and a full disk must not strand an imp's
-work. A sleep that is refused leaves its imp running, and the governor turns to another imp. Below
-twice the reserve, impd warns once per episode and marks the storage low.
+The disk budget never refuses a wake: its disk and memory already exist, and a full disk must not
+strand an imp's work. A sleep that is refused leaves its imp running, and the governor turns to
+another imp. Below twice the reserve, impd warns once per episode and marks the storage low.
 
 Free space is read with each backend's quirks in mind. On ZFS a write counts only once its
 transaction group commits, and a destroy frees its blocks in the background, so the ledger keeps a

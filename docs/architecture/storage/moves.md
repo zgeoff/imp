@@ -80,7 +80,7 @@ transaction.
 Tickets have windows: one to start the stream, one between parts, and one for the commit. The target
 stores only the ticket's hash, and the source keeps the whole ticket, since it needs the secret
 again to check the receipt and, after a restart, to commit or abort. A reissue gives a new ticket
-for a commit whose window ran out.
+for a commit whose window ran out, and `imp move --resume` finishes a move with it.
 
 ## Recovery
 

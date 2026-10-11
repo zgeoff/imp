@@ -42,7 +42,8 @@ Before each boot or wake, impd prepares the jail as if the last VM had been host
 The VM owns its run directory while Firecracker binds its sockets and loads its snapshot. impd then
 seals the directory, giving it back to root, before the guest runs a single instruction, and checks
 what is in it. Anything there beyond the expected sockets and impd's own files proves a compromised
-VM, so the start or the wake fails and impd kills the VM, deleting nothing while it runs. A snapshot
+VM, so the start or the wake fails and impd kills the VM, deleting nothing while it runs. A failed
+wake then drops the snapshot and boots the disk cold, in a jail made again from nothing. A snapshot
 is written into empty files impd makes for it, and handed back to root only once the VM and every
 process of its uid are gone. impd opens every file of its own beside a VM without following
 symlinks, and checks that each socket is a socket before it connects.

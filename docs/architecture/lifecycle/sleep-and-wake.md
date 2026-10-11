@@ -29,7 +29,8 @@ is the only thing a crash has to get right.
    shutdown.
 7. It renames the new files over the old ones, digs holes in the memory file where the guest's pages
    are zero, flushes the files and their directory, and writes `meta.json`, flushed and renamed into
-   place. The imp is then `sleeping`.
+   place. Last, it sets the imp's row to `sleeping`, a separate write that a crash can still miss
+   ([recovery](./lifecycle.md#recovery-after-a-restart)).
 
 impd never writes into a memory file a VM has mapped. A woken VM maps its memory file privately and
 faults pages in from it, so the next sleep always writes new files and renames them over.
@@ -54,15 +55,16 @@ every tap, makes it again before the next wake.
    the time asleep: the guest's clocksource keeps counting from where the snapshot stopped.
 6. It sets the state to `running` and deletes `meta.json.loading`.
 
-If the load or the agent fails, impd kills the new VM, drops the snapshot and boots the disk cold.
-The guest may have run and written its disk, so the snapshot no longer matches it. The disk is
-always the truth, and a lost memory is the cost.
+If the load, the jail's seal or the agent fails, impd kills the new VM, drops the snapshot and boots
+the disk cold. The guest may have run and written its disk, so the snapshot no longer matches it.
+The disk is always the truth, and a lost memory is the cost.
 
-A crash during a wake leaves `meta.json.loading`, and the next impd settles it. A VM that never
-loaded is killed and the record goes back to `meta.json`, so the snapshot stays. A VM that loaded
-gets the rest of the wake, and is killed with its snapshot dropped if any step fails. With no VM
-left, the snapshot is dropped and the imp boots cold. One window loses memory it need not: impd
-dying after the rename and before Firecracker starts drops a snapshot no guest ran.
+A crash during a wake leaves `meta.json.loading`, and the next impd settles it. It asks each
+Firecracker it finds over its API whether the VM started; a VM that never loaded is killed and the
+record goes back to `meta.json`, so the snapshot stays. A VM that loaded gets the rest of the wake,
+and is killed with its snapshot dropped if any step fails. With no VM left, the snapshot is dropped
+and the imp boots cold. One window loses memory it need not: impd dying after the rename and before
+Firecracker starts drops a snapshot no guest ran.
 
 ## Snapshot identity
 
