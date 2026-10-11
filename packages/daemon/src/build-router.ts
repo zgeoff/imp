@@ -46,6 +46,7 @@ import type { DnsTokenStatus } from './https/dns/dns-token';
 import { createExposureService } from './https/exposure-service';
 import type { RecordsStatus } from './https/https-service';
 import type { PublicRecordsLink } from './https/public-records-link';
+import type { Repeat } from './images/build-event-stream';
 import { runImageOp } from './images/image-op-stream';
 import type { ImageOpStreamOptions } from './images/image-op-stream';
 import type { ImageService } from './images/image-service';
@@ -112,6 +113,9 @@ export interface RouterDeps {
 
   // the gap between progress events of a streamed image add or build
   readonly imageKeepaliveMs: number;
+
+  // the timer of those progress events; runOnInterval by default
+  readonly imageKeepaliveRepeat?: Repeat;
 
   // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
   readonly oauth: OAuthService;
@@ -247,6 +251,7 @@ export function buildRouter(deps: RouterDeps) {
       firstPhase,
       signal: call.signal ?? new AbortController().signal,
       keepaliveMs: deps.imageKeepaliveMs,
+      ...(deps.imageKeepaliveRepeat !== undefined && { repeat: deps.imageKeepaliveRepeat }),
       now: deps.now,
       record: (failure) => {
         const impName = readImpName(procedure, call.input, null);

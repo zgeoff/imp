@@ -13,6 +13,7 @@ import { readErrorMessage } from '../read-error-message';
 import { buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { createBuildEventStream } from './build-event-stream';
+import type { Repeat } from './build-event-stream';
 import type { ImageService } from './image-service';
 
 const PROCEDURE = 'images.build';
@@ -41,6 +42,9 @@ export interface BuildContextDeps {
 
   // the gap between progress lines of a streamed build; BUILD_KEEPALIVE_MS
   readonly keepaliveMs: number;
+
+  // the keepalive's timer; runOnInterval by default
+  readonly repeat?: Repeat;
 }
 
 // an error as the route answers it, with the code an oRPC call would give
@@ -171,7 +175,11 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
               ? { type: 'image', image: outcome.image }
               : { type: 'error', code: outcome.failure.code, message: outcome.failure.message };
           },
-          { keepaliveMs: deps.keepaliveMs, now: deps.now },
+          {
+            keepaliveMs: deps.keepaliveMs,
+            now: deps.now,
+            ...(deps.repeat !== undefined && { repeat: deps.repeat }),
+          },
         );
       }
 

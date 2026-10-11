@@ -29,6 +29,7 @@ import { createDnsToken } from './https/dns/dns-token';
 import { createPublicRecordsLink } from './https/public-records-link';
 import { createBuildContextRoute } from './images/build-context-route';
 import { BUILD_KEEPALIVE_MS } from './images/build-event-stream';
+import type { Repeat } from './images/build-event-stream';
 import { createBuilders } from './images/builder-imps';
 import type { Builders } from './images/builder-imps';
 import { HOST_ADD_WARNING, HOST_BUILD_WARNING, createImageService } from './images/image-service';
@@ -196,6 +197,9 @@ export interface ImpdDeps {
   // the gap between the progress events of a streamed image call;
   // BUILD_KEEPALIVE_MS by default
   readonly keepaliveMs?: number;
+
+  // the timer of those progress events; runOnInterval by default
+  readonly keepaliveRepeat?: Repeat;
 }
 
 // What the storage services need, and the data dir's backend
@@ -585,8 +589,10 @@ export function buildImpdApp(
       audit: parts.services.audit,
       now,
       keepaliveMs,
+      ...(deps.keepaliveRepeat !== undefined && { repeat: deps.keepaliveRepeat }),
     }),
     imageKeepaliveMs: keepaliveMs,
+    ...(deps.keepaliveRepeat !== undefined && { imageKeepaliveRepeat: deps.keepaliveRepeat }),
     moves: parts.moves,
   });
 }
