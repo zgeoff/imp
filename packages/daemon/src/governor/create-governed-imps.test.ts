@@ -107,9 +107,6 @@ async function setupTest() {
       readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
     },
     imps: {
-      // what the governor counts for each live VM
-      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
-      readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
       growFilesystem: () => Promise.resolve(false),
       hostCpus: 8,
     },
@@ -135,7 +132,16 @@ test('it skips a victim whose lock another boot holds instead of waiting for it'
   // two awake imps of 300 MiB; making room for 600 MiB needs both asleep
   const impd = await createImpd(
     { ...ctx.config, ramBudgetMib: 800, defaultMemoryMib: 512 },
-    ctx.deps,
+    {
+      ...ctx.deps,
+      imps: {
+        ...ctx.deps.imps,
+
+        // what the governor counts for each live VM
+        readRamMib: (pid) => (ctx.vmm.alive.has(pid) ? 300 : null),
+        readRssMib: (pid) => (ctx.vmm.alive.has(pid) ? 340 : null),
+      },
+    },
   );
 
   ctx.stack.defer(() => impd.broker.stop());
@@ -198,7 +204,16 @@ test('it stops sleeping imps for a rejected admit once a sleep fails', async () 
   // 900 MiB awake + 900 reserved: 800 missing, so the pick is a, b and c
   const impd = await createImpd(
     { ...ctx.config, ramBudgetMib: 1000, defaultMemoryMib: 512 },
-    ctx.deps,
+    {
+      ...ctx.deps,
+      imps: {
+        ...ctx.deps.imps,
+
+        // what the governor counts for each live VM
+        readRamMib: (pid) => (ctx.vmm.alive.has(pid) ? 300 : null),
+        readRssMib: (pid) => (ctx.vmm.alive.has(pid) ? 340 : null),
+      },
+    },
   );
 
   ctx.stack.defer(() => impd.broker.stop());
@@ -255,7 +270,16 @@ test('it stops sleeping imps for a rejected admit once the lock of a victim is t
   // 900 MiB awake + 900 reserved: 800 missing, so the pick is a, b and c
   const impd = await createImpd(
     { ...ctx.config, ramBudgetMib: 1000, defaultMemoryMib: 512 },
-    ctx.deps,
+    {
+      ...ctx.deps,
+      imps: {
+        ...ctx.deps.imps,
+
+        // what the governor counts for each live VM
+        readRamMib: (pid) => (ctx.vmm.alive.has(pid) ? 300 : null),
+        readRssMib: (pid) => (ctx.vmm.alive.has(pid) ? 340 : null),
+      },
+    },
   );
 
   ctx.stack.defer(() => impd.broker.stop());
@@ -334,7 +358,16 @@ test('it picks again past a failed sleep and fits an admit when the rest is enou
   // 1200 MiB awake + 900 reserved: 800 missing; without b, c and d cover it
   const impd = await createImpd(
     { ...ctx.config, ramBudgetMib: 1300, defaultMemoryMib: 512 },
-    ctx.deps,
+    {
+      ...ctx.deps,
+      imps: {
+        ...ctx.deps.imps,
+
+        // what the governor counts for each live VM
+        readRamMib: (pid) => (ctx.vmm.alive.has(pid) ? 300 : null),
+        readRssMib: (pid) => (ctx.vmm.alive.has(pid) ? 340 : null),
+      },
+    },
   );
 
   ctx.stack.defer(() => impd.broker.stop());

@@ -86,9 +86,10 @@ test('it keeps each admission within the budget and never asks a pinned imp to s
         expect(calls.length).toBeLessThanOrEqual(awakeBefore);
 
         // a rejected admit gives up at a failed sleep, never after a sleep
-        // that worked, which would leave the pick enough
+        // that worked, which would leave the pick enough; with no call at
+        // all, nothing slept
         if (rejected) {
-          expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
+          expect(calls.slice(-1).map((call) => call.outcome)).not.toContain('slept');
         }
       }
     }),
@@ -281,8 +282,9 @@ test('it keeps a grow within the budget, never sleeps its grower, and sleeps onl
           // the guest's RSS shows the grow once the plug lands
           host.findImp(op.id).rssMib += op.mib;
         } else {
-          // refused: nothing slept for room that was not there
-          expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
+          // refused: nothing slept for room that was not there, so the last
+          // call, if any, did not sleep
+          expect(calls.slice(-1).map((call) => call.outcome)).not.toContain('slept');
         }
       }
     }),

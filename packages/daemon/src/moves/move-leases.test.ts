@@ -17,15 +17,15 @@ import { MOVE_PART_HEADER } from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { MoveHostsOptions } from './test-moves';
 
-interface SetupConfig extends Pick<MoveHostsOptions, 'hook' | 'isShared' | 'partBytes'> {
-  // each host's frozen clock; left out, a host reads the wall clock
-  readonly source?: Pick<NonNullable<MoveHostsOptions['source']>, 'frozenClockMs'>;
-  readonly target?: Pick<NonNullable<MoveHostsOptions['target']>, 'frozenClockMs'>;
-}
-
 // Two impds. The source's storage is XFS on plain files, as the harness's,
 // with faults a test can set.
-async function setupTest(config: SetupConfig = {}) {
+async function setupTest(
+  config: Readonly<Pick<MoveHostsOptions, 'hook' | 'isShared' | 'partBytes'>> & {
+    // each host's frozen clock; left out, a host reads the wall clock
+    readonly source?: Pick<NonNullable<MoveHostsOptions['source']>, 'frozenClockMs'>;
+    readonly target?: Pick<NonNullable<MoveHostsOptions['target']>, 'frozenClockMs'>;
+  } = {},
+) {
   const sourceFaults = buildStubStorageFaults();
 
   const hosts = await setupMoveHosts({

@@ -235,7 +235,12 @@ test('it refuses an attach without wake to a sleeping imp, and wakes nothing', a
 
 test('it names the cold boots in a session’s started output', async () => {
   const ctx = await setupTest();
+
+  const createdAfter = new Date(Date.now());
+
   const created = await ctx.client.imps.create({ name: 'dev' });
+
+  const createdBefore = new Date(Date.now());
 
   await startStubAttachAgent(buildImpPaths(ctx.dataDir, created.id).vsockSocket, {
     bootId: 'boot-old',
@@ -273,7 +278,8 @@ test('it names the cold boots in a session’s started output', async () => {
 
   invariant(imp?.pid);
 
-  // the cold boot's id is the stub guest's for the VM's pid, and its time the clock's
+  // the cold boot's id is the stub guest's for the VM's pid, and its time the
+  // clock's while the create ran (below)
   expect(stream.output).toStrictEqual({
     continuity: 'offsets',
     bootId: '22222222-2222-4222-8222-222222222222',
@@ -286,11 +292,19 @@ test('it names the cold boots in a session’s started output', async () => {
       {
         bootId: buildStubBootId(imp.pid),
         cause: 'start',
-        at: expect.toSatisfy((at: string) => !Number.isNaN(Date.parse(at))),
+        at: expect.toBeDateString(),
       },
     ],
     resume: { kind: 'exact' },
   });
+
+  if (stream.output?.continuity !== 'offsets') {
+    throw new Error('expected output with offsets');
+  }
+
+  invariant(stream.output.coldBoots[0]);
+
+  expect(new Date(stream.output.coldBoots[0].at)).toBeBetween(createdAfter, createdBefore);
 });
 
 test('it keeps the data of a resume error the agent sends', async () => {
