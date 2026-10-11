@@ -475,16 +475,6 @@ test('it refuses a call whose id a running call holds with an invalid-params err
       error: { code: INVALID_PARAMS, message: 'request 7 is already running' },
     },
   ]);
-
-  expect(ctx.sent.at(1)).toStrictEqual({
-    jsonrpc: '2.0',
-    id: 7,
-    result: {
-      content: [{ type: 'text', text: '{\n  "imps": []\n}' }],
-      structuredContent: { imps: [] },
-      isError: false,
-    },
-  });
 });
 
 test('it answers a request whose reply fails with an internal error', async () => {

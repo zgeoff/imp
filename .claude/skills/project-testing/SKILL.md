@@ -100,8 +100,8 @@ the SQLite handle itself, since Kysely closes a driver only after a query starte
 `startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
 `startStubSshAgent`, `startStubSshServer` (it stops listening and leaves each open connection to its
 client's own end), `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
-`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`
-and `startStubGithubReleases`.
+`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`,
+`startStubGithubReleases` and the client's `createStubUndiciWebSocket` (it closes the socket).
 
 Utils that take a caller's stack and register nothing themselves:
 
