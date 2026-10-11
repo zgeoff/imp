@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import packageJson from '@imp/daemon/package.json' with { type: 'json' };
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
@@ -49,11 +50,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back for the CLI
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -136,6 +138,7 @@ async function setupTest() {
 
   return {
     stack,
+    rootToken,
     dataDir,
     sendRequest: (request: Request) => impd.api.app.handle(request),
     url: `http://127.0.0.1:${String(app.server.port)}`,
@@ -151,7 +154,7 @@ test('it makes no database copy on an impd from before databaseCopy (0.30.0)', a
 
   const result = await runCli({
     args: ['db', 'copy', 'before-upgrade', '--json'],
-    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({
@@ -169,7 +172,7 @@ test('it prints the database copy’s fields in the order a restore script reads
 
   const result = await runCli({
     args: ['db', 'copy', 'before-upgrade', '--json'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   const printed: unknown = JSON.parse(result.stdout);
