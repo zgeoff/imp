@@ -4,7 +4,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   statfsSync,
   writeFileSync,
@@ -828,18 +827,11 @@ test('#start logs and skips a reserve file that would take more than half the fr
 });
 
 test('#measureUsage counts the blocks of each imp and its checkpoints through FIEMAP', async () => {
-  // FIEMAP needs a real filesystem, which a tmpfs temp dir is not: the
-  // checkout's own ignored .cache is one
+  // FIEMAP needs a filesystem with extents, which a tmpfs temp dir is not: the
+  // checkout's own ignored .cache is one. It stays; setupTest's dir in it goes.
   const parentDir = join(import.meta.dir, '..', '..', '..', '..', '.cache');
 
-  // the first dir this made, when .cache was not there yet
-  const made = mkdirSync(parentDir, { recursive: true });
-
-  onTestFinished(() => {
-    if (made !== undefined) {
-      rmSync(made, { recursive: true, force: true });
-    }
-  });
+  mkdirSync(parentDir, { recursive: true });
 
   const ctx = await setupTest({ parentDir });
 

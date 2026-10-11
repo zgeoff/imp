@@ -838,9 +838,8 @@ test.skipIf(readZfsTestPool() === null)(
 
     const datasets = await runChecked(['zfs', 'list', '-H', '-o', 'name', '-r', ctx.root]);
 
-    expect(swept.dropped).toSatisfyAll(
-      (dropped: (typeof swept.dropped)[number]) =>
-        !['b', 'c', 'cp-two'].includes(dropped.id) && !/staging|building/.test(dropped.id),
+    expect(swept.dropped.map((dropped) => dropped.id)).toSatisfyAll(
+      (id: string) => !['b', 'c', 'cp-two'].includes(id) && !/staging|building/.test(id),
     );
 
     expect(readFileSync(ctx.backend.resolveImpPaths('b').disk, 'utf8')).toBe('from a');
