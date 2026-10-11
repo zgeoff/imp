@@ -554,14 +554,14 @@ test('#parseSnapshots reads empty output as no snapshots', () => {
 });
 
 test('#parseBackupSummary rejects backup output without a summary', () => {
-  expect(() =>
-    parseBackupSummary(
-      '{"message_type":"status","snapshot_id":"4f1c","files_new":1,"files_changed":2,"files_unmodified":3,"data_added":512}\n',
+  expect(
+    Promise.try(() =>
+      parseBackupSummary(
+        '{"message_type":"status","snapshot_id":"4f1c","files_new":1,"files_changed":2,"files_unmodified":3,"data_added":512}\n',
+      ),
     ),
-  ).toThrow(
-    expect.objectContaining({
-      name: 'ZodError',
-      issues: expect.toPartiallyContain({ path: ['message_type'], code: 'invalid_value' }),
-    }),
-  );
+  ).rejects.toMatchObject({
+    name: 'ZodError',
+    issues: expect.toPartiallyContain({ path: ['message_type'], code: 'invalid_value' }),
+  });
 });
