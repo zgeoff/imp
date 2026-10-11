@@ -23,25 +23,28 @@ async function setupTest() {
   return { dir };
 }
 
-test.each(['auto', 'off'] as const)('it reads IMP_SUBNET6=%s as that setting', (text) => {
-  expect(parseIpv6Setting(text)).toStrictEqual({ kind: text });
-});
+test.each(['auto', 'off'] as const)(
+  '#parseIpv6Setting reads IMP_SUBNET6=%s as that setting',
+  (text) => {
+    expect(parseIpv6Setting(text)).toStrictEqual({ kind: text });
+  },
+);
 
-test('it reads a /64 IMP_SUBNET6 as a routed prefix', () => {
+test('#parseIpv6Setting reads a /64 IMP_SUBNET6 as a routed prefix', () => {
   expect(parseIpv6Setting('2001:db8:c::/64')).toStrictEqual({
     kind: 'routed',
     prefix: { network: 0x20_01_0d_b8_00_0c_00_00n << 64n, text: '2001:db8:c::/64' },
   });
 });
 
-test('it rejects an IMP_SUBNET6 that is not auto, off or a /64', () => {
+test('#parseIpv6Setting rejects an IMP_SUBNET6 that is not auto, off or a /64', () => {
   expect(() => parseIpv6Setting('2001:db8:c::/56')).toThrowWithMessage(
     Error,
     'IMP_SUBNET6 must be auto, off or an IPv6 /64, got 2001:db8:c::/56',
   );
 });
 
-test('it gives auto a NAT66 unique local prefix out of the IPv6 default route', async () => {
+test('#resolveIpv6Plan gives auto a NAT66 unique local prefix out of the IPv6 default route', async () => {
   const ula = parsePrefix64('fd12:3456:789a::/64');
 
   invariant(ula);
@@ -77,7 +80,7 @@ test('it gives auto a NAT66 unique local prefix out of the IPv6 default route', 
   );
 });
 
-test('it turns auto off, and removes NAT66, without an IPv6 default route', async () => {
+test('#resolveIpv6Plan turns auto off, and removes NAT66, without an IPv6 default route', async () => {
   const deps = {
     readDefaultRoute: () => Promise.resolve(null),
     readUlaPrefix: () => {
@@ -101,7 +104,7 @@ test('it turns auto off, and removes NAT66, without an IPv6 default route', asyn
   );
 });
 
-test('it uses a routed /64 as it is, without NAT, via the IPv6 default route', async () => {
+test('#resolveIpv6Plan uses a routed /64 as it is, without NAT, via the IPv6 default route', async () => {
   const setting = parseIpv6Setting('2001:db8:c::/64');
 
   const deps = {
@@ -129,7 +132,7 @@ test('it uses a routed /64 as it is, without NAT, via the IPv6 default route', a
   expect(deps.log).toHaveBeenCalledExactlyOnceWith('impd: ipv6: 2001:db8:c::/64, routed via eth0');
 });
 
-test('it uses a routed /64 with no IPv6 default route, and says so', async () => {
+test('#resolveIpv6Plan uses a routed /64 with no IPv6 default route, and says so', async () => {
   const setting = parseIpv6Setting('2001:db8:c::/64');
 
   const deps = {
@@ -151,7 +154,7 @@ test('it uses a routed /64 with no IPv6 default route, and says so', async () =>
   );
 });
 
-test('it turns IPv6 off, and removes NAT66, when the setting is off', async () => {
+test('#resolveIpv6Plan turns IPv6 off, and removes NAT66, when the setting is off', async () => {
   const deps = {
     readDefaultRoute: mock(() => Promise.resolve('eth0')),
     readUlaPrefix: () => {
@@ -174,7 +177,7 @@ test('it turns IPv6 off, and removes NAT66, when the setting is off', async () =
   expect(deps.log).toHaveBeenCalledExactlyOnceWith('impd: ipv6: off (IMP_SUBNET6=off)');
 });
 
-test('it turns IPv6 off when nft cannot remove a NAT66 table, as on a host without nftables', async () => {
+test('#resolveIpv6Plan turns IPv6 off when nft cannot remove a NAT66 table, as on a host without nftables', async () => {
   const deps = {
     readDefaultRoute: () => Promise.resolve('eth0'),
     readUlaPrefix: () => {
@@ -192,7 +195,7 @@ test('it turns IPv6 off when nft cannot remove a NAT66 table, as on a host witho
   expect(deps.log).toHaveBeenCalledExactlyOnceWith('impd: ipv6: off (IMP_SUBNET6=off)');
 });
 
-test('it turns IPv6 off, and removes NAT66, when the host lacks its IPv6 rules', async () => {
+test('#resolveIpv6Plan turns IPv6 off, and removes NAT66, when the host lacks its IPv6 rules', async () => {
   const deps = {
     readDefaultRoute: () => Promise.resolve('eth0'),
     readUlaPrefix: () => {
@@ -216,7 +219,7 @@ test('it turns IPv6 off, and removes NAT66, when the host lacks its IPv6 rules',
   );
 });
 
-test('it turns IPv6 off when the NAT66 table cannot be written', async () => {
+test('#resolveIpv6Plan turns IPv6 off when the NAT66 table cannot be written', async () => {
   const ula = parsePrefix64('fd12:3456:789a::/64');
 
   invariant(ula);
@@ -257,7 +260,7 @@ test('it turns IPv6 off when the NAT66 table cannot be written', async () => {
   );
 });
 
-test("it finds every one of setup-net's IPv6 rules and settings in place", async () => {
+test("#checkHostRules6 finds every one of setup-net's IPv6 rules and settings in place", async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -285,7 +288,7 @@ test("it finds every one of setup-net's IPv6 rules and settings in place", async
   expect(missing).toBeNull();
 });
 
-test('it names the first missing filter rule', async () => {
+test('#checkHostRules6 names the first missing filter rule', async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -299,7 +302,7 @@ test('it names the first missing filter rule', async () => {
   expect(missing).toBe('no ip6tables -t filter -A FORWARD -i imp+ -o imp+ -j DROP');
 });
 
-test('it names the missing raw rule once the filter rules are in place', async () => {
+test('#checkHostRules6 names the missing raw rule once the filter rules are in place', async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -321,31 +324,34 @@ test('it names the missing raw rule once the filter rules are in place', async (
   expect(missing).toBe('no ip6tables -t raw -A PREROUTING -i imp+ -m rpfilter --invert -j DROP');
 });
 
-test.each(['filter', 'raw'])('it reports an ip6tables -t %s that fails', async (table) => {
-  const ctx = await setupTest();
+test.each(['filter', 'raw'])(
+  '#checkHostRules6 reports an ip6tables -t %s that fails',
+  async (table) => {
+    const ctx = await setupTest();
 
-  const ip = buildStubIpCommand({
-    outputs: {
-      'ip6tables -w -t filter -S': [
-        '-A INPUT -i imp+ -j DROP',
-        '-A FORWARD -i imp+ -o imp+ -j DROP',
-        '-A FORWARD -o imp+ -j DROP',
-        '-A FORWARD -i imp+ -j DROP',
-      ].join('\n'),
-    },
-    failures: {
-      [`ip6tables -w -t ${table}`]: `ip6tables v1.8.10 (nf_tables): table '${table}' does not exist`,
-    },
-  });
+    const ip = buildStubIpCommand({
+      outputs: {
+        'ip6tables -w -t filter -S': [
+          '-A INPUT -i imp+ -j DROP',
+          '-A FORWARD -i imp+ -o imp+ -j DROP',
+          '-A FORWARD -o imp+ -j DROP',
+          '-A FORWARD -i imp+ -j DROP',
+        ].join('\n'),
+      },
+      failures: {
+        [`ip6tables -w -t ${table}`]: `ip6tables v1.8.10 (nf_tables): table '${table}' does not exist`,
+      },
+    });
 
-  const missing = await checkHostRules6(ctx.dir, ip.run);
+    const missing = await checkHostRules6(ctx.dir, ip.run);
 
-  expect(missing).toBe(
-    `ip6tables -t ${table}: ip6tables v1.8.10 (nf_tables): table '${table}' does not exist`,
-  );
-});
+    expect(missing).toBe(
+      `ip6tables -t ${table}: ip6tables v1.8.10 (nf_tables): table '${table}' does not exist`,
+    );
+  },
+);
 
-test('it names an IPv6 sysctl the kernel does not have', async () => {
+test('#checkHostRules6 names an IPv6 sysctl the kernel does not have', async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -370,7 +376,7 @@ test('it names an IPv6 sysctl the kernel does not have', async () => {
   expect(missing).toBe('net.ipv6.conf.default.accept_ra is missing, not 0');
 });
 
-test('it names an IPv6 sysctl that holds the wrong value', async () => {
+test('#checkHostRules6 names an IPv6 sysctl that holds the wrong value', async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -396,7 +402,7 @@ test('it names an IPv6 sysctl that holds the wrong value', async () => {
   expect(missing).toBe('net.ipv6.conf.all.forwarding is 0, not 1');
 });
 
-test('it reads the device of the first IPv6 default route', async () => {
+test('#readIpv6DefaultRoute reads the device of the first IPv6 default route', async () => {
   const ip = buildStubIpCommand({
     outputs: {
       'ip -6 route show default': [
@@ -412,7 +418,7 @@ test('it reads the device of the first IPv6 default route', async () => {
   expect(dev).toBe('eth1');
 });
 
-test('it reads no IPv6 default route when there is none', async () => {
+test('#readIpv6DefaultRoute reads no IPv6 default route when there is none', async () => {
   const ip = buildStubIpCommand({ outputs: { 'ip -6 route show default': '' } });
 
   const dev = await readIpv6DefaultRoute(ip.run);
@@ -420,7 +426,7 @@ test('it reads no IPv6 default route when there is none', async () => {
   expect(dev).toBeNull();
 });
 
-test('it reads no IPv6 default route when ip fails', async () => {
+test('#readIpv6DefaultRoute reads no IPv6 default route when ip fails', async () => {
   const ip = buildStubIpCommand({
     failures: { 'ip -6 route': 'RTNETLINK answers: Address family not supported by protocol' },
   });
@@ -430,7 +436,7 @@ test('it reads no IPv6 default route when ip fails', async () => {
   expect(dev).toBeNull();
 });
 
-test('it reads the on-link routes and global addresses off the taps as connected prefixes', () => {
+test('#parseConnectedPrefixes reads the on-link routes and global addresses off the taps as connected prefixes', () => {
   const routes = [
     '2001:db8:a::/64 dev eth0 proto kernel metric 256 pref medium',
     '2001:DB8:0e::/64 dev eth1 proto ra metric 1024 expires 86000sec pref medium',
@@ -456,7 +462,7 @@ test('it reads the on-link routes and global addresses off the taps as connected
   ]);
 });
 
-test('it reads the connected IPv6 prefixes from the host routes and addresses', async () => {
+test('#readConnectedPrefixes6 reads the connected IPv6 prefixes from the host routes and addresses', async () => {
   const ip = buildStubIpCommand({
     outputs: {
       'ip -6 route show': '2001:db8:a::/64 dev eth0 proto kernel metric 256 pref medium\n',
@@ -469,7 +475,7 @@ test('it reads the connected IPv6 prefixes from the host routes and addresses', 
   expect(prefixes).toStrictEqual(['2001:db8:a::/64', '2001:db8:f::/64']);
 });
 
-test('it fails the connected IPv6 prefix read when ip fails', () => {
+test('#readConnectedPrefixes6 fails when ip fails', () => {
   const ip = buildStubIpCommand({ failures: { 'ip -6 route': 'Cannot open netlink socket' } });
 
   expect(readConnectedPrefixes6(ip.runChecked)).rejects.toThrowWithMessage(
@@ -478,7 +484,7 @@ test('it fails the connected IPv6 prefix read when ip fails', () => {
   );
 });
 
-test('it makes a unique local prefix on first need and writes it under the data dir', async () => {
+test('#readOrCreateUlaPrefix makes a unique local prefix on first need and writes it under the data dir', async () => {
   const ctx = await setupTest();
 
   const prefix = readOrCreateUlaPrefix(join(ctx.dir, 'net', 'ipv6-ula'));
@@ -490,7 +496,7 @@ test('it makes a unique local prefix on first need and writes it under the data 
   expect(written).toBe(`${prefix.text}\n`);
 });
 
-test('it keeps the unique local prefix it wrote before', async () => {
+test('#readOrCreateUlaPrefix keeps the unique local prefix it wrote before', async () => {
   const ctx = await setupTest();
 
   await mkdir(join(ctx.dir, 'net'));
@@ -502,7 +508,7 @@ test('it keeps the unique local prefix it wrote before', async () => {
   });
 });
 
-test('it replaces a prefix file it cannot read with a new unique local prefix', async () => {
+test('#readOrCreateUlaPrefix replaces a prefix file it cannot read with a new unique local prefix', async () => {
   const ctx = await setupTest();
 
   await mkdir(join(ctx.dir, 'net'));

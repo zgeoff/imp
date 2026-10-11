@@ -2,7 +2,7 @@ import { expect, mock, test } from 'bun:test';
 import { buildStubTailscale } from '../test-utils/build-stub-tailscale';
 import { createStatusCache, parseTailscaleStatus, readTailscaleStatus } from './tailscale-status';
 
-test('it reads state, the MagicDNS name and the IPv4 address', () => {
+test('#parseTailscaleStatus reads state, the MagicDNS name and the IPv4 address', () => {
   // an offline node still holds `imp`, so this one got `imp-1`
   const json = JSON.stringify({
     BackendState: 'Running',
@@ -22,7 +22,7 @@ test('it reads state, the MagicDNS name and the IPv4 address', () => {
   });
 });
 
-test('it takes the IPv6 address when the node has no IPv4 one', () => {
+test('#parseTailscaleStatus takes the IPv6 address when the node has no IPv4 one', () => {
   const json = JSON.stringify({
     BackendState: 'Running',
     Self: { HostName: 'imp', DNSName: 'imp.tail1234.ts.net.', TailscaleIPs: ['fd7a:115c::1'] },
@@ -31,7 +31,7 @@ test('it takes the IPv6 address when the node has no IPv4 one', () => {
   expect(parseTailscaleStatus(json).ip).toBe('fd7a:115c::1');
 });
 
-test('it falls back to the hostname before MagicDNS names the node', () => {
+test('#parseTailscaleStatus falls back to the hostname before MagicDNS names the node', () => {
   const json = JSON.stringify({
     BackendState: 'Starting',
     Self: { HostName: 'imp', DNSName: '', TailscaleIPs: [] },
@@ -46,7 +46,7 @@ test('it falls back to the hostname before MagicDNS names the node', () => {
   });
 });
 
-test('it reads a node with no Self as a state and nothing else', () => {
+test('#parseTailscaleStatus reads a node with no Self as a state and nothing else', () => {
   expect(parseTailscaleStatus(JSON.stringify({ BackendState: 'NeedsLogin' }))).toStrictEqual({
     state: 'NeedsLogin',
     hostname: null,
@@ -56,7 +56,7 @@ test('it reads a node with no Self as a state and nothing else', () => {
   });
 });
 
-test('it gives nulls for output it cannot read', () => {
+test('#parseTailscaleStatus gives nulls for output it cannot read', () => {
   expect(parseTailscaleStatus('')).toStrictEqual({
     state: null,
     hostname: null,
@@ -66,7 +66,7 @@ test('it gives nulls for output it cannot read', () => {
   });
 });
 
-test('it reads the node from tailscale status when tailscale is configured', async () => {
+test('#readTailscaleStatus reads the node from tailscale status when tailscale is configured', async () => {
   const tailscale = buildStubTailscale({
     status: {
       state: 'Running',
@@ -88,7 +88,7 @@ test('it reads the node from tailscale status when tailscale is configured', asy
   });
 });
 
-test('it gives nulls when tailscale is not configured', async () => {
+test('#readTailscaleStatus gives nulls when tailscale is not configured', async () => {
   const status = await readTailscaleStatus(false, mock());
 
   expect(status).toStrictEqual({
@@ -100,7 +100,7 @@ test('it gives nulls when tailscale is not configured', async () => {
   });
 });
 
-test('it runs no tailscale command when tailscale is not configured', async () => {
+test('#readTailscaleStatus runs no tailscale command when tailscale is not configured', async () => {
   const run = mock();
 
   await readTailscaleStatus(false, run);
@@ -108,7 +108,7 @@ test('it runs no tailscale command when tailscale is not configured', async () =
   expect(run).not.toHaveBeenCalled();
 });
 
-test('it gives nulls when tailscale cannot run', async () => {
+test('#readTailscaleStatus gives nulls when tailscale cannot run', async () => {
   const status = await readTailscaleStatus(true, () =>
     Promise.reject(new Error('Executable not found in $PATH: "tailscale"')),
   );
@@ -122,7 +122,7 @@ test('it gives nulls when tailscale cannot run', async () => {
   });
 });
 
-test('it reads tailscale again once 30 seconds have passed', async () => {
+test('#createStatusCache reads tailscale again once 30 seconds have passed', async () => {
   const clock = { at: 0 };
   const reads = { count: 0 };
 

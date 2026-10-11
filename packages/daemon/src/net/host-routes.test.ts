@@ -20,7 +20,7 @@ async function setupTest() {
   return { dir };
 }
 
-test('it reads the on-link IPv4 networks and every address off the taps', () => {
+test('#parseConnectedPrefixes4 reads the on-link IPv4 networks and every address off the taps', () => {
   const routes = [
     'default via 172.17.0.1 dev eth0',
     '10.66.0.0/30 dev imp0 proto kernel scope link src 10.66.0.1',
@@ -52,7 +52,7 @@ test('it reads the on-link IPv4 networks and every address off the taps', () => 
   ]);
 });
 
-test('it reads the connected IPv4 prefixes from the host routes and addresses', async () => {
+test('#readConnectedPrefixes4 reads the connected IPv4 prefixes from the host routes and addresses', async () => {
   const ip = buildStubIpCommand({
     outputs: {
       'ip -4 route show': '172.17.0.0/16 dev eth0 proto kernel scope link src 172.17.0.2\n',
@@ -65,7 +65,7 @@ test('it reads the connected IPv4 prefixes from the host routes and addresses', 
   expect(prefixes).toStrictEqual(['172.17.0.0/16', '172.17.0.2/32']);
 });
 
-test('it fails the connected prefix read when ip fails', () => {
+test('#readConnectedPrefixes4 fails when ip fails', () => {
   const ip = buildStubIpCommand({
     outputs: { 'ip -4 route show': '172.17.0.0/16 dev eth0 proto kernel scope link\n' },
     failures: { 'ip -4 -o addr': 'Cannot open netlink socket' },
@@ -77,7 +77,7 @@ test('it fails the connected prefix read when ip fails', () => {
   );
 });
 
-test("it reads the default routes' interfaces as the uplinks, never a tap", () => {
+test("#parseUplinks reads the default routes' interfaces as the uplinks, never a tap", () => {
   const routes = [
     'default via 172.17.0.1 dev eth0',
     'default via fe80::1 dev eth0 metric 1024 pref medium',
@@ -89,11 +89,11 @@ test("it reads the default routes' interfaces as the uplinks, never a tap", () =
   expect(parseUplinks(routes)).toStrictEqual(['eth0', 'wg0']);
 });
 
-test('it reads no uplinks from no routes', () => {
+test('#parseUplinks reads no uplinks from no routes', () => {
   expect(parseUplinks('')).toStrictEqual([]);
 });
 
-test("it reads a multipath default route's uplinks from its nexthop lines", () => {
+test("#parseUplinks reads a multipath default route's uplinks from its nexthop lines", () => {
   const routes = [
     'default proto ra metric 1024 expires 1797sec pref medium',
     '\tnexthop via fe80::1 dev eth0 weight 1',
@@ -106,7 +106,7 @@ test("it reads a multipath default route's uplinks from its nexthop lines", () =
   expect(parseUplinks(routes)).toStrictEqual(['eth0', 'eth1']);
 });
 
-test('it reads the uplinks of each family from the default routes', async () => {
+test('#readUplinks reads the uplinks of each family from the default routes', async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -123,7 +123,7 @@ test('it reads the uplinks of each family from the default routes', async () => 
   expect(uplinks).toStrictEqual({ ipv4: ['eth0'], ipv6: ['eth1'] });
 });
 
-test('it reads no IPv6 uplinks, and runs no IPv6 read, on a kernel without IPv6', async () => {
+test('#readUplinks reads no IPv6 uplinks, and runs no IPv6 read, on a kernel without IPv6', async () => {
   const ctx = await setupTest();
 
   const ip = buildStubIpCommand({
@@ -139,11 +139,11 @@ test('it reads no IPv6 uplinks, and runs no IPv6 read, on a kernel without IPv6'
 test.each([
   ['93.184.216.34 via 172.17.0.1 dev eth0 src 172.17.0.2 uid 0\n    cache\n', 'eth0'],
   ['local 172.17.0.2 dev lo table local src 172.17.0.2', 'lo'],
-])('it reads the interface a route leaves by from %p', (route, dev) => {
+])('#parseRouteDevice reads the interface a route leaves by from %p', (route, dev) => {
   expect(parseRouteDevice(route, '93.184.216.34')).toBe(dev);
 });
 
-test('it rejects a route that names no interface', () => {
+test('#parseRouteDevice rejects a route that names no interface', () => {
   expect(() =>
     parseRouteDevice('unreachable 203.0.113.9 table main', '203.0.113.9'),
   ).toThrowWithMessage(
@@ -152,7 +152,7 @@ test('it rejects a route that names no interface', () => {
   );
 });
 
-test('it asks ip which interface a route to the address leaves by', async () => {
+test('#readRouteDevice asks ip which interface a route to the address leaves by', async () => {
   const ip = buildStubIpCommand({
     outputs: {
       'ip route get 93.184.216.34': '93.184.216.34 via 172.17.0.1 dev eth0 src 172.17.0.2\n',
