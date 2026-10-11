@@ -153,8 +153,6 @@ test.skipIf(readZfsTestPool() === null)(
       ctx.sourceRoot,
     ]);
 
-    const started = await ctx.targetApp.client.imps.start({ name: 'dev' });
-
     expect(status).toMatchObject({ isDone: true, error: null });
     expect(moved).toMatchObject({ id: created.id, state: 'stopped' });
     expect(moved.move).toBeUndefined();
@@ -167,13 +165,61 @@ test.skipIf(readZfsTestPool() === null)(
 
     expect(sourceSets).not.toInclude(created.id);
     expect(left).toBeUndefined();
+  },
+  180_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it starts an imp that moved cold between two ZFS impds',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.source.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
+
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.source.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
+
+    await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
+
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.target.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
+
+    const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+    await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+    writeSyncedFile(ctx.source.storage.resolveImpPaths(created.id).disk, 'hello');
+
+    await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+    await ctx.runMove('dev');
+
+    const started = await ctx.targetApp.client.imps.start({ name: 'dev' });
+
     expect(started.state).toBe('running');
   },
   180_000,
 );
 
 test.skipIf(readZfsTestPool() === null)(
-  'it moves a sleeping imp warm between two ZFS impds into its slot, and wakes it from its memory',
+  'it moves a sleeping imp warm between two ZFS impds into its slot with its memory',
   async () => {
     // two impds in one process differ in their data dirs: both report the
     // target's facts, as two hosts with the same IMP_DATA_DIR would
@@ -238,8 +284,6 @@ test.skipIf(readZfsTestPool() === null)(
       ctx.sourceRoot,
     ]);
 
-    const woken = await ctx.targetApp.client.imps.wake({ name: 'dev' });
-
     expect(status).toMatchObject({ isDone: true, error: null });
 
     expect(moved).toMatchObject({
@@ -255,6 +299,54 @@ test.skipIf(readZfsTestPool() === null)(
     expect(movedDisk).toStartWith('warm');
     expect(sourceSets).not.toInclude(created.id);
     expect(left).toBeUndefined();
+  },
+  180_000,
+);
+
+test.skipIf(readZfsTestPool() === null)(
+  'it wakes an imp that moved warm between two ZFS impds from its memory',
+  async () => {
+    // two impds in one process differ in their data dirs: both report the
+    // target's facts, as two hosts with the same IMP_DATA_DIR would
+    const ctx = await setupTest({ isShared: true });
+
+    await ctx.source.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
+
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.source.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
+
+    await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
+      writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
+      writeSyncedFile(join(dir, 'config.json'), '{}');
+
+      return Promise.resolve();
+    });
+
+    await createImage(ctx.target.db, {
+      name: 'ubuntu',
+      ref: 'ubuntu:latest',
+      digest: 'sha256:ubuntu',
+      sizeBytes: 6,
+    });
+
+    const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+    writeSyncedFile(ctx.source.storage.resolveImpPaths(created.id).disk, 'warm');
+
+    await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+    await ctx.runMove('dev');
+
+    const woken = await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
     expect(woken.state).toBe('running');
     expect(ctx.target.fake.wakes).toHaveLength(1);
   },

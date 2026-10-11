@@ -106,6 +106,8 @@ test('#start warns about a minor version skew and goes on', async () => {
     log: ctx.log,
   });
 
+  ctx.stack.defer(() => backend.waitForReclaim());
+
   await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
   expect(ctx.log).toHaveBeenCalledWith(
@@ -1110,15 +1112,14 @@ test('#start after a lost database keeps every disk, image and checkpoint, and l
   expect(existsSync(join(ctx.dataDir, 'mem', 'done'))).toBeFalse();
   expect(existsSync(join(ctx.dataDir, 'imps', 'done'))).toBeFalse();
 
-  // a directory's creation is its birth time on the test's filesystem
+  // a directory's creation is its birth time on the test's filesystem; only a
+  // directory orphan names an absolute path, where a dataset names its pool
   expect(
     ctx.log.mock.calls
       .map(([line]) => line)
       .filter((line) => line.startsWith('impd: storage:'))
       .map((line) =>
-        line.includes(ctx.dataDir)
-          ? line.replace(/created \S+Z, snapshots: none$/, 'created <birth>, snapshots: none')
-          : line,
+        line.replace(/(?<dir>\(\/[^)]*\): \S+ MiB, )created \S+Z/, '$<dir>created <birth>'),
       ),
   ).toStrictEqual([
     'impd: storage: removed imp done',
@@ -1475,7 +1476,7 @@ test('#readUsage reads the pool usage of the root dataset', async () => {
   expect(usage).toStrictEqual({ usedBytes: 1_073_741_824, availableBytes: 9_663_676_416 });
 });
 
-test('#createCheckpoint and a live fork run while a reclaim waits on its promote', async () => {
+test('#removeImpDisk lets a checkpoint and a fork of the promote target run while its reclaim waits on the promote', async () => {
   const ctx = setupTest();
 
   await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
@@ -1668,6 +1669,8 @@ test('#openBackupTree gives a close that drops the clones and the copy snapshots
     imageDigests: ['sha256:9f2c'],
   });
 
+  ctx.stack.defer(() => tree.close());
+
   await tree.close();
 
   expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toStrictEqual([]);
@@ -1692,6 +1695,8 @@ test('#removeImpDisk holds back the reclaim of an imp that restic reads until th
     imps: [{ impId: 'a', checkpointIds: ['cp-1'] }],
     imageDigests: ['sha256:9f2c'],
   });
+
+  ctx.stack.defer(() => tree.close());
 
   await ctx.backend.removeImpDisk('a', ['cp-1']);
   await ctx.backend.waitForReclaim();

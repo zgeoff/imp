@@ -271,6 +271,9 @@ test('#writeConsistentCopy writes a copy of an older schema that migrates forwar
 
   const db = await openDatabase(restored);
 
+  onTestFinished(() => db.destroy());
+
+  // the migrating handle closes before a read-only one opens the file
   await db.destroy();
 
   const opened = new Database(restored, { readonly: true });
