@@ -19,8 +19,10 @@ async function setupTest() {
 
   await writeFile(caFile, '');
 
-  // a proxy that records the first line and the peer, then refuses
+  // a proxy that records the first line and the peer, then refuses with the
+  // status the test sets through `refuseWith`
   const seen: { address: string; line: string }[] = [];
+  const refusal = { status: '' };
 
   const proxy = Bun.listen({
     hostname: '127.0.0.1',
@@ -28,7 +30,7 @@ async function setupTest() {
     socket: {
       data: (socket, data) => {
         seen.push({ address: socket.remoteAddress, line: data.toString().split('\r\n')[0] ?? '' });
-        socket.end('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n');
+        socket.end(`HTTP/1.1 ${refusal.status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`);
       },
     },
   });
@@ -37,11 +39,20 @@ async function setupTest() {
     proxy.stop(true);
   });
 
-  return { caFile, seen, proxyPort: proxy.port };
+  return {
+    caFile,
+    seen,
+    proxyPort: proxy.port,
+    refuseWith: (status: string) => {
+      refusal.status = status;
+    },
+  };
 }
 
 test('it tunnels through the proxy from the guest address it was given', async () => {
   const ctx = await setupTest();
+
+  ctx.refuseWith('403 Forbidden');
 
   const guest = buildStubBrokerGuest({
     proxyPort: ctx.proxyPort,
@@ -60,6 +71,8 @@ test('it tunnels through the proxy from the guest address it was given', async (
 // versions; the status the proxy sent does not
 test('it reports the status the proxy refused the CONNECT with', async () => {
   const ctx = await setupTest();
+
+  ctx.refuseWith('403 Forbidden');
 
   const guest = buildStubBrokerGuest({
     proxyPort: ctx.proxyPort,
@@ -89,6 +102,8 @@ test('it reports the exit code and the error curl printed when no proxy listens'
 
 test('it passes its extra arguments to curl', async () => {
   const ctx = await setupTest();
+
+  ctx.refuseWith('403 Forbidden');
 
   const guest = buildStubBrokerGuest({
     proxyPort: ctx.proxyPort,

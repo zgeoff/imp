@@ -237,10 +237,24 @@ test('it holds a hanging pull until its kill', async () => {
     images: [{ refs: ['slow:1'], inspects: [{ Id: 'sha256:1' }], pull: 'hang' }],
   });
 
-  const result = await runCommand(['docker', 'pull', '--quiet', 'slow:1'], {
+  const kill = new AbortController();
+
+  const pull = runCommand(['docker', 'pull', '--quiet', 'slow:1'], {
     env: { PATH: docker.path },
-    signal: AbortSignal.timeout(100),
+    signal: kill.signal,
   });
+
+  onTestFinished(() => {
+    kill.abort();
+  });
+
+  await waitFor(() => {
+    expect(docker.readCalls()).toStrictEqual(['pull --quiet slow:1']);
+  });
+
+  kill.abort();
+
+  const result = await pull;
 
   expect(result.exitCode).toBe(143);
 });

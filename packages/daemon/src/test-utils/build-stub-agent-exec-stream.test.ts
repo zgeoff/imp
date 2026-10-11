@@ -4,12 +4,19 @@ import { buildStubAgentExecStream } from './build-stub-agent-exec-stream';
 test('it builds a plain exec stream by default', () => {
   const fake = buildStubAgentExecStream();
 
-  expect(fake.stream).toMatchObject({
+  expect(fake.stream).toStrictEqual({
     pid: 7,
     session: null,
     created: false,
     groupKill: false,
     output: null,
+    stdinDrained: expect.toBeFunction(),
+    writeStdin: expect.toBeFunction(),
+    closeStdin: expect.toBeFunction(),
+    resize: expect.toBeFunction(),
+    sendSignal: expect.toBeFunction(),
+    events: expect.toBeFunction(),
+    close: expect.toBeFunction(),
   });
 });
 
@@ -22,7 +29,20 @@ test('it reports stdin on its way at once by default', async () => {
 test('it applies the fields it is given', () => {
   const fake = buildStubAgentExecStream({ pid: 9, session: 'main', created: true });
 
-  expect(fake.stream).toMatchObject({ pid: 9, session: 'main', created: true });
+  expect(fake.stream).toStrictEqual({
+    pid: 9,
+    session: 'main',
+    created: true,
+    groupKill: false,
+    output: null,
+    stdinDrained: expect.toBeFunction(),
+    writeStdin: expect.toBeFunction(),
+    closeStdin: expect.toBeFunction(),
+    resize: expect.toBeFunction(),
+    sendSignal: expect.toBeFunction(),
+    events: expect.toBeFunction(),
+    close: expect.toBeFunction(),
+  });
 });
 
 test('it yields the fed events in order and ends after the exit', async () => {
