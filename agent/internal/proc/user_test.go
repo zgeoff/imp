@@ -24,22 +24,17 @@ func useAccounts(t *testing.T, passwd, group string) {
 	t.Cleanup(func() { passwdPath, groupPath = oldP, oldG })
 }
 
-// The account files most cases resolve against: imp is in docker and
-// wheel, svc only in docker. They are immutable inputs; each test installs
-// them itself through useAccounts.
-const (
-	testPasswd = "root:x:0:0:root:/root:/bin/sh\n" +
+func TestLookupUserResolvesTheCredentialsAndHomeOfASpec(t *testing.T) {
+	// imp is in docker and wheel, svc only in docker
+	const passwd = "root:x:0:0:root:/root:/bin/sh\n" +
 		"imp:x:1000:1000::/home/imp:/bin/bash\n" +
 		"svc:x:1001:1001::/srv:/bin/sh\n"
-	testGroup = "root:x:0:\n" +
+	const group = "root:x:0:\n" +
 		"docker:x:999:imp,svc\n" +
 		"imp:x:1000:\n" +
 		"svc:x:1001:\n" +
 		"wheel:x:10:other,imp\n" +
 		"staff:x:50:\n"
-)
-
-func TestLookupUserResolvesTheCredentialsAndHomeOfASpec(t *testing.T) {
 	for _, tc := range []struct {
 		spec string
 		cred *syscall.Credential
@@ -56,7 +51,7 @@ func TestLookupUserResolvesTheCredentialsAndHomeOfASpec(t *testing.T) {
 		{"4242:999", &syscall.Credential{Uid: 4242, Gid: 999, Groups: []uint32{}}, "/"},
 	} {
 		t.Run(tc.spec, func(t *testing.T) {
-			useAccounts(t, testPasswd, testGroup)
+			useAccounts(t, passwd, group)
 
 			cred, home, err := LookupUser(tc.spec)
 
@@ -70,7 +65,7 @@ func TestLookupUserResolvesTheCredentialsAndHomeOfASpec(t *testing.T) {
 func TestLookupUserLeavesRootToInheritTheAgentsCredentials(t *testing.T) {
 	for _, spec := range []string{"", "root", "0"} {
 		t.Run("spec "+spec, func(t *testing.T) {
-			useAccounts(t, testPasswd, testGroup)
+			useAccounts(t, "root:x:0:0:root:/root:/bin/sh\n", "root:x:0:\n")
 
 			cred, home, err := LookupUser(spec)
 
@@ -89,16 +84,16 @@ func TestLookupUserFailsForASpecItCannotResolve(t *testing.T) {
 		// want is the error text, given the paths the test installed
 		want func(passwd, group string) string
 	}{
-		{name: "unknown user", passwd: testPasswd, group: testGroup, spec: "nobody",
+		{name: "unknown user", passwd: "imp:x:1000:1000::/home/imp:/bin/bash\n", group: "imp:x:1000:\n", spec: "nobody",
 			want: func(string, string) string { return `unknown user "nobody"` }},
-		{name: "unknown group", passwd: testPasswd, group: testGroup, spec: "imp:nogroup",
+		{name: "unknown group", passwd: "imp:x:1000:1000::/home/imp:/bin/bash\n", group: "imp:x:1000:\n", spec: "imp:nogroup",
 			want: func(string, string) string { return `unknown group "nogroup"` }},
 		// A malformed id must fail, never fall back to 0 (root).
-		{name: "bad uid", passwd: "bad:x:abc:1000::/:/bin/sh\n", group: testGroup, spec: "bad",
+		{name: "bad uid", passwd: "bad:x:abc:1000::/:/bin/sh\n", group: "imp:x:1000:\n", spec: "bad",
 			want: func(passwd, _ string) string { return passwd + `: bad: bad id "abc"` }},
-		{name: "bad gid", passwd: "bad:x:1000:-1::/:/bin/sh\n", group: testGroup, spec: "bad",
+		{name: "bad gid", passwd: "bad:x:1000:-1::/:/bin/sh\n", group: "imp:x:1000:\n", spec: "bad",
 			want: func(passwd, _ string) string { return passwd + `: bad: bad id "-1"` }},
-		{name: "bad group id", passwd: testPasswd, group: "odd:x:zz:\n", spec: "imp:odd",
+		{name: "bad group id", passwd: "imp:x:1000:1000::/home/imp:/bin/bash\n", group: "odd:x:zz:\n", spec: "imp:odd",
 			want: func(_, group string) string { return group + `: odd: bad id "zz"` }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,7 +109,7 @@ func TestLookupUserFailsForASpecItCannotResolve(t *testing.T) {
 }
 
 func TestLookupUserGivesOnlyThePrimaryGroupWithoutAGroupFile(t *testing.T) {
-	useAccounts(t, testPasswd, "")
+	useAccounts(t, "imp:x:1000:1000::/home/imp:/bin/bash\n", "")
 	groupPath = filepath.Join(t.TempDir(), "missing")
 
 	cred, _, err := LookupUser("imp")
@@ -125,7 +120,7 @@ func TestLookupUserGivesOnlyThePrimaryGroupWithoutAGroupFile(t *testing.T) {
 
 // A malformed /etc/group line costs only that group, not every lookup.
 func TestLookupUserSkipsMalformedGroupLines(t *testing.T) {
-	useAccounts(t, testPasswd, "odd:x:zz:imp\nbroken\ndocker:x:999:imp\n")
+	useAccounts(t, "imp:x:1000:1000::/home/imp:/bin/bash\n", "odd:x:zz:imp\nbroken\ndocker:x:999:imp\n")
 
 	cred, _, err := LookupUser("imp")
 
@@ -135,7 +130,7 @@ func TestLookupUserSkipsMalformedGroupLines(t *testing.T) {
 
 func TestLookupUserReadsAGroupLineLongerThanTheScannerDefault(t *testing.T) {
 	members := strings.Repeat("someone,", 20000) + "imp"
-	useAccounts(t, testPasswd, "big:x:4000:"+members+"\n")
+	useAccounts(t, "imp:x:1000:1000::/home/imp:/bin/bash\n", "big:x:4000:"+members+"\n")
 
 	cred, _, err := LookupUser("imp")
 
