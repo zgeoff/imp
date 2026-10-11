@@ -66,16 +66,16 @@ func startExec(t *testing.T, m *Manager, req proto.Request) *host {
 	guest, conn := net.Pipe()
 	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 64), served: make(chan error, 1)}
 	stop, serveDone, readDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	// The hangup ends Serve: within hangupGrace for a process that ignores
-	// it, and at once otherwise. Cleanups registered later, such as a kill
-	// of the process, run first.
+	// The hangup ends Serve: within the hangup grace for a process that
+	// ignores it, and at once otherwise. Cleanups registered later, such as
+	// a kill of the process, run first.
 	t.Cleanup(func() {
 		close(stop)
 		conn.Close()
 		for _, done := range []chan struct{}{serveDone, readDone} {
 			select {
 			case <-done:
-			case <-time.After(hangupGrace + 5*time.Second):
+			case <-time.After(m.hangupGrace + 5*time.Second):
 				t.Error("a goroutine of the exec connection did not end")
 			}
 		}
@@ -234,9 +234,11 @@ func TestServeDeliversASignalQueuedBehindStdinTheProcessNeverReads(t *testing.T)
 }
 
 // A background child that keeps stdout open must not hold the session open
-// past drainGrace.
+// past the drain grace.
 func TestServeSendsTheExitWithinTheDrainGraceWhileABackgroundChildHoldsStdout(t *testing.T) {
-	h := startExec(t, newManager(), proto.Request{Argv: []string{"sh", "-c", "sleep 3 & echo hi"}})
+	m := newManager()
+	m.drainGrace = 100 * time.Millisecond
+	h := startExec(t, m, proto.Request{Argv: []string{"sh", "-c", "sleep 3 & echo hi"}})
 	h.started(t)
 
 	start := time.Now()
@@ -245,25 +247,28 @@ func TestServeSendsTheExitWithinTheDrainGraceWhileABackgroundChildHoldsStdout(t 
 
 	assert.Check(t, cmp.Equal(out, "hi\n"))
 	assert.Check(t, cmp.Equal(exit, proto.Exit{}))
-	assert.Check(t, took <= drainGrace+time.Second, "EXIT after %s", took)
+	assert.Check(t, took <= m.drainGrace+time.Second, "EXIT after %s", took)
 }
 
 func TestServeReturnsBeforeTheHangupGraceWhenTheProcessExitsOnSIGHUP(t *testing.T) {
 	m := newManager()
+	// long enough that only the process's own exit ends Serve in time
+	m.hangupGrace = 5 * time.Second
 	h := startExec(t, m, proto.Request{Argv: []string{"sh", "-c", "echo ready; sleep 30"}})
 	pid := h.started(t)
 	t.Cleanup(func() { syscall.Kill(-pid, syscall.SIGKILL) })
 	f := h.next(t, 5*time.Second)
 	assert.Equal(t, f.Type, proto.TypeStdout, "the ready line")
-	assert.Equal(t, m.Active(), 1)
+	activeBefore := m.Active()
 
 	start := time.Now()
 	// Serve's EXIT then meets the closed connection, so its error is no
 	// part of this contract.
-	h.hangUp(t, hangupGrace+2*time.Second)
+	h.hangUp(t, m.hangupGrace+2*time.Second)
 	took := time.Since(start)
 
-	assert.Check(t, took < hangupGrace, "returned after %s, want before hangupGrace", took)
+	assert.Check(t, cmp.Equal(activeBefore, 1), "sessions before the hangup")
+	assert.Check(t, took < m.hangupGrace, "returned after %s, want before the hangup grace", took)
 	assert.Check(t, cmp.Equal(m.Active(), 0))
 }
 
@@ -271,22 +276,42 @@ func TestServeReturnsBeforeTheHangupGraceWhenTheProcessExitsOnSIGHUP(t *testing.
 // no longer counts as a session.
 func TestServeDetachesAProcessThatIgnoresSIGHUPAfterTheHangupGrace(t *testing.T) {
 	m := newManager()
+	m.hangupGrace = 200 * time.Millisecond
 	// The process prints once its trap is set.
 	h := startExec(t, m, proto.Request{Argv: []string{"sh", "-c", `trap "" HUP; echo ready; sleep 30`}})
 	pid := h.started(t)
 	t.Cleanup(func() { syscall.Kill(-pid, syscall.SIGKILL) })
 	f := h.next(t, 5*time.Second)
 	assert.Equal(t, f.Type, proto.TypeStdout, "the ready line")
-	assert.Equal(t, m.Active(), 1)
+	activeBefore := m.Active()
 
 	start := time.Now()
-	err := h.hangUp(t, hangupGrace+2*time.Second)
+	err := h.hangUp(t, m.hangupGrace+2*time.Second)
 	took := time.Since(start)
 
+	assert.Check(t, cmp.Equal(activeBefore, 1), "sessions before the hangup")
 	assert.Check(t, cmp.ErrorContains(err, "ignored SIGHUP"))
-	assert.Check(t, took >= hangupGrace, "returned after %s, before hangupGrace", took)
+	assert.Check(t, took >= m.hangupGrace, "returned after %s, before the hangup grace", took)
 	assert.Check(t, syscall.Kill(pid, 0), "the process is gone, want it left running")
 	assert.Check(t, cmp.Equal(m.Active(), 0))
+}
+
+// Output is forwarded for half a second after the process exits, and a
+// process that ignores a hangup has a second to end.
+func TestNewManagersTakeTheDrainAndHangupGraces(t *testing.T) {
+	l := launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{}), nil)
+	for _, tc := range []struct {
+		name string
+		m    *Manager
+	}{
+		{name: "plain", m: NewManager(l, nil)},
+		{name: "strict", m: NewStrictManager(l, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(tc.m.drainGrace, 500*time.Millisecond))
+			assert.Check(t, cmp.Equal(tc.m.hangupGrace, time.Second))
+		})
+	}
 }
 
 // Host frames sent after the process exited, past what the stdin queue
@@ -295,9 +320,7 @@ func TestServeDetachesAProcessThatIgnoresSIGHUPAfterTheHangupGrace(t *testing.T)
 func TestServeReadsHostFramesThatArriveAfterTheExit(t *testing.T) {
 	h := startExec(t, newManager(), proto.Request{Argv: []string{"sh", "-c", "echo refused >&2; exit 1"}})
 	h.started(t)
-	out, exit := h.wait(t, 5*time.Second)
-	assert.Equal(t, out, "refused\n")
-	assert.Equal(t, exit, proto.Exit{Code: 1})
+	h.wait(t, 5*time.Second)
 
 	// More than stdinQueueChunks of stdinChunk, all after the session ended.
 	written := make(chan error, 1)

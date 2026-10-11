@@ -258,10 +258,12 @@ func TestKillGraceDoesNotStartOnSIGUSR1(t *testing.T) {
 // group is empty.
 func TestKillGraceForwardsAStoppedChildsLastOutputBeforeTheExit(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	// The child's trap sleeps past drainGrace before it prints, so only the
-	// wait for the group lets that line through.
-	child := fmt.Sprintf(`trap "sleep 0.7; echo child-bye; exit 0" TERM; echo $$ > %s; while :; do sleep 0.05; done`, pidFile)
-	h := startExec(t, newManager(), proto.Request{
+	// The child's trap sleeps five times past the drain grace before it
+	// prints, so only the wait for the group lets that line through.
+	m := newManager()
+	m.drainGrace = 100 * time.Millisecond
+	child := fmt.Sprintf(`trap "sleep 0.5; echo child-bye; exit 0" TERM; echo $$ > %s; while :; do sleep 0.05; done`, pidFile)
+	h := startExec(t, m, proto.Request{
 		Argv:        []string{"sh", "-c", fmt.Sprintf("sh -c '%s' & exec sleep 300", child)},
 		KillGraceMs: 5000,
 	})
