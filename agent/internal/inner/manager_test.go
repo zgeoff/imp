@@ -52,9 +52,10 @@ func testManager(t *testing.T, gate <-chan struct{}, entered chan<- struct{}) (*
 	// test goroutine, where t.TempDir cannot fail the test
 	root := t.TempDir()
 	m := &Manager{
-		stopCh:    make(chan struct{}),
-		cgroupDir: t.TempDir(),
-		rootOf:    func(int) string { return root },
+		stopCh:       make(chan struct{}),
+		cgroupDir:    t.TempDir(),
+		rootOf:       func(int) string { return root },
+		firstBackoff: minBackoff,
 	}
 	m.startInit = func(*os.File) (*initProc, error) {
 		if entered != nil {
@@ -137,6 +138,7 @@ func TestLaunchBringsTheContainerUp(t *testing.T) {
 
 func TestARestartRunsOnDownThenOnUp(t *testing.T) {
 	m, inits := testManager(t, nil, nil)
+	m.firstBackoff = 100 * time.Millisecond
 	events := make(chan string, 4)
 	m.OnDown(func() { events <- "down" })
 	m.OnUp(func() { events <- "up" })
@@ -145,14 +147,20 @@ func TestARestartRunsOnDownThenOnUp(t *testing.T) {
 
 	first.die()
 
-	// the restart waits out minBackoff
 	got := []string{
-		receive(t, events, 10*time.Second, "hook"),
-		receive(t, events, 10*time.Second, "hook"),
+		receive(t, events, 5*time.Second, "hook"),
+		receive(t, events, 5*time.Second, "hook"),
 	}
 	assert.DeepEqual(t, got, []string{"down", "up"})
 	receive(t, inits, 5*time.Second, "second init")
 	assert.DeepEqual(t, m.Status(), Status{Up: true, Restarts: 1})
+}
+
+// A restart waits one second first, doubling up to 30 s.
+func TestNewStartsTheRestartBackoffAtOneSecond(t *testing.T) {
+	m := New(testReaper, Config{})
+
+	assert.Equal(t, m.firstBackoff, time.Second)
 }
 
 func TestAStopDuringAStartKillsTheNewInit(t *testing.T) {

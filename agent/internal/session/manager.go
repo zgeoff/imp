@@ -42,6 +42,13 @@ type Manager struct {
 	launcher *launch.Launcher
 	// bootID is the guest's boot_id, which every session's output names
 	bootID string
+	// killGrace is the package's killGrace; a test sets its own before it
+	// starts a session
+	killGrace time.Duration
+	// recorded, when set, gets each retired run once record has kept or
+	// passed over it; a test sets it before it starts a session, to know
+	// when a run that ended late has been judged
+	recorded func(proto.Previous)
 
 	// starting serializes starts, so a spawn needs no hold on mu, which List
 	// and Kill take. It guards seq too.
@@ -64,7 +71,7 @@ type ended struct {
 }
 
 func NewManager(l *launch.Launcher, bootID string) *Manager {
-	return &Manager{launcher: l, bootID: bootID, sessions: make(map[string]*session), previous: make(map[string]ended)}
+	return &Manager{launcher: l, bootID: bootID, killGrace: killGrace, sessions: make(map[string]*session), previous: make(map[string]ended)}
 }
 
 // Attached returns the number of open session connections.
@@ -106,7 +113,7 @@ func (m *Manager) Kill(name string) error {
 	safe.Go("session "+name+" kill", func() {
 		select {
 		case <-s.done:
-		case <-time.After(killGrace):
+		case <-time.After(m.killGrace):
 			s.proc.Signal(syscall.SIGKILL)
 		}
 	}, nil)
@@ -278,19 +285,27 @@ func (m *Manager) retire(s *session) {
 // already, as when a killed process outlives its replacement.
 func (m *Manager) record(s *session) {
 	e := ended{seq: s.seq, previous: s.ended()}
+	m.keep(s.name, e)
+	if m.recorded != nil {
+		m.recorded(e.previous)
+	}
+}
+
+// keep makes e the name's previous run unless a later run is there.
+func (m *Manager) keep(name string, e ended) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if cur, ok := m.previous[s.name]; ok && cur.seq > e.seq {
+	if cur, ok := m.previous[name]; ok && cur.seq > e.seq {
 		return
 	}
-	m.previous[s.name] = e
+	m.previous[name] = e
 	if len(m.previous) <= MaxSessions {
 		return
 	}
-	oldest := s.name
-	for name, other := range m.previous {
-		if other.seq < m.previous[oldest].seq {
-			oldest = name
+	oldest := name
+	for other, o := range m.previous {
+		if o.seq < m.previous[oldest].seq {
+			oldest = other
 		}
 	}
 	delete(m.previous, oldest)

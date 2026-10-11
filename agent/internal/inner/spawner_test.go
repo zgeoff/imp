@@ -165,7 +165,7 @@ func TestAFailedSpawnKeepsItsErrno(t *testing.T) {
 	assert.ErrorIs(t, err, syscall.ENOENT)
 }
 
-func TestWhenTheInitDiesEveryWaitEndsAndSpawnsFail(t *testing.T) {
+func TestWhenTheInitDiesEveryWaitEnds(t *testing.T) {
 	c, kill := pair(t)
 	null := devnull(t)
 	p, err := c.Start(proc.Spec{
@@ -179,14 +179,21 @@ func TestWhenTheInitDiesEveryWaitEndsAndSpawnsFail(t *testing.T) {
 	kill()
 
 	assert.Check(t, cmp.DeepEqual(exitOf(t, p), reaper.Status{Pid: p.Pid, Code: -1, Signal: syscall.SIGKILL}))
+	assert.Check(t, !p.GroupAlive(), "a dead container has no live groups")
+}
+
+func TestASpawnAfterTheInitDiedIsErrDown(t *testing.T) {
+	c, kill := pair(t)
+	kill()
 	select {
 	case <-c.Down():
 	case <-time.After(5 * time.Second):
 		t.Fatal("the client never saw the socket close")
 	}
-	_, err = c.Start(proc.Spec{Argv: []string{"true"}})
-	assert.Check(t, cmp.ErrorIs(err, ErrDown))
-	assert.Check(t, !p.GroupAlive(), "a dead container has no live groups")
+
+	_, err := c.Start(proc.Spec{Argv: []string{"true"}})
+
+	assert.ErrorIs(t, err, ErrDown)
 }
 
 func TestASignalAfterTheInitDiedIsESRCH(t *testing.T) {
@@ -217,15 +224,23 @@ func TestASignalAfterTheInitDiedIsESRCH(t *testing.T) {
 func TestAnExitNeverOvertakesItsSpawnReply(t *testing.T) {
 	c, _ := pair(t)
 	null := devnull(t)
+
+	var failed, lost []int
 	for i := range 200 {
 		p, err := c.Start(proc.Spec{Argv: []string{"/bin/true"}, Files: []*os.File{null, null, null}})
-		assert.NilError(t, err, "spawn %d", i)
+		if err != nil {
+			failed = append(failed, i)
+			continue
+		}
 		select {
 		case <-p.Done:
 		case <-time.After(5 * time.Second):
-			t.Fatalf("the exit of spawn %d was lost", i)
+			lost = append(lost, i)
 		}
 	}
+
+	assert.Check(t, cmp.Len(failed, 0), "spawns that failed")
+	assert.Check(t, cmp.Len(lost, 0), "spawns whose exit was lost")
 }
 
 func TestASpawnWhoseCgroupFailsRunsOutsideItAndSaysSo(t *testing.T) {

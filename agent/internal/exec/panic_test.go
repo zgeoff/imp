@@ -5,7 +5,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -19,24 +18,92 @@ import (
 )
 
 // startedPanics is a guest connection whose write of the STARTED frame
-// panics, standing in for a bug in Serve itself. It waits for the child to
-// write its pid first, so the test knows which process to watch.
+// panics once release closes, standing in for a bug in Serve itself. The
+// test closes release once the child has written its pid, so it knows which
+// process to watch. It counts on proto.Writer sending each frame in one
+// Write that starts with the frame's type.
 type startedPanics struct {
 	net.Conn
-	pidFile string
+	release <-chan struct{}
 }
 
 func (c startedPanics) Write(b []byte) (int, error) {
 	if len(b) > 0 && proto.Type(b[0]) == proto.TypeStarted {
-		for range 250 {
-			if b, err := os.ReadFile(c.pidFile); err == nil && len(b) > 0 {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
+		<-c.release
 		panic("serve bug")
 	}
 	return c.Conn.Write(b)
+}
+
+// stdoutPanics is a guest connection whose writes of STDOUT frames panic,
+// standing in for a bug in an output pump. It counts on proto.Writer as
+// startedPanics does.
+type stdoutPanics struct{ net.Conn }
+
+func (c stdoutPanics) Write(b []byte) (int, error) {
+	if len(b) > 0 && proto.Type(b[0]) == proto.TypeStdout {
+		panic("pump bug")
+	}
+	return c.Conn.Write(b)
+}
+
+func TestTheStandInConnectionsPanicOnTheirFrameFromAProtoWriter(t *testing.T) {
+	released := make(chan struct{})
+	close(released)
+	for _, tc := range []struct {
+		name string
+		conn net.Conn
+		typ  proto.Type
+		want string
+	}{
+		{name: "started", conn: startedPanics{release: released}, typ: proto.TypeStarted, want: "serve bug"},
+		{name: "stdout", conn: stdoutPanics{}, typ: proto.TypeStdout, want: "pump bug"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := proto.NewWriter(tc.conn)
+			var panicked any
+
+			func() {
+				defer func() { panicked = recover() }()
+				w.Write(tc.typ, []byte(`{"pid":1}`))
+			}()
+
+			assert.Check(t, cmp.Equal(panicked, tc.want))
+		})
+	}
+}
+
+func TestTheStandInConnectionsPassOtherFramesThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		conn func(net.Conn) net.Conn
+		typ  proto.Type
+	}{
+		{name: "started", conn: func(c net.Conn) net.Conn { return startedPanics{Conn: c, release: make(chan struct{})} }, typ: proto.TypeStdout},
+		{name: "stdout", conn: func(c net.Conn) net.Conn { return stdoutPanics{c} }, typ: proto.TypeStderr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guest, conn := net.Pipe()
+			t.Cleanup(func() { guest.Close(); conn.Close() })
+			read := make(chan proto.Frame, 1)
+			go func() {
+				defer close(read)
+				if f, err := proto.NewReader(conn).Next(); err == nil {
+					read <- f
+				}
+			}()
+
+			err := proto.NewWriter(tc.conn(guest)).Write(tc.typ, []byte("hi"))
+
+			assert.NilError(t, err)
+			select {
+			case f := <-read:
+				assert.Check(t, cmp.DeepEqual(f, proto.Frame{Type: tc.typ, Payload: []byte("hi")}))
+			case <-time.After(5 * time.Second):
+				t.Fatal("the frame never reached the host")
+			}
+		})
+	}
 }
 
 // A panic in Serve's own body hangs up the process before the panic travels
@@ -45,14 +112,16 @@ func TestServeHangsUpTheProcessWhenItsOwnBodyPanics(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	guest, conn := net.Pipe()
 	t.Cleanup(func() { conn.Close() })
+	release := make(chan struct{})
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()
 		newManager().Serve(proto.Request{Op: proto.OpExec, Argv: []string{"sh", "-c", "echo $$ > " + pidFile + "; exec sleep 30"}},
-			proto.NewReader(guest), proto.NewWriter(startedPanics{guest, pidFile}))
+			proto.NewReader(guest), proto.NewWriter(startedPanics{guest, release}))
 	}()
 	pid := readPid(t, pidFile)
 	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	close(release)
 
 	var v any
 	select {
@@ -69,17 +138,6 @@ func TestServeHangsUpTheProcessWhenItsOwnBodyPanics(t *testing.T) {
 		}
 		return poll.Success()
 	}, poll.WithTimeout(5*time.Second), poll.WithDelay(20*time.Millisecond))
-}
-
-// stdoutPanics is a guest connection whose writes of STDOUT frames panic,
-// standing in for a bug in an output pump.
-type stdoutPanics struct{ net.Conn }
-
-func (c stdoutPanics) Write(b []byte) (int, error) {
-	if len(b) > 0 && proto.Type(b[0]) == proto.TypeStdout {
-		panic("pump bug")
-	}
-	return c.Conn.Write(b)
 }
 
 // A panic in a session goroutine ends that session (the process gets SIGHUP)

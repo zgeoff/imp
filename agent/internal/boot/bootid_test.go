@@ -1,6 +1,8 @@
 package boot
 
 import (
+	"regexp"
+	"slices"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -18,10 +20,8 @@ func TestNewBootIDIsAFreshVersion4UUIDEachCall(t *testing.T) {
 		ids[i] = newBootID()
 	}
 
-	seen := map[string]bool{}
-	for _, id := range ids {
-		assert.Check(t, cmp.Regexp(shape, id))
-		seen[id] = true
-	}
-	assert.Check(t, cmp.Len(seen, len(ids)), "a boot id repeated: %v", ids)
+	malformed := slices.DeleteFunc(slices.Clone(ids), regexp.MustCompile(shape).MatchString)
+	distinct := slices.Compact(slices.Sorted(slices.Values(ids)))
+	assert.Check(t, cmp.Len(malformed, 0), "boot ids not of the shape: %v", malformed)
+	assert.Check(t, cmp.Len(distinct, len(ids)), "a boot id repeated: %v", ids)
 }

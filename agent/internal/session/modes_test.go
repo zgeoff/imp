@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 func TestModesSequenceRestoresTheTrackedModesTheOutputLeftSet(t *testing.T) {
@@ -62,23 +63,18 @@ func TestModesBoundsTheKittyStackPastItsLimit(t *testing.T) {
 	assert.Equal(t, len(m.kitty[0]), maxKittyFlags)
 }
 
-// Each step checks the transition its byte makes, so a failure names the
-// byte that left or reached the ground state wrongly.
+// The ground state is read after each byte, so a failure shows every byte
+// that left or reached it wrongly.
 func TestModesReportsGroundOnlyBetweenSequencesAndCharacters(t *testing.T) {
 	m := newModes()
-	steps := []struct {
-		b      byte
-		ground bool
-	}{
-		{'a', true},
-		{0x1b, false},
-		{'[', false},
-		{'m', true},
-		{0xc3, false}, // the first byte of a two-byte UTF-8 character
-		{0xa9, true},
+	// 0xc3 0xa9 is a two-byte UTF-8 character
+	input := []byte{'a', 0x1b, '[', 'm', 0xc3, 0xa9}
+
+	var ground []bool
+	for _, b := range input {
+		m.advance(b)
+		ground = append(ground, m.atGround())
 	}
-	for i, s := range steps {
-		m.advance(s.b)
-		assert.Equal(t, m.atGround(), s.ground, "after byte %d (%#x)", i, s.b)
-	}
+
+	assert.Check(t, cmp.DeepEqual(ground, []bool{true, false, false, true, false, true}))
 }

@@ -12,6 +12,31 @@ import (
 	"gotest.tools/v3/assert/cmp"
 )
 
+// A history of 8 keeps at most 16 bytes. The second write drops the paste
+// mode's sequence into the modes; the third cuts inside the alt screen's
+// sequence, so the cut moves past it and its mode joins the prelude.
+func TestHistoryReplayOfAHandWrittenOutputMatchesTheGolden(t *testing.T) {
+	h := newHistory(8)
+
+	h.Write([]byte("\x1b[?2004h"))
+	h.Write([]byte("abc\x1b]0;t\x07de"))
+	h.Write([]byte("\x1b[?1049hxy"))
+
+	assert.Equal(t, string(replay(h)), "\x1b[?2004h\x1b[?1049hxy")
+}
+
+func TestHistoryReplayIsTheSameForTheSameOutput(t *testing.T) {
+	first, second := newHistory(8), newHistory(8)
+
+	for _, h := range []*history{first, second} {
+		h.Write([]byte("\x1b[?2004h"))
+		h.Write([]byte("abc\x1b]0;t\x07de"))
+		h.Write([]byte("\x1b[?1049hxy"))
+	}
+
+	assert.DeepEqual(t, replay(first), replay(second))
+}
+
 // goldenOutput is a program's output, the same on every run: text, colours,
 // UTF-8, OSC titles, the modes a replay restores and kitty flags, written in
 // chunks of uneven size. It runs past historyLimit, so the history drops

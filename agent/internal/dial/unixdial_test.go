@@ -43,6 +43,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// runTestHelper is the dial helper for address. A few addresses name a
+// fault instead, each a helper that misbehaves in one way; the tests of the
+// faults pin what each sends.
 func runTestHelper(address string) {
 	switch address {
 	case "/hang":
@@ -66,6 +69,124 @@ func runTestHelper(address string) {
 			os.Exit(1)
 		}
 	}
+}
+
+// startFaultyHelper runs the test binary as the dial helper for fault, as
+// the Dialer runs the agent: its end of a socketpair as fd 0, /dev/null as
+// fds 1 and 2, and an empty env. It returns the helper's exit, which comes
+// once, and the other end.
+func startFaultyHelper(t *testing.T, fault string) (<-chan reaper.Status, int) {
+	t.Helper()
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	assert.NilError(t, err)
+	t.Cleanup(func() { unix.Close(pair[0]) })
+	child := os.NewFile(uintptr(pair[1]), "the helper's end")
+	devNull, err := os.Open(os.DevNull)
+	assert.NilError(t, err)
+	t.Cleanup(func() { devNull.Close() })
+	p, err := (&proc.Direct{Reaper: testReaper, Agent: os.Args[0]}).Start(proc.Spec{
+		Argv:   []string{"imp-agent", HelperCommand, fault},
+		Env:    []string{},
+		Dir:    "/",
+		Helper: true,
+		Files:  []*os.File{child, devNull, devNull},
+	})
+	child.Close()
+	assert.NilError(t, err)
+	exit, gone := make(chan reaper.Status, 1), make(chan struct{})
+	go func() {
+		defer close(gone)
+		exit <- <-p.Done
+	}()
+	t.Cleanup(func() {
+		p.Kill()
+		<-gone
+	})
+	return exit, pair[0]
+}
+
+// helperAnswer is what a helper sent in one message: its bytes, and the
+// socket type of each fd it passed.
+type helperAnswer struct {
+	Payload string
+	FdTypes []int
+}
+
+// readHelperAnswer reads one message from conn, waiting up to wait for it,
+// and closes the fds it carried.
+func readHelperAnswer(t *testing.T, conn int, wait time.Duration) (helperAnswer, error) {
+	t.Helper()
+	tv := unix.NsecToTimeval(wait.Nanoseconds())
+	assert.NilError(t, unix.SetsockoptTimeval(conn, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv))
+	buf := make([]byte, 4096)
+	oob := make([]byte, unix.CmsgSpace(4*4))
+	// a socket with a receive timeout is not restarted after a signal, such
+	// as the reaper's SIGCHLD
+	n, oobn, _, _, err := unix.Recvmsg(conn, buf, oob, unix.MSG_CMSG_CLOEXEC)
+	for errors.Is(err, unix.EINTR) {
+		n, oobn, _, _, err = unix.Recvmsg(conn, buf, oob, unix.MSG_CMSG_CLOEXEC)
+	}
+	if err != nil {
+		return helperAnswer{}, err
+	}
+	msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
+	assert.NilError(t, err)
+	answer := helperAnswer{Payload: string(buf[:n])}
+	for _, m := range msgs {
+		fds, err := unix.ParseUnixRights(&m)
+		assert.NilError(t, err)
+		for _, fd := range fds {
+			typ, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_TYPE)
+			assert.NilError(t, err)
+			answer.FdTypes = append(answer.FdTypes, typ)
+			unix.Close(fd)
+		}
+	}
+	return answer, nil
+}
+
+func TestTheFaultyHelpersSendWhatTheirFaultNames(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		fault  string
+		answer helperAnswer
+		exit   int
+	}{
+		// an exit with no answer reads as the end of the stream
+		{fault: "/die", answer: helperAnswer{}, exit: 3},
+		{fault: "/junk", answer: helperAnswer{Payload: "k"}, exit: 0},
+		{fault: "/datagram", answer: helperAnswer{Payload: "k", FdTypes: []int{unix.SOCK_DGRAM}}, exit: 0},
+		{fault: "/fds", answer: helperAnswer{Payload: "d/dev/null,/dev/null"}, exit: 0},
+		{fault: "/two", answer: helperAnswer{Payload: "k", FdTypes: []int{unix.SOCK_STREAM, unix.SOCK_STREAM}}, exit: 0},
+	} {
+		t.Run(tc.fault, func(t *testing.T) {
+			t.Parallel()
+			exit, conn := startFaultyHelper(t, tc.fault)
+
+			answer, err := readHelperAnswer(t, conn, 5*time.Second)
+			var st reaper.Status
+			select {
+			case st = <-exit:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the helper did not exit")
+			}
+
+			assert.NilError(t, err)
+			assert.Check(t, cmp.DeepEqual(answer, tc.answer))
+			assert.Check(t, cmp.Equal(st.Code, tc.exit))
+		})
+	}
+}
+
+// A hung helper neither answers nor exits: an exit would end the stream, and
+// the read would return no bytes instead of timing out.
+func TestTheHangingHelperNeverAnswers(t *testing.T) {
+	t.Parallel()
+	_, conn := startFaultyHelper(t, "/hang")
+
+	_, err := readHelperAnswer(t, conn, 200*time.Millisecond)
+
+	assert.Check(t, cmp.ErrorIs(err, unix.EAGAIN))
 }
 
 // testDialer dials unix sockets as user; "" is root, which connects in the

@@ -33,9 +33,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestManager(t *testing.T) *Manager {
+// newTestManager returns a manager for the guest boot bootID that kills
+// every session it still lists when the test ends.
+func newTestManager(t *testing.T, bootID string) *Manager {
 	t.Helper()
-	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), testBootID)
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), bootID)
 	t.Cleanup(func() {
 		for _, s := range m.List() {
 			m.Kill(s.Name)
@@ -227,7 +229,7 @@ func find(m *Manager, name string) (proto.SessionInfo, bool) {
 }
 
 func TestServeStartsANewSessionUnderTheRequestedName(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `echo ready; sleep 30`)
 
 	st := h.started(t)
@@ -238,7 +240,7 @@ func TestServeStartsANewSessionUnderTheRequestedName(t *testing.T) {
 }
 
 func TestServeLeavesTheProcessRunningWhenTheViewerDetaches(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `echo ready; while read l; do echo "said $l"; done`)
 	st := h.started(t)
 	h.until(t, "ready")
@@ -256,7 +258,7 @@ func TestServeLeavesTheProcessRunningWhenTheViewerDetaches(t *testing.T) {
 // A later viewer gets the same process, the replay of what the session wrote
 // while the first viewer watched, and live input; the detach sent no SIGHUP.
 func TestServeReattachesToTheRunningProcessWithItsReplay(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `trap 'echo got-hup' HUP; echo ready; while read l; do echo "said $l"; done`)
 	first := h.started(t)
 	h.until(t, "ready")
@@ -275,7 +277,7 @@ func TestServeReattachesToTheRunningProcessWithItsReplay(t *testing.T) {
 
 // A viewer that comes back at the same size still makes the program redraw.
 func TestServeSendsAResizeOnReattachAtTheSameSize(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `trap 'echo winch-$(stty size)' WINCH; echo ready; while :; do sleep 0.05; done`)
 	h.started(t)
 	h.until(t, "ready")
@@ -288,7 +290,7 @@ func TestServeSendsAResizeOnReattachAtTheSameSize(t *testing.T) {
 }
 
 func TestServeResizesTheSessionToANewViewersSize(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `trap 'echo winch-$(stty size)' WINCH; echo ready; while :; do sleep 0.05; done`)
 	h.started(t)
 	h.until(t, "ready")
@@ -305,7 +307,7 @@ func TestServeResizesTheSessionToANewViewersSize(t *testing.T) {
 }
 
 func TestServeHandsTheSessionToANewViewerAndDetachesTheOldOne(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	first := start(t, m, "main", `echo ready; while read l; do echo "said $l"; done`)
 	first.started(t)
 	first.until(t, "ready")
@@ -325,7 +327,7 @@ func TestServeHandsTheSessionToANewViewerAndDetachesTheOldOne(t *testing.T) {
 // new viewer out.
 func TestServeHandsTheSessionOnFromAHalfOpenViewer(t *testing.T) {
 	shortenLastWrite(t)
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	guest, conn := net.Pipe()
 	stuck := &host{conn: conn}
 	stuck.served = runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, conn)
@@ -349,7 +351,7 @@ func shortenLastWrite(t *testing.T) {
 }
 
 func TestServeRecordsTheExitOfADetachedSession(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "job", `read go; echo bye; exit 3`)
 	h.started(t)
 	h.send(t, proto.TypeStdin, []byte("go\n"))
@@ -363,7 +365,7 @@ func TestServeRecordsTheExitOfADetachedSession(t *testing.T) {
 }
 
 func TestServeGivesALaterViewerTheReplayAndTheExitOfADetachedSession(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "job", `read go; echo bye; exit 3`)
 	h.started(t)
 	h.send(t, proto.TypeStdin, []byte("go\n"))
@@ -381,7 +383,7 @@ func TestServeGivesALaterViewerTheReplayAndTheExitOfADetachedSession(t *testing.
 
 // Once a viewer has the EXIT, the session goes and its name finds nothing.
 func TestServeRemovesAnExitedSessionOnceAViewerHasTheExit(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "job", `read go; echo bye; exit 3`)
 	h.started(t)
 	h.send(t, proto.TypeStdin, []byte("go\n"))
@@ -398,7 +400,7 @@ func TestServeRemovesAnExitedSessionOnceAViewerHasTheExit(t *testing.T) {
 }
 
 func TestServeSendsTheExitToTheAttachedViewerAndRemovesTheSession(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "job", `echo bye; exit 4`)
 	h.started(t)
 
@@ -410,7 +412,7 @@ func TestServeSendsTheExitToTheAttachedViewerAndRemovesTheSession(t *testing.T) 
 }
 
 func TestKillHangsUpTheSessionsProcess(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `echo ready; sleep 30`)
 	h.started(t)
 	h.until(t, "ready")
@@ -424,7 +426,7 @@ func TestKillHangsUpTheSessionsProcess(t *testing.T) {
 }
 
 func TestKillRefusesASessionThatIsAlreadyKilled(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `echo ready; sleep 30`)
 	h.started(t)
 	h.until(t, "ready")
@@ -437,12 +439,17 @@ func TestKillRefusesASessionThatIsAlreadyKilled(t *testing.T) {
 	assert.Check(t, cmp.Equal(pe.Code, proto.ErrNoSession))
 }
 
+// A killed session's process has two seconds between SIGHUP and SIGKILL.
+func TestNewManagerGivesAKilledSessionTwoSecondsBeforeSIGKILL(t *testing.T) {
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{}), nil), "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+
+	assert.Equal(t, m.killGrace, 2*time.Second)
+}
+
 // A process that ignores SIGHUP gets SIGKILL after the kill grace.
 func TestKillEscalatesToSIGKILLForAProcessThatIgnoresSIGHUP(t *testing.T) {
-	// It waits out the real kill grace; it owns its manager and changes no
-	// package setting, so it waits beside the other such test.
-	t.Parallel()
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+	m.killGrace = 200 * time.Millisecond
 	h := start(t, m, "main", `trap "" HUP; echo ready; while :; do sleep 0.05; done`)
 	h.started(t)
 	h.until(t, "ready")
@@ -467,7 +474,7 @@ func TestServeRefusesABadRequestAndKeepsNoSession(t *testing.T) {
 		{name: "attach to nothing", req: proto.Request{Op: proto.OpSessionAttach, Session: "none"}, code: proto.ErrNoSession},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newTestManager(t)
+			m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 
 			code := connect(t, m, tc.req).errorCode(t)
 
@@ -503,7 +510,7 @@ func exitAfterDetach(t *testing.T, m *Manager, name string) {
 
 // Exited sessions whose EXIT nobody got count toward the cap.
 func TestServeRefusesANewSessionPastTheCap(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	exitAfterDetach(t, m, "s0")
 	fillSessions(t, m, 1)
 
@@ -515,7 +522,7 @@ func TestServeRefusesANewSessionPastTheCap(t *testing.T) {
 // The name of an exited session is free: a new session replaces it, even at
 // the cap.
 func TestServeReplacesAnExitedSessionOfTheSameName(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	exitAfterDetach(t, m, "s0")
 	fillSessions(t, m, 1)
 
@@ -527,7 +534,7 @@ func TestServeReplacesAnExitedSessionOfTheSameName(t *testing.T) {
 }
 
 func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	first := start(t, m, "s1", "echo ready; sleep 30")
 	first.started(t)
 	first.until(t, "ready")
@@ -539,24 +546,14 @@ func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
 	assert.Check(t, !st.Created, "a running session was replaced")
 }
 
-// A viewer that stops reading is dropped; the program and the session go on.
+// A viewer that stops reading is dropped, and finds DETACHED slow once it
+// reads again.
 func TestServeDropsAViewerThatStopsReading(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	guest, conn := net.Pipe()
 	runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
-
 	waitFor(t, "the viewer to be dropped", func() bool { info, ok := find(m, "main"); return ok && !info.Attached })
 
-	// the pump still runs: a new viewer gets live output
-	fresh := attach(t, m, "main")
-	fresh.started(t)
-	var types, want []proto.Type
-	for range 50 {
-		types = append(types, fresh.next(t).Type)
-		want = append(want, proto.TypeStdout)
-	}
-	assert.Check(t, cmp.DeepEqual(types, want))
-	// the slow viewer, once it reads again, finds DETACHED slow at the end
 	r := proto.NewReader(conn)
 	var detached proto.Frame
 	for detached.Type != proto.TypeDetached {
@@ -564,32 +561,56 @@ func TestServeDropsAViewerThatStopsReading(t *testing.T) {
 		assert.NilError(t, err, "the connection ended without DETACHED")
 		detached = f
 	}
+
 	assert.Check(t, cmp.Equal(decode[proto.Detached](t, detached).Reason, proto.DetachSlow))
 }
 
-// failingConn fails every write after STARTED and the replay, like a host
+// The pump goes on after it drops a slow viewer: a new viewer gets live
+// output.
+func TestServeKeepsTheSessionRunningAfterItDropsASlowViewer(t *testing.T) {
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+	guest, conn := net.Pipe()
+	runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
+	waitFor(t, "the viewer to be dropped", func() bool { info, ok := find(m, "main"); return ok && !info.Attached })
+
+	fresh := attach(t, m, "main")
+	fresh.started(t)
+	var types, want []proto.Type
+	for range 50 {
+		types = append(types, fresh.next(t).Type)
+		want = append(want, proto.TypeStdout)
+	}
+
+	assert.Check(t, cmp.DeepEqual(types, want))
+}
+
+// failingConn fails every write once the test sets failing, like a host
 // that went away without a close.
 type failingConn struct {
 	net.Conn
-	writes atomic.Int64
+	failing atomic.Bool
 }
 
 func (c *failingConn) Write(b []byte) (int, error) {
-	if c.writes.Add(1) > 2 {
+	if c.failing.Load() {
 		return 0, errors.New("broken")
 	}
 	return c.Conn.Write(b)
 }
 
 func TestServeEndsOnlyTheViewerWhoseWriteFails(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "main", `echo ready; while read l; do echo "said $l"; done`)
 	h.started(t)
 	h.until(t, "ready")
 	h.detach(t)
 	guest, conn := net.Pipe()
-	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "main"}, &failingConn{Conn: guest}, conn)
+	fc := &failingConn{Conn: guest}
+	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "main"}, fc, conn)
 	broken.started(t)
+	// the pipe is synchronous: once the host read the replay, it is written
+	broken.until(t, "ready")
+	fc.failing.Store(true)
 
 	broken.send(t, proto.TypeStdin, []byte("a\nb\nc\nd\n"))
 	broken.waitServed(t)
@@ -601,17 +622,21 @@ func TestServeEndsOnlyTheViewerWhoseWriteFails(t *testing.T) {
 }
 
 // An EXIT that a viewer could not be sent stays for the next viewer. With
-// no echo, the EXIT is the first frame after STARTED and the replay, so the
-// one write that fails is the EXIT's.
+// no echo, the EXIT is the first frame after the replay, so the one write
+// that fails is the EXIT's.
 func TestServeKeepsAnExitTheViewerCouldNotBeSentForTheNextViewer(t *testing.T) {
-	m := newTestManager(t)
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	h := start(t, m, "job", `stty -echo; echo ready; read go; exit 5`)
 	h.started(t)
 	h.until(t, "ready")
 	h.detach(t)
 	guest, conn := net.Pipe()
-	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "job"}, &failingConn{Conn: guest}, conn)
+	fc := &failingConn{Conn: guest}
+	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "job"}, fc, conn)
 	broken.started(t)
+	// the pipe is synchronous: once the host read the replay, it is written
+	broken.until(t, "ready")
+	fc.failing.Store(true)
 	broken.send(t, proto.TypeStdin, []byte("go\n"))
 	broken.waitServed(t)
 	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })

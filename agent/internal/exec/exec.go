@@ -61,18 +61,21 @@ type Manager struct {
 	// that cannot have one
 	strict bool
 	active atomic.Int64
+	// drainGrace and hangupGrace are the package's graces; a test sets its
+	// own before it serves an exec
+	drainGrace, hangupGrace time.Duration
 
 	leafFailed sync.Once
 }
 
 func NewManager(l *launch.Launcher, cgroups *cgroup.Tree) *Manager {
-	return &Manager{launcher: l, cgroups: cgroups}
+	return &Manager{launcher: l, cgroups: cgroups, drainGrace: drainGrace, hangupGrace: hangupGrace}
 }
 
 // NewStrictManager is NewManager for execs that must stay inside the limits
 // of cgroups: each one, tty or not, starts in a leaf of it or not at all.
 func NewStrictManager(l *launch.Launcher, cgroups *cgroup.Tree) *Manager {
-	return &Manager{launcher: l, cgroups: cgroups, strict: true}
+	return &Manager{launcher: l, cgroups: cgroups, strict: true, drainGrace: drainGrace, hangupGrace: hangupGrace}
 }
 
 // Active returns the number of running exec sessions.
@@ -136,7 +139,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	case <-hangup:
 		select {
 		case st = <-s.proc.Done:
-		case <-time.After(hangupGrace):
+		case <-time.After(m.hangupGrace):
 			s.close()
 			pumps.Wait()
 			writer.Wait()
@@ -155,7 +158,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		}
 	}
 	for _, o := range s.outputs {
-		o.f.SetReadDeadline(time.Now().Add(drainGrace))
+		o.f.SetReadDeadline(time.Now().Add(m.drainGrace))
 	}
 	pumps.Wait()
 	s.close()
