@@ -1705,13 +1705,13 @@ test('it sends the disk and its checkpoints between two ZFS hosts as ZFS streams
 });
 
 test.each([
-  ['source', 'sourceApp', false],
-  ['source', 'sourceApp', true],
-  ['target', 'targetApp', false],
-  ['target', 'targetApp', true],
+  ['source', false, 'sourceApp'],
+  ['source', true, 'sourceApp'],
+  ['target', false, 'targetApp'],
+  ['target', true, 'targetApp'],
 ] as const)(
   'it finds nothing for a GC on the %s to drop or keep after a ZFS move (orphans: %p)',
-  async (_host, app, orphans) => {
+  async (_host, orphans, app) => {
     const sourceZfs = buildStubZfsStorage('tank/imp');
     const targetZfs = buildStubZfsStorage('tank/imp');
 
