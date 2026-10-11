@@ -40,7 +40,7 @@ API for [moves](./hosts.md#the-acl). Guests never use it: their egress refuses `
 
 State lives in `/var/lib/imp/tailscale` (`IMP_TAILSCALE_STATE_DIR`; `mem` keeps it in memory).
 
-imp keeps the node state even with an ephemeral key, because the name matters more than the node
+impz keeps the node state even with an ephemeral key, because the name matters more than the node
 lifetime:
 
 - With persisted state, a restart reuses the same node: same IP, same name. Checked: kill

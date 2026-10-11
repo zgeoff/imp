@@ -126,7 +126,7 @@ undone ([storage cleanup](./operations.md#storage-cleanup)).
 - A backup restore still re-creates the grants a backup lists, as fresh host-authorized grants
   against the current secrets: each one takes the secret's generation now and passes the clash
   check. A grant revoked after the backup is created again, so revoke it again if needed.
-- Restoring the whole host database rolls back revocations. imp has no anti-rollback mechanism. The
+- Restoring the whole host database rolls back revocations. impz has no anti-rollback mechanism. The
   values of secrets added after the copy are kept aside at the next start
   ([value files](#value-files)), not deleted.
 

@@ -1,9 +1,9 @@
 # The host
 
-imp runs almost entirely inside the imp-host container: impd, Firecracker, tailscaled and the
+impz runs almost entirely inside the imp-host container: impd, Firecracker, tailscaled and the
 firewall for the imps' taps. The host under it is thin, and this doc is the contract it must meet,
 so that any installer can meet it. Two installers exist: `deploy/bootstrap.sh` for Ubuntu and
-Debian, and the NixOS module in imp's flake ([install](../guides/install.md),
+Debian, and the NixOS module in impz's flake ([install](../guides/install.md),
 [NixOS](../guides/nixos.md)). [Isolation](./isolation.md) covers what the container's boundary
 holds.
 
@@ -85,7 +85,7 @@ running imps keep running.
 The host needs no inbound port for imp. impd's ports are published on the host's loopback only, the
 tailnet reaches impd inside the container, and impd's own tables live in the container's namespace,
 where the host's firewall never sees them. The owner chooses who owns the host's inbound firewall:
-imp's own table, an input chain that drops all but SSH, ICMP and DHCP, or the platform's firewall,
-such as NixOS's. In nftables a drop in any base chain wins, so imp's table blocks whatever another
+impz's own table, an input chain that drops all but SSH, ICMP and DHCP, or the platform's firewall,
+such as NixOS's. In nftables a drop in any base chain wins, so impz's table blocks whatever another
 firewall allows, and the NixOS module refuses it beside the platform's. A firewall that filters
 forwarding must admit the container's bridge, or the imps' traffic never leaves.

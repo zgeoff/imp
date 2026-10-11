@@ -1,8 +1,8 @@
 # The guest agent
 
 Every guest runs one program as PID 1, the imp agent, a static Go binary. It comes from a read-only
-system drive, not from the user's image, so any OCI image boots with nothing of imp in it. The agent
-mounts the guest's filesystems, brings up its network, runs the user's processes in an inner
+system drive, not from the user's image, so any OCI image boots with nothing of impz in it. The
+agent mounts the guest's filesystems, brings up its network, runs the user's processes in an inner
 container, supervises services, reaps orphans, and serves impd over vsock
 ([the agent protocol](./protocol.md)). The code is `agent/`.
 
@@ -14,7 +14,7 @@ holds the agent and a static busybox, built to the same bytes for the release im
 instance alike. The kernel boots with the system drive as its root and the agent as its init, with
 no initramfs, and impd passes the imp's hostname, addresses and DNS on the kernel command line.
 
-imp builds its own guest kernel, a 6.1 LTS kernel from Firecracker's microVM config plus a fragment
+impz builds its own guest kernel, a 6.1 LTS kernel from Firecracker's microVM config plus a fragment
 of everything a current Docker needs: nftables, the iptables raw table, IPVS, the overlay network
 drivers, TUN and FUSE. The microVM config lacks those, and has modules off, so nothing missing could
 be loaded later. Everything is built in, and nothing loads modules. AppArmor stays off, because with

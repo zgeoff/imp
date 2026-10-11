@@ -65,7 +65,7 @@ flowchart TB
   T --- I
 ```
 
-The host under imp is thin: it gives KVM, cgroup v2, Docker and a filesystem for the data, and runs
+The host under impz is thin: it gives KVM, cgroup v2, Docker and a filesystem for the data, and runs
 two containers from one image ([the host](./host.md)). The imp-host container holds impd, every
 Firecracker process and the tailnet node, in a network namespace of its own, so the taps, routes and
 firewall rules for the imps never touch the host's network. A small entrypoint sets up the cgroups,
@@ -76,8 +76,8 @@ impd makes, for image pulls and builds.
 impd is one Bun process. It starts one Firecracker microVM per awake imp, detached from itself, so
 an impd restart leaves every VM running and the next impd adopts them. Each Firecracker runs under
 its jailer as the imp's own uid, in its own chroot and cgroup ([isolation](./isolation.md)). A guest
-boots a kernel imp builds, from a read-only system drive that holds the agent, so any OCI image
-boots with nothing of imp in it.
+boots a kernel impz builds, from a read-only system drive that holds the agent, so any OCI image
+boots with nothing of impz in it.
 
 Reach comes from the tailnet. The host publishes impd's ports on its loopback only, and tailnet
 traffic arrives inside the container's namespace through its own tailscaled. Nothing on the host

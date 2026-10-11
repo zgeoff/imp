@@ -1,6 +1,6 @@
 # Configuration
 
-imp reads environment variables in three places: impd, the host container scripts, and the CLI.
+impz reads environment variables in three places: impd, the host container scripts, and the CLI.
 There is no config file. A server keeps the variables in an env file, `/etc/imp/imp-host.env`
 ([`deploy/imp-host.env.example`](../../deploy/imp-host.env.example)), which the systemd unit and the
 compose file pass to the container. An empty variable counts as unset.

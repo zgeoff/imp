@@ -40,7 +40,7 @@ imp backup restore --all --merge               # add every imp to a host that ha
 1. **Stop the old impd, or remove its `IMP_BACKUP_*` settings, first.** Both hosts are named
    `imp-host`, so each one's `restic unlock` would take the other's live locks for its own dead ones
    and drop them. `imp backup restore --all` prints this warning too.
-2. Install imp on the new host as usual ([install](./install.md)), with the same `IMP_BACKUP_*`
+2. Install impz on the new host as usual ([install](./install.md)), with the same `IMP_BACKUP_*`
    settings, the repository's keys and the same password file.
 3. Add the connector secrets the imps need (`imp secret add`); their grants come back by name.
 4. Start it. It makes a new API token, as any new host does; the old token is not in the backup.

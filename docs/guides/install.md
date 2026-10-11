@@ -1,6 +1,6 @@
 # Install
 
-imp runs on one Linux machine, in one host container, in one of two ways:
+impz runs on one Linux machine, in one host container, in one of two ways:
 
 - **The release image** for a server: impd, the `imp` CLI, the guest kernel and the system drive are
   baked in, and nothing from the repo is mounted. [Bootstrap a server](#bootstrap-a-server) sets up
@@ -177,7 +177,7 @@ The phases run in order:
 
 ### Disk layout
 
-Give imp a disk or a partition of its own. Put the OS on the rest:
+Give impz a disk or a partition of its own. Put the OS on the rest:
 
 | Mount          | Size                              | Notes                                                            |
 | -------------- | --------------------------------- | ---------------------------------------------------------------- |
@@ -187,7 +187,7 @@ Give imp a disk or a partition of its own. Put the OS on the rest:
 
 OVH Rise and Vultr bare metal ship two NVMe disks, and their installers can put the OS on a RAID 1
 of both. Either keep the second disk out of the RAID and give it as `--data-device`, or make a RAID
-array or partition for imp in the installer and give that (`--data-device /dev/md2`). The script
+array or partition for impz in the installer and give that (`--data-device /dev/md2`). The script
 does not partition disks. OVH's default template gives the free space to `/home`; the script refuses
 that partition while it is mounted, so pick a layout without it in the installer.
 
@@ -200,7 +200,7 @@ one. ZFS needs a device; the script makes no pool on a file.
 
 ### ZFS
 
-`--storage zfs` puts imp on a ZFS pool instead ([storage](../architecture/storage/storage.md#zfs)):
+`--storage zfs` puts impz on a ZFS pool instead ([storage](../architecture/storage/storage.md#zfs)):
 
 ```sh
 bash bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1   # pool tank, dataset tank/imp
@@ -276,7 +276,7 @@ On a host whose platform owns the firewall, run with `--host-firewall none`. The
 host rules and leaves `ufw` and `firewalld` alone, and the env file records
 `IMP_HOST_FIREWALL=none`, so later runs keep it. On a host that an earlier run gave the `imp_host`
 table, the flag removes the table and `imp-firewall.service`. Without the flag, a table that is
-still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. imp
+still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. impz
 needs no inbound port either way ([host contract](../architecture/host.md#the-host-firewall)).
 
 ### IPv6
@@ -321,7 +321,7 @@ the host's IPv6 with it. The ipv6 phase settles this before it creates the netwo
 - **The kernel takes the adverts** (`accept_ra` is 1): the script writes
   `/etc/sysctl.d/90-imp-ipv6.conf` with `net/ipv6/conf/<uplink>/accept_ra = 2`, which keeps them
   with forwarding on, and applies it. The slash form keeps a dotted name such as `eth0.100` whole.
-  The file stays when you roll the host back or remove imp; `--ipv6 off` removes it, and the live
+  The file stays when you roll the host back or remove impz; `--ipv6 off` removes it, and the live
   value stays until a reboot.
 - **A client takes them** (`accept_ra` is 0): systemd-networkd (and netplan, which uses it),
   NetworkManager or dhcpcd. networkd keeps them with forwarding on when the uplink's `.network` file
@@ -426,8 +426,8 @@ sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.loc
 <!-- x-release-please-end -->
 
 The deploy files run the image of their own release: `deploy/bootstrap.sh`, both units and
-`deploy/compose.yaml` name `ghcr.io/zgeoff/imp-host:X.Y.Z`, the version in imp's `package.json`, and
-`deploy/upgrade.sh` moves the host to the release it comes from
+`deploy/compose.yaml` name `ghcr.io/zgeoff/imp-host:X.Y.Z`, the version in impz's `package.json`,
+and `deploy/upgrade.sh` moves the host to the release it comes from
 ([upgrade](./operations.md#upgrade)). On `main`, `package.json` holds the last release until the
 next one, so the files there can name an image older than their own code. Files from a release tag
 name that release's image, which is why [bootstrap a server](#bootstrap-a-server) fetches

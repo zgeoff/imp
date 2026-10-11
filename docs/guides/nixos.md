@@ -1,6 +1,6 @@
 # NixOS
 
-imp's flake exports `nixosModules.imp`, which sets a NixOS host up for the `imp-host` container. It
+impz's flake exports `nixosModules.imp`, which sets a NixOS host up for the `imp-host` container. It
 meets the [host contract](../architecture/host.md), as
 [`deploy/bootstrap.sh`](./install.md#bootstrap-a-server) does on Ubuntu and Debian. The module is
 [`deploy/nixos/module.nix`](../../deploy/nixos/module.nix).
@@ -11,7 +11,7 @@ meets the [host contract](../architecture/host.md), as
 {
   # a release tag: the module runs that release's image (see "The image")
   inputs.imp.url = "github:zgeoff/imp/vX.Y.Z";
-  # The module takes pkgs from your system; imp's own pin is for its checks only.
+  # The module takes pkgs from your system; impz's own pin is for its checks only.
   inputs.imp.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = { nixpkgs, imp, ... }: {
@@ -81,7 +81,7 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   only what that misses, such as an address the host gains later. The module refuses
   `IMP_EGRESS_DENY` in `settings`.
 - **Firewall:** `hostFirewall`, by default `none`. The env file says `IMP_HOST_FIREWALL=none`,
-  `networking.firewall` stays the host's firewall, and imp adds no host rules; it needs no inbound
+  `networking.firewall` stays the host's firewall, and impz adds no host rules; it needs no inbound
   port ([Firewall](../architecture/host.md#the-host-firewall)). With `own`, the module loads
   `bootstrap.sh`'s `imp_host` table for `services.openssh.ports`, and refuses the build unless
   `networking.firewall.enable = false`. Either way it refuses
@@ -96,7 +96,7 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
 
 ## The image
 
-`image` defaults to `ghcr.io/zgeoff/imp-host:X.Y.Z`, where `X.Y.Z` is the version in imp's
+`image` defaults to `ghcr.io/zgeoff/imp-host:X.Y.Z`, where `X.Y.Z` is the version in impz's
 `package.json`, so the module runs the image of its own release:
 
 - Pin `inputs.imp` to a release tag, such as `github:zgeoff/imp/vX.Y.Z`, and the image is pinned

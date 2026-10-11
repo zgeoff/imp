@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>imp</h1>
+  <h1>impz</h1>
 
   <p>
     <a href="./docs/README.md">Documentation</a> •
@@ -8,9 +8,9 @@
   </p>
 </div>
 
-**imp** gives you small Linux computers that stay yours. Each one is a Firecracker microVM with real
-root, its own kernel and Docker inside. It boots in under a second, and its disk keeps everything
-you put there.
+**impz** gives you small Linux computers that stay yours. Each one, an imp, is a Firecracker microVM
+with real root, its own kernel and Docker inside. It boots in under a second, and its disk keeps
+everything you put there.
 
 Imps are heavily inspired by Fly.io's wonderful [Sprites](https://fly.io/sprites/). If you want
 something more polished or out-of-the-box, check them out.
@@ -24,7 +24,7 @@ and try two things at once.
 
 ## Install
 
-imp runs on one Linux machine with `/dev/kvm`: bare metal, or a VM with nested virtualization, with
+impz runs on one Linux machine with `/dev/kvm`: bare metal, or a VM with nested virtualization, with
 Docker. On a fresh Ubuntu or Debian server, `deploy/bootstrap.sh` from a release tag sets up the
 host and starts impd ([bootstrap a server](./docs/guides/install.md#bootstrap-a-server)), and
 [NixOS](./docs/guides/nixos.md) has a module. Then install the CLI on your own machine:

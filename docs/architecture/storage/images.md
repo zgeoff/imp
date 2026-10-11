@@ -2,7 +2,7 @@
 
 Any OCI image can be an imp. impd turns each image into one sparse ext4 file, once per image ID, and
 every disk made from it is a clone of that file ([storage](./storage.md)). The guest boots its agent
-from a separate system drive, so the image needs nothing of imp in it. The
+from a separate system drive, so the image needs nothing of impz in it. The
 [images guide](../../guides/images.md) covers adding, building and making images.
 
 ## From an OCI image to a disk

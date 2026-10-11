@@ -1,7 +1,7 @@
 <div align="center">
-  <h1>imp documentation</h1>
+  <h1>impz documentation</h1>
 
-  <p>How imp is built, how to use it, and how to develop and release it.</p>
+  <p>How impz is built, how to use it, and how to develop and release it.</p>
 
   <p>
     <a href="./architecture/overview.md">Architecture</a> •
@@ -15,7 +15,7 @@
 
 ## Architecture
 
-How imp is built: the parts, what each one owns, and what holds whatever a caller does.
+How impz is built: the parts, what each one owns, and what holds whatever a caller does.
 
 - [Overview](./architecture/overview.md) — the path of a request, the topology, the data and the
   rules that cross every part, on one page
@@ -78,9 +78,9 @@ How imp is built: the parts, what each one owns, and what holds whatever a calle
 
 ## Guides
 
-How to install, run and use imp.
+How to install, run and use impz.
 
-- [Install](./guides/install.md) — what imp needs, a dev instance, a server bootstrap and the
+- [Install](./guides/install.md) — what impz needs, a dev instance, a server bootstrap and the
   release image
 - [NixOS](./guides/nixos.md) — the NixOS module, what it sets, the env file and the Tailscale key
 - [Configuration](./guides/configuration.md) — every variable for impd, the host container, the dev
