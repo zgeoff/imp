@@ -1,6 +1,7 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import type { Imp } from '@imp/api';
 import { EVENT_VERSION } from '@imp/api';
+import { buildStubTimers } from '@imp/daemon/src/test-utils/build-stub-timers';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { buildMockImp } from '../test-utils/build-mock-imp';
 import { buildMockImpChangedEvent } from '../test-utils/build-mock-imp-changed-event';
@@ -121,6 +122,8 @@ test('#openImpdEventStream lets go of its listener once the caller aborts it', a
     controller.signal,
   );
 
+  onTestFinished(() => controller.abort());
+
   const pending = stream.next();
 
   await waitFor(() => {
@@ -192,45 +195,32 @@ test('#impdLogouts ends every open stream at a logout', async () => {
   expect(ended.done).toBe(true);
 });
 
-// The expiry runs on impd's real timer, so the short stream ends 50 ms on:
-// it must still pass the event sent before then, and the control, a day
-// from expiry, must still be open after it ends
 test('#openImpdEventStream ends when the session expires and not before', async () => {
-  const expiring = openImpdEventStream(
-    { imps: null, expiresAt: new Date(Date.now() + 50) },
+  const timers = buildStubTimers();
+
+  const stream = openImpdEventStream(
+    { imps: null, expiresAt: new Date(Date.UTC(2026, 9, 2, 12) + 50) },
     () => [],
     undefined,
+    { now: () => Date.UTC(2026, 9, 2, 12), startTimer: timers.startTimer },
   );
 
-  onTestFinished(() => expiring.return(undefined));
+  onTestFinished(() => stream.return(undefined));
 
-  const control = openImpdEventStream(
-    { imps: null, expiresAt: new Date(Date.now() + 86_400_000) },
-    () => [],
-    undefined,
-  );
+  const event = buildMockImpChangedEvent({ imp: { name: 'web' } });
+  const pending = stream.next();
 
-  onTestFinished(() => control.return(undefined));
+  emitImpdEvent(event);
 
-  const before = buildMockImpChangedEvent({ imp: { name: 'web' } });
-  const after = buildMockImpChangedEvent({ imp: { name: 'db' } });
-  const expiringNext = expiring.next();
-  const controlFirstNext = control.next();
+  const passed = await pending;
 
-  emitImpdEvent(before);
+  const pendingMs = timers.readPendingMs();
 
-  const passed = await expiringNext;
-  const ended = await expiring.next();
-  const controlFirst = await controlFirstNext;
+  timers.firePending();
 
-  const controlNext = control.next();
+  const ended = await stream.next();
 
-  emitImpdEvent(after);
-
-  const controlRead = await controlNext;
-
-  expect(passed.value).toStrictEqual(before);
+  expect(pendingMs).toStrictEqual([50]);
+  expect(passed.value).toStrictEqual(event);
   expect(ended.done).toBe(true);
-  expect(controlFirst.value).toStrictEqual(before);
-  expect(controlRead.value).toStrictEqual(after);
 });
