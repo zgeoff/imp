@@ -1,4 +1,4 @@
-// oxlint-disable zgeoff/test-beside-module -- tests build-stub-public-network.ts under a test-kind suffix the rule does not allow; GEO-TBD-imp-suffix
+// oxlint-disable zgeoff/test-beside-module -- tests build-stub-public-network.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, test } from 'bun:test';
 import { buildStubPublicNetwork } from './build-stub-public-network';
 import { canUnshare } from './can-unshare';

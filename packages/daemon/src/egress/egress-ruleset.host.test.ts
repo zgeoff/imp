@@ -1,4 +1,4 @@
-// oxlint-disable zgeoff/test-beside-module -- tests egress-ruleset.ts under a test-kind suffix the rule does not allow; GEO-TBD-imp-suffix
+// oxlint-disable zgeoff/test-beside-module -- tests egress-ruleset.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, test } from 'bun:test';
 import { REFUSED_RANGES } from '../broker/tunnel-target';
 import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6 } from '../net/ranges6';
