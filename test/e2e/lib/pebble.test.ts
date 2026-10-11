@@ -103,7 +103,7 @@ test('#startPebbleStack refuses a network name that is taken, before it makes an
   ]);
 });
 
-test('#startPebbleStack removes only what it made when Pebble does not start', async () => {
+test('#startPebbleStack removes only what it made when the Pebble container is not created', async () => {
   const ctx = await setupTest();
 
   const docker = createStubBin(
@@ -126,6 +126,38 @@ test('#startPebbleStack removes only what it made when Pebble does not start', a
   const calls = await readFile(docker.calls, 'utf8');
 
   expect(calls.split('\n').filter((line) => line.includes(' rm '))).toStrictEqual([
+    'docker rm --force imp-acme-it-x-challtestsrv',
+    'docker network rm imp-acme-it-x-acme',
+  ]);
+});
+
+test('#startPebbleStack removes the Pebble container it created when that container does not start', async () => {
+  const ctx = await setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    [
+      'case "$*" in',
+      '  *inspect*) exit 1 ;;',
+      '  "start imp-acme-it-x-pebble") exit 1 ;;',
+      'esac',
+    ].join('\n'),
+  );
+
+  updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
+
+  expect(startPebbleStack(ctx.stack, 'imp-acme-it-x')).rejects.toThrowWithMessage(
+    Error,
+    'docker start imp-acme-it-x-pebble exited 1: ',
+  );
+
+  await ctx.stack.disposeAsync();
+
+  const calls = await readFile(docker.calls, 'utf8');
+
+  expect(calls.split('\n').filter((line) => line.includes(' rm '))).toStrictEqual([
+    'docker rm --force imp-acme-it-x-pebble',
     'docker rm --force imp-acme-it-x-challtestsrv',
     'docker network rm imp-acme-it-x-acme',
   ]);

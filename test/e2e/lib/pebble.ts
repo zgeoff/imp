@@ -84,17 +84,21 @@ export async function startPebbleStack(
     await runChecked(['docker', 'network', 'rm', names.network]);
   });
 
-  await runChallTestSrv(names);
+  // created, then started, so a container that will not start still goes
+  await createChallTestSrv(names);
 
   stack.defer(async () => {
     await runChecked(['docker', 'rm', '--force', names.challtestsrv]);
   });
 
-  await runPebble(names);
+  await runChecked(['docker', 'start', names.challtestsrv]);
+  await createPebble(names);
 
   stack.defer(async () => {
     await runChecked(['docker', 'rm', '--force', names.pebble]);
   });
+
+  await runChecked(['docker', 'start', names.pebble]);
 
   return waitForStack(names, started);
 }
@@ -121,8 +125,10 @@ export async function startPebble(): Promise<void> {
     await runChecked(['docker', 'network', 'create', names.network]);
   }
 
-  await runChallTestSrv(names);
-  await runPebble(names);
+  await createChallTestSrv(names);
+  await runChecked(['docker', 'start', names.challtestsrv]);
+  await createPebble(names);
+  await runChecked(['docker', 'start', names.pebble]);
   await waitForStack(names, started);
 }
 
@@ -170,11 +176,10 @@ export function stopPebble(): Promise<void> {
   return stopHarnessStack(buildNames(instance.container, HARNESS_MINICA_DIR));
 }
 
-function runChallTestSrv(names: PebbleNames): Promise<string> {
+function createChallTestSrv(names: PebbleNames): Promise<string> {
   return runChecked([
     'docker',
-    'run',
-    '-d',
+    'create',
     '--rm',
     '--name',
     names.challtestsrv,
@@ -194,11 +199,10 @@ function runChallTestSrv(names: PebbleNames): Promise<string> {
 
 // no sleep before validation, and no nonce rejections: a faster test, the
 // same protocol
-function runPebble(names: PebbleNames): Promise<string> {
+function createPebble(names: PebbleNames): Promise<string> {
   return runChecked([
     'docker',
-    'run',
-    '-d',
+    'create',
     '--rm',
     '--name',
     names.pebble,
