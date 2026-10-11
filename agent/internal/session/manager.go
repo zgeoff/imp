@@ -45,6 +45,10 @@ type Manager struct {
 	// killGrace is the package's killGrace; a test sets its own before it
 	// starts a session
 	killGrace time.Duration
+	// recorded, when set, gets each retired run once record has kept or
+	// passed over it; a test sets it before it starts a session, to know
+	// when a run that ended late has been judged
+	recorded func(proto.Previous)
 
 	// starting serializes starts, so a spawn needs no hold on mu, which List
 	// and Kill take. It guards seq too.
@@ -281,19 +285,27 @@ func (m *Manager) retire(s *session) {
 // already, as when a killed process outlives its replacement.
 func (m *Manager) record(s *session) {
 	e := ended{seq: s.seq, previous: s.ended()}
+	m.keep(s.name, e)
+	if m.recorded != nil {
+		m.recorded(e.previous)
+	}
+}
+
+// keep makes e the name's previous run unless a later run is there.
+func (m *Manager) keep(name string, e ended) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if cur, ok := m.previous[s.name]; ok && cur.seq > e.seq {
+	if cur, ok := m.previous[name]; ok && cur.seq > e.seq {
 		return
 	}
-	m.previous[s.name] = e
+	m.previous[name] = e
 	if len(m.previous) <= MaxSessions {
 		return
 	}
-	oldest := s.name
-	for name, other := range m.previous {
-		if other.seq < m.previous[oldest].seq {
-			oldest = name
+	oldest := name
+	for other, o := range m.previous {
+		if o.seq < m.previous[oldest].seq {
+			oldest = other
 		}
 	}
 	delete(m.previous, oldest)

@@ -439,6 +439,13 @@ func TestKillRefusesASessionThatIsAlreadyKilled(t *testing.T) {
 	assert.Check(t, cmp.Equal(pe.Code, proto.ErrNoSession))
 }
 
+// A killed session's process has two seconds between SIGHUP and SIGKILL.
+func TestNewManagerGivesAKilledSessionTwoSecondsBeforeSIGKILL(t *testing.T) {
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{}), nil), "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+
+	assert.Equal(t, m.killGrace, 2*time.Second)
+}
+
 // A process that ignores SIGHUP gets SIGKILL after the kill grace.
 func TestKillEscalatesToSIGKILLForAProcessThatIgnoresSIGHUP(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")

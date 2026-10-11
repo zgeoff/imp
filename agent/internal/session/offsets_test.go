@@ -297,8 +297,10 @@ func TestPreviousIsFinalAfterAKill(t *testing.T) {
 	// the kill grace never runs out here: the test ends the killed process
 	// itself, once the replacement is previous, so the end order is certain
 	m.killGrace = time.Hour
+	recorded := make(chan proto.Previous, 4)
+	m.recorded = func(p proto.Previous) { recorded <- p }
 	h := start(t, m, "job", `trap '' HUP; stty -opost; printf ready; while :; do sleep 0.05; done`)
-	killed, _ := h.output(t)
+	killed, first := h.output(t)
 	t.Cleanup(func() { syscall.Kill(killed.Pid, syscall.SIGKILL) })
 	h.until(t, "ready")
 	h.detach(t)
@@ -314,7 +316,15 @@ func TestPreviousIsFinalAfterAKill(t *testing.T) {
 	})
 
 	assert.NilError(t, syscall.Kill(killed.Pid, syscall.SIGKILL))
-	waitFor(t, "the killed process", func() bool { return syscall.Kill(killed.Pid, 0) != nil })
+	// the manager judges the killed run once its process has ended
+	var late proto.Previous
+	for late.Generation != first.Generation {
+		select {
+		case late = <-recorded:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the killed run was never recorded")
+		}
+	}
 
 	assert.Check(t, cmp.Equal(replacementExit, proto.Exit{Code: 2}))
 	assert.Check(t, cmp.DeepEqual(m.previousOf("job"), &proto.Previous{Generation: second.Generation, End: 1, Exit: proto.Exit{Code: 2}}))
