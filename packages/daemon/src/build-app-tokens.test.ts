@@ -18,6 +18,7 @@ import { openDatabase } from './db/open-database';
 import { PEER_HEADER } from './proxy/forwarded-peers';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from './test-utils/build-stub-exec-guest';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
@@ -161,12 +162,10 @@ async function setupTest(options: SetupOptions = {}) {
   // the image every imps.create boots when it names none
   await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const sendToImpd = (request: Request) => impd.api.app.handle(request);
 

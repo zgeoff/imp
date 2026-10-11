@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@imp/api';
+import { invariant } from '@imp/test-utils/invariant';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
@@ -19,6 +20,7 @@ import { findImpByName } from './db/imps';
 import { openDatabase } from './db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubDockerCli } from './test-utils/build-stub-docker-cli';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
@@ -299,12 +301,10 @@ test('it answers a conflict that is not a move without Retry-After', async () =>
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -345,12 +345,10 @@ test('it creates a running imp on the first slot with its own tap', async () => 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
@@ -374,12 +372,10 @@ test('it stops an imp gracefully', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -394,12 +390,10 @@ test('it starts a stopped imp and counts it as awake', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.stop({ name: 'dev' });
@@ -422,12 +416,10 @@ test('it destroys an imp and its VM', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.destroy({ name: 'dev' });
@@ -443,12 +435,10 @@ test('it reports only the local URL when impd has no domain', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -474,12 +464,10 @@ test('it reports the https URL when impd has a domain', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -491,6 +479,8 @@ test('it reports the https URL when impd has a domain', async () => {
 test('it names a missing DNS token file as an error in system.info, and still answers', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
   const ctx = await setupTest({
     env: {
       IMP_DOMAIN: 'imp.example.com',
@@ -498,9 +488,6 @@ test('it names a missing DNS token file as an error in system.info, and still an
       IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
     },
   });
-
-  // registered after setupTest's own release, so the dir goes once impd stops
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   const info = await ctx.client.system.info();
 
@@ -517,6 +504,8 @@ test('it names a missing DNS token file as an error in system.info, and still an
 test('it reads a DNS token file put in place after start, and never shows the token', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
   const ctx = await setupTest({
     env: {
       IMP_DOMAIN: 'imp.example.com',
@@ -524,9 +513,6 @@ test('it reads a DNS token file put in place after start, and never shows the to
       IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
     },
   });
-
-  // registered after setupTest's own release, so the dir goes once impd stops
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   await writeFile(join(dir, 'dns-api-token'), 'cf-secret-token\n');
 
@@ -548,12 +534,10 @@ test('it exposes an imp with a basic credential shown once', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
 
@@ -581,12 +565,10 @@ test('it shows an exposed imp as public', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
   await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
@@ -608,12 +590,10 @@ test('it gives an exposed imp its public URL', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
   await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
@@ -635,12 +615,10 @@ test('it counts exposed imps in system.info, with no token check for a token fro
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
   await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
@@ -663,12 +641,10 @@ test('it keeps only a hash of an exposed imp’s credential', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
 
@@ -679,9 +655,11 @@ test('it keeps only a hash of an exposed imp’s credential', async () => {
     .select(['public_hash', 'public_user'])
     .executeTakeFirstOrThrow();
 
+  invariant(exposed.credential);
+
   expect(row.public_user).toBe('imp');
   expect(row.public_hash).toBeString();
-  expect(row.public_hash).not.toContain(exposed.credential ?? 'no credential');
+  expect(row.public_hash).not.toContain(exposed.credential);
 });
 
 test('it gives a new credential to a second expose', async () => {
@@ -696,12 +674,10 @@ test('it gives a new credential to a second expose', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
 
@@ -731,12 +707,10 @@ test('it ends an exposure on unexpose', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
   await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
@@ -753,12 +727,10 @@ test('it refuses an expose when impd has no public mode', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'web' });
 
@@ -811,12 +783,10 @@ test('it boots ubuntu when the configured default image is missing', async () =>
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const created = await ctx.client.imps.create({ name: 'a' });
 
@@ -828,12 +798,10 @@ test('it boots the configured default image, and names an imp made without a nam
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
@@ -855,12 +823,10 @@ test('it rejects a duplicate name', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -884,12 +850,10 @@ test('it marks a running imp stopped when its VM died', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -905,12 +869,10 @@ test('it refuses to remove an image an imp uses', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -924,12 +886,10 @@ test('it makes a template image from an imp', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -943,12 +903,10 @@ test('it creates an imp from a template image', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.images.add({ imp: 'dev', name: 'tools' });
@@ -963,12 +921,10 @@ test('it lists a template image beside the image it came from', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.images.add({ imp: 'dev', name: 'tools' });
@@ -986,12 +942,10 @@ test('it sleeps an imp and ends its VM', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -1007,12 +961,10 @@ test('it reports what the sleepers take back on a wake, and the default image, i
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -1031,12 +983,10 @@ test('it wakes a sleeping imp from its snapshot', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -1052,12 +1002,10 @@ test('it wakes a sleeping imp it holds, until the hold ends', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.sleep({ name: 'dev' });
@@ -1073,12 +1021,10 @@ test('it releases a hold with seconds 0', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.imps.hold({ name: 'dev', seconds: 60 });
@@ -1093,12 +1039,10 @@ test('it boots cold when the snapshot belongs to another firecracker', async () 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
@@ -1124,12 +1068,10 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'a' });
 
@@ -1157,12 +1099,10 @@ test('it refuses a wake that needs more RAM than the held imps leave', async () 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'a' });
   await ctx.client.imps.sleep({ name: 'a' });
@@ -1184,12 +1124,10 @@ test('it keeps the sleeping imp and its snapshot when the budget turns away a co
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const asleep = await ctx.client.imps.create({ name: 'a' });
 
@@ -1222,12 +1160,10 @@ test('it leaves nothing behind when an imp is larger than the RAM budget', async
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   expect(ctx.client.imps.create({ name: 'huge', memoryMib: 900 })).rejects.toMatchObject({
     code: 'RAM_BUDGET_EXCEEDED',
@@ -1246,12 +1182,10 @@ test('it frees the name and the slot of a create the RAM budget refused', async 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   // refused: the budget is 800 MiB
   await Promise.allSettled([ctx.client.imps.create({ name: 'huge', memoryMib: 900 })]);
@@ -1266,12 +1200,10 @@ test('it records a boot failure as the error state with its first line', async (
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   ctx.vmm.queue('boot', 'fail');
 
@@ -1290,12 +1222,10 @@ test('it starts an imp in error', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   ctx.vmm.queue('boot', 'fail');
 
@@ -1312,12 +1242,10 @@ test('it re-adopts live VMs on reconcile, even with a silent agent', async () =>
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'alive' });
   await ctx.client.imps.create({ name: 'dead' });
@@ -1349,12 +1277,10 @@ test('it keeps an imp running for a read during a lifecycle operation', async ()
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -1410,12 +1336,10 @@ test('it refuses the socket of an exec ticket for another imp', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'other' });
 
@@ -1432,12 +1356,10 @@ test('it refuses an exec ticket used once', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'other' });
 
@@ -1495,12 +1417,10 @@ test('it audits an exec on a ticket the token asked for as the token', async () 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -1538,12 +1458,10 @@ test('it refuses an expired exec ticket', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -1568,12 +1486,10 @@ test('it refuses a ticket on /tunnel', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -1614,12 +1530,10 @@ test('it audits a tunnel open as the token, with the imp and the port', async ()
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -1679,12 +1593,10 @@ test('it refuses a wake of an imp in error when restartError is false', async ()
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   ctx.vmm.queue('boot', 'fail');
 
@@ -1702,12 +1614,10 @@ test('it restarts an imp in error on a wake', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   ctx.vmm.queue('boot', 'fail');
 
