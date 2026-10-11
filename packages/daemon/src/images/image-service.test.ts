@@ -13,6 +13,7 @@ import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
 import { createImageService, normalizeDockerfilePath, parseDuCount } from './image-service';
 
@@ -455,8 +456,8 @@ test('#removeImage keeps the rootfs while another image uses its digest', async 
 
   await Bun.write(rootfs, 'rootfs');
 
-  await createImage(ctx.db, { name: 'web', ref: 'web:1', digest, sizeBytes: 6 });
-  await createImage(ctx.db, { name: 'web-copy', ref: 'web:1', digest, sizeBytes: 6 });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', digest }));
+  await createImage(ctx.db, buildMockNewImage({ name: 'web-copy', digest }));
 
   const images = createImageService({
     config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
@@ -481,7 +482,7 @@ test('#removeImage removes the rootfs once no image uses its digest', async () =
 
   await Bun.write(rootfs, 'rootfs');
 
-  await createImage(ctx.db, { name: 'web', ref: 'web:1', digest, sizeBytes: 6 });
+  await createImage(ctx.db, buildMockNewImage({ name: 'web', digest }));
 
   const images = createImageService({
     config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),

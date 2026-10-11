@@ -1162,7 +1162,10 @@ test('it frees each build slot once its build ends', async () => {
 
   gate.resolve();
 
-  await Promise.all(running);
+  const responses = await Promise.all(running);
+
+  // the four builds ended, each built, so each slot came free at its end
+  invariant(responses.every((built) => built.status === 200));
 
   const fifth = await ctx.impd.api.app.handle(
     new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web5`, {
