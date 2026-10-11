@@ -147,6 +147,33 @@ async function setupTest() {
   return { config, db, dataDir, vmm, impd, client, stack };
 }
 
+test('it sends the agent the service an add names, its env values included', async () => {
+  const ctx = await setupTest();
+
+  // an agent with the services API, which each boot and wake reports
+  ctx.vmm.agent.version = '0.10.0';
+
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  const agent = await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    knowsServices: true,
+    stack: ctx.stack,
+  });
+
+  await ctx.client.services.add({
+    name: 'dev',
+    service: { name: 'web', argv: ['node', 'server.js'], env: ['PORT=3000', 'TOKEN=s3cret'] },
+  });
+
+  const added = agent.requests
+    .filter((request) => request.op === 'services.add')
+    .map((request) => request.def);
+
+  expect(added).toStrictEqual([
+    { name: 'web', argv: ['node', 'server.js'], env: ['PORT=3000', 'TOKEN=s3cret'] },
+  ]);
+});
+
 test('it lists an added service with its command, its source, and only its env keys', async () => {
   const ctx = await setupTest();
 
@@ -172,12 +199,6 @@ test('it lists an added service with its command, its source, and only its env k
   agent.services[0] = { ...web, last_exit: { code: 137, signal: 9 } };
 
   const listed = await ctx.client.services.list({ name: 'dev' });
-
-  expect(agent.requests.find((request) => request.op === 'services.add')?.def).toStrictEqual({
-    name: 'web',
-    argv: ['node', 'server.js'],
-    env: ['PORT=3000', 'TOKEN=s3cret'],
-  });
 
   expect(listed).toStrictEqual({
     services: [
@@ -999,29 +1020,52 @@ test('it goes on with a follow when the wake’s event comes before the wake let
 
   onTestFinished(unsubscribe);
 
-  const stream = await ctx.client.services.logs({ name: 'dev', service: 'web', follow: true });
+  const timers = buildStubTimers();
 
-  const iterator = stream[Symbol.asyncIterator]();
+  // impd's own services API over its runtime, with timers the test fires
+  const api = createServiceApi({
+    runtime: ctx.impd.imps,
+    events: ctx.impd.imps.events,
+    readSleptServices: (record) =>
+      readSnapshotMeta(buildImpPaths(ctx.dataDir, record.id))?.services,
+    startTimer: timers.startTimer,
+  });
+
+  const stream = await api.openServiceLogs('dev', { service: 'web', lines: 100, follow: true });
+
+  // before impd and its database go
+  ctx.stack.defer(async () => {
+    await stream.return?.();
+  });
 
   await ctx.client.imps.sleep({ name: 'dev' });
 
   agent.stopFollows();
 
-  const asleep = await iterator.next();
+  const pausing = stream.next();
 
-  const wokeAt = Date.now();
+  // the dropped connection's retry, then the look that finds the imp asleep
+  await waitFor(() => {
+    expect(timers.readPendingMs()).not.toBeEmpty();
+  });
+
+  timers.firePending();
+
+  const asleep = await pausing;
+
+  const waking = stream.next();
 
   await ctx.client.imps.wake({ name: 'dev' });
 
-  const awake = await iterator.next();
+  const pendingMs = timers.readPendingMs();
 
-  const waitedMs = Date.now() - wokeAt;
+  timers.firePending();
 
-  await iterator.return?.();
+  const awake = await waking;
 
   expect(asleep.value).toStrictEqual({ type: 'sleeping', state: 'sleeping' });
+  expect(pendingMs).toStrictEqual([500]);
   expect(awake.value).toStrictEqual({ type: 'awake' });
-  expect(waitedMs).toBeLessThan(2000);
 });
 
 test('it ends a follow with the error once its log fails to open five times in a row', async () => {
