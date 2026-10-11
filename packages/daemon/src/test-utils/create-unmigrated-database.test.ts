@@ -2,7 +2,6 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { sql } from 'kysely';
 import { createUnmigratedDatabase } from './create-unmigrated-database';
 
@@ -34,24 +33,20 @@ test('it opens the file at the path it is given', () => {
   expect(existsSync(join(dir, 'older.sqlite'))).toBeTrue();
 });
 
-test('it closes the database when the test finishes, even one no query opened', () => {
+test('it closes the database file when the test finishes, even one no query opened', () => {
   const dir = mkdtempSync(join(tmpdir(), 'imp-unmigrated-'));
 
   onTestFinished(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const run = runChildTests(
-    dir,
-    [
-      "import { expect, test } from 'bun:test';",
-      `import { createUnmigratedDatabase } from ${JSON.stringify(join(import.meta.dir, 'create-unmigrated-database.ts'))};`,
-      'const left: { db: ReturnType<typeof createUnmigratedDatabase> | null } = { db: null };',
-      "test('it opens', () => { left.db = createUnmigratedDatabase(); });",
-      "test('it finds it closed', () => { expect(left.db!.selectNoFrom((eb) => eb.val(1).as('one')).execute()).rejects.toThrow(); });",
-    ].join('\n'),
-  );
+  createUnmigratedDatabase(join(dir, 'older.sqlite'));
 
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 2 pass');
+  // runs after the helper's own close, and after the dir's removal, which
+  // leaves an open file listed as deleted: no descriptor names the file
+  onTestFinished(() => {
+    const descriptors = Bun.spawnSync(['ls', '-l', `/proc/${String(process.pid)}/fd`]);
+
+    expect(descriptors.stdout.toString()).not.toInclude(join(dir, 'older.sqlite'));
+  });
 });

@@ -9,7 +9,7 @@ function setupTest() {
   onTestFinished(() => stack.disposeAsync());
 
   // a front port that answers each CONNECT with the reply the test sets
-  const state = { reply: 'HTTP/1.1 200 Connection Established\r\n\r\n', heads: [] as string[] };
+  const state = { reply: '', heads: [] as string[] };
 
   const front = Bun.listen({
     hostname: '127.0.0.1',
@@ -74,6 +74,8 @@ test('it sends nothing until the head is sent', async () => {
 test('it sends a CONNECT head for its target', async () => {
   const ctx = setupTest();
 
+  ctx.state.reply = 'HTTP/1.1 200 Connection Established\r\n\r\n';
+
   const tunnel = await startStubBrokerTunnel(ctx.stack, {
     proxyPort: ctx.front.port,
     address: '127.0.0.2',
@@ -108,6 +110,8 @@ test('it rejects established with the reply when the front refuses', async () =>
 test('it reports closed once the front ends the connection', async () => {
   const ctx = setupTest();
 
+  ctx.state.reply = 'HTTP/1.1 200 Connection Established\r\n\r\n';
+
   const tunnel = await startStubBrokerTunnel(ctx.stack, {
     proxyPort: ctx.front.port,
     address: '127.0.0.2',
@@ -127,6 +131,8 @@ test('it reports closed once the front ends the connection', async () => {
 
 test('it stays open while the front holds the connection', async () => {
   const ctx = setupTest();
+
+  ctx.state.reply = 'HTTP/1.1 200 Connection Established\r\n\r\n';
 
   const tunnel = await startStubBrokerTunnel(ctx.stack, {
     proxyPort: ctx.front.port,

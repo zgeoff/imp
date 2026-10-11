@@ -1,59 +1,28 @@
-import { expect, onTestFinished, test } from 'bun:test';
-import { Server } from 'ssh2';
-import type { ServerChannel } from 'ssh2';
-import { z } from 'zod';
-import { createEd25519Key } from '../ssh/host-key';
+import { expect, test } from 'bun:test';
 import { openSshChannel } from './open-ssh-channel';
 import { openSshClient } from './open-ssh-client';
+import { startStubSshServer } from './start-stub-ssh-server';
 
-// An ssh2 server on loopback that takes any login and answers every exec
-// with the test's `script.answer`, in the same packet burst as the open. It
-// takes no forward, so a forward's open fails.
+// An SSH server on loopback and a client logged in to it. The server answers
+// each exec with the test's `server.exec.answer` and refuses every forward.
 async function setupTest() {
-  const script: { answer: (channel: ServerChannel) => void } = { answer: () => {} };
-
-  const server = new Server({ hostKeys: [createEd25519Key().private] }, (client) => {
-    client.on('authentication', (auth) => {
-      auth.accept();
-    });
-
-    client.on('error', () => {});
-
-    client.on('session', (acceptSession) => {
-      const session = acceptSession();
-
-      session.on('exec', (acceptExec) => {
-        script.answer(acceptExec());
-      });
-    });
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', resolve);
-  });
-
-  // stops listening; each client's own end closes its connection
-  onTestFinished(() => {
-    server.close();
-  });
-
-  // a server listening on a TCP port reports an object with its port
-  const address = z.object({ port: z.number() }).parse(server.address());
+  // the client needs the server's one password to log in
+  const server = await startStubSshServer({ password: 'secret' });
 
   const client = await openSshClient({
     host: '127.0.0.1',
-    port: address.port,
+    port: server.port,
     username: 'dev',
-    password: 'any',
+    password: 'secret',
   });
 
-  return { client, script };
+  return { server, client };
 }
 
 test('it collects a channel’s output and exit status from the open on', async () => {
   const ctx = await setupTest();
 
-  ctx.script.answer = (channel) => {
+  ctx.server.exec.answer = (channel) => {
     channel.write('out');
     channel.stderr.write('err');
     channel.exit(3);
@@ -77,7 +46,7 @@ test('it collects a channel’s output and exit status from the open on', async 
 test('it collects the signal a program was killed by', async () => {
   const ctx = await setupTest();
 
-  ctx.script.answer = (channel) => {
+  ctx.server.exec.answer = (channel) => {
     channel.exit('TERM', false, '');
     channel.end();
   };

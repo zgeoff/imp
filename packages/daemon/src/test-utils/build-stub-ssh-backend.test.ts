@@ -310,6 +310,13 @@ test('it rejects a dial with the dial error a test sets', () => {
   expect(dial).rejects.toThrowWithMessage(Error, 'connection refused');
 });
 
+test('it rejects a dial on an imp it does not hold as NOT_FOUND', () => {
+  const ssh = buildStubSshBackend();
+  const dial = ssh.backend.openDial('nobody', { network: 'tcp', address: '127.0.0.1:80' }, 'ssh');
+
+  expect(dial).rejects.toMatchObject({ code: 'NOT_FOUND' });
+});
+
 test('it puts an ssh-agent listener’s socket under /run/imp/ssh-agent', async () => {
   const ssh = buildStubSshBackend();
 
@@ -427,6 +434,13 @@ test('it rejects a listen on an imp it does not hold as NOT_FOUND', () => {
   const listen = ssh.backend.openListener('nobody', { network: 'ssh-agent' }, 'ssh');
 
   expect(listen).rejects.toMatchObject({ code: 'NOT_FOUND' });
+});
+
+test('it rejects an accept on an imp it does not hold as NOT_FOUND', () => {
+  const ssh = buildStubSshBackend();
+  const accept = ssh.backend.openAccept('nobody', 'stub1', 1, 'ssh');
+
+  expect(accept).rejects.toMatchObject({ code: 'NOT_FOUND' });
 });
 
 test('it yields the guest clients a test connects, until the listener ends', async () => {

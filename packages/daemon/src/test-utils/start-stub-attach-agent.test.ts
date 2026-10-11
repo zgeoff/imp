@@ -113,6 +113,8 @@ test('it stops listening once its stack is released', async () => {
 
   const stack = new AsyncDisposableStack();
 
+  onTestFinished(() => stack.disposeAsync());
+
   await startStubAttachAgent(path, { bootId: 'boot-a', stack });
 
   await stack.disposeAsync();
