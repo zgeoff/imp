@@ -17,6 +17,7 @@ import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-ima
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@imp/test-utils/invariant';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from '@zgeoff/imp-client';
 import { printEvents } from './events';
@@ -134,10 +135,19 @@ async function setupTest() {
 
   const port = findFreePorts(1).take();
 
-  impd.api.app.listen({ port, hostname: '127.0.0.1' });
+  // each listen registers the stop of its own server; a Bun server that a
+  // test stopped already stops again as a no-op
+  const startListener = (): void => {
+    impd.api.app.listen({ port, hostname: '127.0.0.1' });
 
-  // a test may have stopped it already, which leaves no server to stop
-  stack.defer(() => impd.api.app.server?.stop(true));
+    const server = impd.api.app.server;
+
+    invariant(server, 'impd listens once listen returns');
+
+    stack.defer(() => server.stop(true));
+  };
+
+  startListener();
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 
@@ -150,7 +160,7 @@ async function setupTest() {
     dataDir,
     url: `http://127.0.0.1:${String(port)}`,
     stopListener: () => impd.api.app.stop(true),
-    startListener: () => impd.api.app.listen({ port, hostname: '127.0.0.1' }),
+    startListener,
   };
 }
 

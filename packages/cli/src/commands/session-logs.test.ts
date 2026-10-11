@@ -393,6 +393,27 @@ test('it never deletes the logs of another session or another imp', async () => 
   const dev = await ctx.client.imps.create({ name: 'dev' });
   const web = await ctx.client.imps.create({ name: 'web' });
 
+  const named = join(buildImpPaths(ctx.dataDir, dev.id).sessionLogsDir, 'c'.repeat(32));
+
+  const namedLog = await createGenerationLog(
+    {
+      dir: named,
+      segmentBytes: 64,
+      maxBytes: 128,
+      requireRoom: () => Promise.resolve(),
+      now: () => Date.UTC(2026, 9, 4),
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'c'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  await namedLog.append(new TextEncoder().encode('abcdef'));
+  await namedLog.finish({ end: 6, exitCode: 0 });
+
   const otherSession = join(buildImpPaths(ctx.dataDir, dev.id).sessionLogsDir, 'd'.repeat(32));
 
   const otherSessionLog = await createGenerationLog(
@@ -438,13 +459,16 @@ test('it never deletes the logs of another session or another imp', async () => 
   const result = await runCli({ args: ['sessions', 'log-rm', 'dev', 'main'], env: ctx.env });
 
   expect(result).toStrictEqual({
-    stdout: 'deleted 0 session logs of dev\n',
+    stdout: 'deleted 1 session logs of dev\n',
     stderr: '',
     code: 0,
   });
 
-  expect(existsSync(otherSession)).toBe(true);
-  expect(existsSync(otherImp)).toBe(true);
+  expect([existsSync(named), existsSync(otherSession), existsSync(otherImp)]).toStrictEqual([
+    false,
+    true,
+    true,
+  ]);
 });
 
 test('it refuses to read a log from an impd from before sessionLog, before any read', async () => {
