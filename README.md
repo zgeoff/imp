@@ -12,6 +12,11 @@
 root, its own kernel and Docker inside. It boots in under a second, and its disk keeps everything
 you put there.
 
+Imps are heavily inspired by Fly.io's wonderful [Sprites](https://fly.io/sprites/). If you want
+something more polished or out-of-the-box, check them out.
+
+## Why imps?
+
 When an imp sits idle, it goes to sleep: its memory goes to disk and its RAM goes back to the host.
 The next request to its URL wakes it in about a tenth of a second, with every process still running.
 Checkpoint it before you let an agent loose, roll it back when the agent makes a mess, or fork it
