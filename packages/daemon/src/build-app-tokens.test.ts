@@ -9,7 +9,7 @@ import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { buildApiListenOptions } from './api-listen-options';
 import { PROCEDURE_ACCESS } from './auth/access-policy';
-import type { TailnetPeer } from './auth/tailnet-identity';
+import { runWhois } from './auth/tailnet-identity';
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
 import { listApiCalls } from './db/api-audit';
@@ -21,6 +21,7 @@ import { createXfsBackend } from './storage/xfs-backend';
 import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from './test-utils/build-stub-exec-guest';
+import { buildStubTailscale } from './test-utils/build-stub-tailscale';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 import { startStubExecAgent } from './test-utils/start-stub-exec-agent';
@@ -30,13 +31,13 @@ interface SetupOptions {
   // impd's environment past what every test boots with
   readonly env?: Readonly<Record<string, string>>;
 
-  // `tailscale whois`; nobody on the tailnet by default
-  readonly whois?: (address: string) => Promise<TailnetPeer | null>;
+  // the `tailscale` CLI that impd's whois runs; its peers are the test's
+  readonly tailscale: Pick<ReturnType<typeof buildStubTailscale>, 'run'>;
 }
 
 // impd's real app on stub VMs, reached in process and on a loopback port
 // for its sockets, with a root client for the scenario
-async function setupTest(options: SetupOptions = {}) {
+async function setupTest(options: SetupOptions) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -112,7 +113,7 @@ async function setupTest(options: SetupOptions = {}) {
     // this host is no tailnet node
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
-    whois: options.whois ?? (() => Promise.resolve(null)),
+    whois: (address) => runWhois(address, options.tailscale.run),
     cgroups: buildStubCpuCgroups().cgroups,
     vms: vmm.startGeneration(),
     taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
@@ -183,7 +184,7 @@ async function setupTest(options: SetupOptions = {}) {
 // The access check runs before input validation, so each procedure is called
 // with an empty input and a refusal is FORBIDDEN, not BAD_REQUEST.
 test('it refuses every procedure to a token whose scope is below what it needs', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const scopes: readonly Scope[] = ['read', 'exec', 'manage'];
 
@@ -235,7 +236,7 @@ test('it refuses every procedure to a token whose scope is below what it needs',
 });
 
 test('it refuses every host-wide procedure to a manage token limited to some imps', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const made = await ctx.client.tokens.create({
     name: 'limited',
@@ -277,7 +278,7 @@ test('it refuses every host-wide procedure to a manage token limited to some imp
 });
 
 test('it answers a create with the token and a secret in the token format', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const made: unknown = await ctx.client.tokens.create({
     name: 'ci',
@@ -299,7 +300,7 @@ test('it answers a create with the token and a secret in the token format', asyn
 });
 
 test('it lists a token without its secret', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
   const listed = await ctx.client.tokens.list();
 
@@ -308,7 +309,7 @@ test('it lists a token without its secret', async () => {
 });
 
 test('it tells a token who it is', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
 
   const ci = createImpClient({
@@ -329,7 +330,7 @@ test('it tells a token who it is', async () => {
 });
 
 test('it refuses a token with the name of another with a conflict', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
 
@@ -339,7 +340,7 @@ test('it refuses a token with the name of another with a conflict', async () => 
 });
 
 test('it refuses a token named root with a conflict', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   expect(ctx.client.tokens.create({ name: 'root', scope: 'read' })).rejects.toMatchObject({
     code: 'CONFLICT',
@@ -347,7 +348,7 @@ test('it refuses a token named root with a conflict', async () => {
 });
 
 test('it refuses a removed token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
 
   const ci = createImpClient({
@@ -362,7 +363,7 @@ test('it refuses a removed token', async () => {
 });
 
 test('it lists no token once the only one is removed', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
   await ctx.client.tokens.delete({ name: 'ci' });
@@ -373,7 +374,7 @@ test('it lists no token once the only one is removed', async () => {
 });
 
 test('it lists a token limited to dev-* only its imps', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -392,7 +393,7 @@ test('it lists a token limited to dev-* only its imps', async () => {
 });
 
 test('it lists a token limited to dev-* a secret’s grants on its imps only', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -414,7 +415,7 @@ test('it lists a token limited to dev-* a secret’s grants on its imps only', a
 });
 
 test('it refuses a token limited to dev-* a stop of another imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
 
@@ -430,7 +431,7 @@ test('it refuses a token limited to dev-* a stop of another imp', async () => {
 });
 
 test('it refuses a token limited to dev-* a create that leaves the name to impd', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
 
   const dev = createImpClient({
@@ -443,7 +444,7 @@ test('it refuses a token limited to dev-* a create that leaves the name to impd'
 });
 
 test('it refuses a token limited to dev-* a create of an imp outside its pattern', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
 
   const dev = createImpClient({
@@ -456,7 +457,7 @@ test('it refuses a token limited to dev-* a create of an imp outside its pattern
 });
 
 test('it refuses a token limited to dev-* a grant of a host secret', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
@@ -475,7 +476,7 @@ test('it refuses a token limited to dev-* a grant of a host secret', async () =>
 });
 
 test('it refuses a token limited to dev-* another imp’s audit events', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
 
@@ -491,7 +492,7 @@ test('it refuses a token limited to dev-* another imp’s audit events', async (
 });
 
 test('it refuses a token limited to dev-* another imp’s API calls', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
 
@@ -507,7 +508,7 @@ test('it refuses a token limited to dev-* another imp’s API calls', async () =
 });
 
 test('it lists a token limited to dev-* only the API calls on its imps', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -548,7 +549,7 @@ test('it lists a token limited to dev-* only the API calls on its imps', async (
 });
 
 test('it refuses a token limited to dev-* an imp from another imp’s template', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
   await ctx.client.images.add({ imp: 'prod', name: 'prod-tpl' });
@@ -567,7 +568,7 @@ test('it refuses a token limited to dev-* an imp from another imp’s template',
 });
 
 test('it lets a token limited to dev-* make an imp from its own imp’s template', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-src' });
   await ctx.client.images.add({ imp: 'dev-src', name: 'dev-tpl' });
@@ -586,7 +587,7 @@ test('it lets a token limited to dev-* make an imp from its own imp’s template
 });
 
 test('it names in each template’s audit row the imp whose disk it copied', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
   await ctx.client.imps.create({ name: 'dev-src' });
@@ -608,7 +609,7 @@ test('it names in each template’s audit row the imp whose disk it copied', asy
 });
 
 test('it streams a limited token the events of its imps only', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.create({ name: 'prod' });
@@ -661,7 +662,7 @@ test('it streams a limited token the events of its imps only', async () => {
 });
 
 test('it refuses an exec socket to a read token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
 
@@ -675,7 +676,7 @@ test('it refuses an exec socket to a read token', async () => {
 });
 
 test('it refuses an exec socket to an exec token for dev-* on another imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
 
@@ -689,7 +690,7 @@ test('it refuses an exec socket to an exec token for dev-* on another imp', asyn
 });
 
 test('it refuses a tunnel to an exec token for dev-* on another imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
 
@@ -706,7 +707,7 @@ test('it refuses a tunnel to an exec token for dev-* on another imp', async () =
 });
 
 test('it refuses an exec ticket to a read token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev-a' });
 
@@ -722,7 +723,7 @@ test('it refuses an exec ticket to a read token', async () => {
 });
 
 test('it refuses an exec ticket to an exec token for dev-* on another imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'prod' });
 
@@ -738,7 +739,7 @@ test('it refuses an exec ticket to an exec token for dev-* on another imp', asyn
 });
 
 test('it opens nothing for a ticket once its token is removed', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -760,7 +761,7 @@ test('it opens nothing for a ticket once its token is removed', async () => {
 });
 
 test('it closes a token’s open sockets when the token is removed', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
 
   const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/tunnel`, {
@@ -793,7 +794,7 @@ test('it closes a token’s open sockets when the token is removed', async () =>
 // A removal that lands after the token passed its check but before the
 // socket opened: the socket must close all the same.
 test('it closes at once a socket that opens after its token is revoked', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'ci', scope: 'exec' });
 
   const tokenId = /^imp_(?<id>[^.]+)\./v.exec(made.secret)?.groups?.['id'];
@@ -821,7 +822,7 @@ test('it closes at once a socket that opens after its token is revoked', async (
 });
 
 test('it refuses a token limited to no imps at all', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   expect(ctx.client.tokens.create({ name: 'none', scope: 'read', imps: [] })).rejects.toMatchObject(
     { code: 'BAD_REQUEST' },
@@ -829,23 +830,18 @@ test('it refuses a token limited to no imps at all', async () => {
 });
 
 test('it refuses a loopback client that names a tailnet address itself', async () => {
+  // alice's laptop is the one tailnet peer
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
   const ctx = await setupTest({
     // alice may exec on dev-* imps
     env: {
       IMP_TAILNET_IDENTITIES:
         '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
     },
-
-    // alice's laptop is the one tailnet peer
-    whois: (address) =>
-      Promise.resolve(
-        new Map([
-          [
-            '100.101.102.103',
-            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
-          ],
-        ]).get(address) ?? null,
-      ),
+    tailscale,
   });
 
   const response = await fetch(`http://127.0.0.1:${ctx.port}/rpc/tokens/whoami`, {
@@ -861,23 +857,18 @@ test('it refuses a loopback client that names a tailnet address itself', async (
 });
 
 test('it serves a tailnet identity through a peer handle the wake proxy registered', async () => {
+  // alice's laptop is the one tailnet peer
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
   const ctx = await setupTest({
     // alice may exec on dev-* imps
     env: {
       IMP_TAILNET_IDENTITIES:
         '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
     },
-
-    // alice's laptop is the one tailnet peer
-    whois: (address) =>
-      Promise.resolve(
-        new Map([
-          [
-            '100.101.102.103',
-            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
-          ],
-        ]).get(address) ?? null,
-      ),
+    tailscale,
   });
 
   const response = await fetch(`http://127.0.0.1:${ctx.port}/rpc/tokens/whoami`, {
@@ -898,23 +889,18 @@ test('it serves a tailnet identity through a peer handle the wake proxy register
 });
 
 test('it refuses a tailnet identity an exec socket from a page on an imp’s port', async () => {
+  // alice's laptop is the one tailnet peer
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
   const ctx = await setupTest({
     // alice may exec on dev-* imps
     env: {
       IMP_TAILNET_IDENTITIES:
         '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
     },
-
-    // alice's laptop is the one tailnet peer
-    whois: (address) =>
-      Promise.resolve(
-        new Map([
-          [
-            '100.101.102.103',
-            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
-          ],
-        ]).get(address) ?? null,
-      ),
+    tailscale,
   });
 
   await ctx.client.imps.create({ name: 'dev-a' });
@@ -928,23 +914,18 @@ test('it refuses a tailnet identity an exec socket from a page on an imp’s por
 });
 
 test('it refuses a tailnet identity a tunnel from a page on an imp’s port', async () => {
+  // alice's laptop is the one tailnet peer
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
   const ctx = await setupTest({
     // alice may exec on dev-* imps
     env: {
       IMP_TAILNET_IDENTITIES:
         '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
     },
-
-    // alice's laptop is the one tailnet peer
-    whois: (address) =>
-      Promise.resolve(
-        new Map([
-          [
-            '100.101.102.103',
-            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
-          ],
-        ]).get(address) ?? null,
-      ),
+    tailscale,
   });
 
   await ctx.client.imps.create({ name: 'dev-a' });
@@ -963,23 +944,18 @@ test('it refuses a tailnet identity a tunnel from a page on an imp’s port', as
 });
 
 test('it opens an exec socket for a tailnet identity from impd’s own page', async () => {
+  // alice's laptop is the one tailnet peer
+  const tailscale = buildStubTailscale();
+
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
   const ctx = await setupTest({
     // alice may exec on dev-* imps
     env: {
       IMP_TAILNET_IDENTITIES:
         '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
     },
-
-    // alice's laptop is the one tailnet peer
-    whois: (address) =>
-      Promise.resolve(
-        new Map([
-          [
-            '100.101.102.103',
-            { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
-          ],
-        ]).get(address) ?? null,
-      ),
+    tailscale,
   });
 
   const created = await ctx.client.imps.create({ name: 'dev-a' });

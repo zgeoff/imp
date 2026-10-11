@@ -32,14 +32,14 @@ interface SetupOptions {
   // impd's environment past what every test boots with
   readonly env?: Readonly<Record<string, string>>;
 
-  // the host's cgroup tree; one with a cpu controller by default
-  readonly cgroups?: CpuCgroups;
+  // the host's cgroup tree
+  readonly cgroups: CpuCgroups;
 }
 
 // impd's real app on stub VMs, on a loopback port for the sockets, with a
 // root client in process, the clock the test steps, the stub VMM and the taps
 // impd set up
-async function setupTest(options: SetupOptions = {}) {
+async function setupTest(options: SetupOptions) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -120,7 +120,7 @@ async function setupTest(options: SetupOptions = {}) {
     resolveIpv6: () => Promise.resolve(null),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
-    cgroups: options.cgroups ?? buildStubCpuCgroups().cgroups,
+    cgroups: options.cgroups,
     vms: vmm.startGeneration(),
     taps: {
       setupTap: (address) => {
@@ -195,7 +195,7 @@ async function setupTest(options: SetupOptions = {}) {
 }
 
 test('it serves system.info from config and the database', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
   const { storage, ...info } = await ctx.client.system.info();
 
   // the test data dir's own filesystem
@@ -253,7 +253,7 @@ test('it reports cpu limits as not enforced on a host without a cpu controller',
 });
 
 test('it rejects a request with the wrong token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
@@ -267,7 +267,7 @@ test('it rejects a request with the wrong token', async () => {
 });
 
 test('it answers 404 for a procedure the API does not have', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   const response = await ctx.impd.api.app.handle(
     new Request('http://impd.test/rpc/nope/missing', {
@@ -284,7 +284,7 @@ test('it answers 404 for a procedure the API does not have', async () => {
 });
 
 test('it refuses an image build without a token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   const response = await ctx.impd.api.app.handle(
     new Request('http://impd.test/images/build', { method: 'POST', body: 'context' }),
@@ -297,7 +297,7 @@ test('it refuses an image build without a token', async () => {
 });
 
 test('it answers a conflict that is not a move without Retry-After', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -321,7 +321,7 @@ test('it answers a conflict that is not a move without Retry-After', async () =>
 });
 
 test('it answers /health without a token, not ready before the default image is seeded', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
   const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
   const body: unknown = await response.json();
 
@@ -329,7 +329,7 @@ test('it answers /health without a token, not ready before the default image is 
 });
 
 test('it answers /health as ready once impd marks itself ready', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   // as main.ts marks it once the default image is seeded
   ctx.impd.state.ready = true;
@@ -341,7 +341,7 @@ test('it answers /health as ready once impd marks itself ready', async () => {
 });
 
 test('it creates a running imp on the first slot with its own tap', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -368,7 +368,7 @@ test('it creates a running imp on the first slot with its own tap', async () => 
 });
 
 test('it stops an imp gracefully', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -386,7 +386,7 @@ test('it stops an imp gracefully', async () => {
 });
 
 test('it starts a stopped imp and counts it as awake', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -412,7 +412,7 @@ test('it starts a stopped imp and counts it as awake', async () => {
 });
 
 test('it destroys an imp and its VM', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -431,7 +431,7 @@ test('it destroys an imp and its VM', async () => {
 });
 
 test('it reports only the local URL when impd has no domain', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -455,6 +455,7 @@ test('it reports only the local URL when impd has no domain', async () => {
 
 test('it reports the https URL when impd has a domain', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -482,6 +483,7 @@ test('it names a missing DNS token file as an error in system.info, and still an
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -507,6 +509,7 @@ test('it reads a DNS token file put in place after start, and never shows the to
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
 
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -524,6 +527,7 @@ test('it reads a DNS token file put in place after start, and never shows the to
 
 test('it exposes an imp with a basic credential shown once', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -555,6 +559,7 @@ test('it exposes an imp with a basic credential shown once', async () => {
 
 test('it shows an exposed imp as public', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -580,6 +585,7 @@ test('it shows an exposed imp as public', async () => {
 
 test('it gives an exposed imp its public URL', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -605,6 +611,7 @@ test('it gives an exposed imp its public URL', async () => {
 
 test('it counts exposed imps in system.info, with no token check for a token from the env', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -631,6 +638,7 @@ test('it counts exposed imps in system.info, with no token check for a token fro
 
 test('it keeps only a hash of an exposed imp’s credential', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -664,6 +672,7 @@ test('it keeps only a hash of an exposed imp’s credential', async () => {
 
 test('it gives a new credential to a second expose', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -697,6 +706,7 @@ test('it gives a new credential to a second expose', async () => {
 
 test('it ends an exposure on unexpose', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -723,7 +733,7 @@ test('it ends an exposure on unexpose', async () => {
 });
 
 test('it refuses an expose when impd has no public mode', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -740,7 +750,7 @@ test('it refuses an expose when impd has no public mode', async () => {
 });
 
 test('it reports neither public mode nor HTTPS in system.info without a domain', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
   const info = await ctx.client.system.info();
 
   expect(info.public).toBeNull();
@@ -749,6 +759,7 @@ test('it reports neither public mode nor HTTPS in system.info without a domain',
 
 test('it refuses to expose an imp that does not exist', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -765,6 +776,7 @@ test('it refuses to expose an imp that does not exist', async () => {
 
 test('it refuses a user name on an expose without basic auth', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: {
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -779,7 +791,7 @@ test('it refuses a user name on an expose without basic auth', async () => {
 });
 
 test('it boots ubuntu when the configured default image is missing', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -794,7 +806,7 @@ test('it boots ubuntu when the configured default image is missing', async () =>
 });
 
 test('it boots the configured default image, and names an imp made without a name', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -819,7 +831,7 @@ test('it boots the configured default image, and names an imp made without a nam
 });
 
 test('it rejects a duplicate name', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -837,7 +849,7 @@ test('it rejects a duplicate name', async () => {
 });
 
 test('it rejects an unknown image', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   expect(ctx.client.imps.create({ name: 'other', image: 'nope' })).rejects.toMatchObject({
     code: 'NOT_FOUND',
@@ -846,7 +858,7 @@ test('it rejects an unknown image', async () => {
 });
 
 test('it marks a running imp stopped when its VM died', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -865,7 +877,7 @@ test('it marks a running imp stopped when its VM died', async () => {
 });
 
 test('it refuses to remove an image an imp uses', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -882,7 +894,7 @@ test('it refuses to remove an image an imp uses', async () => {
 });
 
 test('it makes a template image from an imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -899,7 +911,7 @@ test('it makes a template image from an imp', async () => {
 });
 
 test('it creates an imp from a template image', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -917,7 +929,7 @@ test('it creates an imp from a template image', async () => {
 });
 
 test('it lists a template image beside the image it came from', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -938,7 +950,7 @@ test('it lists a template image beside the image it came from', async () => {
 });
 
 test('it sleeps an imp and ends its VM', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -957,7 +969,7 @@ test('it sleeps an imp and ends its VM', async () => {
 });
 
 test('it reports what the sleepers take back on a wake, and the default image, in system.info', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -979,7 +991,7 @@ test('it reports what the sleepers take back on a wake, and the default image, i
 });
 
 test('it wakes a sleeping imp from its snapshot', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -998,7 +1010,7 @@ test('it wakes a sleeping imp from its snapshot', async () => {
 });
 
 test('it wakes a sleeping imp it holds, until the hold ends', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1017,7 +1029,7 @@ test('it wakes a sleeping imp it holds, until the hold ends', async () => {
 });
 
 test('it releases a hold with seconds 0', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1035,7 +1047,7 @@ test('it releases a hold with seconds 0', async () => {
 });
 
 test('it boots cold when the snapshot belongs to another firecracker', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1063,6 +1075,7 @@ test('it boots cold when the snapshot belongs to another firecracker', async () 
 test('it sleeps the least recently active imp to fit a new one in the budget', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
@@ -1094,6 +1107,7 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
 
 test('it refuses a wake that needs more RAM than the held imps leave', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
@@ -1119,6 +1133,7 @@ test('it refuses a wake that needs more RAM than the held imps leave', async () 
 
 test('it keeps the sleeping imp and its snapshot when the budget turns away a cold boot', async () => {
   const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
     env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
@@ -1156,7 +1171,10 @@ test('it keeps the sleeping imp and its snapshot when the budget turns away a co
 });
 
 test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
-  const ctx = await setupTest({ env: { IMP_RAM_BUDGET_MIB: '800' } });
+  const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
+    env: { IMP_RAM_BUDGET_MIB: '800' },
+  });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1178,7 +1196,10 @@ test('it leaves nothing behind when an imp is larger than the RAM budget', async
 });
 
 test('it frees the name and the slot of a create the RAM budget refused', async () => {
-  const ctx = await setupTest({ env: { IMP_RAM_BUDGET_MIB: '800' } });
+  const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
+    env: { IMP_RAM_BUDGET_MIB: '800' },
+  });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1196,7 +1217,7 @@ test('it frees the name and the slot of a create the RAM budget refused', async 
 });
 
 test('it records a boot failure as the error state with its first line', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1218,7 +1239,7 @@ test('it records a boot failure as the error state with its first line', async (
 });
 
 test('it starts an imp in error', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1238,7 +1259,7 @@ test('it starts an imp in error', async () => {
 });
 
 test('it re-adopts live VMs on reconcile, even with a silent agent', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1273,7 +1294,7 @@ test('it re-adopts live VMs on reconcile, even with a silent agent', async () =>
 });
 
 test('it keeps an imp running for a read during a lifecycle operation', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1303,7 +1324,7 @@ test('it keeps an imp running for a read during a lifecycle operation', async ()
 });
 
 test('it closes exec sessions with 1012 when impd stops', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/exec`, {
     headers: { authorization: 'Bearer root-token' },
@@ -1332,7 +1353,7 @@ test('it closes exec sessions with 1012 when impd stops', async () => {
 });
 
 test('it refuses the socket of an exec ticket for another imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1352,7 +1373,7 @@ test('it refuses the socket of an exec ticket for another imp', async () => {
 });
 
 test('it refuses an exec ticket used once', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1373,7 +1394,10 @@ test('it refuses an exec ticket used once', async () => {
 });
 
 test("it keeps the reference an image add's pull resolved in its audit row", async () => {
-  const ctx = await setupTest({ env: { IMP_BUILD_ISOLATION: 'host' } });
+  const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
+    env: { IMP_BUILD_ISOLATION: 'host' },
+  });
 
   const pulled = `busybox@sha256:${'d'.repeat(64)}`;
 
@@ -1413,7 +1437,7 @@ test("it keeps the reference an image add's pull resolved in its audit row", asy
 });
 
 test('it audits an exec on a ticket the token asked for as the token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1443,7 +1467,7 @@ test('it audits an exec on a ticket the token asked for as the token', async () 
 });
 
 test('it lets a bearer exec socket start any imp', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   const reply = await tryExecSocket(ctx.port, '', 'other', {
     authorization: 'Bearer root-token',
@@ -1454,7 +1478,7 @@ test('it lets a bearer exec socket start any imp', async () => {
 });
 
 test('it refuses an expired exec ticket', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1475,14 +1499,14 @@ test('it refuses an expired exec ticket', async () => {
 });
 
 test('it refuses the token in the query of /exec', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
   const reply = await tryExecSocket(ctx.port, 'token=root-token');
 
   expect(reply).toBe('rejected');
 });
 
 test('it refuses a ticket on /tunnel', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1500,7 +1524,7 @@ test('it refuses a ticket on /tunnel', async () => {
 });
 
 test('it takes the bearer header on /tunnel', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
   const reply = await tryTunnelSocket(ctx.port, '', { authorization: 'Bearer root-token' });
 
   // past the auth: the imp does not exist
@@ -1508,7 +1532,7 @@ test('it takes the bearer header on /tunnel', async () => {
 });
 
 test('it refuses a tunnel into an imp to a token without exec', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
   const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
 
   const reply = await tryTunnelSocket(
@@ -1526,7 +1550,7 @@ test('it refuses a tunnel into an imp to a token without exec', async () => {
 });
 
 test('it audits a tunnel open as the token, with the imp and the port', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1554,7 +1578,7 @@ test('it audits a tunnel open as the token, with the imp and the port', async ()
 });
 
 test('it closes tunnels with 1012 when impd stops', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   const socket = new WebSocket(`ws://127.0.0.1:${ctx.port}/tunnel`, {
     headers: { authorization: 'Bearer root-token' },
@@ -1583,13 +1607,13 @@ test('it closes tunnels with 1012 when impd stops', async () => {
 });
 
 test('it refuses an exec ticket for an imp that does not exist', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   expect(ctx.client.exec.ticket({ name: 'nope' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
 });
 
 test('it refuses a wake of an imp in error when restartError is false', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
@@ -1610,7 +1634,7 @@ test('it refuses a wake of an imp in error when restartError is false', async ()
 });
 
 test('it restarts an imp in error on a wake', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
