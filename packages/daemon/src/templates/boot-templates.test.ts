@@ -1,32 +1,23 @@
-import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, mock, onTestFinished, test } from 'bun:test';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { createDiskBudget } from '../storage/disk-budget';
-import type { TemplateBuildPlan } from '../vmm/template-vm';
+import { buildMockHostIdentity } from '../test-utils/build-mock-host-identity';
+import { buildStubTemplateVm } from '../test-utils/build-stub-template-vm';
 import { buildTemplateKey, createBootTemplates } from './boot-templates';
 import type { BootTemplateDeps } from './boot-templates';
 
+// a template store's host: a data dir, the template VM, a disk budget, the
+// taps, cgroups and RAM admission as recorders, and a frozen clock
 async function setupTest() {
-  const stack = new AsyncDisposableStack();
-
-  onTestFinished(() => stack.disposeAsync());
-
   const dataDir = await mkdtemp(join(tmpdir(), 'boot-templates-'));
 
-  stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
 
-  const builds: TemplateBuildPlan[] = [];
-  const admitted: string[] = [];
   const logs: string[] = [];
-
-  // the taps and cgroups each build asked for, in order
-  const cgroupCalls: string[] = [];
-
-  // the disk room held while each build ran
-  const pendingAtBuild: number[] = [];
 
   // a frozen clock, far from the wall clock, that moves only with advance
   const clock = { ms: Date.UTC(2026, 0, 1) };
@@ -38,88 +29,40 @@ async function setupTest() {
     log: () => {},
   });
 
-  const deps: BootTemplateDeps = {
+  const vm = buildStubTemplateVm(diskBudget);
+
+  const deps = {
     dataDir,
-    identity: {
-      firecrackerVersion: 'v1.17.0',
-      snapshotVersion: 'v12.0.0',
-      hostKernel: 'test',
-      guestKernel: 'k',
-      systemDrive: 'd1',
-      systemDrivePath: join(dataDir, 'system', 'drives', 'd1'),
-      cpuModel: 'Test CPU',
-      cpuFlags: 'test-flags',
-    },
+
+    // the binary, kernel and guest age only the template VM reads
     firecrackerBin: 'firecracker',
     kernelPath: 'vmlinux',
     minGuestUptimeMs: 1500,
-    bootReservePercent: 50,
-
-    // the template VM: it writes the snapshot's two files
-    buildVm: async (plan) => {
-      builds.push(plan);
-
-      const status = await diskBudget.readStatus();
-
-      pendingAtBuild.push(status.pendingBytes);
-
-      mkdirSync(plan.snapshotDir, { recursive: true });
-      writeFileSync(plan.vmstate, 'vmstate');
-      writeFileSync(plan.memFile, 'mem');
-    },
-    taps: {
-      setupTap: (address, owner) => {
-        cgroupCalls.push(`tap ${address.tap} ${String(owner?.uid ?? 'root')}`);
-
-        return Promise.resolve();
-      },
-      removeTap: () => Promise.resolve(),
-    },
+    buildVm: vm.buildVm,
+    taps: { setupTap: mock(() => Promise.resolve()), removeTap: mock(() => Promise.resolve()) },
     jail: null,
     cgroups: {
-      setup: (impId, _cpu, memoryMib) => {
-        cgroupCalls.push(`setup ${impId} ${String(memoryMib)}`);
-
-        return {
-          procsPath: `/cg/${impId}/cgroup.procs`,
-          liftLimit: () => {},
-          applyLimit: () => {},
-        };
-      },
-      remove: (impId) => {
-        cgroupCalls.push(`remove ${impId}`);
-
-        return Promise.resolve();
-      },
+      setup: mock((impId: string) => ({
+        procsPath: `/cg/${impId}/cgroup.procs`,
+        liftLimit: () => {},
+        applyLimit: () => {},
+      })),
+      remove: mock(() => Promise.resolve()),
     },
-    admission: {
-      admit: (request) => {
-        admitted.push(
-          `${request.id} ${String(request.reserveMib)} ${String(request.maySleepImps ?? true)}`,
-        );
-
-        return Promise.resolve();
-      },
-      release: (id) => {
-        admitted.push(`release ${id}`);
-      },
-    },
+    admission: { admit: mock(() => Promise.resolve()), release: mock(() => {}) },
     diskBudget,
     now: () => clock.ms,
-    log: (message) => {
+    log: (message: string) => {
       logs.push(message);
     },
-  };
+  } satisfies Omit<BootTemplateDeps, 'identity' | 'bootReservePercent'>;
 
   return {
     dataDir,
     deps,
     diskBudget,
-    builds,
-    admitted,
+    vm,
     logs,
-    cgroupCalls,
-    pendingAtBuild,
     advance: (ms: number) => {
       clock.ms += ms;
     },
@@ -127,28 +70,21 @@ async function setupTest() {
 }
 
 test('#buildTemplateKey changes with each thing a restore inherits', () => {
-  const identity = {
-    firecrackerVersion: 'v1.17.0',
-    snapshotVersion: 'v12.0.0',
-    hostKernel: 'test',
-    guestKernel: 'k',
-    systemDrive: 'd1',
-    systemDrivePath: '/data/system/drives/d1',
-    cpuModel: 'Test CPU',
-    cpuFlags: 'test-flags',
-  };
-
+  const identity = buildMockHostIdentity();
   const shape = { vcpus: 1, memoryMib: 512 };
 
   const keys = [
     buildTemplateKey(identity, shape),
-    buildTemplateKey({ ...identity, guestKernel: 'k2' }, shape),
-    buildTemplateKey({ ...identity, systemDrive: 'd2' }, shape),
-    buildTemplateKey({ ...identity, firecrackerVersion: 'v1.18.0' }, shape),
-    buildTemplateKey({ ...identity, snapshotVersion: 'v13.0.0' }, shape),
-    buildTemplateKey({ ...identity, hostKernel: 'other' }, shape),
-    buildTemplateKey({ ...identity, cpuModel: 'Other CPU' }, shape),
-    buildTemplateKey({ ...identity, cpuFlags: 'other-flags' }, shape),
+    buildTemplateKey({ ...identity, guestKernel: `${identity.guestKernel}-other` }, shape),
+    buildTemplateKey({ ...identity, systemDrive: `${identity.systemDrive}-other` }, shape),
+    buildTemplateKey(
+      { ...identity, firecrackerVersion: `${identity.firecrackerVersion}-other` },
+      shape,
+    ),
+    buildTemplateKey({ ...identity, snapshotVersion: `${identity.snapshotVersion}-other` }, shape),
+    buildTemplateKey({ ...identity, hostKernel: `${identity.hostKernel}-other` }, shape),
+    buildTemplateKey({ ...identity, cpuModel: `${identity.cpuModel}-other` }, shape),
+    buildTemplateKey({ ...identity, cpuFlags: `${identity.cpuFlags}-other` }, shape),
     buildTemplateKey(identity, { ...shape, vcpus: 2 }),
     buildTemplateKey(identity, { ...shape, memoryMib: 1024 }),
   ];
@@ -157,17 +93,7 @@ test('#buildTemplateKey changes with each thing a restore inherits', () => {
 });
 
 test('#buildTemplateKey keeps the key when only the drive path changes', () => {
-  const identity = {
-    firecrackerVersion: 'v1.17.0',
-    snapshotVersion: 'v12.0.0',
-    hostKernel: 'test',
-    guestKernel: 'k',
-    systemDrive: 'd1',
-    systemDrivePath: '/data/system/drives/d1',
-    cpuModel: 'Test CPU',
-    cpuFlags: 'test-flags',
-  };
-
+  const identity = buildMockHostIdentity();
   const shape = { vcpus: 1, memoryMib: 512 };
 
   expect(buildTemplateKey({ ...identity, systemDrivePath: '/elsewhere' }, shape)).toBe(
@@ -178,19 +104,28 @@ test('#buildTemplateKey keeps the key when only the drive path changes', () => {
 test('#find answers null and starts no build on the first miss of a shape', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
+
   const found = store.find({ vcpus: 1, memoryMib: 512 });
 
   await store.stop();
 
   expect(found).toBeNull();
-  expect(ctx.builds).toStrictEqual([]);
+  expect(ctx.vm.builds).toStrictEqual([]);
 });
 
 test('#find starts one build on the second miss of a shape, shared by the misses after it', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   store.find({ vcpus: 1, memoryMib: 512 });
   store.find({ vcpus: 1, memoryMib: 512 });
@@ -198,13 +133,17 @@ test('#find starts one build on the second miss of a shape, shared by the misses
 
   await store.stop();
 
-  expect(ctx.builds).toHaveLength(1);
+  expect(ctx.vm.builds).toHaveLength(1);
 });
 
 test('#find answers the template a build made', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -214,43 +153,77 @@ test('#find answers the template a build made', async () => {
 test('#buildTemplate names the template by its key', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const identity = buildMockHostIdentity();
+  const store = createBootTemplates({ ...ctx.deps, identity, bootReservePercent: 50 });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(files.key).toBe(buildTemplateKey(ctx.deps.identity, { vcpus: 1, memoryMib: 512 }));
+  expect(files.key).toBe(buildTemplateKey(identity, { vcpus: 1, memoryMib: 512 }));
 });
 
-test('#buildTemplate takes free RAM only, for half its memory, and gives it back', async () => {
+test('#buildTemplate takes free RAM only, for its boot reserve of its memory', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(ctx.admitted).toStrictEqual([
-    `template-${files.key.slice(0, 12)} 256 false`,
-    `release template-${files.key.slice(0, 12)}`,
-  ]);
+  expect(ctx.deps.admission.admit).toHaveBeenCalledExactlyOnceWith({
+    id: `template-${files.key.slice(0, 12)}`,
+    name: null,
+    reserveMib: 256,
+    memoryMib: 512,
+    maySleepImps: false,
+  });
+});
+
+test('#buildTemplate gives back the RAM it took once the build is done', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
+
+  const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(ctx.deps.admission.release).toHaveBeenCalledExactlyOnceWith(
+    `template-${files.key.slice(0, 12)}`,
+  );
+
+  expect(ctx.deps.admission.release).toHaveBeenCalledAfter(ctx.deps.admission.admit);
 });
 
 test('#buildTemplate holds disk room for its whole memory through the build only', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   const after = await ctx.diskBudget.readStatus();
 
-  expect(ctx.pendingAtBuild).toStrictEqual([512 * 1024 ** 2]);
+  expect(ctx.vm.pendingAtBuild).toStrictEqual([512 * 1024 ** 2]);
   expect(after.pendingBytes).toBe(0);
 });
 
 test('#buildTemplate leaves only the template and the placeholder disk', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -263,12 +236,16 @@ test('#buildTemplate leaves only the template and the placeholder disk', async (
 test('#buildTemplate names the same placeholder disk in every build', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
   await store.buildTemplate({ vcpus: 1, memoryMib: 1024 });
 
-  expect(ctx.builds.map((plan) => plan.placeholderPath)).toStrictEqual([
+  expect(ctx.vm.builds.map((plan) => plan.placeholderPath)).toStrictEqual([
     join(ctx.dataDir, 'templates', 'placeholder.ext4'),
     join(ctx.dataDir, 'templates', 'placeholder.ext4'),
   ]);
@@ -277,11 +254,15 @@ test('#buildTemplate names the same placeholder disk in every build', async () =
 test('#buildTemplate boots a parked agent with no imp address', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  const [plan] = ctx.builds;
+  const [plan] = ctx.vm.builds;
 
   invariant(plan);
 
@@ -294,11 +275,16 @@ test('#buildTemplate boots a parked agent with no imp address', async () => {
 test('#buildTemplate runs a jailed build as the build uid in a cgroup of its own', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates({ ...ctx.deps, jail: { uid: 899_999, gid: 899_999 } });
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    jail: { uid: 899_999, gid: 899_999 },
+  });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  const [plan] = ctx.builds;
+  const [plan] = ctx.vm.builds;
 
   invariant(plan);
 
@@ -311,30 +297,72 @@ test('#buildTemplate runs a jailed build as the build uid in a cgroup of its own
   });
 });
 
-test('#buildTemplate gives a jailed build its tap and a cgroup sized to it, removed after', async () => {
+test('#buildTemplate gives a jailed build its tap, owned by the build uid', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates({ ...ctx.deps, jail: { uid: 899_999, gid: 899_999 } });
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    jail: { uid: 899_999, gid: 899_999 },
+  });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(ctx.cgroupCalls).toStrictEqual([
-    'tap imp-tpl 899999',
-    'setup tpl-build 512',
-    'remove tpl-build',
-  ]);
+  expect(ctx.deps.taps.setupTap).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ tap: 'imp-tpl' }),
+    { uid: 899_999, gid: 899_999 },
+  );
+});
+
+test('#buildTemplate sizes the cgroup of a jailed build to its memory after its tap', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    jail: { uid: 899_999, gid: 899_999 },
+  });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(ctx.deps.cgroups.setup).toHaveBeenCalledExactlyOnceWith(
+    'tpl-build',
+    expect.anything(),
+    512,
+  );
+
+  expect(ctx.deps.cgroups.setup).toHaveBeenCalledAfter(ctx.deps.taps.setupTap);
+});
+
+test('#buildTemplate removes the cgroup of a jailed build once the build is done', async () => {
+  const ctx = await setupTest();
+
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    jail: { uid: 899_999, gid: 899_999 },
+  });
+
+  await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
+
+  expect(ctx.deps.cgroups.remove).toHaveBeenCalledExactlyOnceWith('tpl-build');
+  expect(ctx.deps.cgroups.remove).toHaveBeenCalledAfter(ctx.deps.cgroups.setup);
 });
 
 // a restore reopens the drive the snapshot booted, and the placeholder
 test('#buildTemplate returns the drive and the placeholder a restore reopens', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const identity = buildMockHostIdentity();
+  const store = createBootTemplates({ ...ctx.deps, identity, bootReservePercent: 50 });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   expect(files).toMatchObject({
-    systemDrivePath: ctx.deps.identity.systemDrivePath,
+    systemDrivePath: identity.systemDrivePath,
     placeholderPath: join(ctx.dataDir, 'templates', 'placeholder.ext4'),
   });
 });
@@ -344,6 +372,8 @@ test('#buildTemplate refuses a jailed build without its cgroup before any VM sta
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     jail: { uid: 899_999, gid: 899_999 },
     cgroups: { setup: () => null, remove: () => Promise.resolve() },
   });
@@ -355,7 +385,7 @@ test('#buildTemplate refuses a jailed build without its cgroup before any VM sta
     'a jailed template build needs its own cgroup, and it has none',
   );
 
-  expect(ctx.builds).toStrictEqual([]);
+  expect(ctx.vm.builds).toStrictEqual([]);
 });
 
 test('#buildTemplate leaves no template behind a failed build', async () => {
@@ -363,6 +393,8 @@ test('#buildTemplate leaves no template behind a failed build', async () => {
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     buildVm: () => Promise.reject(new Error('no agent')),
   });
 
@@ -377,13 +409,13 @@ test('#buildTemplate leaves no template behind a failed build', async () => {
 test('#find starts no build while a failed build backs off', async () => {
   const ctx = await setupTest();
 
+  const buildVm = mock(() => Promise.reject(new Error('no agent')));
+
   const store = createBootTemplates({
     ...ctx.deps,
-    buildVm: (plan) => {
-      ctx.builds.push(plan);
-
-      return Promise.reject(new Error('no agent'));
-    },
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    buildVm,
   });
 
   store.find({ vcpus: 1, memoryMib: 512 });
@@ -396,7 +428,7 @@ test('#find starts no build while a failed build backs off', async () => {
 
   await store.stop();
 
-  expect(ctx.builds).toHaveLength(1);
+  expect(buildVm).toHaveBeenCalledOnce();
 });
 
 test('#buildTemplate refuses a shape while its failed build backs off', async () => {
@@ -404,6 +436,8 @@ test('#buildTemplate refuses a shape while its failed build backs off', async ()
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     buildVm: () => Promise.reject(new Error('no agent')),
   });
 
@@ -420,13 +454,13 @@ test('#buildTemplate refuses a shape while its failed build backs off', async ()
 test('#find builds again once the backoff after a failed build has passed', async () => {
   const ctx = await setupTest();
 
+  const buildVm = mock(() => Promise.reject(new Error('no agent')));
+
   const store = createBootTemplates({
     ...ctx.deps,
-    buildVm: (plan) => {
-      ctx.builds.push(plan);
-
-      return Promise.reject(new Error('no agent'));
-    },
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    buildVm,
   });
 
   store.find({ vcpus: 1, memoryMib: 512 });
@@ -439,7 +473,7 @@ test('#find builds again once the backoff after a failed build has passed', asyn
 
   await store.stop();
 
-  expect(ctx.builds).toHaveLength(2);
+  expect(buildVm).toHaveBeenCalledTimes(2);
 });
 
 test('#buildTemplate turns a key off at its third failed build', async () => {
@@ -447,6 +481,8 @@ test('#buildTemplate turns a key off at its third failed build', async () => {
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     buildVm: () => Promise.reject(new Error('no agent')),
   });
 
@@ -471,6 +507,8 @@ test('#buildTemplate refuses a key that is off however long it waits', async () 
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     buildVm: () => Promise.reject(new Error('no agent')),
   });
 
@@ -497,13 +535,13 @@ test('#buildTemplate refuses a key that is off however long it waits', async () 
 test('#find starts no build for a key that is off', async () => {
   const ctx = await setupTest();
 
+  const buildVm = mock(() => Promise.reject(new Error('no agent')));
+
   const store = createBootTemplates({
     ...ctx.deps,
-    buildVm: (plan) => {
-      ctx.builds.push(plan);
-
-      return Promise.reject(new Error('no agent'));
-    },
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    buildVm,
   });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 }).catch(() => null);
@@ -522,7 +560,7 @@ test('#find starts no build for a key that is off', async () => {
 
   await store.stop();
 
-  expect(ctx.builds).toHaveLength(3);
+  expect(buildVm).toHaveBeenCalledTimes(3);
 });
 
 test('#buildTemplate refuses a build the RAM turns away with the admission error', async () => {
@@ -530,6 +568,8 @@ test('#buildTemplate refuses a build the RAM turns away with the admission error
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     admission: { admit: () => Promise.reject(new Error('no room: ram')), release: () => {} },
   });
 
@@ -544,6 +584,8 @@ test('#buildTemplate refuses a build the disk has no room for', async () => {
   // a disk of 1 GiB holds no 512 MiB build past its reserve
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     diskBudget: createDiskBudget({
       storage: { readUsage: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 3 }) },
       reserveBytes: null,
@@ -553,7 +595,10 @@ test('#buildTemplate refuses a build the disk has no room for', async () => {
 
   const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
-  expect(building).rejects.toThrow('not enough free disk');
+  expect(building).rejects.toThrowWithMessage(
+    Error,
+    /^not enough free disk: 1\.0 GiB free, 0\.5 GiB wanted, /,
+  );
 });
 
 test('#buildTemplate backs off a minute after a refused build', async () => {
@@ -561,6 +606,8 @@ test('#buildTemplate backs off a minute after a refused build', async () => {
 
   const store = createBootTemplates({
     ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
     admission: { admit: () => Promise.reject(new Error('no room: ram')), release: () => {} },
   });
 
@@ -575,16 +622,13 @@ test('#buildTemplate backs off a minute after a refused build', async () => {
 test('#buildTemplate gives back the admission of a refused build and leaves no work directory', async () => {
   const ctx = await setupTest();
 
-  const released: string[] = [];
+  const release = mock(() => {});
 
   const store = createBootTemplates({
     ...ctx.deps,
-    admission: {
-      admit: () => Promise.reject(new Error('no room: ram')),
-      release: (id) => {
-        released.push(id);
-      },
-    },
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    admission: { admit: () => Promise.reject(new Error('no room: ram')), release },
   });
 
   const building = store.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -592,21 +636,25 @@ test('#buildTemplate gives back the admission of a refused build and leaves no w
   await building.catch(() => {});
 
   expect(building).rejects.toThrowWithMessage(Error, 'no room: ram');
-  expect(released).toHaveLength(1);
+  expect(release).toHaveBeenCalledOnce();
   expect(existsSync(join(ctx.dataDir, 'templates'))).toBeFalse();
 });
 
 test('#buildTemplate counts no refused build as a failure', async () => {
   const ctx = await setupTest();
 
-  const room = { isRefused: true };
+  // four refusals, past the three failures that turn a key off, then room
+  const admit = mock(() => Promise.resolve())
+    .mockImplementationOnce(() => Promise.reject(new Error('no room: ram')))
+    .mockImplementationOnce(() => Promise.reject(new Error('no room: ram')))
+    .mockImplementationOnce(() => Promise.reject(new Error('no room: ram')))
+    .mockImplementationOnce(() => Promise.reject(new Error('no room: ram')));
 
   const store = createBootTemplates({
     ...ctx.deps,
-    admission: {
-      admit: () => (room.isRefused ? Promise.reject(new Error('no room: ram')) : Promise.resolve()),
-      release: () => {},
-    },
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+    admission: { admit, release: () => {} },
   });
 
   for (let count = 0; count < 4; count += 1) {
@@ -614,8 +662,6 @@ test('#buildTemplate counts no refused build as a failure', async () => {
 
     ctx.advance(60_000);
   }
-
-  room.isRefused = false;
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -625,7 +671,11 @@ test('#buildTemplate counts no refused build as a failure', async () => {
 test('#reportFailure keeps a template whose restore failed in the imp', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -637,7 +687,11 @@ test('#reportFailure keeps a template whose restore failed in the imp', async ()
 test('#reportFailure removes a template whose restore failed in the template', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -649,7 +703,11 @@ test('#reportFailure removes a template whose restore failed in the template', a
 test('#reportFailure for an older build leaves the rebuilt template', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   const first = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -665,7 +723,11 @@ test('#reportFailure for an older build leaves the rebuilt template', async () =
 test('#reportFailure turns a key off at its third template fault in a row', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   for (let count = 0; count < 2; count += 1) {
     const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -683,7 +745,11 @@ test('#reportFailure turns a key off at its third template fault in a row', asyn
 test('#buildTemplate refuses a key its restore faults turned off', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   for (let count = 0; count < 3; count += 1) {
     const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -703,7 +769,11 @@ test('#buildTemplate refuses a key its restore faults turned off', async () => {
 test('#reportFailure counts no fault in the imp toward turning the key off', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   for (let count = 0; count < 2; count += 1) {
     const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -723,7 +793,11 @@ test('#reportFailure counts no fault in the imp toward turning the key off', asy
 test('#reportRestored starts the count of template faults again', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   for (let count = 0; count < 2; count += 1) {
     const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -746,7 +820,11 @@ test('#reportRestored starts the count of template faults again', async () => {
 test('#reportFailure counts no failure for a template evicted before it', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   for (let count = 0; count < 3; count += 1) {
     const files = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -764,7 +842,11 @@ test('#reportFailure counts no failure for a template evicted before it', async 
 test('#buildTemplate removes the least recently used template past four', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   for (const memoryMib of [256, 512, 768, 1024]) {
     await store.buildTemplate({ vcpus: 1, memoryMib });
@@ -787,16 +869,14 @@ test('#buildTemplate removes the least recently used template past four', async 
 test('#removeStale removes the templates of another host identity', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const identity = buildMockHostIdentity();
+  const store = createBootTemplates({ ...ctx.deps, identity, bootReservePercent: 50 });
 
   // a template the host built before its system drive changed
   const old = createBootTemplates({
     ...ctx.deps,
-    identity: {
-      ...ctx.deps.identity,
-      systemDrive: 'd0',
-      systemDrivePath: join(ctx.dataDir, 'system', 'drives', 'd0'),
-    },
+    identity: { ...identity, systemDrive: 'd0', systemDrivePath: '/data/system/drives/d0' },
+    bootReservePercent: 50,
   });
 
   const stale = await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -807,7 +887,11 @@ test('#removeStale removes the templates of another host identity', async () => 
 test('#removeStale removes what a cut-short build left', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
@@ -821,17 +905,15 @@ test('#removeStale removes what a cut-short build left', async () => {
 test('#removeStale never removes a current template or the placeholder disk', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const identity = buildMockHostIdentity();
+  const store = createBootTemplates({ ...ctx.deps, identity, bootReservePercent: 50 });
 
   const current = await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   const old = createBootTemplates({
     ...ctx.deps,
-    identity: {
-      ...ctx.deps.identity,
-      systemDrive: 'd0',
-      systemDrivePath: join(ctx.dataDir, 'system', 'drives', 'd0'),
-    },
+    identity: { ...identity, systemDrive: 'd0', systemDrivePath: '/data/system/drives/d0' },
+    bootReservePercent: 50,
   });
 
   await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
@@ -847,7 +929,11 @@ test('#removeStale never removes a current template or the placeholder disk', as
 test('#removeStale answers no keys before any template exists', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const store = createBootTemplates({
+    ...ctx.deps,
+    identity: buildMockHostIdentity(),
+    bootReservePercent: 50,
+  });
 
   expect(store.removeStale()).toStrictEqual([]);
 });
@@ -855,43 +941,42 @@ test('#removeStale answers no keys before any template exists', async () => {
 test('#listDrivePaths lists the system drive of every template', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
-  const oldDrive = join(ctx.dataDir, 'system', 'drives', 'd0');
+  const identity = buildMockHostIdentity({ systemDrivePath: '/data/system/drives/d1' });
+  const store = createBootTemplates({ ...ctx.deps, identity, bootReservePercent: 50 });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   const old = createBootTemplates({
     ...ctx.deps,
-    identity: { ...ctx.deps.identity, systemDrive: 'd0', systemDrivePath: oldDrive },
+    identity: { ...identity, systemDrive: 'd0', systemDrivePath: '/data/system/drives/d0' },
+    bootReservePercent: 50,
   });
 
   await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   expect(store.listDrivePaths()).toIncludeSameMembers([
-    ctx.deps.identity.systemDrivePath,
-    oldDrive,
+    '/data/system/drives/d1',
+    '/data/system/drives/d0',
   ]);
 });
 
 test('#listDrivePaths drops the drive of a stale template once it is removed', async () => {
   const ctx = await setupTest();
 
-  const store = createBootTemplates(ctx.deps);
+  const identity = buildMockHostIdentity({ systemDrivePath: '/data/system/drives/d1' });
+  const store = createBootTemplates({ ...ctx.deps, identity, bootReservePercent: 50 });
 
   await store.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   const old = createBootTemplates({
     ...ctx.deps,
-    identity: {
-      ...ctx.deps.identity,
-      systemDrive: 'd0',
-      systemDrivePath: join(ctx.dataDir, 'system', 'drives', 'd0'),
-    },
+    identity: { ...identity, systemDrive: 'd0', systemDrivePath: '/data/system/drives/d0' },
+    bootReservePercent: 50,
   });
 
   await old.buildTemplate({ vcpus: 1, memoryMib: 512 });
 
   store.removeStale();
 
-  expect(store.listDrivePaths()).toStrictEqual([ctx.deps.identity.systemDrivePath]);
+  expect(store.listDrivePaths()).toStrictEqual(['/data/system/drives/d1']);
 });
