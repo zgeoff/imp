@@ -2,11 +2,13 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildStubBrokerTokenEndpoint } from '@imp/daemon/src/test-utils/build-stub-broker-token-endpoint';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -51,11 +53,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back for the CLI
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -141,7 +144,8 @@ async function setupTest() {
   return {
     stack,
     sendRequest,
-    client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendRequest }),
+    rootToken,
+    client: createImpClient({ url: 'http://impd.test', token: rootToken, fetch: sendRequest }),
     url: `http://127.0.0.1:${String(app.server.port)}`,
   };
 }
@@ -348,7 +352,7 @@ test.each([
 
     const result = await runCli({
       args,
-      env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+      env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
       stdin: 'fake-secret-value\n',
     });
 
@@ -369,7 +373,7 @@ test('it replaces no secret on an impd from before SystemInfo.features', async (
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
-    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
   });
 
@@ -386,7 +390,7 @@ test('it replaces no secret when the feature check’s connection drops', async 
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
-    env: { IMP_URL: impd.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: impd.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
   });
 
@@ -407,7 +411,7 @@ test('it replaces a secret on an impd with the feature', async () => {
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
   });
 
@@ -429,7 +433,7 @@ test('it adds a plain secret without a feature check, even on an impd from befor
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github'],
-    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
   });
 
@@ -442,12 +446,10 @@ test('it says until when an added oauth secret’s access token is valid', async
 
   // an access token whose JWT expiry is 2030-01-01T00:00:00Z
   const accessToken = `e30.${Buffer.from(JSON.stringify({ exp: 1_893_456_000 })).toString('base64url')}.sig`;
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
-  server.use(
-    http.post('https://auth.example.com/oauth/token', () =>
-      HttpResponse.json({ access_token: accessToken, refresh_token: 'fake-refresh-1' }),
-    ),
-  );
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh', { access_token: accessToken, refresh_token: 'fake-refresh-1' });
 
   const result = await runCli({
     args: [
@@ -465,7 +467,7 @@ test('it says until when an added oauth secret’s access token is valid', async
       '--token-format',
       'json',
     ],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-refresh\n',
   });
 
@@ -483,11 +485,10 @@ test('it says until when an added oauth secret’s access token is valid', async
 test('it says why an added oauth secret failed its sign-in', async () => {
   const ctx = await setupTest();
 
-  server.use(
-    http.post('https://auth.example.com/oauth/token', () =>
-      HttpResponse.json({ error: 'invalid_grant' }, { status: 400 }),
-    ),
-  );
+  // the endpoint has issued nothing for this refresh token, so it refuses it
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
 
   const result = await runCli({
     args: [
@@ -505,7 +506,7 @@ test('it says why an added oauth secret failed its sign-in', async () => {
       '--token-format',
       'json',
     ],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-refresh\n',
   });
 
@@ -523,14 +524,14 @@ test('it says why an added oauth secret failed its sign-in', async () => {
 test('it prints a refreshed oauth secret that is ready', async () => {
   const ctx = await setupTest();
 
-  // an access token whose JWT expiry is 2030-01-01T00:00:00Z
+  // an access token whose JWT expiry is 2030-01-01T00:00:00Z, for the add's
+  // sign-in and then the refresh
   const accessToken = `e30.${Buffer.from(JSON.stringify({ exp: 1_893_456_000 })).toString('base64url')}.sig`;
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
 
-  server.use(
-    http.post('https://auth.example.com/oauth/token', () =>
-      HttpResponse.json({ access_token: accessToken, refresh_token: 'fake-refresh-1' }),
-    ),
-  );
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh', { access_token: accessToken, refresh_token: 'fake-refresh-1' });
+  endpoint.issue('fake-refresh-1', { access_token: accessToken, refresh_token: 'fake-refresh-2' });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -546,7 +547,7 @@ test('it prints a refreshed oauth secret that is ready', async () => {
 
   const result = await runCli({
     args: ['secret', 'refresh', 'codex'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({
@@ -583,7 +584,7 @@ test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
 
   const result = await runCli({
     args: ['secret', 'refresh', 'codex', '--json'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   const printed: unknown = JSON.parse(result.stdout);
@@ -635,7 +636,7 @@ test('it shows a state column on secret ls, with a dash for other kinds', async 
 
   const result = await runCli({
     args: ['secret', 'ls'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({
@@ -665,7 +666,7 @@ test('it sends a secret upstream in the rule to an impd that knows it', async ()
       '--upstream',
       'http://172.17.0.1:18081',
     ],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-token\n',
   });
 
@@ -696,7 +697,7 @@ test('it stores nothing when stdin gives an empty value', async () => {
 
   const result = await runCli({
     args: ['secret', 'add', 'gh', '--kind', 'github'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: '\n',
   });
 
