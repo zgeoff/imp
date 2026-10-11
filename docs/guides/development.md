@@ -12,7 +12,7 @@ bun run test:host                 # nft and iptables in namespaces; IMP_HOST_TES
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, deploy/, test/
-bun run lint:docs                 # every docs/ reference in code resolves
+bun run lint:docs                 # every relative link and anchor in the docs resolves
 (cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
 scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
 scripts/test-e2e.sh --clean       # end to end, from a clean state
@@ -242,8 +242,10 @@ Lefthook installs the hooks with `bun install`.
 | `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                              |
 | `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                 |
 
-The `checks` job also runs `bun run lint:docs`, which fails when a code comment cites a docs page or
-heading that does not exist.
+The `checks` job also runs the docs-writing skill's scripts. `bun run lint:docs` runs
+`check-links.sh`, which fails on a broken relative link or anchor in a README or a page under
+`docs/`. `check-length.sh` reports README and docs/ lengths and runs `check-prose.sh`, without
+failing the job.
 
 `bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
 signature verification, and no fixed node-forge exists (all versions up to 1.4.0). acme-client loads

@@ -77,7 +77,7 @@
     "deadcode": "knip",
     "lint": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error --fix",
-    "lint:docs": "bun scripts/check-doc-refs.ts",
+    "lint:docs": "bash .claude/skills/docs-writing/scripts/check-links.sh",
     "render:deploy": "bun scripts/render-imp-host.ts",
     "lint:shell": "./scripts/shellcheck.sh",
     "test": "bun test",

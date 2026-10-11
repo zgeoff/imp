@@ -30,7 +30,7 @@ the rules for writing tests live in the testing skill.
 | ACME issuer             | `bun run test:pebble`                                                  | Docker                                                                                  |
 
 Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
-tests need `jq`, and `release-please-config.test.ts` and `scripts/check-doc-refs.ts` run `git`.
+tests need `jq`, and `release-please-config.test.ts` runs `git`.
 
 The build disk hold's `<file>` is `packages/daemon/src/images/isolated-build.test.ts`; its
 small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory. Each trial measures the
