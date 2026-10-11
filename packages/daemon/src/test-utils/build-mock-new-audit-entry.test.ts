@@ -3,16 +3,16 @@ import { buildMockNewAuditEntry } from './build-mock-new-audit-entry';
 
 test('it builds a default new audit entry', () => {
   expect(buildMockNewAuditEntry()).toStrictEqual({
-    impId: expect.toBeString() as unknown,
-    secretName: expect.toBeString() as unknown,
-    at: expect.toBeValidDate() as unknown,
+    impId: expect.toBeString(),
+    secretName: expect.toBeString(),
+    at: expect.toBeValidDate(),
     method: 'GET',
-    host: expect.toBeString() as unknown,
-    path: expect.toStartWith('/') as unknown,
+    host: expect.toBeString(),
+    path: expect.toStartWith('/'),
     status: 200,
-    requestBytes: expect.toBeWithin(0, 1024 ** 2 + 1) as unknown,
-    responseBytes: expect.toBeWithin(0, 1024 ** 2 + 1) as unknown,
-    durationMs: expect.toBeWithin(0, 60_001) as unknown,
+    requestBytes: expect.toBeWithin(0, 1024 ** 2 + 1),
+    responseBytes: expect.toBeWithin(0, 1024 ** 2 + 1),
+    durationMs: expect.toBeWithin(0, 60_001),
   });
 });
 
