@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
@@ -29,9 +30,6 @@ import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 import type { CpuCgroups } from './vmm/cpu-cgroups';
 
 interface SetupOptions {
-  // impd's environment past what every test boots with
-  readonly env?: Readonly<Record<string, string>>;
-
   // the host's cgroup tree
   readonly cgroups: CpuCgroups;
 }
@@ -60,7 +58,7 @@ async function setupTest(options: SetupOptions) {
       IMP_JAILER: 'false',
       IMP_BOOT_TEMPLATES: 'false',
       IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-      ...options.env,
+      ...readImpEnv(),
     }),
 
     // a new disk stays the size of its image, since the clone copies every
@@ -454,13 +452,12 @@ test('it reports only the local URL when impd has no domain', async () => {
 });
 
 test('it reports the https URL when impd has a domain', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -481,14 +478,12 @@ test('it names a missing DNS token file as an error in system.info, and still an
   const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN_FILE', join(dir, 'dns-api-token'));
 
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
-    },
   });
 
   const info = await ctx.client.system.info();
@@ -507,14 +502,12 @@ test('it reads a DNS token file put in place after start, and never shows the to
   const dir = await mkdtemp(join(tmpdir(), 'imp-dns-token-'));
 
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN_FILE', join(dir, 'dns-api-token'));
 
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN_FILE: join(dir, 'dns-api-token'),
-    },
   });
 
   await writeFile(join(dir, 'dns-api-token'), 'cf-secret-token\n');
@@ -526,14 +519,13 @@ test('it reads a DNS token file put in place after start, and never shows the to
 });
 
 test('it exposes an imp with a basic credential shown once', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -558,14 +550,13 @@ test('it exposes an imp with a basic credential shown once', async () => {
 });
 
 test('it shows an exposed imp as public', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -584,14 +575,13 @@ test('it shows an exposed imp as public', async () => {
 });
 
 test('it gives an exposed imp its public URL', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -610,14 +600,13 @@ test('it gives an exposed imp its public URL', async () => {
 });
 
 test('it counts exposed imps in system.info, with no token check for a token from the env', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -637,14 +626,13 @@ test('it counts exposed imps in system.info, with no token check for a token fro
 });
 
 test('it keeps only a hash of an exposed imp’s credential', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -671,14 +659,13 @@ test('it keeps only a hash of an exposed imp’s credential', async () => {
 });
 
 test('it gives a new credential to a second expose', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -705,14 +692,13 @@ test('it gives a new credential to a second expose', async () => {
 });
 
 test('it ends an exposure on unexpose', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -758,14 +744,13 @@ test('it reports neither public mode nor HTTPS in system.info without a domain',
 });
 
 test('it refuses to expose an imp that does not exist', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   expect(ctx.client.imps.expose({ name: 'nope', auth: 'none' })).rejects.toMatchObject({
@@ -775,14 +760,13 @@ test('it refuses to expose an imp that does not exist', async () => {
 });
 
 test('it refuses a user name on an expose without basic auth', async () => {
+  updateEnv('IMP_DOMAIN', 'imp.example.com');
+  updateEnv('IMP_DNS_PROVIDER', 'cloudflare');
+  updateEnv('IMP_DNS_API_TOKEN', 'unused');
+  updateEnv('IMP_PUBLIC_IP', '203.0.113.7');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: {
-      IMP_DOMAIN: 'imp.example.com',
-      IMP_DNS_PROVIDER: 'cloudflare',
-      IMP_DNS_API_TOKEN: 'unused',
-      IMP_PUBLIC_IP: '203.0.113.7',
-    },
   });
 
   expect(
@@ -1074,9 +1058,11 @@ test('it boots cold when the snapshot belongs to another firecracker', async () 
 
 test('it sleeps the least recently active imp to fit a new one in the budget', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -1106,9 +1092,11 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
 });
 
 test('it refuses a wake that needs more RAM than the held imps leave', async () => {
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -1132,9 +1120,11 @@ test('it refuses a wake that needs more RAM than the held imps leave', async () 
 });
 
 test('it keeps the sleeping imp and its snapshot when the budget turns away a cold boot', async () => {
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -1171,9 +1161,10 @@ test('it keeps the sleeping imp and its snapshot when the budget turns away a co
 });
 
 test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: { IMP_RAM_BUDGET_MIB: '800' },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -1196,9 +1187,10 @@ test('it leaves nothing behind when an imp is larger than the RAM budget', async
 });
 
 test('it frees the name and the slot of a create the RAM budget refused', async () => {
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: { IMP_RAM_BUDGET_MIB: '800' },
   });
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
@@ -1394,9 +1386,10 @@ test('it refuses an exec ticket used once', async () => {
 });
 
 test("it keeps the reference an image add's pull resolved in its audit row", async () => {
+  updateEnv('IMP_BUILD_ISOLATION', 'host');
+
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    env: { IMP_BUILD_ISOLATION: 'host' },
   });
 
   const pulled = `busybox@sha256:${'d'.repeat(64)}`;

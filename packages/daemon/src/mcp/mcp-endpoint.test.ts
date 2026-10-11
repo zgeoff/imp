@@ -3,6 +3,8 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { buildApiListenOptions } from '../api-listen-options';
@@ -25,9 +27,6 @@ import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
 
 interface SetupOptions {
-  // impd's environment past what every test boots with
-  readonly env?: Readonly<Record<string, string>>;
-
   // the `tailscale` CLI that impd's whois runs; its peers are the test's
   readonly tailscale: Pick<ReturnType<typeof buildStubTailscale>, 'run'>;
 
@@ -57,7 +56,7 @@ async function setupTest(options: SetupOptions) {
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-    ...options.env,
+    ...readImpEnv(),
   });
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
@@ -852,11 +851,12 @@ test('it refuses the session of a removed token with 401', async () => {
 });
 
 test('it refuses a caller with no token and no handed-over address with 401', async () => {
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale: buildStubTailscale(),
   });
 
@@ -880,12 +880,13 @@ test('it serves a tailnet identity the wake proxy hands over the imps its rule a
 
   tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
 
+  // alice's laptop may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    // alice's laptop may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale,
   });
 

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpEvent } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { loadConfig } from './config';
@@ -18,14 +20,9 @@ import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 
-interface SetupOptions {
-  // impd's environment past what every test boots with
-  readonly env?: Readonly<Record<string, string>>;
-}
-
 // impd's real app on stub VMs, on a clock the test steps, with every event
 // it emits and a root client that reaches the app in process
-async function setupTest(options: SetupOptions = {}) {
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -45,7 +42,7 @@ async function setupTest(options: SetupOptions = {}) {
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-    ...options.env,
+    ...readImpEnv(),
   });
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
@@ -782,9 +779,10 @@ test('it sleeps a leased imp in the shutdown pass and keeps its lease', async ()
 
 test('it names only the protected imps the caller may read in a RAM refusal', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  const ctx = await setupTest({
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
-  });
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.sleep({ name: 'dev-a' });
@@ -820,9 +818,10 @@ test('it names only the protected imps the caller may read in a RAM refusal', as
 
 test('it emits the governor’s refusal with every protected imp counted', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  const ctx = await setupTest({
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
-  });
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.sleep({ name: 'dev-a' });

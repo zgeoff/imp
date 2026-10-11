@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ApiCall, ImpEvent, Scope } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
@@ -28,9 +30,6 @@ import { startStubExecAgent } from './test-utils/start-stub-exec-agent';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 
 interface SetupOptions {
-  // impd's environment past what every test boots with
-  readonly env?: Readonly<Record<string, string>>;
-
   // the `tailscale` CLI that impd's whois runs; its peers are the test's
   readonly tailscale: Pick<ReturnType<typeof buildStubTailscale>, 'run'>;
 }
@@ -58,7 +57,7 @@ async function setupTest(options: SetupOptions) {
       IMP_JAILER: 'false',
       IMP_BOOT_TEMPLATES: 'false',
       IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-      ...options.env,
+      ...readImpEnv(),
     }),
 
     // a new disk stays the size of its image, since a template's clone
@@ -835,12 +834,13 @@ test('it refuses a loopback client that names a tailnet address itself', async (
 
   tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
 
+  // alice may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    // alice may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale,
   });
 
@@ -862,12 +862,13 @@ test('it serves a tailnet identity through a peer handle the wake proxy register
 
   tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
 
+  // alice may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    // alice may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale,
   });
 
@@ -894,12 +895,13 @@ test('it refuses a tailnet identity an exec socket from a page on an imp’s por
 
   tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
 
+  // alice may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    // alice may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale,
   });
 
@@ -919,12 +921,13 @@ test('it refuses a tailnet identity a tunnel from a page on an imp’s port', as
 
   tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
 
+  // alice may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    // alice may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale,
   });
 
@@ -949,12 +952,13 @@ test('it opens an exec socket for a tailnet identity from impd’s own page', as
 
   tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
 
+  // alice may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    // alice may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
     tailscale,
   });
 
