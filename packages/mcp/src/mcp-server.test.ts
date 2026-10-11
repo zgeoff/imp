@@ -483,7 +483,9 @@ test('it answers a request whose reply fails with an internal error', async () =
   const server = createMcpServer({ version: '1.2.3' });
   const logged = spyOn(console, 'error').mockImplementation(() => {});
 
-  onTestFinished(() => logged.mockRestore());
+  onTestFinished(() => {
+    logged.mockRestore();
+  });
 
   const failure = new Error('write EPIPE');
 
@@ -512,7 +514,9 @@ test('it answers a tool call whose result reply fails with an internal error', a
   const server = createMcpServer({ version: '1.2.3' });
   const logged = spyOn(console, 'error').mockImplementation(() => {});
 
-  onTestFinished(() => logged.mockRestore());
+  onTestFinished(() => {
+    logged.mockRestore();
+  });
 
   const failure = new Error('write EPIPE');
 

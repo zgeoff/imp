@@ -12,8 +12,8 @@ test('it fires error and no close listener for a refused upgrade', async () => {
 
   onTestFinished(() => server.stop(true));
 
-  const errors = mock();
-  const closes = mock();
+  const errors = mock<() => void>();
+  const closes = mock<() => void>();
   const closed = Promise.withResolvers<void>();
   const socket = createStubUndiciWebSocket(`ws://127.0.0.1:${String(server.port)}/`);
 
@@ -48,7 +48,7 @@ test('it passes open and message listeners through for an accepted upgrade', asy
 
   onTestFinished(() => server.stop(true));
 
-  const opens = mock();
+  const opens = mock<() => void>();
   const messages: unknown[] = [];
   const socket = createStubUndiciWebSocket(`ws://127.0.0.1:${String(server.port)}/`);
 
