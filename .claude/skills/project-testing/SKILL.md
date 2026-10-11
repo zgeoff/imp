@@ -404,11 +404,15 @@ this checkout whatever its `-C` says.
   is a symlink is refused too. The tests run in the background, so TERM (exit 143) or INT (130)
   stops them before cleanup. It reads the module's version from `IMP_ZFS_MODULE_VERSION_FILE`
   (default `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs the script against stub `id`,
-  `zfs`, `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), and a
-  `zpool` that keeps its pools in a state file (`create-stub-zpool.ts`), in a temp root: a normal
-  release, a work dir made with its parents, the collisions (a symlinked `pool.img` included), a
-  failed `zfs create`, a failed `zpool create`, a failed destroy, a pool that still uses the file, a
-  failed `zpool` query, a work dir path with spaces, and SIGTERM during the create and mid-run.
+  `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), a `zfs` that
+  prints its version and can fail a create (`create-stub-zfs.ts`), and a `zpool` that keeps its
+  pools in a state file (`create-stub-zpool.ts`), in a temp root: the refusals for a user other than
+  root, a missing module and a missing `zpool`, a normal release, a work dir made with its parents,
+  the collisions (a symlinked `pool.img` included), a failed `zfs create`, a failed `zpool create`,
+  a failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
+  spaces, and SIGTERM during the create and mid-run. For the create, the `zpool` stub writes a
+  marker and holds until the test writes a release file (or fails after 30 s), so the test sends
+  SIGTERM after the marker and before the release, inside the create.
 - **`scripts/zfs-host-test.sh`** runs `test-zfs.sh` (unless `IMP_ZFS_TEST_UNIT=0`), then starts a
   dev instance `imp-zfs` (port offset `IMP_DEV_PORT_OFFSET`, default 300) with
   `IMP_STORAGE_BACKEND=zfs` on a second sparse pool `impbench<pid>` of `IMP_ZFS_BENCH_GIB`
@@ -426,11 +430,13 @@ this checkout whatever its `-C` says.
   path), and removes that file only when no pool lists it and `zpool` could say so. A pool that will
   not go keeps its file and fails the run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in
   `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh`
-  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh`, with stub `sudo`, `zfs` and `docker` and
-  the stateful `zpool` on `PATH`: a normal release with its owner file, a work dir made with its
-  parents, the pool, file, symlink, data dir and container collisions, a failed `zpool create`, a
-  failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
-  spaces, and SIGTERM during the create and during the e2e run.
+  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh` (`create-stub-repo-script.ts`), with stub
+  `sudo`, the `zfs` stub, a `docker` that knows only the containers a test lists
+  (`create-stub-instance-docker.ts`) and the stateful `zpool` on `PATH`: the refusal for a missing
+  module, a normal release with its owner file, a work dir made with its parents, the pool, file,
+  symlink, data dir and container collisions, a failed `zpool create`, a failed destroy, a pool that
+  still uses the file, a failed `zpool` query, a work dir path with spaces, and SIGTERM during the
+  held create and during the e2e run.
 
 ## NixOS
 
