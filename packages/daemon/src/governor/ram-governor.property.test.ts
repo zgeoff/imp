@@ -1,3 +1,4 @@
+// oxlint-disable zgeoff/test-beside-module -- tests ram-governor.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, test } from 'bun:test';
 import fc from 'fast-check';
 import { buildStubGovernedHost } from '../test-utils/build-stub-governed-host';

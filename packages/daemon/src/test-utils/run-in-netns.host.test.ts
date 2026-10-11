@@ -1,3 +1,4 @@
+// oxlint-disable zgeoff/test-beside-module -- tests run-in-netns.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, test } from 'bun:test';
 import { canUnshare } from './can-unshare';
 import { runInNetns } from './run-in-netns';

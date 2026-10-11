@@ -8,6 +8,11 @@ exact = true
 # supply-chain guard: only install versions published >= 7 days ago
 minimumReleaseAge = 604800
 
+# @zgeoff/oxlint-config, a first-party package, is pinned to a release younger
+# than the gate; each pinned version's provenance is checked before the pin, and
+# its own dependencies stay behind the gate.
+minimumReleaseAgeExcludes = ["@zgeoff/oxlint-config"]
+
 [test]
 # restores env overrides, seeds faker and runs the MSW server for every test
 # (packages/test-utils), then registers jest-extended matchers

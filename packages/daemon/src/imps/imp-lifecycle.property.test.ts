@@ -1,3 +1,4 @@
+// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, test } from 'bun:test';
 import { waitFor } from '@imp/test-utils/wait-for';
 import fc from 'fast-check';

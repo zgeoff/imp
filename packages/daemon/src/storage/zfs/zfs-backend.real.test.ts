@@ -1,3 +1,4 @@
+// oxlint-disable zgeoff/test-beside-module -- tests zfs-backend.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
