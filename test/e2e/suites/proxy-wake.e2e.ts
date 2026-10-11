@@ -1,7 +1,15 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { assertState, runImp, runShellInImp } from '../lib/imp-cli';
+import {
+  assertState,
+  createInstanceClient,
+  readState,
+  runImp,
+  runShellInImp,
+} from '../lib/imp-cli';
 import {
   GUEST_SERVERS,
   PAGE,
@@ -10,85 +18,103 @@ import {
   sendRequest,
   startProxy,
 } from '../lib/imp-proxy';
-import type { RunningProxy } from '../lib/imp-proxy';
-import { createImp } from '../lib/imps';
-import { setupSuite } from '../lib/setup-suite';
+import { waitForExec } from '../lib/imps';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// `imp proxy` and sleep: each case waits out the idle timeout, so these run
+// `imp proxy` and sleep: the journey waits out the idle timeout, so it runs
 // in the acceptance set, not in `fast` with the proxy suite.
 
-const prefix = setupSuite('proxy-wake');
-const name = `${prefix}a`;
+// one stack for every release, so the proxy stops before its imp goes
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// the idle timeout plus a sweep of the idle loop
-const ASLEEP_WITHIN_MS = (config.idleTimeoutS + 15) * 1000;
+  onTestFinished(() => stack.disposeAsync());
 
-// long enough that only activity keeps an imp awake
-const PAST_IDLE_MS = (config.idleTimeoutS + 6) * 1000;
-let proxy: RunningProxy;
+  const client = await createInstanceClient();
 
-beforeAll(async () => {
-  await createImp(name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
-  await runShellInImp(name, GUEST_SERVERS);
-
-  proxy = await startProxy(name, '0:8080', '0:9001', '0:9002');
-}, 120_000);
-
-afterAll(async () => {
-  const code = await proxy.stop();
-
-  expect(code).toBe(0);
-});
-
-function waitAsleep(): Promise<void> {
-  return waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'), {
-    timeoutMs: ASLEEP_WITHIN_MS,
-  });
+  return { prefix: readSuitePrefix('proxy-wake'), stack, client };
 }
 
-test('an open connection keeps the imp awake, and it sleeps once the connection ends', async () => {
-  const held = await openHeldSocket(proxy.ports[1] ?? 0);
+test('it keeps an imp awake while a proxied connection is open, wakes it on a connection, and drops connections on a forced sleep', async () => {
+  const ctx = await setupTest();
 
-  try {
-    await Bun.sleep(PAST_IDLE_MS);
+  const name = `${ctx.prefix}a`;
 
-    await assertState(name, 'running');
-  } finally {
+  await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+  await runShellInImp(name, GUEST_SERVERS);
+
+  const proxy = await startProxy(name, '0:8080', '0:9001', '0:9002');
+
+  ctx.stack.defer(async () => {
+    await proxy.stop();
+  });
+
+  const [pagePort, heldPort, countPort] = proxy.ports;
+
+  invariant(pagePort);
+  invariant(heldPort);
+  invariant(countPort);
+
+  // an open connection keeps it awake past the idle timeout, and it sleeps
+  // once the connection ends
+  const held = await openHeldSocket(heldPort);
+
+  ctx.stack.defer(() => {
     held.socket.destroy();
-  }
+  });
 
-  await waitAsleep();
-}, 120_000);
+  const holding = Date.now();
 
-test('a connection wakes a sleeping imp', async () => {
-  await assertState(name, 'sleeping');
+  await waitAwakePastIdle(name, holding);
 
+  held.socket.destroy();
+
+  // the idle timeout plus a sweep of the idle loop
+  await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'), {
+    timeoutMs: (config.idleTimeoutS + 15) * 1000,
+  });
+
+  // a connection wakes it
   const started = Date.now();
 
-  const page = await readPage(`http://127.0.0.1:${String(proxy.ports[0])}/`);
+  const page = await readPage(`http://127.0.0.1:${String(pagePort)}/`);
 
   writeMetric('proxyWakeMs', Date.now() - started);
 
+  const afterPage = await readState(name);
+
   expect(page).toBe(PAGE);
+  expect(afterPage).toBe('running');
 
-  await assertState(name, 'running');
-});
+  // a forced sleep drops open connections, and the next connection wakes it
+  const dropped = await openHeldSocket(countPort);
 
-test('a forced sleep drops open connections, and the next connection wakes the imp', async () => {
-  const held = await openHeldSocket(proxy.ports[2] ?? 0);
-
-  await runImp('sleep', name);
-  await held.closed;
-
-  await waitFor('the lost notice', () => {
-    expect(proxy.readStderr()).toContain(`${name}:9002: the connection in the imp was lost`);
+  ctx.stack.defer(() => {
+    dropped.socket.destroy();
   });
 
-  const reply = await sendRequest(proxy.ports[2] ?? 0, 'again');
+  await runImp('sleep', name);
+  await dropped.closed;
+
+  await waitFor('the lost notice', () => {
+    if (!proxy.readStderr().includes(`${name}:9002: the connection in the imp was lost`)) {
+      throw new Error(`imp proxy said ${proxy.readStderr()}`);
+    }
+  });
+
+  const reply = await sendRequest(countPort, 'again');
+  const afterReply = await readState(name);
+  const code = await proxy.stop();
 
   expect(reply).toBe('got 5 bytes\n');
-
-  await assertState(name, 'running');
-}, 120_000);
+  expect(afterReply).toBe('running');
+  expect(code).toBe(0);
+});

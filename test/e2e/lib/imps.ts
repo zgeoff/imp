@@ -2,7 +2,7 @@ import { listImps, runImp, runInImp, runShellInImp, tryImp } from './imp-cli';
 import { waitFor } from './wait-for';
 
 // ignores imps already gone
-export async function removeImps(...names: readonly string[]): Promise<void> {
+async function removeImps(...names: readonly string[]): Promise<void> {
   for (const name of names) {
     await tryImp(['rm', name]);
   }
@@ -10,15 +10,6 @@ export async function removeImps(...names: readonly string[]): Promise<void> {
 
 export async function waitForExec(name: string, timeoutMs = 60_000): Promise<void> {
   await waitFor(`${name} to accept exec`, () => runInImp(name, 'true'), { timeoutMs });
-}
-
-// `imp new NAME ARGS...`, then waits until exec works; returns what it printed
-export async function createImp(name: string, ...args: readonly string[]): Promise<string> {
-  const out = await runImp('new', name, ...args);
-
-  await waitForExec(name);
-
-  return out;
 }
 
 // keeps the imp awake, so the short idle timeout does not sleep it between steps
@@ -41,6 +32,24 @@ export async function writeGuestFile(name: string, path: string, content: string
 // "none" when the file does not exist
 export function readGuestFile(name: string, path: string): Promise<string> {
   return runShellInImp(name, `cat ${path} 2>/dev/null || echo none`);
+}
+
+// a guest script that prints `gone` once nothing is at `path`, a socket
+// included, and `there` while something is
+export function buildPathGoneCheck(path: string): string {
+  return `if [ -e '${path}' ]; then echo there; else echo gone; fi`;
+}
+
+// waits until nothing is at `path` in the imp, such as a socket a forward or
+// a connection made and must remove once it ends
+export async function waitForGuestPathGone(name: string, path: string): Promise<void> {
+  await waitFor(`${path} to go`, async () => {
+    const state = await runShellInImp(name, buildPathGoneCheck(path));
+
+    if (state !== 'gone') {
+      throw new Error(`${path} is still there`);
+    }
+  });
 }
 
 export interface GuestIdentity {

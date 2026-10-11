@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandResult } from './instance';
 import { REPO_ROOT, instance, runChecked, runCommand, runInContainer } from './instance';
@@ -176,6 +177,54 @@ export function startSsh(
   };
 }
 
+export interface ForwardedList {
+  // ssh-add's exit code, stdout and stderr
+  readonly listed: CommandResult;
+
+  // what the forwarding ssh logged
+  readonly forwardLog: string;
+}
+
+// `ssh-add -l` on this machine through `ssh -N -L <local>:<guestPath>` to a
+// socket in the imp. `local` must fit a unix socket path (107 bytes).
+export async function listAgentThroughUnixForward(
+  client: SshClient,
+  user: string,
+  guestPath: string,
+  local: string,
+): Promise<ForwardedList> {
+  // INFO: the client logs a refused channel at that level
+  const forward = startSsh(client, [
+    '-N',
+    '-o',
+    'LogLevel=INFO',
+    '-L',
+    `${local}:${guestPath}`,
+    `${user}@${SSH_HOST}`,
+  ]);
+
+  try {
+    // the client listens once it has logged in, which may wake the imp
+    await waitFor(`the forward to listen on ${local}`, () => {
+      if (!existsSync(local)) {
+        throw new Error(`no ${local} yet`);
+      }
+    });
+
+    const result = await runCommand(['ssh-add', '-l'], { env: { SSH_AUTH_SOCK: local } });
+
+    await forward.stop();
+
+    const forwardLog = await new Response(forward.proc.stderr).text();
+
+    return { listed: result, forwardLog };
+  } finally {
+    await forward.stop();
+
+    rmSync(local, { force: true });
+  }
+}
+
 // The user's ssh-agent on this machine, holding a key made for the run.
 export interface LocalSshAgent extends AsyncDisposable {
   // SSH_AUTH_SOCK for `ssh -A`
@@ -190,12 +239,15 @@ export interface LocalSshAgent extends AsyncDisposable {
 // ends, even without afterAll, the pipe closes and the agent goes with it.
 const AGENT_WRAPPER = 'ssh-agent -D -a "$1" & agent=$!; cat >/dev/null; kill "$agent"';
 
-// `label` names the socket, the key file and the key's comment
+// `label` names the socket, the key file and the key's comment. The socket
+// sits in a dir of its own under TMPDIR: a unix socket path holds 107
+// bytes, which the client's dir in a worktree's .cache can pass.
 export async function startLocalSshAgent(
   client: SshClient,
   label = 'laptop',
 ): Promise<LocalSshAgent> {
-  const socket = join(client.dir, `${label}.sock`);
+  const sockets = mkdtempSync(join(tmpdir(), 'imp-agent-'));
+  const socket = join(sockets, `${label}.sock`);
   const keyPath = join(client.dir, `${label}-key`);
 
   const publicKey = await createKey(keyPath, `imp-e2e-${label}`);
@@ -217,6 +269,8 @@ export async function startLocalSshAgent(
       await agent.stdin.end();
 
       await agent.exited;
+
+      rmSync(sockets, { recursive: true, force: true });
     },
   };
 }
@@ -253,14 +307,4 @@ export async function readTapLinkLocal(hostIp: string): Promise<string> {
   }
 
   return linkLocal;
-}
-
-// a free port on this machine for a local forward
-export function findFreePort(): number {
-  const server = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } });
-  const port = server.port;
-
-  server.stop(true);
-
-  return port;
 }

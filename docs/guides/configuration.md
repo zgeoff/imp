@@ -148,21 +148,22 @@ set. The OTLP exporters read the other standard `OTEL_EXPORTER_OTLP_*` variables
 
 The host container's scripts in `host/` read these before impd starts.
 
-| Variable                     | Default                            | Read by            | Meaning                                                                                                            |
-| ---------------------------- | ---------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `IMP_STORAGE_BACKEND`        | `xfs`                              | `setup-storage.sh` | `zfs` mounts `IMP_ZFS_ROOT` on `/var/lib/imp` and skips the loop file.                                             |
-| `IMP_ZFS_ROOT`               | none                               | `setup-storage.sh` | The dataset to mount; it must have `mountpoint=legacy`.                                                            |
-| `IMP_STORAGE_LOOP`           | `1`; `0` in the release image      | `setup-storage.sh` | `1` loop-mounts `IMP_STORAGE_FILE` when nothing is mounted at `/var/lib/imp`; `0` refuses to start.                |
-| `IMP_STORAGE_GIB`            | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                              |
-| `IMP_STORAGE_FILE`           | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
-| `IMP_SUBNET`                 | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                 |
-| `IMP_UPLINK_MTU`             | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp (less 40, or 60 for IPv6). Unset: path MTU.                   |
-| `TAILSCALE_AUTHKEY`          | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: the saved node state, if any, else no tailnet.                                           |
-| `IMP_TAILSCALE_AUTHKEY_FILE` | none                               | `tailscale-up.sh`  | A file that holds the key instead, read by `tailscale` only to join.                                               |
-| `IMP_TAILSCALE_HOSTNAME`     | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                              |
-| `IMP_TAILSCALE_STATE_DIR`    | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                              |
-| `IMP_DNS`                    | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                          |
-| `IMP_DAEMON`                 | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd the supervisor runs: a `.ts` file under bun, else a binary. The release image sets `/usr/local/bin/impd`. |
+| Variable                     | Default                            | Read by            | Meaning                                                                                                                                                     |
+| ---------------------------- | ---------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IMP_STORAGE_BACKEND`        | `xfs`                              | `setup-storage.sh` | `zfs` mounts `IMP_ZFS_ROOT` on `/var/lib/imp` and skips the loop file.                                                                                      |
+| `IMP_ZFS_ROOT`               | none                               | `setup-storage.sh` | The dataset to mount; it must have `mountpoint=legacy`.                                                                                                     |
+| `IMP_STORAGE_LOOP`           | `1`; `0` in the release image      | `setup-storage.sh` | `1` loop-mounts `IMP_STORAGE_FILE` when nothing is mounted at `/var/lib/imp`; `0` refuses to start.                                                         |
+| `IMP_STORAGE_GIB`            | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                                                                       |
+| `IMP_STORAGE_FILE`           | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                                                                       |
+| `IMP_SUBNET`                 | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                                                          |
+| `IMP_UPLINK_MTU`             | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp (less 40, or 60 for IPv6). Unset: path MTU.                                                            |
+| `TAILSCALE_AUTHKEY`          | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: the saved node state, if any, else no tailnet.                                                                                    |
+| `IMP_TAILSCALE_AUTHKEY_FILE` | none                               | `tailscale-up.sh`  | A file that holds the key instead, read by `tailscale` only to join.                                                                                        |
+| `IMP_TAILSCALE_HOSTNAME`     | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                                                                       |
+| `IMP_TAILSCALE_TAGS`         | `tag:imp`                          | `tailscale-up.sh`  | The tags the node advertises, comma-separated. When set, a node with other tags joins again with the key, or goes down. The e2e harness sets `tag:imp-e2e`. |
+| `IMP_TAILSCALE_STATE_DIR`    | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                                                                       |
+| `IMP_DNS`                    | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                                                                   |
+| `IMP_DAEMON`                 | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd the supervisor runs: a `.ts` file under bun, else a binary. The release image sets `/usr/local/bin/impd`.                                          |
 
 **NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, a comma-separated list. `dev.sh` does
 not pass `IMP_DNS`, so the dev instance uses the defaults.
@@ -214,17 +215,24 @@ other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first
 
 1. `TAILSCALE_AUTHKEY` in your environment.
 2. `op read "$IMP_TAILSCALE_AUTHKEY_REF"`, only when `IMP_TAILSCALE_OP=1`, the 1Password CLI is on
-   `PATH` and the read works. The e2e harness sets `IMP_TAILSCALE_OP=1` only when the run includes
-   the tailscale suite, so other runs and other worktrees' dev instances stay off the tailnet. The
-   reference defaults to `op://cloud/imp-tailscale-authkey/credential`. The read gets 20 seconds, so
-   a locked 1Password app cannot hang a run. A failed read stays quiet, falls through, and sets
-   `IMP_TAILSCALE_OP_MISSED=1`, so the rest of the run (a reboot, the e2e harness's later steps)
-   skips `op`.
+   `PATH` and the read works, so other worktrees' dev instances stay off the tailnet. The reference
+   defaults to `op://cloud/imp-tailscale-authkey/credential`, a `tag:imp` key. The read gets 20
+   seconds, so a locked 1Password app cannot hang a run. A failed read stays quiet, falls through,
+   and sets `IMP_TAILSCALE_OP_MISSED=1`, so the rest of the run (a reboot, the e2e harness's later
+   steps) skips `op`.
 3. `TAILSCALE_AUTHKEY` in `.env`.
 
 With none of them, the dev instance stays off the tailnet. The key reaches Docker as
 `-e TAILSCALE_AUTHKEY` with no value, so it never shows in argv, and `bash -x` traces never show it.
-`load_tailscale_authkey` in `scripts/lib.sh` holds the order; the e2e harness uses it too.
+`load_tailscale_authkey` in `scripts/lib.sh` holds the order.
+
+The e2e harness never uses that key: a `tag:imp` node reaches a live impd. When a run includes the
+`tailscale` or `moves-tailnet` suite, `load_tailscale_e2e_authkey` reads the OAuth client of
+`tag:imp-e2e`, from `IMP_E2E_TAILSCALE_AUTHKEY` or else `op read "$IMP_E2E_TAILSCALE_OAUTH_REF"`
+(default `op://imp-e2e/imp-e2e-tailscale-oauth/client-secret`). The harness passes the secret to
+`dev.sh` as `TAILSCALE_AUTHKEY`, with `?ephemeral=true&preauthorized=true`, and
+`IMP_TAILSCALE_TAGS=tag:imp-e2e`. The tailnet policy lets `tag:imp-e2e` nodes reach each other on
+tcp 7070 and nothing else. Every other e2e run sets `IMP_DEV_TAILNET=0`.
 
 `dev.sh` sets `IMP_UPLINK_MTU` from this machine's default route, unless it is set.
 

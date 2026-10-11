@@ -34,6 +34,12 @@ export async function resetBaseline(options: Readonly<ResetBaselineOptions>): Pr
       .map((row) => row.name)
       .filter((name) => options.prefixes.some((prefix) => name.startsWith(prefix)));
 
+  // impd refuses to remove an imp a failed move left marked, so the move ends
+  // first; a target that cannot be reached rejects the reset
+  for (const name of listOwned(imps.filter((imp) => imp.move !== undefined))) {
+    await client.moves.abort({ name });
+  }
+
   // an imp first: it holds its checkpoints, leases, networks, grants and image
   for (const name of listOwned(imps)) {
     await client.imps.destroy({ name });
@@ -111,6 +117,17 @@ export async function removeSecretIfPresent(client: ImpClient, name: string): Pr
 export async function removeNetworkIfPresent(client: ImpClient, name: string): Promise<void> {
   try {
     await client.networks.delete({ name });
+  } catch (error) {
+    if (!isNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
+// The same for an OAuth client a journey made; it revokes the client's grants.
+export async function removeOAuthClientIfPresent(client: ImpClient, name: string): Promise<void> {
+  try {
+    await client.oauth.clients.delete({ name });
   } catch (error) {
     if (!isNotFound(error)) {
       throw error;

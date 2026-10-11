@@ -1,107 +1,102 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy } from '../lib/http';
 import {
   assertState,
-  listCheckpoints,
-  listImps,
+  createInstanceClient,
   readState,
   runImp,
   runShellInImp,
   tryImp,
 } from '../lib/imp-cli';
-import { createImp, holdImp, readGuestFile, waitForExec, writeGuestFile } from '../lib/imps';
+import { holdImp, readGuestFile, waitForExec, writeGuestFile } from '../lib/imps';
 import { checkHealthReady, findImpdPid, runDevScript } from '../lib/instance';
-import type { MemoryProof } from '../lib/memory-proof';
 import { checkMemoryProof, startMemoryProof } from '../lib/memory-proof';
-import { setupSuite } from '../lib/setup-suite';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { listAwakeImps, readInventory } from '../lib/restart-inventory';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-const prefix = setupSuite('restart');
-const TINY = resolveImageName('e2e-tiny');
-const BARE = resolveImageName('e2e-bare');
-const disk = `${prefix}disk`;
-const mem = `${prefix}mem`;
-const stopped = `${prefix}stopped`;
-const BOOT_ID = 'cat /proc/sys/kernel/random/boot_id';
-let proof: MemoryProof;
-let diskBootId: string;
+// impd restarts and instance reboots keep every imp (docs/guides/development.md).
+// The inventory holds every imp on the instance: in the acceptance run that
+// is scale's fleet too, which the harness keeps for this suite.
 
-// Every imp (scale's too, when it ran first) without volatile fields, with
-// its checkpoint ids: a restart must keep all of it.
-async function readInventory(): Promise<readonly unknown[]> {
-  const rows = await listImps();
+// one stack for every release
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  const inventory: unknown[] = [];
+  onTestFinished(() => stack.disposeAsync());
 
-  for (const row of rows.toSorted((a, b) => a.name.localeCompare(b.name))) {
-    const checkpoints = await listCheckpoints(row.name);
+  const client = await createInstanceClient();
 
-    inventory.push({
-      name: row.name,
-      id: row.id,
-      image: row.image,
-      slot: row.slot,
-      port: row.port,
-      vcpus: row.vcpus,
-      memoryMib: row.memoryMib,
-      checkpoints: checkpoints.map((checkpoint) => checkpoint.id).toSorted(),
-    });
-  }
-
-  return inventory;
+  return { prefix: readSuitePrefix('restart'), stack, client };
 }
 
-async function listAwakeImps(): Promise<readonly string[]> {
-  const rows = await listImps();
+test('it re-adopts running VMs across an impd restart, wakes a sleeper and restores a checkpoint, then sleeps every imp across a reboot', async () => {
+  const ctx = await setupTest();
 
-  return rows
-    .filter((row) => row.state !== 'sleeping' && row.state !== 'stopped')
-    .map((row) => `${row.name} ${row.state}`);
-}
+  const disk = `${ctx.prefix}disk`;
+  const mem = `${ctx.prefix}mem`;
+  const stopped = `${ctx.prefix}stopped`;
 
-test('setup: a running imp with a checkpoint, a sleeping imp and a stopped imp', async () => {
-  await createImp(disk, '--image', TINY, '--memory', '512');
+  // a running imp with a checkpoint and a later write
+  await runImp('new', disk, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, disk));
+
+  await waitForExec(disk);
   await holdImp(disk);
   await writeGuestFile(disk, '/root/f', 'r1');
   await runImp('checkpoint', disk, 'r1');
   await writeGuestFile(disk, '/root/f', 'r2');
 
-  diskBootId = await runShellInImp(disk, BOOT_ID);
+  const diskBootId = await runShellInImp(disk, 'cat /proc/sys/kernel/random/boot_id');
 
-  await createImp(mem, '--image', BARE, '--memory', '512');
+  // a sleeping imp whose memory holds a proof
+  await runImp('new', mem, '--image', resolveImageName('e2e-bare'), '--memory', '512');
 
-  proof = await startMemoryProof(mem);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, mem));
+
+  await waitForExec(mem);
+
+  const proof = await startMemoryProof(mem);
 
   // the idle sleeper may get there first
   await tryImp(['sleep', mem]);
   await waitFor(`${mem} to sleep`, () => assertState(mem, 'sleeping'));
-  await createImp(stopped, '--image', TINY, '--memory', '512');
-  await runImp('stop', stopped);
-});
 
-test('an impd restart re-adopts running VMs and keeps every imp and checkpoint', async () => {
-  const before = await readInventory();
+  // a stopped imp
+  await runImp('new', stopped, '--image', resolveImageName('e2e-tiny'), '--memory', '512');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, stopped));
+
+  await waitForExec(stopped);
+  await runImp('stop', stopped);
+
+  const beforeRestart = await readInventory();
   const oldPid = await findImpdPid();
 
-  expect(oldPid).not.toBeNull();
+  console.log(`    ${String(beforeRestart.length)} imps before the restart`);
 
-  console.log(`    ${String(before.length)} imps before the restart`);
-
-  const started = Date.now();
+  const restarting = Date.now();
 
   // dev.sh restart can return while the old impd still answers /health, so
   // wait for a new impd process before trusting readiness
   await runDevScript('restart');
 
-  await waitFor(
+  const newPid = await waitFor(
     'a new impd process',
     async () => {
       const pid = await findImpdPid();
 
-      expect(pid).not.toBeNull();
-      expect(pid).not.toBe(oldPid);
+      if (pid === null || pid === oldPid) {
+        throw new Error(`impd pid ${String(pid)}, was ${String(oldPid)}`);
+      }
+
+      return pid;
     },
     { timeoutMs: 180_000 },
   );
@@ -111,66 +106,67 @@ test('an impd restart re-adopts running VMs and keeps every imp and checkpoint',
     async () => {
       const ready = await checkHealthReady();
 
-      expect(ready).toBeTrue();
+      if (!ready) {
+        throw new Error('impd is not ready');
+      }
     },
     { timeoutMs: 120_000 },
   );
 
-  writeMetric('restartMs', Date.now() - started);
+  writeMetric('restartMs', Date.now() - restarting);
 
-  const after = await readInventory();
+  const afterRestart = await readInventory();
   const diskState = await readState(disk);
-  const bootId = await runShellInImp(disk, BOOT_ID);
+  const bootId = await runShellInImp(disk, 'cat /proc/sys/kernel/random/boot_id');
   const file = await readGuestFile(disk, '/root/f');
   const stoppedState = await readState(stopped);
 
-  expect(after).toEqual(before);
+  expect(oldPid).not.toBeNull();
+  expect(newPid).not.toBe(oldPid);
+  expect(afterRestart).toStrictEqual(beforeRestart);
 
   // re-adopted, not rebooted: the same boot and the latest write
   expect(diskState).toBe('running');
   expect(bootId).toBe(diskBootId);
   expect(file).toBe('r2');
   expect(stoppedState).toBe('stopped');
-});
 
-test('a sleeping imp wakes with its memory after an impd restart', async () => {
-  const body = await getThroughProxy(mem);
+  // the sleeper wakes with its memory after the restart
+  const woken = await getThroughProxy(mem);
 
-  expect(body).toBe(proof.token);
+  expect(woken).toBe(proof.token);
 
   await checkMemoryProof(proof);
-});
 
-test('a checkpoint taken before the restart restores', async () => {
+  // a checkpoint taken before the restart restores
   await runImp('restore', disk, 'r1');
   await waitForExec(disk);
 
-  const file = await readGuestFile(disk, '/root/f');
+  const restored = await readGuestFile(disk, '/root/f');
 
-  expect(file).toBe('r1');
-});
+  expect(restored).toBe('r1');
 
-test('stopping the instance sleeps every imp and they wake intact', async () => {
+  // stopping the instance sleeps every imp, and they wake intact
   await holdImp(mem);
 
-  const before = await readInventory();
+  const beforeReboot = await readInventory();
 
-  const started = Date.now();
+  const rebooting = Date.now();
 
   // dev.sh reboot: SIGTERM makes impd sleep every VM before it exits
   await runDevScript('reboot');
 
-  writeMetric('rebootMs', Date.now() - started);
+  writeMetric('rebootMs', Date.now() - rebooting);
 
-  const after = await readInventory();
+  const afterReboot = await readInventory();
   const awake = await listAwakeImps();
   const memState = await readState(mem);
-  const stoppedState = await readState(stopped);
+  const stoppedAfterReboot = await readState(stopped);
 
-  expect(after).toEqual(before);
-  expect(awake).toBeEmpty();
+  expect(afterReboot).toStrictEqual(beforeReboot);
+  expect(awake).toStrictEqual([]);
   expect(memState).toBe('sleeping');
-  expect(stoppedState).toBe('stopped');
+  expect(stoppedAfterReboot).toBe('stopped');
 
   const body = await getThroughProxy(mem);
 

@@ -1,221 +1,319 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { runImp, tryImp } from '../lib/imp-cli';
+import { countGuestSleeps } from '../lib/guest-processes';
+import { createInstanceClient, findImp } from '../lib/imp-cli';
 import { startHttpMcpSession, startMcpSession } from '../lib/mcp';
-import type { McpSession, ToolResult } from '../lib/mcp';
-import { setupSuite } from '../lib/setup-suite';
+import { readToolData } from '../lib/mcp-result';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent, removeTokenIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 
-const prefix = setupSuite('mcp');
+// `imp mcp` over stdio, as an agent's MCP client drives it, held to the
+// suite's prefix; and impd's MCP over HTTP. The file tools' commands must
+// work with BusyBox (e2e-tiny) and coreutils (impd's default image).
 
-// BusyBox in e2e-tiny, coreutils in impd's default image: the file tools'
-// commands must work with both
-const tiny = `${prefix}tiny`;
-const full = `${prefix}full`;
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-// a leading dash and spaces in each part, and shell syntax that must stay text
-const ODD_PATH = '/root/-odd dir/-a file $(x).txt';
+  onTestFinished(() => stack.disposeAsync());
 
-// the tokens the HTTP tests make, and remove
-const AGENT_TOKEN = `${prefix}agent`;
-const READ_TOKEN = `${prefix}reader`;
-let session: McpSession;
+  const client = await createInstanceClient();
 
-beforeAll(async () => {
-  session = await startMcpSession(['--prefix', prefix]);
-});
+  const prefix = readSuitePrefix('mcp');
 
-afterAll(async () => {
-  await session.close();
+  const session = await startMcpSession(['--prefix', prefix]);
 
-  for (const name of [AGENT_TOKEN, READ_TOKEN]) {
-    await tryImp(['token', 'rm', name]);
-  }
-});
+  stack.defer(async () => {
+    await session.close();
+  });
 
-// `imp token new`, which prints the secret alone on stdout
-async function makeToken(name: string, ...args: readonly string[]): Promise<string> {
-  await tryImp(['token', 'rm', name]);
-
-  const stdout = await runImp('token', 'new', name, ...args);
-
-  return stdout.trim();
+  return { prefix, stack, client, session };
 }
 
-function readData(result: Readonly<ToolResult>): Readonly<Record<string, unknown>> {
-  const failure = result.isError ? (result.content[0]?.text ?? '') : null;
+test('it boots an imp inside the prefix with imp_create, and refuses one outside', async () => {
+  const ctx = await setupTest();
 
-  if (failure !== null) {
-    throw new Error(`the tool failed: ${failure}`);
-  }
+  const name = `${ctx.prefix}tiny`;
+  const other = 'e2e-other-stdio';
 
-  return result.structuredContent ?? {};
-}
+  // the outside name must be free, so the cleanup below takes only what this
+  // test made
+  const taken = await findImp(other);
 
-async function runShell(name: string, command: string): Promise<Readonly<Record<string, unknown>>> {
-  const result = await session.runTool('imp_exec', { name, command });
+  expect(taken).toBeUndefined();
 
-  return readData(result);
-}
-
-test('imp_create boots imps inside the prefix', async () => {
-  const created = await session.runTool('imp_create', {
-    name: tiny,
+  const created = await ctx.session.runTool('imp_create', {
+    name,
     image: resolveImageName('e2e-tiny'),
     memoryMib: 512,
   });
 
-  const createdFull = await session.runTool('imp_create', { name: full, memoryMib: 512 });
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  expect(readData(created)).toMatchObject({ imp: { name: tiny, state: 'running' } });
-  expect(readData(createdFull)).toMatchObject({ imp: { name: full, state: 'running' } });
+  const outside = await ctx.session.runTool('imp_create', { name: other });
 
-  const outside = await session.runTool('imp_create', { name: 'e2e-other' });
+  // a regressed refusal, or a create that failed after its insert, leaves an
+  // imp; the removal passes over a name that was never made
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
 
-  expect(outside.isError).toBe(true);
+  expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
+  expect(outside.isError).toBeTrue();
 });
 
-test('files round-trip through odd paths, and a write keeps the mode of the file it replaces', async () => {
-  for (const name of [tiny, full]) {
+test.each([
+  ['BusyBox', { image: resolveImageName('e2e-tiny') }],
+  ['coreutils', {}],
+])(
+  'it round-trips a file through an odd path with %s, and a write keeps the mode of the file it replaces',
+  async (tools, image) => {
+    const ctx = await setupTest();
+
+    const name = `${ctx.prefix}files-${tools.toLowerCase()}`;
+
+    // a leading dash and spaces in each part, and shell syntax that stays text
+    const path = '/root/-odd dir/-a file $(x).txt';
     const content = 'line one\nünïcode\n';
 
-    const written = await session.runTool('imp_write_file', { name, path: ODD_PATH, content });
+    const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
 
-    expect(readData(written)).toEqual({ path: ODD_PATH, bytes: Buffer.byteLength(content) });
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-    const read = await session.runTool('imp_read_file', { name, path: ODD_PATH });
+    expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
 
-    expect(readData(read)).toMatchObject({ content });
+    const written = await ctx.session.runTool('imp_write_file', { name, path, content });
+    const read = await ctx.session.runTool('imp_read_file', { name, path });
 
-    const listed = await runShell(name, `ls -la '/root/-odd dir'; stat -c %a '${ODD_PATH}'`);
+    const listed = await ctx.session.runTool('imp_exec', {
+      name,
+      command: `ls -la '/root/-odd dir'; stat -c %a '${path}'`,
+    });
 
-    const stdout = String(listed['stdout']);
+    expect(readToolData(written)).toStrictEqual({ path, bytes: Buffer.byteLength(content) });
+    expect(readToolData(read)).toMatchObject({ content });
 
     // no temp file is left behind, and a new file gets 0666 less the umask
-    expect(stdout).not.toContain('.imp-write.');
-    expect(stdout.trim().split('\n').at(-1)).toBe('644');
-
-    await runShell(name, `chmod 600 '${ODD_PATH}'`);
-
-    await session.runTool('imp_write_file', { name, path: ODD_PATH, content: 'again\n' });
-
-    const mode = await runShell(name, `stat -c %a '${ODD_PATH}'; cat '${ODD_PATH}'`);
-
-    expect(mode['stdout']).toBe('600\nagain\n');
-  }
-});
-
-test('a write follows a symlink and refuses a directory', async () => {
-  for (const name of [tiny, full]) {
-    await runShell(name, `ln -sf '${ODD_PATH}' /root/link.txt`);
-
-    const linked = await session.runTool('imp_write_file', {
-      name,
-      path: '/root/link.txt',
-      content: 'through\n',
+    expect(readToolData(listed)).toMatchObject({
+      exitCode: 0,
+      stdout: expect.toSatisfy(
+        (stdout: string) => !stdout.includes('.imp-write.') && stdout.trimEnd().endsWith('\n644'),
+      ),
+      stderr: '',
     });
 
-    expect(linked.isError).toBe(false);
+    await ctx.session.runTool('imp_exec', { name, command: `chmod 600 '${path}'` });
+    await ctx.session.runTool('imp_write_file', { name, path, content: 'again\n' });
 
-    const after = await runShell(name, `[ -L /root/link.txt ] && echo link; cat '${ODD_PATH}'`);
-
-    expect(after['stdout']).toBe('link\nthrough\n');
-
-    const directory = await session.runTool('imp_write_file', {
+    const mode = await ctx.session.runTool('imp_exec', {
       name,
-      path: '/root',
-      content: 'x',
+      command: `stat -c %a '${path}'; cat '${path}'`,
     });
 
-    expect(directory.isError).toBe(true);
-    expect(directory.content[0]?.text).toContain('/root is a directory');
-  }
+    expect(readToolData(mode)).toMatchObject({ exitCode: 0, stdout: '600\nagain\n', stderr: '' });
+  },
+);
+
+test.each([
+  ['BusyBox', { image: resolveImageName('e2e-tiny') }],
+  ['coreutils', {}],
+])('it writes through a symlink and refuses a directory with %s', async (tools, image) => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}link-${tools.toLowerCase()}`;
+
+  const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
+
+  // the link points at an odd path: a leading dash, a space and shell syntax
+  await ctx.session.runTool('imp_exec', {
+    name,
+    command:
+      "mkdir -p '/root/-odd dir' && echo before > '/root/-odd dir/-target $(x).txt' && ln -sf '/root/-odd dir/-target $(x).txt' /root/link.txt",
+  });
+
+  const linked = await ctx.session.runTool('imp_write_file', {
+    name,
+    path: '/root/link.txt',
+    content: 'through\n',
+  });
+
+  const after = await ctx.session.runTool('imp_exec', {
+    name,
+    command: "[ -L /root/link.txt ] && echo link; cat '/root/-odd dir/-target $(x).txt'",
+  });
+
+  const directory = await ctx.session.runTool('imp_write_file', {
+    name,
+    path: '/root',
+    content: 'x',
+  });
+
+  expect(linked.isError).toBeFalse();
+  expect(readToolData(after)).toMatchObject({ exitCode: 0, stdout: 'link\nthrough\n', stderr: '' });
+  expect(directory.isError).toBeTrue();
+  expect(directory.content[0]?.text).toContain('/root is a directory');
 });
 
-test('base64 carries bytes that are not UTF-8', async () => {
+test('it carries bytes that are not UTF-8 as base64', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}b64`;
   const bytes = Buffer.from([0, 1, 254, 255, 10]).toString('base64');
 
-  await session.runTool('imp_write_file', {
-    name: tiny,
+  const created = await ctx.session.runTool('imp_create', {
+    name,
+    image: resolveImageName('e2e-tiny'),
+    memoryMib: 512,
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+  readToolData(created);
+
+  await ctx.session.runTool('imp_write_file', {
+    name,
     path: '/tmp/bin.dat',
     content: bytes,
     encoding: 'base64',
   });
 
-  const asText = await session.runTool('imp_read_file', { name: tiny, path: '/tmp/bin.dat' });
+  const asText = await ctx.session.runTool('imp_read_file', { name, path: '/tmp/bin.dat' });
 
-  const asBase64 = await session.runTool('imp_read_file', {
-    name: tiny,
+  const asBase64 = await ctx.session.runTool('imp_read_file', {
+    name,
     path: '/tmp/bin.dat',
     encoding: 'base64',
   });
 
-  expect(asText.isError).toBe(true);
-  expect(readData(asBase64)).toMatchObject({ bytes: 5, content: bytes });
+  expect(asText.isError).toBeTrue();
+  expect(readToolData(asBase64)).toMatchObject({ bytes: 5, content: bytes });
 });
 
-// How many processes in the imp run `sleep SECONDS`, from /proc: ps lists
-// every process in BusyBox but only the caller's session in procps.
-async function countSleeps(name: string, seconds: string): Promise<number> {
-  const result = await runShell(
-    name,
-    `for p in /proc/[0-9]*; do tr '\\0' ' ' < "$p/cmdline" 2>/dev/null; echo; done | grep -c '^sleep ${seconds} ' || true`,
-  );
+test.each([
+  ['BusyBox', { image: resolveImageName('e2e-tiny') }],
+  ['coreutils', {}],
+])(
+  'it kills the whole process group on a timeout with %s, a nohup child that ignores SIGTERM included',
+  async (tools, image) => {
+    const ctx = await setupTest();
 
-  return Number(String(result['stdout']).trim());
-}
+    const name = `${ctx.prefix}group-${tools.toLowerCase()}`;
 
-test('a timeout kills the whole process group, a nohup child that ignores SIGTERM included', async () => {
-  for (const name of [tiny, full]) {
-    const result = await session.runTool('imp_exec', {
+    const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
+
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+    readToolData(created);
+
+    const result = await ctx.session.runTool('imp_exec', {
       name,
       command: `nohup sh -c 'trap "" TERM HUP; sleep 301' >/dev/null 2>&1 & sleep 302`,
       timeoutSeconds: 2,
     });
 
-    expect(readData(result)).toMatchObject({ timedOut: true });
+    const left = await countGuestSleeps(name, '30[12]');
 
-    const left = await countSleeps(name, '30[12]');
+    expect(readToolData(result)).toMatchObject({ timedOut: true });
+    expect(left).toBe(0);
+  },
+);
 
-    expect({ name, left }).toEqual({ name, left: 0 });
-  }
-});
+test.each([
+  ['BusyBox', { image: resolveImageName('e2e-tiny') }],
+  ['coreutils', {}],
+])(
+  'it kills a child that left the process group with setsid on a timeout with %s',
+  async (tools, image) => {
+    const ctx = await setupTest();
 
-test('a timeout kills a child that left the process group with setsid', async () => {
-  for (const name of [tiny, full]) {
-    const result = await session.runTool('imp_exec', {
+    const name = `${ctx.prefix}setsid-${tools.toLowerCase()}`;
+
+    const created = await ctx.session.runTool('imp_create', { name, memoryMib: 512, ...image });
+
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+    readToolData(created);
+
+    const result = await ctx.session.runTool('imp_exec', {
       name,
       command: `setsid sh -c 'trap "" TERM HUP; sleep 304' >/dev/null 2>&1 & sleep 305`,
       timeoutSeconds: 2,
     });
 
-    expect(readData(result)).toMatchObject({ timedOut: true });
+    const left = await countGuestSleeps(name, '30[45]');
 
-    const left = await countSleeps(name, '30[45]');
+    expect(readToolData(result)).toMatchObject({ timedOut: true });
+    expect(left).toBe(0);
+  },
+);
 
-    expect({ name, left }).toEqual({ name, left: 0 });
-  }
-});
+test('it lets a job started with nohup and & outlive the call that started it', async () => {
+  const ctx = await setupTest();
 
-test('a job started with nohup and & outlives the call that started it', async () => {
-  const started = await runShell(tiny, 'nohup sleep 303 >/tmp/job.log 2>&1 &');
+  const name = `${ctx.prefix}job`;
 
-  expect(started).toMatchObject({ exitCode: 0, timedOut: false });
+  const created = await ctx.session.runTool('imp_create', {
+    name,
+    image: resolveImageName('e2e-tiny'),
+    memoryMib: 512,
+  });
 
-  const running = await countSleeps(tiny, '303');
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+  readToolData(created);
 
+  const started = await ctx.session.runTool('imp_exec', {
+    name,
+    command: 'nohup sleep 303 >/tmp/job.log 2>&1 &',
+  });
+
+  const running = await countGuestSleeps(name, '303');
+
+  expect(readToolData(started)).toMatchObject({ exitCode: 0, timedOut: false });
   expect(running).toBe(1);
 });
 
-test('over HTTP, a token limited to the prefix runs a 15 s command and is refused outside', async () => {
-  const secret = await makeToken(AGENT_TOKEN, '--scope', 'manage', '--imps', `${prefix}*`);
-  const agent = await startHttpMcpSession(secret);
+test('it runs a 15 s command over HTTP for a token held to the prefix, and refuses it outside', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}http`;
+  const tokenName = `${ctx.prefix}agent`;
+  const other = 'e2e-other-http';
+
+  // the outside name must be free, so the cleanup below takes only what this
+  // test made
+  const taken = await findImp(other);
+
+  expect(taken).toBeUndefined();
+
+  const created = await ctx.session.runTool('imp_create', {
+    name,
+    image: resolveImageName('e2e-tiny'),
+    memoryMib: 512,
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+  readToolData(created);
+
+  const token = await ctx.client.tokens.create({
+    name: tokenName,
+    scope: 'manage',
+    imps: [`${ctx.prefix}*`],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, tokenName));
+
+  const agent = await startHttpMcpSession(token.secret);
+
+  ctx.stack.defer(async () => {
+    await agent.close();
+  });
 
   // longer than the API server's 10 s idle timeout; the answer comes as SSE,
   // with a keepalive comment every 5 s
   const startedAt = performance.now();
 
   const long = await agent.runTool('imp_exec', {
-    name: tiny,
+    name,
     command: 'sleep 15; echo done',
     timeoutSeconds: 60,
   });
@@ -226,39 +324,60 @@ test('over HTTP, a token limited to the prefix runs a 15 s command and is refuse
     `mcp http: a 15 s exec answered after ${seconds.toFixed(1)} s, ${String(agent.readKeepalives())} keepalives`,
   );
 
-  expect(readData(long)).toMatchObject({ exitCode: 0, stdout: 'done\n', timedOut: false });
-  expect(agent.readKeepalives()).toBeGreaterThanOrEqual(2);
+  const outside = await agent.runTool('imp_create', { name: other });
 
-  const outside = await agent.runTool('imp_create', { name: 'e2e-other' });
-
-  expect(outside.isError).toBe(true);
-  expect(outside.content[0]?.text).toStartWith('FORBIDDEN: ');
+  // a regressed refusal, or a create that failed after its insert, leaves an
+  // imp; the removal passes over a name that was never made
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, other));
 
   const ended = await agent.close();
 
+  expect(readToolData(long)).toMatchObject({ exitCode: 0, stdout: 'done\n', timedOut: false });
+  expect(agent.readKeepalives()).toBeGreaterThanOrEqual(2);
+  expect(outside.isError).toBeTrue();
+  expect(outside.content[0]?.text).toStartWith('FORBIDDEN: ');
   expect(ended).toBe(204);
 }, 60_000);
 
-test('over HTTP, a read token sees only the read tools', async () => {
-  const secret = await makeToken(READ_TOKEN, '--scope', 'read');
-  const reader = await startHttpMcpSession(secret);
+test('it shows a read token only the read tools over HTTP', async () => {
+  const ctx = await setupTest();
+
+  const tokenName = `${ctx.prefix}reader`;
+
+  const token = await ctx.client.tokens.create({ name: tokenName, scope: 'read' });
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, tokenName));
+
+  const reader = await startHttpMcpSession(token.secret);
+
+  ctx.stack.defer(async () => {
+    await reader.close();
+  });
+
   const tools = await reader.listTools();
-  const refused = await reader.runTool('imp_exec', { name: tiny, command: 'true' });
+  const refused = await reader.runTool('imp_exec', { name: `${ctx.prefix}none`, command: 'true' });
 
-  expect(tools).toEqual(['imp_list', 'imp_url', 'imp_image_list', 'imp_checkpoint_list']);
+  expect(tools).toStrictEqual(['imp_list', 'imp_url', 'imp_image_list', 'imp_checkpoint_list']);
   expect(refused.content[0]?.text).toStartWith('FORBIDDEN: ');
-
-  await reader.close();
 });
 
-test('imp_destroy removes the imps', async () => {
-  for (const name of [tiny, full]) {
-    const destroyed = await session.runTool('imp_destroy', { name });
+test('it removes an imp with imp_destroy', async () => {
+  const ctx = await setupTest();
 
-    expect(readData(destroyed)).toEqual({ destroyed: name });
-  }
+  const name = `${ctx.prefix}gone`;
 
-  const listed = await session.runTool('imp_list', {});
+  const created = await ctx.session.runTool('imp_create', {
+    name,
+    image: resolveImageName('e2e-tiny'),
+    memoryMib: 512,
+  });
 
-  expect(readData(listed)).toEqual({ imps: [] });
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+  readToolData(created);
+
+  const destroyed = await ctx.session.runTool('imp_destroy', { name });
+  const listed = await ctx.session.runTool('imp_list', {});
+
+  expect(readToolData(destroyed)).toStrictEqual({ destroyed: name });
+  expect(readToolData(listed)).toStrictEqual({ imps: [] });
 });

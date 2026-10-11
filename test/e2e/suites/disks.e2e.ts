@@ -1,102 +1,124 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { readInfo, requireImp, runImp, runInImp } from '../lib/imp-cli';
-import { createImp, holdImp } from '../lib/imps';
+import { buildImpDiskPath, parseDfSizeKib } from '../lib/guest-disk';
+import {
+  createInstanceClient,
+  readInfo,
+  requireImp,
+  runImp,
+  runInImp,
+  tryImp,
+} from '../lib/imp-cli';
+import { holdImp, waitForExec } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
-import { setupSuite } from '../lib/setup-suite';
+import { registerRemoval } from '../lib/register-removal';
+import { removeImpIfPresent } from '../lib/reset-baseline';
+import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-const prefix = setupSuite('disks');
-const TINY = resolveImageName('e2e-tiny');
-const imp = `${prefix}grow`;
-const GIB_KIB = 1024 * 1024;
+// `imp new --disk` and `imp disk resize` on one imp, through each state a
+// resize can find it in.
 
-// the root filesystem's size in GiB, as the guest's df reports it
-async function readGuestDiskGib(name: string): Promise<number> {
-  const stdout = await runInImp(name, 'df', '-k', '/');
+async function setupTest() {
+  const stack = new AsyncDisposableStack();
 
-  const sizeKib = Number(stdout.trim().split('\n').at(-1)?.split(/\s+/)[1]);
+  onTestFinished(() => stack.disposeAsync());
 
-  return sizeKib / GIB_KIB;
+  const client = await createInstanceClient();
+
+  return { prefix: readSuitePrefix('disks'), stack, client };
 }
 
-async function findDiskFile(id: string): Promise<string> {
+test('it grows a disk past its image at the first boot, at once while running, on a wake or the next boot, never shrinks it, and fsck finds it clean', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}grow`;
+
   const info = await readInfo();
 
-  return info.storage.backend === 'xfs'
-    ? `/var/lib/imp/imps/${id}/disk.ext4`
-    : `/var/lib/imp/imps/${id}/disk/rootfs.ext4`;
-}
+  await runImp(
+    'new',
+    name,
+    '--image',
+    resolveImageName('e2e-tiny'),
+    '--memory',
+    '512',
+    '--disk',
+    '100g',
+  );
 
-// a forced, read-only fsck of the stopped imp's disk
-async function checkDiskClean(name: string): Promise<void> {
-  const found = await requireImp(name);
-  const disk = await findDiskFile(found.id);
-  const result = await runInContainer(['e2fsck', '-fn', disk]);
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  expect({ disk, exitCode: result.exitCode }).toEqual({ disk, exitCode: 0 });
-}
+  await waitForExec(name);
+  await holdImp(name);
 
-test('a disk grows past its image on the first boot, and fsck finds it clean', async () => {
-  await createImp(imp, '--image', TINY, '--memory', '512', '--disk', '100g');
-  await holdImp(imp);
+  const row = await requireImp(name);
 
-  // ext4 keeps a few percent for its own metadata
-  const size1 = await readGuestDiskGib(imp);
+  const disk = buildImpDiskPath(info.storage.backend, row.id);
 
-  expect(size1).toBeGreaterThan(97);
+  // ext4 keeps a few percent of each size for its own metadata
+  const firstBoot = await runInImp(name, 'df', '-k', '/');
 
-  await runImp('stop', imp);
-  await checkDiskClean(imp);
-});
+  expect(parseDfSizeKib(firstBoot)).toBeGreaterThan(97 * 1024 * 1024);
 
-test('a running guest grows into a resize at once, a sleeping one on its wake', async () => {
-  await runImp('start', imp);
-  await holdImp(imp);
-  await runImp('disk', 'resize', imp, '110g');
+  await runImp('stop', name);
 
-  const size2 = await readGuestDiskGib(imp);
+  const afterFirstBoot = await runInContainer(['e2fsck', '-fn', disk]);
 
-  expect(size2).toBeGreaterThan(107);
+  expect(afterFirstBoot.exitCode, afterFirstBoot.stdout).toBe(0);
 
-  await runImp('hold', imp, '0');
-  await runImp('sleep', imp);
-  await runImp('disk', 'resize', imp, '120g');
-  await runImp('wake', imp);
-  await holdImp(imp);
+  await runImp('start', name);
+  await holdImp(name);
+  await runImp('disk', 'resize', name, '110g');
 
-  const size3 = await readGuestDiskGib(imp);
+  const whileRunning = await runInImp(name, 'df', '-k', '/');
 
-  expect(size3).toBeGreaterThan(117);
-});
+  expect(parseDfSizeKib(whileRunning)).toBeGreaterThan(107 * 1024 * 1024);
 
-test('a stopped disk grows at its next boot, and never shrinks', async () => {
-  await runImp('stop', imp);
-  await runImp('disk', 'resize', imp, '130g');
-  await runImp('start', imp);
-  await holdImp(imp);
+  await runImp('hold', name, '0');
+  await runImp('sleep', name);
+  await runImp('disk', 'resize', name, '120g');
+  await runImp('wake', name);
+  await holdImp(name);
 
-  const size4 = await readGuestDiskGib(imp);
+  const afterWake = await runInImp(name, 'df', '-k', '/');
 
-  expect(size4).toBeGreaterThan(127);
+  expect(parseDfSizeKib(afterWake)).toBeGreaterThan(117 * 1024 * 1024);
 
-  const shrink = await runImp('disk', 'resize', imp, '64g').catch((error: unknown) => error);
+  await runImp('stop', name);
+  await runImp('disk', 'resize', name, '130g');
+  await runImp('start', name);
+  await holdImp(name);
 
-  expect(String(shrink)).toContain('a disk only grows');
+  const afterBoot = await runInImp(name, 'df', '-k', '/');
 
-  await runImp('stop', imp);
+  expect(parseDfSizeKib(afterBoot)).toBeGreaterThan(127 * 1024 * 1024);
 
-  // The stop wrote the grown filesystem out and asked for a pass, about 10 s
-  // later. A count from a pass that started before the stop does not hold
-  // those blocks, so only a later one counts.
+  const shrink = await tryImp(['disk', 'resize', name, '64g']);
+
+  expect(shrink).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'imp: BAD_REQUEST: a disk of 65536 MiB is smaller than the disk now; a disk only grows (133120 MiB)\n',
+  });
+
+  await runImp('stop', name);
+
+  // The stop wrote the grown filesystem out and asked for a usage pass, about
+  // 10 s later. A count from a pass that started before the stop does not
+  // hold those blocks, so only a later one counts.
   const stoppedAt = new Date();
 
-  await checkDiskClean(imp);
+  const afterGrows = await runInContainer(['e2fsck', '-fn', disk]);
+
+  expect(afterGrows.exitCode, afterGrows.stdout).toBe(0);
 
   const usage = await waitFor(
-    `a usage count for ${imp} measured after its stop`,
+    `a usage count for ${name} measured after its stop`,
     async () => {
-      const found = await requireImp(imp);
+      const found = await requireImp(name);
 
       if (found.diskUsage === undefined || found.diskUsage.measuredAt < stoppedAt) {
         throw new Error(`last count: ${found.diskUsage?.measuredAt.toISOString() ?? 'none'}`);
@@ -109,6 +131,4 @@ test('a stopped disk grows at its next boot, and never shrinks', async () => {
 
   expect(usage.isPartial).toBeFalse();
   expect(usage.exclusiveBytes).toBeGreaterThan(0);
-
-  await runImp('rm', imp);
 });

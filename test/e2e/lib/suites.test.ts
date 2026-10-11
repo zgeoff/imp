@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { instance } from './instance';
 import type { Suite } from './suites';
 import {
   FAST_GROUPS,
@@ -10,6 +11,7 @@ import {
   buildJourneyArgv,
   listJourneys,
   readSuitePrefix,
+  readSuiteSettings,
 } from './suites';
 
 test('#buildJourneyArgv runs a journey file by a ./ path, which bun test does not read as a name filter', () => {
@@ -45,6 +47,23 @@ test('#readSuitePrefix reads the prefix of a suite', () => {
 
 test('#readSuitePrefix rejects a name that no suite has', () => {
   expect(() => readSuitePrefix('nope')).toThrowWithMessage(Error, 'no suite named nope');
+});
+
+test('#readSuiteSettings reads the settings a suite runs its journeys on', () => {
+  expect(readSuiteSettings('tailscale', instance)).toStrictEqual({
+    IMP_TAILNET_IDENTITIES: '[{"match":"*","scope":"read"}]',
+  });
+});
+
+test('#readSuiteSettings reads null for a suite on the run’s own settings', () => {
+  expect(readSuiteSettings('templates', instance)).toBeNull();
+});
+
+test('#readSuiteSettings rejects a name that no suite has', () => {
+  expect(() => readSuiteSettings('nope', instance)).toThrowWithMessage(
+    Error,
+    'no suite named nope',
+  );
 });
 
 test('#SUITES gives every suite at least one journey', () => {

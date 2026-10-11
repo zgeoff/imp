@@ -20,7 +20,8 @@ import {
   runCommand,
   runDevScript,
 } from './lib/instance';
-import { removeMoveLeftovers } from './lib/move-hosts';
+import { buildHostBFixture, readMoveOptions, removeMoveLeftovers } from './lib/move-hosts';
+import type { HostBFixture } from './lib/move-hosts';
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
@@ -29,8 +30,14 @@ import { resetBaseline } from './lib/reset-baseline';
 import { runSuite, stopSuiteGroup } from './lib/run-suite';
 import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
-import { FAST_GROUPS, SUITES, buildJourneyArgv, listJourneys } from './lib/suites';
-import { readTailscaleAuthKey } from './lib/tailscale-key';
+import {
+  FAST_GROUPS,
+  SUITES,
+  buildJourneyArgv,
+  listJourneys,
+  readSuiteSettings,
+} from './lib/suites';
+import { readTailscaleE2EAuthKey } from './lib/tailscale-key';
 import { resolveWipeTarget } from './lib/wipe-target';
 import type { WipeTarget } from './lib/wipe-target';
 import { ZFS_OWNER_FILE, resetZfsRoot } from './lib/zfs-owner';
@@ -376,6 +383,20 @@ function formatSection(section: Section): string {
   return `[${String(section.index)}] ${section.name.padEnd(12)} ${section.verdict} ${(section.ms / 1000).toFixed(1).padStart(7)} s`;
 }
 
+// a host-B fixture as its suite runs it: B's options, and the suite's prefix
+// for B's reset
+function readHostBFixture(fixture: string): HostBFixture {
+  for (const suite of SUITES) {
+    const name = suite.fixtures?.find((candidate) => candidate === fixture);
+
+    if (name !== undefined) {
+      return buildHostBFixture(readMoveOptions(name), suite.prefix);
+    }
+  }
+
+  throw new Error(`no suite runs the fixture ${fixture}`);
+}
+
 // impd's default and base images stay
 async function removeLeftovers(suites: readonly string[]): Promise<void> {
   console.log('== cleanup');
@@ -466,16 +487,20 @@ async function main(): Promise<number> {
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
   process.env['IMP_IDLE_TIMEOUT_S'] = String(config.idleTimeoutS);
 
-  // one 1Password read per run, and only when a suite needs the tailnet:
-  // dev.sh and the tailscale suite take the key from the env
-  if (args.suites.includes('tailscale') || args.suites.includes('moves-tailnet')) {
-    process.env['IMP_TAILSCALE_OP'] = '1';
-  }
+  // e2e nodes join only as tag:imp-e2e, which reaches no live impd, never
+  // with dev's tag:imp key; one 1Password read, only for the tailnet suites
+  delete process.env['TAILSCALE_AUTHKEY'];
 
-  const authKey = await readTailscaleAuthKey();
+  const tailnet =
+    args.suites.includes('tailscale') || args.suites.includes('moves-tailnet')
+      ? await readTailscaleE2EAuthKey()
+      : null;
 
-  if (authKey !== null) {
-    process.env['TAILSCALE_AUTHKEY'] = authKey;
+  if (tailnet === null) {
+    process.env['IMP_DEV_TAILNET'] = '0';
+  } else {
+    process.env['TAILSCALE_AUTHKEY'] = tailnet.key;
+    process.env['IMP_TAILSCALE_TAGS'] = tailnet.tags;
   }
 
   // stop the running suite, run no more, and clean up
@@ -520,10 +545,13 @@ async function main(): Promise<number> {
       checkJourney: (suite, journey) =>
         checkNoBootFallbacks(suite, startedAt.get(journey) ?? new Date()),
       reset: resetSuites,
-      settingsOf: (name) =>
-        SUITES.find((suite) => suite.name === name)?.settings?.(instance) ?? null,
+      settingsOf: (name) => readSuiteSettings(name, instance),
       rebootOnto: (settings) => runDevScript('reboot', instance, settings),
       reboot: () => runDevScript('reboot'),
+      fixturesOf: (name) => SUITES.find((suite) => suite.name === name)?.fixtures ?? [],
+      startFixture: (fixture) => readHostBFixture(fixture).start(),
+      resetFixture: (fixture) => readHostBFixture(fixture).reset(),
+      stopFixture: (fixture) => readHostBFixture(fixture).stop(),
 
       // a fresh instance: the container and data dir go, and come back
       // with the run's settings, baseline and images

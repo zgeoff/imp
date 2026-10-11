@@ -33,6 +33,7 @@ const ImpRowSchema = z.object({
   url: z.string(),
   lastActiveAt: z.string(),
   ramMib: z.number().optional(),
+  sleptAt: z.string().optional(),
   error: z.string().optional(),
   sessions: z.number().optional(),
   diskUsage: z
