@@ -70,16 +70,21 @@ the session's imps, and the preload clears `impdEventListeners`. `src/test-utils
 reads a call's input in a per-test MSW handler.
 
 The root preload is `packages/test-utils/src/preload.ts`, ahead of `@zgeoff/bun-test-extended`;
-`packages/test-utils/bunfig.toml` repeats it for a run from that package. It seeds faker, restores
-every `updateEnv` override after each test, registers the run's one tracer provider
-(`register-tracing.ts`: a `BasicTracerProvider` over `spanExporter`, an `InMemorySpanExporter` that
-a test reads and the preload resets after each test), and runs one MSW server
-(`packages/test-utils/src/mock-server.ts`) for the whole run with `onUnhandledRequest: 'error'`. The
-server intercepts `fetch` only; `node:http` clients and WebSockets stay native. While it listens,
-the global `fetch` sends a request to a loopback host or over a unix socket to the native fetch
-(`route-fetch.ts`), and every other request to MSW. The end-to-end suites run with
-`test/e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env overrides and seeds faker,
-with no MSW server. `updateEnv`, `invariant` and `waitFor` live in `packages/test-utils/src`.
+`packages/test-utils/bunfig.toml` repeats it for a run from that package. At load it removes every
+`IMP_*` variable the shell passed in (`remove-ambient-imp-env.ts`), except the run gates
+`IMP_HOST_TESTS`, `IMP_TEST_SMALL_FS`, `IMP_TEST_ZFS_ROOT` and `IMP_TEST_ZFS_DIR`, so no developer
+setting reaches a unit test; a test sets an impd setting with `updateEnv` before its `setupTest()`,
+which passes `readImpEnv()` (`read-imp-env.ts`, the `IMP_*` variables only) to `loadConfig` after
+its fixed boot values. It seeds faker, restores every `updateEnv` override after each test,
+registers the run's one tracer provider (`register-tracing.ts`: a `BasicTracerProvider` over
+`spanExporter`, an `InMemorySpanExporter` that a test reads and the preload resets after each test),
+and runs one MSW server (`packages/test-utils/src/mock-server.ts`) for the whole run with
+`onUnhandledRequest: 'error'`. The server intercepts `fetch` only; `node:http` clients and
+WebSockets stay native. While it listens, the global `fetch` sends a request to a loopback host or
+over a unix socket to the native fetch (`route-fetch.ts`), and every other request to MSW. The
+end-to-end suites run with `test/e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env
+overrides and seeds faker, with no MSW server. `updateEnv`, `invariant` and `waitFor` live in
+`packages/test-utils/src`.
 
 ### Cleanup order
 
