@@ -1,4 +1,4 @@
-import { expect, mock, onTestFinished, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { ORPCError } from '@orpc/client';
 import { listSavedTargets, runOnHosts } from './fan-out';
 import { writeHostConfig } from './host-store';
 import { buildMockSavedTarget } from './test-utils/build-mock-saved-target';
+import { buildStubTimeouts } from './test-utils/build-stub-timeouts';
 import { UsageError } from './usage-error';
 
 function setupTest() {
@@ -23,7 +24,7 @@ function setupTest() {
 
 test('#runOnHosts gives each host its own answer or error, and a silent one the timeout', async () => {
   const signals: AbortSignal[] = [];
-  const timers: { readonly fire: () => void; isCancelled: boolean }[] = [];
+  const timeouts = buildStubTimeouts();
 
   const replies = [
     () => Promise.resolve('imps'),
@@ -32,16 +33,6 @@ test('#runOnHosts gives each host its own answer or error, and a silent one the 
     () => new Promise<string>(() => {}),
     () => Promise.reject(new ORPCError('UNAUTHORIZED', { status: 401 })),
   ];
-
-  const startTimer = mock((_ms: number, fire: () => void) => {
-    const timer = { fire, isCancelled: false };
-
-    timers.push(timer);
-
-    return () => {
-      timer.isCancelled = true;
-    };
-  });
 
   const answers = runOnHosts(
     [
@@ -59,19 +50,19 @@ test('#runOnHosts gives each host its own answer or error, and a silent one the 
       return reply();
     },
     50,
-    startTimer,
+    timeouts.startTimer,
   );
 
   // box and old settle on their own; then the silent host's timer runs out
   await waitFor(() => {
-    expect(timers.filter((timer) => timer.isCancelled)).toHaveLength(2);
+    expect(timeouts.timers.map((timer) => timer.state)).toStrictEqual([
+      'cancelled',
+      'pending',
+      'cancelled',
+    ]);
   });
 
-  const silentTimer = timers.find((timer) => !timer.isCancelled);
-
-  invariant(silentTimer);
-
-  silentTimer.fire();
+  timeouts.firePending();
 
   const settled = await answers;
 
@@ -86,17 +77,22 @@ test('#runOnHosts gives each host its own answer or error, and a silent one the 
   ]);
 });
 
-test('#runOnHosts gives each host a timer of the timeout', async () => {
-  const startTimer = mock<(ms: number, fire: () => void) => () => void>(() => () => {});
+test('#runOnHosts gives each host a timer of the timeout, cancelled once it answers', async () => {
+  const timeouts = buildStubTimeouts();
 
-  await runOnHosts([buildMockSavedTarget()], () => Promise.resolve('imps'), 50, startTimer);
+  await runOnHosts(
+    [buildMockSavedTarget()],
+    () => Promise.resolve('imps'),
+    50,
+    timeouts.startTimer,
+  );
 
-  expect(startTimer).toHaveBeenCalledExactlyOnceWith(50, expect.any(Function));
+  expect(timeouts.timers).toStrictEqual([{ ms: 50, state: 'cancelled' }]);
 });
 
 test('#runOnHosts aborts each host’s requests once its answer is in, the silent one’s by the timeout', async () => {
   const signals: AbortSignal[] = [];
-  const fires: (() => void)[] = [];
+  const timeouts = buildStubTimeouts();
 
   const replies = [
     () => Promise.resolve('imps'),
@@ -116,21 +112,14 @@ test('#runOnHosts aborts each host’s requests once its answer is in, the silen
       return reply();
     },
     50,
-    (_ms, fire) => {
-      fires.push(fire);
-
-      return () => {};
-    },
+    timeouts.startTimer,
   );
 
   await waitFor(() => {
     expect(signals.filter((signal) => signal.aborted)).toHaveLength(2);
   });
 
-  const [, silentFire] = fires;
-
-  invariant(silentFire);
-  silentFire();
+  timeouts.firePending();
 
   await answers;
 
