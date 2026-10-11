@@ -6,23 +6,23 @@ test('it generates awake imps with distinct ids', () => {
   const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c']);
   const samples = fc.sample(arbitraries.awake, { numRuns: 200, seed: 1 });
 
-  expect(
-    samples.filter((awake) => new Set(awake.map((imp) => imp.id)).size !== awake.length),
-  ).toStrictEqual([]);
+  expect(samples.map((awake) => awake.map((imp) => imp.id))).toSatisfyAll(
+    (ids: readonly string[]) => new Set(ids).size === ids.length,
+  );
 });
 
 test('it generates awake imps only among the given ids', () => {
   const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c']);
   const imps = fc.sample(arbitraries.awake, { numRuns: 200, seed: 1 }).flat();
 
-  expect(imps.filter((imp) => !['a', 'b', 'c'].includes(imp.id))).toStrictEqual([]);
+  expect(imps.map((imp) => imp.id)).toSatisfyAll((id: string) => ['a', 'b', 'c'].includes(id));
 });
 
 test('it generates awake imps that measure up to 400 MiB', () => {
   const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c']);
   const imps = fc.sample(arbitraries.awake, { numRuns: 200, seed: 1 }).flat();
 
-  expect(imps.filter((imp) => imp.rssMib < 0 || imp.rssMib > 400)).toStrictEqual([]);
+  expect(imps.map((imp) => imp.rssMib)).toSatisfyAll((mib: number) => mib >= 0 && mib <= 400);
 });
 
 test('it generates some awake imps that fail to sleep and some that do not', () => {
@@ -36,16 +36,17 @@ test('it generates admits that reserve 50 to 700 MiB, plus up to 600, for one of
   const arbitraries = buildStubGovernedHostArbitraries(['a', 'b', 'c']);
   const admits = fc.sample(arbitraries.admit, { numRuns: 200, seed: 1 });
 
-  expect(
-    admits.filter(
-      (admit) =>
-        !['a', 'b', 'c'].includes(admit.id) ||
-        admit.reserveMib < 50 ||
-        admit.reserveMib > 700 ||
-        admit.extraMib < 0 ||
-        admit.extraMib > 600,
-    ),
-  ).toStrictEqual([]);
+  expect(admits.map((admit) => admit.id)).toSatisfyAll((id: string) =>
+    ['a', 'b', 'c'].includes(id),
+  );
+
+  expect(admits.map((admit) => admit.reserveMib)).toSatisfyAll(
+    (mib: number) => mib >= 50 && mib <= 700,
+  );
+
+  expect(admits.map((admit) => admit.extraMib)).toSatisfyAll(
+    (mib: number) => mib >= 0 && mib <= 600,
+  );
 });
 
 test('it generates every kind of host change', () => {

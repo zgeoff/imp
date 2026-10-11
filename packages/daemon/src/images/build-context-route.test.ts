@@ -36,8 +36,8 @@ import {
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockCaller } from '../test-utils/build-mock-caller';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
 import { createBuildContextRoute } from './build-context-route';
@@ -196,7 +196,7 @@ test('it builds an uploaded context and answers the image', async () => {
   // the frontend is on the host, and the engine tags what it builds
   const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -234,7 +234,7 @@ test('it sends the engine the context under the image tag and the Dockerfile pat
   await mkdir(join(ctx.dataDir, 'context', 'docker'), { recursive: true });
   await writeFile(join(ctx.dataDir, 'context', 'docker', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -270,7 +270,7 @@ test('it removes the upload and audits the build as ok once the build ends', asy
 
   const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -318,7 +318,7 @@ test('it answers a streamed build with its headers while the build still runs', 
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -375,7 +375,7 @@ test('it streams progress lines while the build runs, then the image', async () 
 
   const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -462,7 +462,7 @@ test('it sends a progress line through the proxy before the upload ends', async 
 
   const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -975,7 +975,7 @@ test('it refuses a fifth build with 429 while four run', async () => {
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -1040,7 +1040,7 @@ test('it refuses a fifth streamed build with 429, before its stream, while four 
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -1108,7 +1108,7 @@ test('it frees each build slot once its build ends', async () => {
 
   const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -1190,7 +1190,7 @@ test.each([
     await mkdir(join(ctx.dataDir, 'context'));
     await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-    const docker = buildStubDockerCli({
+    const docker = createStubDockerCli({
       dir: ctx.dataDir,
       images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
     });
@@ -1278,7 +1278,7 @@ test.each([
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] }],
   });
@@ -1355,7 +1355,7 @@ test('it kills the base image pulls of clients that go, and starts no other pull
   );
 
   // neither image is on the host, and a pull hangs until it is killed
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1427,7 +1427,7 @@ test('it frees the build slots of clients that go during a base image pull', asy
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM first.test/a:1\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1497,7 +1497,7 @@ test('it refuses a base image with ONBUILD triggers once the host has it', async
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1576,7 +1576,7 @@ test('it pulls COPY --from and RUN --mount images first, like a FROM, by tag or 
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1668,7 +1668,7 @@ test('it sends the engine the Dockerfile with each image pinned and the platform
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1772,7 +1772,7 @@ test('it refuses a COPY --from image with ONBUILD triggers, which the frontend w
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1842,7 +1842,7 @@ test('it refuses a RUN --mount image with ONBUILD triggers, which the frontend w
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -1925,7 +1925,7 @@ test('it inspects and pins a ref the build names twice once, so a moving tag giv
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2008,7 +2008,7 @@ test('it inspects and pins the spellings of one image once', async () => {
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2089,7 +2089,7 @@ test('it says how impd pinned a build the registry denies, and what to build fro
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/retag:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2146,7 +2146,7 @@ test('it refuses a FROM image with no registry digest before the build', async (
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/local:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2213,7 +2213,7 @@ test('it refuses a COPY --from image with no registry digest before the build', 
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2276,7 +2276,7 @@ test('it refuses an arm64 image on an amd64 host before the build', async () => 
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/arm:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2344,7 +2344,7 @@ test('it refuses a 32-bit arm image on an amd64 host before the build', async ()
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/arm32:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2412,7 +2412,7 @@ test('it refuses an image whose registry digests name only registries impd refus
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/private:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2482,7 +2482,7 @@ test('it refuses an image under an IP address registry before any call', async (
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM 127.0.0.1:5000/x:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2552,7 +2552,7 @@ test("it refuses an image under the host's own registry, in any case, before any
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM LocalHost/name:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2625,7 +2625,7 @@ test('it refuses a global ARG that sets the build platform before any call', asy
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2686,7 +2686,7 @@ test('it refuses a stage ARG that sets the target platform before any call', asy
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2747,7 +2747,7 @@ test('it refuses a braced platform variable before any call', async () => {
   );
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2806,7 +2806,7 @@ test('it pulls a missing Dockerfile frontend by digest once, before the build', 
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/a:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2876,7 +2876,7 @@ test('it pulls no Dockerfile frontend the engine has, and checks it before the b
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/a:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -2935,7 +2935,7 @@ test('it fails a build with 502 before the engine gets it when the frontend pull
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM base.test/a:1\n');
 
   // an amd64 host engine with these images
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -3009,7 +3009,7 @@ test('it answers a build that fails after the engine built it with its error, an
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
   // the engine builds the image; the unpack's create finds no room
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -3053,7 +3053,7 @@ test('it ends a streamed build that fails with its error, and removes the upload
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -3099,7 +3099,7 @@ test('it audits a failed build with its code', async () => {
   await mkdir(join(ctx.dataDir, 'context'));
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
@@ -3164,7 +3164,7 @@ test('it reports the unpack of an on-host build after the engine built the image
   await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
 
   // the frontend and the built tag are on the host; the unpack's create fails
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },

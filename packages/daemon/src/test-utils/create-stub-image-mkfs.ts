@@ -5,7 +5,7 @@ import { waitFor } from '@imp/test-utils/wait-for';
 // An `mkfs.ext4` in `<dir>/bin` that holds each rootfs write until `release`
 // (the real one runs) or `fail` (that stderr), so a test acts while impd
 // writes a rootfs; it gives up once `dir` is gone.
-export function buildStubImageMkfs(dir: string) {
+export function createStubImageMkfs(dir: string) {
   const bin = join(dir, 'bin');
   const started = join(dir, 'mkfs-started');
   const released = join(dir, 'mkfs-released');

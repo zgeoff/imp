@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { runCommand } from '../process/run-command';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { createBuildEngine } from './build-engine';
 
 async function setupTest() {
@@ -22,7 +22,7 @@ async function setupTest() {
 test('#readPlatform reads the engine platform as containerd names it', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({ dir: ctx.dir, version: { os: 'linux', arch: 'aarch64' } });
+  const docker = createStubDockerCli({ dir: ctx.dir, version: { os: 'linux', arch: 'aarch64' } });
 
   const engine = createBuildEngine((argv, signal) =>
     runCommand(argv, { env: { PATH: docker.path }, signal }),
@@ -47,7 +47,7 @@ test('#readPlatform fails to read the platform of an engine that does not answer
 test('#readPlatform fails to read a version answer that names no platform', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({ dir: ctx.dir, version: { stdout: 'null null' } });
+  const docker = createStubDockerCli({ dir: ctx.dir, version: { stdout: 'null null' } });
 
   const engine = createBuildEngine((argv, signal) =>
     runCommand(argv, { env: { PATH: docker.path }, signal }),
@@ -70,7 +70,7 @@ test('#readPlatform refuses to read the platform once its signal aborted', () =>
 test('#loadImage reads an image the engine has without a pull', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [
       {
@@ -103,7 +103,7 @@ test('#loadImage reads an image the engine has without a pull', async () => {
 test('#loadImage pulls an image the engine lacks, then reads it', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [
       {
@@ -130,7 +130,7 @@ test('#loadImage pulls an image the engine lacks, then reads it', async () => {
 test('#loadImage refuses an image whose pull fails as the client BAD_REQUEST', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [
       {
@@ -157,7 +157,7 @@ test('#loadImage refuses an image whose pull fails as the client BAD_REQUEST', a
 test('#loadImage keeps the last 4000 characters of a failed pull', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [
       {
@@ -183,7 +183,7 @@ test('#loadImage keeps the last 4000 characters of a failed pull', async () => {
 test('#loadImage fails an image the engine still lacks after its pull', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [{ refs: ['a:1'], inspects: [{ Id: 'sha256:1' }], isOnHost: false, pull: 'lost' }],
   });
@@ -200,7 +200,7 @@ test('#loadImage fails an image the engine still lacks after its pull', async ()
 test('#loadFrontend pulls no frontend the engine has', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: 'sha256:f' }] }],
   });
@@ -219,7 +219,7 @@ test('#loadFrontend pulls no frontend the engine has', async () => {
 test('#loadFrontend pulls the frontend the engine lacks', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [{ refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: 'sha256:f' }], isOnHost: false }],
   });
@@ -239,7 +239,7 @@ test('#loadFrontend pulls the frontend the engine lacks', async () => {
 test('#loadFrontend fails a frontend whose pull fails as BAD_GATEWAY', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dir,
     images: [
       {

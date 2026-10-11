@@ -14,7 +14,7 @@ import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
-import { buildStubDockerCli } from '../test-utils/build-stub-docker-cli';
+import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { BUILDER_IMAGE } from './builder-imps';
 import { createImageService, normalizeDockerfilePath, parseDuCount } from './image-service';
 
@@ -98,7 +98,7 @@ test('#addImage answers a proxy refusal of the pull as BAD_REQUEST with its mess
 
   const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -132,7 +132,7 @@ test('#addImage answers a proxy refusal of the create as BAD_REQUEST with its me
 
   const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -165,7 +165,7 @@ test('#addImage answers a proxy refusal of the create as BAD_REQUEST with its me
 test('#addImage leaves no work directory behind when the create fails', async () => {
   const ctx = await setupTest();
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {
@@ -368,7 +368,7 @@ test('#buildImage refuses a Dockerfile image that is not an image reference', as
   const ctx = await setupTest();
 
   const contextDir = join(ctx.dataDir, 'context');
-  const docker = buildStubDockerCli({ dir: ctx.dataDir });
+  const docker = createStubDockerCli({ dir: ctx.dataDir });
 
   updateEnv('PATH', docker.path);
   mkdirSync(contextDir);
@@ -399,7 +399,7 @@ test('#buildImage answers BAD_REQUEST when the pinned Dockerfile does not parse 
 
   const contextDir = join(ctx.dataDir, 'context');
 
-  const docker = buildStubDockerCli({
+  const docker = createStubDockerCli({
     dir: ctx.dataDir,
     images: [
       {

@@ -16,7 +16,7 @@ test('it builds a default governor decision', () => {
     budgetMib: expect.toBeNumber(),
   });
 
-  expect(ImpEventSchema.safeParse(event).success).toBe(true);
+  expect(ImpEventSchema.parse(event)).toStrictEqual(event);
 });
 
 test('it applies overrides on top of the defaults', () => {

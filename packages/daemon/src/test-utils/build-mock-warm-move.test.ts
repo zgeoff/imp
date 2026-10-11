@@ -18,7 +18,7 @@ test('it builds a default warm move', () => {
       ipv6Prefix: null,
     },
     host: {
-      dataDir: expect.toSatisfy((dir: string) => dir.startsWith('/')),
+      dataDir: expect.toStartWith('/'),
       storage: 'xfs',
       subnet: '10.66.0.0/16',
       brokerPort: expect.toBeWithin(1024, 65_536),

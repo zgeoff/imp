@@ -115,7 +115,7 @@ function buildInspectArm(
 // A `docker` CLI in `<dir>/bin` for the host engine: version, inspect in
 // each format impd passes, pull, create, export and rm. It logs each argv,
 // joined by spaces, and fails any call it does not model.
-export function buildStubDockerCli(options: Readonly<StubDockerCliOptions>) {
+export function createStubDockerCli(options: Readonly<StubDockerCliOptions>) {
   const bin = join(options.dir, 'bin');
   const state = join(options.dir, 'stub-docker');
   const log = join(state, 'calls.log');

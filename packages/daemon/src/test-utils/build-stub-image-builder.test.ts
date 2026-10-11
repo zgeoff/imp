@@ -187,7 +187,13 @@ test('it reports the architecture the test gives for a pulled image', async () =
     { signal: new AbortController().signal },
   );
 
-  expect(JSON.parse(result.stdout)).toMatchObject({ Os: 'linux', Architecture: 'aarch64' });
+  expect(JSON.parse(result.stdout)).toStrictEqual({
+    Id: `sha256:${'c'.repeat(64)}`,
+    RepoDigests: [`busybox@sha256:${'b'.repeat(64)}`],
+    Os: 'linux',
+    Architecture: 'aarch64',
+    Config: {},
+  });
 });
 
 // each failure exits 1 with the stderr, as the docker CLI does for an
