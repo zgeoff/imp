@@ -124,8 +124,9 @@ Utils that take a caller's stack and register nothing themselves:
   behind the HTTPS listeners, which answers with the headers it got and echoes WebSocket messages.
 
 `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
-`packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source)`) runs one test file in a
-child `bun test` with `dir` as its working and temp dir.
+`packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source, timeoutMs = 4000)`) runs
+one test file in a child `bun test` with `dir` as its working and temp dir, and kills it at
+`timeoutMs`.
 
 Plain `bun test` does not match `*.e2e.ts` or `*.pebble.ts`; each of those runs only when its `./`
 path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain `bun test`
@@ -462,7 +463,8 @@ The flake's two checks test `deploy/nixos/module.nix`:
   depend on each other. Every firewall there drops without a reject, so a dropped connection is the
   `timeout 5` exit: 124 on a node (GNU coreutils), and 143 inside the stand-in image, whose busybox
   `timeout` execs the command and kills it with SIGTERM. The driver's `fail` is kept for a refusal
-  whose cause the subtest checks another way, such as the journal.
+  whose cause the subtest checks another way, such as the journal. The stub image's `tailscale` is
+  `scripts/test-utils/run-stub-vm-tailscale.sh`, which `run-stub-vm-tailscale.test.ts` tests.
 
 `.github/workflows/nix.yml` checks the format with `nix fmt -- --check` and builds each check in its
 own job; the `vm` job opens `/dev/kvm` to the builders. The local `nixfmt` must be the pinned
@@ -524,6 +526,11 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | CLIs a script calls          | `scripts/test-utils/create-stub-bin.ts` (7)                                                        | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`                            |
 | Docker for upgrade           | `scripts/test-utils/build-stub-host-docker.ts`                                                     | The docker that `deploy/upgrade.sh` drives on a host                               |
 | Docker for dev.sh            | `scripts/test-utils/build-stub-dev-docker.ts`                                                      | The images, labels and containers `dev.sh prune` reads                             |
+| Docker for dev.sh up         | `scripts/test-utils/build-stub-dev-host-docker.ts`                                                 | Host image, containers, proxy build, socket and logs of `up` and `restart`         |
+| Docker for bootstrap.sh      | `scripts/test-utils/build-stub-bootstrap-docker.ts`                                                | The daemon, the imp-host network, images, seccomp and the container it reads       |
+| Block devices                | `scripts/test-utils/build-stub-block-devices.ts`                                                   | `stat`, `findmnt`, `lsblk` and `blkid` over a table of devices, for bootstrap.sh   |
+| tailscale for tailscale-up   | `scripts/test-utils/create-stub-tailscale.ts`                                                      | The `tailscale` CLI that `host/scripts/tailscale-up.sh` drives: status, up, down   |
+| tailscale in the NixOS VM    | `scripts/test-utils/run-stub-vm-tailscale.sh`                                                      | The `tailscale` CLI in `vm.nix`'s stub image: saved states, key files, a used key  |
 | Registry for base            | `scripts/test-utils/build-stub-registry-docker.ts`                                                 | `docker buildx imagetools inspect` in the release Plan step                        |
 | impd for the client          | `packages/client/smoke/run-stub-impd.ts`                                                           | impd's app on loopback, run by `check-client-runtimes.sh`                          |
 | nft                          | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                               | `nft` from the egress service                                                      |
