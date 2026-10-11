@@ -48,6 +48,14 @@ test('it ends a call’s tool only when the test ends it', async () => {
   await expect(ended).toResolve();
 });
 
+test('it rejects each request with the failure it was given, and records none', () => {
+  const transport = buildStubMcpTransport({ failure: new Error('the transport broke') });
+  const handled = transport.handle(new Request('http://imp.test/mcp', { method: 'POST' }));
+
+  expect(handled).rejects.toThrow(new Error('the transport broke'));
+  expect(transport.calls).toStrictEqual([]);
+});
+
 test('it reads no call end for a response it did not make', () => {
   const transport = buildStubMcpTransport();
 

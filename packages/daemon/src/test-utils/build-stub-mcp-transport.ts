@@ -11,7 +11,12 @@ interface StubMcpCall {
 // MCP's HTTP transport with every answer a tool call's open event stream,
 // whose tool runs until the test ends it: `calls` holds each request with
 // its `end`, and `closes` counts the transport's close.
-export function buildStubMcpTransport() {
+export function buildStubMcpTransport(
+  options: Readonly<{
+    // rejects each request instead, as a broken transport does
+    failure?: Error;
+  }> = {},
+) {
   const calls: StubMcpCall[] = [];
 
   const callEnds = new WeakMap<Response, Promise<void>>();
@@ -20,6 +25,10 @@ export function buildStubMcpTransport() {
 
   const transport: HttpTransport = {
     handle: (request) => {
+      if (options.failure !== undefined) {
+        return Promise.reject(options.failure);
+      }
+
       const ended = Promise.withResolvers<void>();
 
       const response = new Response(new ReadableStream<Uint8Array>({ start: () => {} }), {
