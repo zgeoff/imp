@@ -18,23 +18,13 @@ import {
 } from '../lib/chaos';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import {
-  createInstanceClient,
-  listImps,
-  requireImp,
-  runImp,
-  runInImp,
-  runShellInImp,
-  tryImp,
-} from '../lib/imp-cli';
+import { createInstanceClient, listImps, runImp, runInImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
-import { instance, runDevScript, runInContainer } from '../lib/instance';
 import type { MemoryProof } from '../lib/memory-proof';
 import { checkMemoryKept, startMemoryProof } from '../lib/memory-proof';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
-import { waitFor } from '../lib/wait-for';
 
 // Kills of impd, a Firecracker or the container; every imp must stay valid,
 // keep its disk, and keep its memory unless the kill could take it. Guests
@@ -185,115 +175,5 @@ test('it keeps every imp valid, with its disk and the memory no kill could take,
   // the instance's own mount, and one VM per running imp
   expect(devices.length).toBeLessThanOrEqual(1);
   expect([...vms.values()].flat()).toHaveLength(awake);
-  expect(processes.length).toBeGreaterThan(0);
-});
-
-test('it restarts a paused VM whose agent stops answering with the watchdog', async () => {
-  const ctx = await setupTest();
-
-  const name = `${ctx.prefix}dog`;
-
-  // in-test: the rounds would trip a watchdog this short, and DISK_FULL's
-  // reserve would refuse their sleeps
-  await runDevScript('reboot', instance, {
-    IMP_WATCHDOG_ACTION: 'restart',
-    IMP_WATCHDOG_TIMEOUT_S: '10',
-  });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
-
-  await waitForImpd();
-
-  // no VM or loop device outlives the reboot
-  const devices = await readLoopDevices();
-  const vms = await listContainerVms();
-  const rows = await listImps();
-
-  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '512');
-
-  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
-
-  await waitForExec(name);
-  await holdImp(name);
-
-  const proof = await startMemoryProof(name);
-  const row = await requireImp(name);
-
-  // the guest stops; Firecracker and its socket stay
-  await runInContainer([
-    'curl',
-    '-fsS',
-    '--unix-socket',
-    `/var/lib/imp/imps/${row.id}/run/api.sock`,
-    '-X',
-    'PATCH',
-    'http://localhost/vm',
-    '-d',
-    '{"state":"Paused"}',
-  ]);
-
-  const restarted = await waitFor(
-    `${name} to boot cold by the watchdog`,
-    async () => {
-      const current = await requireImp(name);
-
-      if (!(current.coldBootReason ?? '').includes('watchdog')) {
-        throw new Error(`cold boot reason ${current.coldBootReason ?? 'none'}`);
-      }
-
-      return current;
-    },
-    { timeoutMs: 120_000 },
-  );
-
-  await runInImp(name, 'true');
-
-  const isKept = await checkMemoryKept(proof);
-
-  expect(devices.length).toBeLessThanOrEqual(1);
-  expect(findStrayVms(rows, vms)).toStrictEqual([]);
-  expect(restarted.coldBootReason).toContain('watchdog');
-  expect(isKept).toBeFalse();
-});
-
-test('it keeps an imp awake with DISK_FULL when the disk cannot take its sleep', async () => {
-  const ctx = await setupTest();
-
-  const name = `${ctx.prefix}full`;
-
-  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '512');
-
-  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
-
-  await waitForExec(name);
-
-  // A reserve past any test disk: a wake still goes through, a sleep not.
-  // In-test, since the suite's other tests need their sleeps; the imp comes
-  // first, as no create fits the reserve.
-  await runDevScript('reboot', instance, { IMP_DISK_RESERVE_GIB: '100000' });
-
-  ctx.stack.defer(() => runDevScript('reboot'));
-
-  await waitForImpd();
-
-  // no VM or loop device outlives the reboot
-  const devices = await readLoopDevices();
-  const vms = await listContainerVms();
-  const rows = await listImps();
-
-  await runImp('wake', name);
-
-  const result = await tryImp(['sleep', name]);
-  const after = await requireImp(name);
-
-  expect(devices.length).toBeLessThanOrEqual(1);
-  expect(findStrayVms(rows, vms)).toStrictEqual([]);
-
-  expect(result).toStrictEqual({
-    exitCode: 1,
-    stdout: '',
-    stderr: expect.toStartWith('imp: DISK_FULL: '),
-  });
-
-  expect(after.state).toBe('running');
+  expect(processes).not.toBeEmpty();
 });

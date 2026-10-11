@@ -66,7 +66,7 @@ export const SUITES: readonly Suite[] = [
     name: 'sleep',
     prefix: 'e2e-slp-',
     images: ['e2e-bare', 'e2e-ws'],
-    journeys: ['sleep-memory', 'sleep-websocket'],
+    journeys: ['sleep-memory', 'sleep-proxy-answers', 'sleep-websocket'],
   },
   {
     name: 'scale',
@@ -184,7 +184,12 @@ export const SUITES: readonly Suite[] = [
   },
 
   // kills impd, Firecracker and the container; reboots the instance
-  { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
+  {
+    name: 'chaos',
+    prefix: 'e2e-chaos-',
+    images: ['e2e-bare'],
+    journeys: ['chaos', 'chaos-watchdog', 'chaos-disk-full'],
+  },
 
   // reboots the instance with the jailer off, then on again
   {
