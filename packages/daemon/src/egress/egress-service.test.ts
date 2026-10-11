@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
@@ -28,7 +30,17 @@ import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubEchoServer } from '../test-utils/start-stub-echo-server';
 import type { EgressDeps } from './egress-service';
 
-async function setupTest() {
+// the stand-ins a test wires in place of the default host's
+interface SetupOptions {
+  readonly nft?: Readonly<ReturnType<typeof buildStubNft>>;
+  readonly egress?: Readonly<Partial<NonNullable<ImpdDeps['egress']>>>;
+  readonly broker?: Readonly<Partial<NonNullable<ImpdDeps['broker']>>>;
+  readonly resolveIpv6?: ImpdDeps['resolveIpv6'];
+}
+
+// impd booted on stub VMs, a data dir and a database; impd settings come
+// from the test's updateEnv
+async function setupTest(options: Readonly<SetupOptions> = {}) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -54,7 +66,7 @@ async function setupTest() {
   await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
 
   const vmm = buildStubVmm();
-  const nft = buildStubNft();
+  const nft = options.nft ?? buildStubNft();
   const logs: string[] = [];
   const flushed: string[] = [];
   const flushedPairs: string[] = [];
@@ -67,6 +79,8 @@ async function setupTest() {
 
   const deps = {
     db,
+
+    // the bearer the test's root client sends
     rootToken: 'root-token',
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
@@ -95,7 +109,7 @@ async function setupTest() {
       cpuFlags: 'test-flags',
       ipv6Prefix,
     }),
-    resolveIpv6: () => Promise.resolve(null),
+    resolveIpv6: options.resolveIpv6 ?? (() => Promise.resolve(null)),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     cgroups: buildStubCpuCgroups().cgroups,
@@ -111,6 +125,7 @@ async function setupTest() {
       installBundle: () => Promise.resolve(),
       resolveTunnelTarget: () => Promise.reject(new Error('no network in tests')),
       runOAuthTimer: false,
+      ...options.broker,
     },
 
     // the host container as setup-net.sh leaves it: its ACCEPT for imps on
@@ -134,6 +149,7 @@ async function setupTest() {
       forward: () => Promise.reject(new Error('no upstream in tests')),
       resolveExact: () => Promise.resolve([]),
       ...buildStubHostRoutes().deps,
+      ...options.egress,
     },
     imps: {
       readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
@@ -147,9 +163,7 @@ async function setupTest() {
   // impd on this data dir and database; each boot takes its own DNS port,
   // as the resolver binds it on every address. Its stops run before the
   // database closes, and before anything the test deferred earlier.
-  const startImpd = async (
-    overrides: Readonly<{ env?: Readonly<Record<string, string>>; deps?: Partial<ImpdDeps> }> = {},
-  ) => {
+  const startImpd = async () => {
     // a new disk stays the size of its image: the clone copies every byte
     const config = {
       ...loadConfig({
@@ -157,16 +171,12 @@ async function setupTest() {
         IMP_JAILER: 'false',
         IMP_BOOT_TEMPLATES: 'false',
         IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-        ...overrides.env,
+        ...readImpEnv(),
       }),
       defaultDiskBytes: 0,
     };
 
-    const impd = await createImpd(config, {
-      ...deps,
-      vms: vmm.startGeneration(),
-      ...overrides.deps,
-    });
+    const impd = await createImpd(config, { ...deps, vms: vmm.startGeneration() });
 
     stack.defer(() => impd.broker.stop());
 
@@ -175,27 +185,37 @@ async function setupTest() {
       impd.diskUsage.stop();
     });
 
-    const link = new RPCLink({
-      url: 'http://impd.test/rpc',
-      headers: { authorization: 'Bearer root-token' },
-      fetch: (request) => impd.api.app.handle(request),
-    });
-
-    const client: ContractRouterClient<ImpContract> = createORPCClient(link);
-
-    return { config, impd, client };
+    return { config, impd };
   };
+
+  const started = await startImpd();
+
+  const link = new RPCLink({
+    url: 'http://impd.test/rpc',
+    headers: { authorization: 'Bearer root-token' },
+    fetch: (request) => started.impd.api.app.handle(request),
+  });
+
+  const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
   return {
     stack,
     db,
-    deps,
     nft,
     logs,
     flushed,
     flushedPairs,
     taps,
-    startImpd,
+    config: started.config,
+    impd: started.impd,
+    client,
+
+    // a second impd on the same data dir and database, as after a restart
+    restartImpd: async () => {
+      const restarted = await startImpd();
+
+      return restarted.impd;
+    },
     advance: (ms: number) => {
       clock.nowMs += ms;
     },
@@ -204,16 +224,15 @@ async function setupTest() {
 
 test('it writes a new imp into the table, with its policy, before its tap comes up', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({
+  await ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: ['github.com'] },
   });
 
   // the DNS port is a free one, picked per boot
   const tables = ctx.taps.map((tap) =>
-    tap.table?.replaceAll(`:${String(booted.config.egressDnsPort)}`, ':<dns port>'),
+    tap.table?.replaceAll(`:${String(ctx.config.egressDnsPort)}`, ':<dns port>'),
   );
 
   expect(tables).toHaveLength(1);
@@ -306,14 +325,13 @@ test('it writes a new imp into the table, with its policy, before its tap comes 
 
 test('it keeps the policy a new imp was created with', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({
+  await ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: ['github.com'] },
   });
 
-  expect(booted.impd.egress.readPolicy('dev')).resolves.toStrictEqual({
+  expect(ctx.impd.egress.readPolicy('dev')).resolves.toStrictEqual({
     mode: 'box',
     allow: ['github.com'],
   });
@@ -321,12 +339,11 @@ test('it keeps the policy a new imp was created with', async () => {
 
 test('it takes a destroyed imp out of the table while its row still holds the slot', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'none', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'none', allow: [] } });
 
   const held = ctx.nft.hold((script) => script.startsWith('table') && !script.includes('slot0'));
-  const destroyed = booted.impd.imps.destroyImp('dev');
+  const destroyed = ctx.impd.imps.destroyImp('dev');
 
   await held.reached;
 
@@ -341,20 +358,18 @@ test('it takes a destroyed imp out of the table while its row still holds the sl
 
 test('it gives a fork the policy of its source', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'none', allow: [] } });
-  await booted.client.imps.fork({ source: 'dev', name: 'copy' });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'none', allow: [] } });
+  await ctx.client.imps.fork({ source: 'dev', name: 'copy' });
 
-  expect(booted.impd.egress.readPolicy('copy')).resolves.toStrictEqual({ mode: 'none', allow: [] });
+  expect(ctx.impd.egress.readPolicy('copy')).resolves.toStrictEqual({ mode: 'none', allow: [] });
 });
 
 test('it writes a fork into its first table with the policy of its source', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'none', allow: [] } });
-  await booted.client.imps.fork({ source: 'dev', name: 'copy' });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'none', allow: [] } });
+  await ctx.client.imps.fork({ source: 'dev', name: 'copy' });
 
   const first = ctx.nft.scripts.find((script) => script.includes('chain slot1'));
 
@@ -378,19 +393,18 @@ test.each([
   'it gives %s in slot %p, asking for %p, the verdict %p',
   async (_label, slot, name, verdict) => {
     const ctx = await setupTest();
-    const booted = await ctx.startImpd();
 
-    const imps = booted.impd.imps;
+    const imps = ctx.impd.imps;
 
     await imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['*.npmjs.org'] } });
     await imps.createImp({ name: 'web' });
     await imps.createImp({ name: 'shut', policy: { mode: 'none', allow: [] } });
     await imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
-    await booted.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
-    await booted.impd.broker.addGrant('dev', 'gh');
-    await booted.impd.broker.addGrant('shut', 'gh');
+    await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+    await ctx.impd.broker.addGrant('dev', 'gh');
+    await ctx.impd.broker.addGrant('shut', 'gh');
 
-    const given = await booted.impd.egress.checkName(slot, name);
+    const given = await ctx.impd.egress.checkName(slot, name);
 
     expect(given).toBe(verdict);
   },
@@ -398,31 +412,29 @@ test.each([
 
 test("it admits a CNAME target of a box's allowed name as an alias", async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({
+  await ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: ['*.npmjs.org'] },
   });
 
-  await booted.impd.egress.writeAnswers(
+  await ctx.impd.egress.writeAnswers(
     0,
     ['registry.npmjs.org', 'npm.cdn.test'],
     [{ address: '104.16.0.1', ttlS: 300 }],
   );
 
-  const verdict = await booted.impd.egress.checkName(0, 'npm.cdn.test');
+  const verdict = await ctx.impd.egress.checkName(0, 'npm.cdn.test');
 
   expect(verdict).toBe('admit');
 });
 
 test("it adds a box's admitted addresses to its sets, each family to its own", async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
 
-  await booted.impd.egress.writeAnswers(
+  await ctx.impd.egress.writeAnswers(
     0,
     ['github.com'],
     [
@@ -438,28 +450,22 @@ test("it adds a box's admitted addresses to its sets, each family to its own", a
 
 test('it writes nothing to nft for the answers of an imp that is not a box', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'web' });
+  await ctx.impd.imps.createImp({ name: 'web' });
 
   const before = ctx.nft.scripts.length;
 
-  await booted.impd.egress.writeAnswers(
-    0,
-    ['github.com'],
-    [{ address: '140.82.112.3', ttlS: 300 }],
-  );
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 300 }]);
 
   expect(ctx.nft.scripts).toHaveLength(before);
 });
 
 test('it keeps admitted addresses in a rebuilt table', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
-  await booted.impd.imps.createImp({ name: 'web' });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
+  await ctx.impd.imps.createImp({ name: 'web' });
 
   expect(ctx.nft.readTable()).toInclude(
     '  set allow0 {\n    type ipv4_addr\n    size 4096\n    elements = { 140.82.112.3 }\n  }\n',
@@ -468,93 +474,83 @@ test('it keeps admitted addresses in a rebuilt table', async () => {
 
 test('it sweeps nothing before an admitted address is due, whatever shorter TTL it came with', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
 
   const before = ctx.nft.scripts.length;
 
   // 60 s counts as 300 s
   ctx.advance(299_000);
 
-  await booted.impd.egress.runSweep();
+  await ctx.impd.egress.runSweep();
 
   expect(ctx.nft.scripts).toHaveLength(before);
 });
 
 test('it sweeps an admitted address out of the set when it is due', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
 
   ctx.advance(300_000);
 
-  await booted.impd.egress.runSweep();
+  await ctx.impd.egress.runSweep();
 
   expect(ctx.nft.scripts.at(-1)).toBe('delete element inet imp_egress allow0 { 140.82.112.3 }\n');
 });
 
 test('it never sweeps an address that is not yet due, in another slot', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.imps.createImp({ name: 'web', policy: { mode: 'box', allow: ['npmjs.org'] } });
-  await booted.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.imps.createImp({ name: 'web', policy: { mode: 'box', allow: ['npmjs.org'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
 
   ctx.advance(200_000);
 
-  await booted.impd.egress.writeAnswers(1, ['npmjs.org'], [{ address: '104.16.0.1', ttlS: 60 }]);
+  await ctx.impd.egress.writeAnswers(1, ['npmjs.org'], [{ address: '104.16.0.1', ttlS: 60 }]);
 
   // slot 0's address is due now, slot 1's in 200 s: each counts as 300 s
   ctx.advance(100_000);
 
   const before = ctx.nft.scripts.length;
 
-  await booted.impd.egress.runSweep();
+  await ctx.impd.egress.runSweep();
 
   expect(ctx.nft.scripts.slice(before)).toStrictEqual([
     'delete element inet imp_egress allow0 { 140.82.112.3 }\n',
   ]);
 
-  expect(booted.impd.egress.readAnswers(1)).toStrictEqual([
+  expect(ctx.impd.egress.readAnswers(1)).toStrictEqual([
     { names: ['npmjs.org'], address: '104.16.0.1', ttlS: 200 },
   ]);
 });
 
 test('it runs the sweep every 30 seconds once started', async () => {
-  const ctx = await setupTest();
-
   const repeat = mock<NonNullable<EgressDeps['repeat']>>(() => () => {});
 
-  await ctx.startImpd({ deps: { egress: { ...ctx.deps.egress, repeat } } });
+  await setupTest({ egress: { repeat } });
 
   expect(repeat).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 30_000);
 });
 
 test('it sweeps an address that is due out of the set on a run of the sweep', async () => {
-  const ctx = await setupTest();
-
   const runs: (() => void)[] = [];
 
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        repeat: (run) => {
-          runs.push(run);
+  const ctx = await setupTest({
+    egress: {
+      repeat: (run) => {
+        runs.push(run);
 
-          return () => {};
-        },
+        return () => {};
       },
     },
   });
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
 
   ctx.advance(300_000);
 
@@ -569,25 +565,20 @@ test('it sweeps an address that is due out of the set on a run of the sweep', as
 });
 
 test('it logs a run of the sweep that nft refuses', async () => {
-  const ctx = await setupTest();
-
   const runs: (() => void)[] = [];
 
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        repeat: (run) => {
-          runs.push(run);
+  const ctx = await setupTest({
+    egress: {
+      repeat: (run) => {
+        runs.push(run);
 
-          return () => {};
-        },
+        return () => {};
       },
     },
   });
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 60 }]);
 
   ctx.advance(300_000);
   ctx.nft.refuse({ reason: 'table busy', match: (script) => script.startsWith('delete element') });
@@ -603,58 +594,40 @@ test('it logs a run of the sweep that nft refuses', async () => {
 });
 
 test('it stops the sweep when it stops', async () => {
-  const ctx = await setupTest();
-
   const stopSweep = mock();
 
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        repeat: () => () => {
-          stopSweep();
-        },
+  const ctx = await setupTest({
+    egress: {
+      repeat: () => () => {
+        stopSweep();
       },
     },
   });
 
-  booted.impd.egress.stop();
+  ctx.impd.egress.stop();
 
   expect(stopSweep).toHaveBeenCalledOnce();
 });
 
 test('it lists what a box holds, with names and seconds left, for a warm move', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-
-  await booted.impd.egress.writeAnswers(
-    0,
-    ['github.com'],
-    [{ address: '140.82.112.3', ttlS: 600 }],
-  );
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 600 }]);
 
   ctx.advance(100_000);
 
-  expect(booted.impd.egress.readAnswers(0)).toStrictEqual([
+  expect(ctx.impd.egress.readAnswers(0)).toStrictEqual([
     { names: ['github.com'], address: '140.82.112.3', ttlS: 500 },
   ]);
 });
 
 test("it resolves a box's exact names when the box is created, and admits their addresses", async () => {
-  const ctx = await setupTest();
-
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        resolveExact: () => Promise.resolve([{ address: '140.82.112.3', ttlS: 60 }]),
-      },
-    },
+  const ctx = await setupTest({
+    egress: { resolveExact: () => Promise.resolve([{ address: '140.82.112.3', ttlS: 60 }]) },
   });
 
-  await booted.impd.imps.createImp({
+  await ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: ['github.com', '*.npmjs.org'] },
   });
@@ -665,18 +638,11 @@ test("it resolves a box's exact names when the box is created, and admits their 
 });
 
 test("it logs an exact name of a box's list that does not resolve", async () => {
-  const ctx = await setupTest();
-
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        resolveExact: () => Promise.reject(new Error('queryA ESERVFAIL github.com')),
-      },
-    },
+  const ctx = await setupTest({
+    egress: { resolveExact: () => Promise.reject(new Error('queryA ESERVFAIL github.com')) },
   });
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
 
   await waitFor(() => {
     expect(ctx.logs).toContain(
@@ -687,21 +653,15 @@ test("it logs an exact name of a box's list that does not resolve", async () => 
 
 test('it prunes the set of a tighter box to the names it still allows, and flushes the guest', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({
+  await ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: ['github.com', 'npmjs.org'] },
   });
 
-  await booted.impd.egress.writeAnswers(
-    0,
-    ['github.com'],
-    [{ address: '140.82.112.3', ttlS: 300 }],
-  );
-
-  await booted.impd.egress.writeAnswers(0, ['npmjs.org'], [{ address: '104.16.0.1', ttlS: 300 }]);
-  await booted.impd.egress.setPolicy('dev', { mode: 'box', allow: ['npmjs.org'] });
+  await ctx.impd.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 300 }]);
+  await ctx.impd.egress.writeAnswers(0, ['npmjs.org'], [{ address: '104.16.0.1', ttlS: 300 }]);
+  await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['npmjs.org'] });
 
   expect(ctx.nft.readTable()).toInclude(
     '  set allow0 {\n    type ipv4_addr\n    size 4096\n    elements = { 104.16.0.1 }\n  }\n',
@@ -712,10 +672,9 @@ test('it prunes the set of a tighter box to the names it still allows, and flush
 
 test('it flushes no flows and drops the sets when an imp opens up', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
-  await booted.impd.egress.setPolicy('dev', { mode: 'open', allow: [] });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'open', allow: [] });
 
   const table = ctx.nft.readTable();
 
@@ -726,7 +685,8 @@ test('it flushes no flows and drops the sets when an imp opens up', async () => 
 });
 
 test('it lets a public imp out only by the uplinks, and refuses it the private ranges, the host and IMP_EGRESS_DENY', async () => {
-  const ctx = await setupTest();
+  updateEnv('IMP_EGRESS_DENY', '8.8.4.4,2a01:4f8::7/128');
+  updateEnv('IMP_HOST_ADDRESSES', '2a01:4f8:1::5/64');
 
   // two links of the container's own and a default route each way
   const routes = buildStubHostRoutes({
@@ -735,18 +695,15 @@ test('it lets a public imp out only by the uplinks, and refuses it the private r
     uplinks: { ipv4: ['eth0'], ipv6: ['eth0'] },
   });
 
-  const booted = await ctx.startImpd({
-    env: { IMP_EGRESS_DENY: '8.8.4.4,2a01:4f8::7/128', IMP_HOST_ADDRESSES: '2a01:4f8:1::5/64' },
-    deps: { egress: { ...ctx.deps.egress, ...routes.deps } },
-  });
+  const ctx = await setupTest({ egress: routes.deps });
 
-  await booted.impd.imps.createImp({ name: 'dev' });
-  await booted.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
+  await ctx.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
 
   // the DNS port is a free one, picked per boot
   const table = ctx.nft
     .readTable()
-    ?.replaceAll(`:${String(booted.config.egressDnsPort)}`, ':<dns port>');
+    ?.replaceAll(`:${String(ctx.config.egressDnsPort)}`, ':<dns port>');
 
   expect(ctx.flushed).toStrictEqual(['10.66.0.2']);
 
@@ -836,26 +793,19 @@ test('it lets a public imp out only by the uplinks, and refuses it the private r
 });
 
 test('it ends every plain tunnel of an imp that becomes public', async () => {
-  const ctx = await setupTest();
+  // guests on loopback, and every tunnel's host on loopback too
+  updateEnv('IMP_SUBNET', '127.0.0.0/16');
 
-  // the far end of every tunnel, which outlives impd
-  const far = await startStubEchoServer(ctx.stack);
-
-  // guests on loopback, and every tunnel to the far end
-  const booted = await ctx.startImpd({
-    env: { IMP_SUBNET: '127.0.0.0/16' },
-    deps: {
-      broker: {
-        ...ctx.deps.broker,
-        resolveTunnelTarget: () => Promise.resolve('127.0.0.1'),
-        dialTunnel: () => createConnection({ host: '127.0.0.1', port: far.port }),
-      },
-    },
+  const ctx = await setupTest({
+    broker: { resolveTunnelTarget: () => Promise.resolve('127.0.0.1') },
   });
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  // the far end of the tunnel
+  const far = await startStubEchoServer(ctx.stack);
 
-  const brokerPort = await booted.impd.broker.listen(0);
+  await ctx.impd.imps.createImp({ name: 'dev' });
+
+  const brokerPort = await ctx.impd.broker.listen(0);
 
   const established = Promise.withResolvers<void>();
   const closed = Promise.withResolvers<void>();
@@ -864,7 +814,9 @@ test('it ends every plain tunnel of an imp that becomes public', async () => {
   const tunnel = createConnection(
     { host: '127.0.0.1', port: brokerPort, localAddress: '127.0.0.2' },
     () => {
-      tunnel.write('CONNECT example.org:443 HTTP/1.1\r\nHost: example.org:443\r\n\r\n');
+      tunnel.write(
+        `CONNECT example.org:${String(far.port)} HTTP/1.1\r\nHost: example.org:${String(far.port)}\r\n\r\n`,
+      );
     },
   );
 
@@ -885,7 +837,7 @@ test('it ends every plain tunnel of an imp that becomes public', async () => {
 
   await established.promise;
 
-  await booted.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
 
   await closed.promise;
 
@@ -893,26 +845,19 @@ test('it ends every plain tunnel of an imp that becomes public', async () => {
 });
 
 test('it keeps the plain tunnels of an imp that stays public', async () => {
-  const ctx = await setupTest();
+  // guests on loopback, and every tunnel's host on loopback too
+  updateEnv('IMP_SUBNET', '127.0.0.0/16');
 
-  // the far end of every tunnel, which outlives impd
-  const far = await startStubEchoServer(ctx.stack);
-
-  // guests on loopback, and every tunnel to the far end
-  const booted = await ctx.startImpd({
-    env: { IMP_SUBNET: '127.0.0.0/16' },
-    deps: {
-      broker: {
-        ...ctx.deps.broker,
-        resolveTunnelTarget: () => Promise.resolve('127.0.0.1'),
-        dialTunnel: () => createConnection({ host: '127.0.0.1', port: far.port }),
-      },
-    },
+  const ctx = await setupTest({
+    broker: { resolveTunnelTarget: () => Promise.resolve('127.0.0.1') },
   });
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'public', allow: [] } });
+  // the far end of the tunnel
+  const far = await startStubEchoServer(ctx.stack);
 
-  const brokerPort = await booted.impd.broker.listen(0);
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'public', allow: [] } });
+
+  const brokerPort = await ctx.impd.broker.listen(0);
 
   const established = Promise.withResolvers<void>();
   const echoed = Promise.withResolvers<string>();
@@ -921,7 +866,9 @@ test('it keeps the plain tunnels of an imp that stays public', async () => {
   const tunnel = createConnection(
     { host: '127.0.0.1', port: brokerPort, localAddress: '127.0.0.2' },
     () => {
-      tunnel.write('CONNECT example.org:443 HTTP/1.1\r\nHost: example.org:443\r\n\r\n');
+      tunnel.write(
+        `CONNECT example.org:${String(far.port)} HTTP/1.1\r\nHost: example.org:${String(far.port)}\r\n\r\n`,
+      );
     },
   );
 
@@ -942,7 +889,7 @@ test('it keeps the plain tunnels of an imp that stays public', async () => {
 
   await established.promise;
 
-  await booted.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
 
   tunnel.write('still here');
 
@@ -952,20 +899,16 @@ test('it keeps the plain tunnels of an imp that stays public', async () => {
 });
 
 test('it refuses a public policy whose routes cannot be read, and leaves the imp as it was', async () => {
-  const ctx = await setupTest();
-
   const routes = buildStubHostRoutes({ uplinks: { ipv4: ['eth0'], ipv6: [] } });
 
-  const booted = await ctx.startImpd({
-    deps: { egress: { ...ctx.deps.egress, ...routes.deps } },
-  });
+  const ctx = await setupTest({ egress: routes.deps });
 
-  await booted.impd.imps.createImp({ name: 'dev' });
-  await booted.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
 
   routes.failUplinks('ip -4 route show default exited 1');
 
-  const change = booted.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
+  const change = ctx.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
 
   expect(change).rejects.toMatchObject({
     code: 'PRECONDITION_FAILED',
@@ -973,23 +916,19 @@ test('it refuses a public policy whose routes cannot be read, and leaves the imp
       'impd cannot read the routes a public egress policy needs: ip -4 route show default exited 1',
   });
 
-  expect(booted.impd.egress.readPolicy('dev')).resolves.toStrictEqual({ mode: 'open', allow: [] });
+  expect(ctx.impd.egress.readPolicy('dev')).resolves.toStrictEqual({ mode: 'open', allow: [] });
 });
 
 test('it leaves a running public imp no uplink while the routes cannot be read', async () => {
-  const ctx = await setupTest();
-
   const routes = buildStubHostRoutes({ uplinks: { ipv4: ['eth0'], ipv6: [] } });
 
-  const booted = await ctx.startImpd({
-    deps: { egress: { ...ctx.deps.egress, ...routes.deps } },
-  });
+  const ctx = await setupTest({ egress: routes.deps });
 
-  await booted.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
 
   routes.failUplinks('ip -4 route show default exited 1');
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   expect(ctx.nft.readTable()).toInclude('  set uplinks4 {\n    type ifname\n  }\n');
 
@@ -999,22 +938,18 @@ test('it leaves a running public imp no uplink while the routes cannot be read',
 });
 
 test('it refuses a public policy outright while the routes cannot be read', async () => {
-  const ctx = await setupTest();
-
   const routes = buildStubHostRoutes({ uplinks: { ipv4: ['eth0'], ipv6: [] } });
 
-  const booted = await ctx.startImpd({
-    deps: { egress: { ...ctx.deps.egress, ...routes.deps } },
-  });
+  const ctx = await setupTest({ egress: routes.deps });
 
-  await booted.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
 
   routes.failUplinks('ip -4 route show default exited 1');
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   expect(() => {
-    booted.impd.egress.requirePolicy({ mode: 'public', allow: [] });
+    ctx.impd.egress.requirePolicy({ mode: 'public', allow: [] });
   }).toThrowWithMessage(
     Error,
     'impd cannot read the routes a public egress policy needs: ip -4 route show default exited 1',
@@ -1022,52 +957,44 @@ test('it refuses a public policy outright while the routes cannot be read', asyn
 });
 
 test('it accepts a public policy once the routes are back', async () => {
-  const ctx = await setupTest();
-
   const routes = buildStubHostRoutes({ uplinks: { ipv4: ['eth0'], ipv6: [] } });
 
-  const booted = await ctx.startImpd({
-    deps: { egress: { ...ctx.deps.egress, ...routes.deps } },
-  });
+  const ctx = await setupTest({ egress: routes.deps });
 
-  await booted.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
 
   routes.failUplinks('ip -4 route show default exited 1');
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   // the refusal while the routes were gone, kept for the end
   const refusal = Promise.try(() => {
-    booted.impd.egress.requirePolicy({ mode: 'public', allow: [] });
+    ctx.impd.egress.requirePolicy({ mode: 'public', allow: [] });
   });
 
   routes.restoreUplinks();
 
-  const policy = await booted.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
+  const policy = await ctx.impd.egress.setPolicy('dev', { mode: 'public', allow: [] });
 
   expect(refusal).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
   expect(policy).toStrictEqual({ mode: 'public', allow: [] });
 
   expect(() => {
-    booted.impd.egress.requirePolicy({ mode: 'public', allow: [] });
+    ctx.impd.egress.requirePolicy({ mode: 'public', allow: [] });
   }).not.toThrow();
 });
 
 test('it builds the table again for a public imp once the routes are back', async () => {
-  const ctx = await setupTest();
-
   const routes = buildStubHostRoutes({ uplinks: { ipv4: ['eth0'], ipv6: [] } });
 
-  const booted = await ctx.startImpd({
-    deps: { egress: { ...ctx.deps.egress, ...routes.deps } },
-  });
+  const ctx = await setupTest({ egress: routes.deps });
 
-  await booted.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
-  await booted.impd.imps.stopImp('pub');
+  await ctx.impd.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.stopImp('pub');
 
   routes.failUplinks('ip -4 route show default exited 1');
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   routes.restoreUplinks();
 
@@ -1075,7 +1002,7 @@ test('it builds the table again for a public imp once the routes are back', asyn
 
   invariant(pub);
 
-  await booted.impd.egress.requireImp(pub.id);
+  await ctx.impd.egress.requireImp(pub.id);
 
   expect(ctx.nft.readTable()).toInclude(
     '  set uplinks4 {\n    type ifname\n    elements = { "eth0" }\n  }\n',
@@ -1084,44 +1011,44 @@ test('it builds the table again for a public imp once the routes are back', asyn
 
 test('it warns once that a public imp lacks the host addresses when IMP_HOST_ADDRESSES is empty', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
-  await booted.impd.imps.createImp({ name: 'b', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
+  await ctx.impd.imps.createImp({ name: 'b', policy: { mode: 'public', allow: [] } });
 
   expect(ctx.logs.filter((line) => line.includes('IMP_HOST_ADDRESSES is empty'))).toHaveLength(1);
 });
 
 test('it warns that a public imp lacks the host addresses even when IMP_EGRESS_DENY holds some', async () => {
-  const ctx = await setupTest();
-  const booted = await ctx.startImpd({ env: { IMP_EGRESS_DENY: '203.0.113.7' } });
+  updateEnv('IMP_EGRESS_DENY', '203.0.113.7');
 
-  await booted.impd.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
+  const ctx = await setupTest();
+
+  await ctx.impd.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
 
   expect(ctx.logs.filter((line) => line.includes('IMP_HOST_ADDRESSES is empty'))).toHaveLength(1);
 });
 
 test('it gives no warning for a public imp when IMP_HOST_ADDRESSES is set', async () => {
-  const ctx = await setupTest();
-  const booted = await ctx.startImpd({ env: { IMP_HOST_ADDRESSES: '203.0.113.9/24' } });
+  updateEnv('IMP_HOST_ADDRESSES', '203.0.113.9/24');
 
-  await booted.impd.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
+  const ctx = await setupTest();
+
+  await ctx.impd.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
 
   expect(ctx.logs.filter((line) => line.includes('IMP_HOST_ADDRESSES is empty'))).toBeEmpty();
 });
 
 test('it leaves the old policy in place, and flushes nothing, when nft refuses a change', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   ctx.nft.refuse({ reason: 'table busy', match: (script) => script.includes('allow0') });
 
-  const change = booted.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
+  const change = ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
 
   expect(change).rejects.toThrow(new Error('nft exited 1: table busy'));
-  expect(booted.impd.egress.readPolicy('dev')).resolves.toStrictEqual({ mode: 'open', allow: [] });
+  expect(ctx.impd.egress.readPolicy('dev')).resolves.toStrictEqual({ mode: 'open', allow: [] });
 
   expect(ctx.nft.readTable()).toInclude(
     '  chain slot0 {\n    ip saddr != 10.66.0.2 drop\n    meta nfproto ipv6 drop\n    ip daddr { 169.254.0.0/16, 100.64.0.0/10 } goto deny\n',
@@ -1132,24 +1059,23 @@ test('it leaves the old policy in place, and flushes nothing, when nft refuses a
 
 test('it takes a policy change once nft takes scripts again after a refusal', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   ctx.nft.refuse({ reason: 'table busy', match: (script) => script.includes('allow0') });
 
-  const refused = booted.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
+  const refused = ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
 
   await Promise.allSettled([refused]);
 
   ctx.nft.accept();
 
-  const policy = await booted.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
+  const policy = await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
 
   expect(refused).rejects.toThrow(new Error('nft exited 1: table busy'));
   expect(policy).toStrictEqual({ mode: 'box', allow: ['github.com'] });
 
-  expect(booted.impd.egress.readPolicy('dev')).resolves.toStrictEqual({
+  expect(ctx.impd.egress.readPolicy('dev')).resolves.toStrictEqual({
     mode: 'box',
     allow: ['github.com'],
   });
@@ -1157,20 +1083,19 @@ test('it takes a policy change once nft takes scripts again after a refusal', as
 
 test('it leaves nft and the database agreeing when a create meets a failing policy change', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   // nft refuses dev's box set; the first create after dev's waits in nft
   ctx.nft.refuse({ reason: 'table busy', match: (script) => script.includes('allow0') });
 
   const held = ctx.nft.hold((script) => script.includes('imp1'));
-  const first = booted.impd.imps.createImp({ name: 'first' });
+  const first = ctx.impd.imps.createImp({ name: 'first' });
 
   await held.reached;
 
   // a second create gets its row, then waits behind the first for the table
-  const second = booted.impd.imps.createImp({ name: 'second' });
+  const second = ctx.impd.imps.createImp({ name: 'second' });
 
   await waitFor(async () => {
     const row = await findImpByName(ctx.db, 'second');
@@ -1178,7 +1103,7 @@ test('it leaves nft and the database agreeing when a create meets a failing poli
     expect(row).toBeDefined();
   });
 
-  const change = booted.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
+  const change = ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] });
 
   held.release();
 
@@ -1194,19 +1119,19 @@ test('it leaves nft and the database agreeing when a create meets a failing poli
     'fulfilled',
   ]);
 
-  expect(booted.impd.egress.readPolicy('dev')).resolves.toStrictEqual({ mode: 'open', allow: [] });
+  expect(ctx.impd.egress.readPolicy('dev')).resolves.toStrictEqual({ mode: 'open', allow: [] });
   expect(table).toInclude('chain slot2');
   expect(table).not.toInclude('allow0');
 });
 
 test('it refuses a box without nft', async () => {
-  const ctx = await setupTest();
+  const nft = buildStubNft();
 
-  ctx.nft.refuse({ reason: 'nft is not installed' });
+  nft.refuse({ reason: 'nft is not installed' });
 
-  const booted = await ctx.startImpd();
+  const ctx = await setupTest({ nft });
 
-  const create = booted.impd.imps.createImp({
+  const create = ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: [] },
   });
@@ -1219,31 +1144,30 @@ test('it refuses a box without nft', async () => {
 
 test('it refuses to boot an imp whose policy is none without nft', async () => {
   const ctx = await setupTest();
-  const first = await ctx.startImpd();
 
-  await first.impd.imps.createImp({ name: 'shut', policy: { mode: 'none', allow: [] } });
-  await first.impd.imps.stopImp('shut');
+  await ctx.impd.imps.createImp({ name: 'shut', policy: { mode: 'none', allow: [] } });
+  await ctx.impd.imps.stopImp('shut');
 
   ctx.nft.refuse({ reason: 'nft is not installed' });
 
-  const restarted = await ctx.startImpd();
+  const restarted = await ctx.restartImpd();
 
-  expect(restarted.impd.imps.startImp('shut')).rejects.toMatchObject({
+  expect(restarted.imps.startImp('shut')).rejects.toMatchObject({
     code: 'PRECONDITION_FAILED',
     message: 'impd cannot enforce a none egress policy here: nft exited 1: nft is not installed',
   });
 });
 
 test('it runs an open imp without nft, and says the firewall is off', async () => {
-  const ctx = await setupTest();
+  const nft = buildStubNft();
 
-  ctx.nft.refuse({ reason: 'nft is not installed' });
+  nft.refuse({ reason: 'nft is not installed' });
 
-  const booted = await ctx.startImpd();
-  const web = await booted.impd.imps.createImp({ name: 'web' });
+  const ctx = await setupTest({ nft });
+  const web = await ctx.impd.imps.createImp({ name: 'web' });
 
   expect(web.state).toBe('running');
-  expect(booted.impd.egress.isEnforced()).toBeFalse();
+  expect(ctx.impd.egress.isEnforced()).toBeFalse();
 
   expect(ctx.logs).toContain(
     'impd: egress: NO FIREWALL: nft exited 1: nft is not installed; imps with a public, box or none policy will not start (0 now)',
@@ -1251,24 +1175,19 @@ test('it runs an open imp without nft, and says the firewall is off', async () =
 });
 
 test("it says nft is not installed when impd cannot start nft's binary", async () => {
-  const ctx = await setupTest();
-
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        runNft: () =>
-          Promise.reject(
-            Object.assign(new Error("ENOENT: no such file or directory, posix_spawn 'nft'"), {
-              code: 'ENOENT',
-            }),
-          ),
-      },
+  const ctx = await setupTest({
+    egress: {
+      runNft: () =>
+        Promise.reject(
+          Object.assign(new Error("ENOENT: no such file or directory, posix_spawn 'nft'"), {
+            code: 'ENOENT',
+          }),
+        ),
     },
   });
 
   expect(() => {
-    booted.impd.egress.requirePolicy({ mode: 'none', allow: [] });
+    ctx.impd.egress.requirePolicy({ mode: 'none', allow: [] });
   }).toThrowWithMessage(
     Error,
     'impd cannot enforce a none egress policy here: nft is not installed',
@@ -1276,8 +1195,6 @@ test("it says nft is not installed when impd cannot start nft's binary", async (
 });
 
 test("it checks an IPv6 slot's source /128, and blocks the imps' /64 and the container's links", async () => {
-  const ctx = await setupTest();
-
   const prefix = parsePrefix64('fd12:3456:789a::/64');
 
   invariant(prefix);
@@ -1285,14 +1202,12 @@ test("it checks an IPv6 slot's source /128, and blocks the imps' /64 and the con
   // the container's own IPv6 link
   const routes = buildStubHostRoutes({ connected6: ['2001:db8:a::/64'] });
 
-  const booted = await ctx.startImpd({
-    deps: {
-      resolveIpv6: () => Promise.resolve({ prefix, nat66: true, uplink: 'eth0' }),
-      egress: { ...ctx.deps.egress, ...routes.deps },
-    },
+  const ctx = await setupTest({
+    resolveIpv6: () => Promise.resolve({ prefix, nat66: true, uplink: 'eth0' }),
+    egress: routes.deps,
   });
 
-  await booted.impd.imps.createImp({
+  await ctx.impd.imps.createImp({
     name: 'dev',
     policy: { mode: 'box', allow: ['2001:db8:c::/48'] },
   });
@@ -1300,7 +1215,7 @@ test("it checks an IPv6 slot's source /128, and blocks the imps' /64 and the con
   // the DNS port is a free one, picked per boot
   const table = ctx.nft
     .readTable()
-    ?.replaceAll(`:${String(booted.config.egressDnsPort)}`, ':<dns port>');
+    ?.replaceAll(`:${String(ctx.config.egressDnsPort)}`, ':<dns port>');
 
   expect(table).toMatchInlineSnapshot(`
     "table inet imp_egress {}
@@ -1390,9 +1305,9 @@ test("it checks an IPv6 slot's source /128, and blocks the imps' /64 and the con
 });
 
 test('it turns IPv6 off when NAT66 fails, and still enforces the egress table', async () => {
-  const ctx = await setupTest();
+  const nft = buildStubNft();
 
-  ctx.nft.refuse({
+  nft.refuse({
     reason: 'Operation not supported',
     match: (script) => script.includes('masquerade'),
   });
@@ -1401,25 +1316,24 @@ test('it turns IPv6 off when NAT66 fails, and still enforces the egress table', 
 
   invariant(prefix);
 
-  const booted = await ctx.startImpd({
-    deps: {
-      resolveIpv6: () =>
-        resolveIpv6Plan(
-          { kind: 'auto' },
-          {
-            readDefaultRoute: () => Promise.resolve('eth0'),
-            readUlaPrefix: () => prefix,
-            checkHostRules: () => Promise.resolve(null),
-            runNft: ctx.nft.runNft,
-            log: () => {},
-          },
-        ),
-    },
+  const ctx = await setupTest({
+    nft,
+    resolveIpv6: () =>
+      resolveIpv6Plan(
+        { kind: 'auto' },
+        {
+          readDefaultRoute: () => Promise.resolve('eth0'),
+          readUlaPrefix: () => prefix,
+          checkHostRules: () => Promise.resolve(null),
+          runNft: nft.runNft,
+          log: () => {},
+        },
+      ),
   });
 
-  await booted.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+  await ctx.impd.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
 
-  expect(booted.impd.egress.isEnforced()).toBeTrue();
+  expect(ctx.impd.egress.isEnforced()).toBeTrue();
 
   expect(ctx.nft.readTable()).toInclude(
     '  chain slot0 {\n    ip saddr != 10.66.0.2 drop\n    meta nfproto ipv6 drop\n',
@@ -1428,13 +1342,12 @@ test('it turns IPv6 off when NAT66 fails, and still enforces the egress table', 
 
 test('it builds the table from the rows when nft refuses a network change and the undo throws', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
   const network = await writeNetwork(ctx.db, 'lab');
 
   invariant(network);
 
-  await booted.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
-  await booted.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
 
   const joined = ctx.nft.readTable();
 
@@ -1442,7 +1355,7 @@ test('it builds the table from the rows when nft refuses a network change and th
 
   const undo = mock(() => Promise.reject(new Error('the database is gone')));
 
-  const change = booted.impd.egress.changeNetworks({
+  const change = ctx.impd.egress.changeNetworks({
     write: () => removeNetwork(ctx.db, network.id),
     undo,
   });
@@ -1469,13 +1382,12 @@ test('it builds the table from the rows when nft refuses a network change and th
 
 test('it rethrows the refusal of nft, and keeps the network, when the undo of a change succeeds', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
   const network = await writeNetwork(ctx.db, 'lab');
 
   invariant(network);
 
-  await booted.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
-  await booted.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
 
   const dbImp = await findImpByName(ctx.db, 'db');
 
@@ -1483,7 +1395,7 @@ test('it rethrows the refusal of nft, and keeps the network, when the undo of a 
 
   ctx.nft.refuse({ reason: 'table busy', times: 1 });
 
-  const change = booted.impd.egress.changeNetworks({
+  const change = ctx.impd.egress.changeNetworks({
     write: () => removeMember(ctx.db, network.id, dbImp.id),
     undo: async () => {
       await ctx.db
@@ -1502,15 +1414,14 @@ test('it rethrows the refusal of nft, and keeps the network, when the undo of a 
 
 test('it drops the flows of a pair that a change parts', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
   const network = await writeNetwork(ctx.db, 'lab');
 
   invariant(network);
 
-  await booted.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
-  await booted.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
 
-  await booted.impd.egress.changeNetworks({
+  await ctx.impd.egress.changeNetworks({
     write: () => removeNetwork(ctx.db, network.id),
     undo: () => Promise.resolve(),
   });
@@ -1519,15 +1430,9 @@ test('it drops the flows of a pair that a change parts', async () => {
 });
 
 test('it logs a pair whose flows cannot be dropped, and keeps the change', async () => {
-  const ctx = await setupTest();
-
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        flushPair: () =>
-          Promise.reject(new Error('conntrack -D exited 1: Operation not permitted')),
-      },
+  const ctx = await setupTest({
+    egress: {
+      flushPair: () => Promise.reject(new Error('conntrack -D exited 1: Operation not permitted')),
     },
   });
 
@@ -1535,10 +1440,10 @@ test('it logs a pair whose flows cannot be dropped, and keeps the change', async
 
   invariant(network);
 
-  await booted.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
-  await booted.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
 
-  const result = await booted.impd.egress.changeNetworks({
+  const result = await ctx.impd.egress.changeNetworks({
     write: () => removeNetwork(ctx.db, network.id).then(() => 'removed'),
     undo: () => Promise.resolve(),
   });
@@ -1551,16 +1456,11 @@ test('it logs a pair whose flows cannot be dropped, and keeps the change', async
 });
 
 test("it says once that setup-net.sh's imp-network ACCEPT is missing from a table with members", async () => {
-  const ctx = await setupTest();
-
   // the rule without its mark, as a hand-made one might be
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        readForwardRules: () =>
-          Promise.resolve('-A FORWARD -m comment --comment imp-network -j ACCEPT\n'),
-      },
+  const ctx = await setupTest({
+    egress: {
+      readForwardRules: () =>
+        Promise.resolve('-A FORWARD -m comment --comment imp-network -j ACCEPT\n'),
     },
   });
 
@@ -1568,22 +1468,17 @@ test("it says once that setup-net.sh's imp-network ACCEPT is missing from a tabl
 
   invariant(network);
 
-  await booted.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
-  await booted.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'db', networkIds: [network.id] });
 
   expect(ctx.logs.filter((line) => line.includes('imp-network ACCEPT is missing'))).toHaveLength(1);
 });
 
 test('it logs a FORWARD chain it cannot read', async () => {
-  const ctx = await setupTest();
-
-  const booted = await ctx.startImpd({
-    deps: {
-      egress: {
-        ...ctx.deps.egress,
-        readForwardRules: () =>
-          Promise.reject(new Error('iptables -S FORWARD exited 4: Permission denied')),
-      },
+  const ctx = await setupTest({
+    egress: {
+      readForwardRules: () =>
+        Promise.reject(new Error('iptables -S FORWARD exited 4: Permission denied')),
     },
   });
 
@@ -1591,7 +1486,7 @@ test('it logs a FORWARD chain it cannot read', async () => {
 
   invariant(network);
 
-  await booted.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
+  await ctx.impd.imps.createImp({ name: 'web', networkIds: [network.id] });
 
   expect(ctx.logs).toContain(
     'impd: egress: reading FORWARD: iptables -S FORWARD exited 4: Permission denied',
@@ -1600,40 +1495,36 @@ test('it logs a FORWARD chain it cannot read', async () => {
 
 test('it rejects a policy read of an imp that does not exist as NOT_FOUND', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  expect(booted.impd.egress.readPolicy('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(ctx.impd.egress.readPolicy('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' });
 });
 
 test('it rejects a policy change of an imp that does not exist as NOT_FOUND', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  expect(booted.impd.egress.setPolicy('ghost', { mode: 'none', allow: [] })).rejects.toMatchObject({
+  expect(ctx.impd.egress.setPolicy('ghost', { mode: 'none', allow: [] })).rejects.toMatchObject({
     code: 'NOT_FOUND',
   });
 });
 
 test('it rejects a policy change of an imp on the move as MOVING', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
-  const imp = await booted.impd.imps.createImp({ name: 'dev' });
+  const imp = await ctx.impd.imps.createImp({ name: 'dev' });
 
   await updateImpMove(ctx.db, imp.id, 'sending');
 
-  expect(booted.impd.egress.setPolicy('dev', { mode: 'none', allow: [] })).rejects.toMatchObject({
+  expect(ctx.impd.egress.setPolicy('dev', { mode: 'none', allow: [] })).rejects.toMatchObject({
     code: 'MOVING',
   });
 });
 
 test('it frees the DNS port when it stops', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  booted.impd.egress.stop();
+  ctx.impd.egress.stop();
 
   // the resolver bound both on every address
-  const socket = await Bun.udpSocket({ hostname: '0.0.0.0', port: booted.config.egressDnsPort });
+  const socket = await Bun.udpSocket({ hostname: '0.0.0.0', port: ctx.config.egressDnsPort });
 
   onTestFinished(() => {
     socket.close();
@@ -1641,7 +1532,7 @@ test('it frees the DNS port when it stops', async () => {
 
   const listener = Bun.listen({
     hostname: '0.0.0.0',
-    port: booted.config.egressDnsPort,
+    port: ctx.config.egressDnsPort,
     socket: { data: () => {} },
   });
 
@@ -1649,19 +1540,18 @@ test('it frees the DNS port when it stops', async () => {
     listener.stop(true);
   });
 
-  expect(socket.port).toBe(booted.config.egressDnsPort);
-  expect(listener.port).toBe(booted.config.egressDnsPort);
+  expect(socket.port).toBe(ctx.config.egressDnsPort);
+  expect(listener.port).toBe(ctx.config.egressDnsPort);
 });
 
 test('it logs a rebuild of the table that nft refuses too after a failed change', async () => {
   const ctx = await setupTest();
-  const booted = await ctx.startImpd();
 
-  await booted.impd.imps.createImp({ name: 'dev' });
+  await ctx.impd.imps.createImp({ name: 'dev' });
 
   ctx.nft.refuse({ reason: 'table busy', times: 2 });
 
-  const change = booted.impd.egress.setPolicy('dev', { mode: 'none', allow: [] });
+  const change = ctx.impd.egress.setPolicy('dev', { mode: 'none', allow: [] });
 
   expect(change).rejects.toThrow(new Error('nft exited 1: table busy'));
   expect(ctx.logs).toContain('impd: egress: rebuilding the table: nft exited 1: table busy');
