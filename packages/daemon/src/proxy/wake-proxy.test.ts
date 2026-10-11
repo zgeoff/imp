@@ -12,8 +12,10 @@ import { openDatabase } from '../db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubHeaderEcho } from '../test-utils/start-stub-header-echo';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
@@ -137,7 +139,7 @@ async function setupTest() {
     sizeBytes: 6,
   });
 
-  return { config, db, impd, stack };
+  return { config, db, impd, vmm, stack };
 }
 
 test('it ends overlapping listener syncs with no listener for an imp the database lost', async () => {
@@ -340,19 +342,7 @@ test('it keeps the dashboard session cookie from an imp over a WebSocket', async
 test('it relays WebSocket messages both ways', async () => {
   const ctx = await setupTest();
 
-  const upstream = Bun.serve({
-    port: 0,
-    hostname: '127.0.0.1',
-    fetch: (request, server) =>
-      server.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 }),
-    websocket: {
-      message: (ws, message) => {
-        ws.send(`echo ${String(message)}`);
-      },
-    },
-  });
-
-  ctx.stack.defer(() => upstream.stop(true));
+  const upstream = startStubHeaderEcho(ctx.stack);
 
   const proxy = startWakeProxy({
     config: ctx.config,
@@ -391,7 +381,7 @@ test('it relays WebSocket messages both ways', async () => {
 
   const echoed = await reply;
 
-  expect(echoed).toBe('echo hello');
+  expect(echoed).toBe('hello');
 });
 
 test.each([['/ui/'], ['/ui/assets/app.js'], ['/health'], ['/rpcx']])(
@@ -826,6 +816,73 @@ test('it answers an imp that does not exist with a 404 that names it', async () 
   expect(body).toInclude('There is no imp named nope.');
 });
 
+test('it answers an imp that cannot wake with a 503 that names the reason', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const imp = await ctx.impd.imps.createImp({ name: 'web' });
+
+  await ctx.impd.imps.stopImp('web');
+  await proxy.syncListeners();
+
+  ctx.vmm.queue('boot', 'fail');
+
+  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/`);
+  const body = await response.text();
+
+  expect(response.status).toBe(503);
+  expect(response.headers.get('retry-after')).toBeNull();
+  expect(body).toInclude('web could not wake: boot failed: no agent');
+});
+
+test('it answers a public request for an imp that cannot wake with a 503 that names nothing', async () => {
+  const ctx = await setupTest();
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  await ctx.impd.imps.createImp({ name: 'web' });
+  await ctx.impd.imps.stopImp('web');
+
+  const listener = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({
+      kind: 'imp',
+      name: 'web',
+      public: { dropAuthorization: true, release: () => {} },
+    }),
+  });
+
+  ctx.stack.defer(() => listener.stop(true));
+  ctx.vmm.queue('boot', 'fail');
+
+  const response = await fetch(`http://127.0.0.1:${String(listener.port)}/`);
+  const body = await response.text();
+
+  expect(response.status).toBe(503);
+  expect(body).toInclude('This site is not available right now.');
+  expect(body).not.toInclude('web');
+});
+
 test('it answers an unauthorized route with a 401 and its challenge', async () => {
   const ctx = await setupTest();
 
@@ -1078,6 +1135,8 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
     silent.stop(true);
   });
 
+  const timers = buildStubTimers();
+
   const proxy = startWakeProxy({
     config: ctx.config,
     db: ctx.db,
@@ -1086,6 +1145,7 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
     peers: createForwardedPeers(Date.now),
     ports: { proxy: 0, slot: () => 0 },
     upstreamSocketTimeoutMs: 50,
+    startTimer: timers.startTimer,
   });
 
   ctx.stack.defer(() => proxy.stop());
@@ -1096,7 +1156,7 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
   await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
   await proxy.syncListeners();
 
-  const response = await fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/socket`, {
+  const responding = fetch(`http://127.0.0.1:${String(proxy.readImpPort(imp.id))}/socket`, {
     headers: {
       connection: 'Upgrade',
       upgrade: 'websocket',
@@ -1106,6 +1166,15 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
       'sec-websocket-key': Buffer.from('imp-test-socket!').toString('base64'),
     },
   });
+
+  // the open deadline passes while the silent listener holds the handshake
+  await waitFor(() => {
+    expect(timers.readPendingMs()).toStrictEqual([50]);
+  });
+
+  timers.firePending();
+
+  const response = await responding;
 
   expect(response.status).toBe(502);
 
