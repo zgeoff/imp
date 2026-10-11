@@ -29,7 +29,6 @@ import { writeMetric } from '../lib/write-metric';
 // HTTPS through Pebble, which the harness starts only for a run with this
 // suite. Each test reboots the instance onto HTTPS, without the certificate
 // and account of an earlier start, and back to plain impd at its end.
-const pebbleUp = isPebbleRunning();
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -41,7 +40,7 @@ async function setupTest() {
   return { prefix: readSuitePrefix('https'), stack, client };
 }
 
-test.skipIf(!pebbleUp)(
+test.skipIf(!isPebbleRunning())(
   'it gets a wildcard certificate from Pebble, serves and wakes imps at https://<name>.<domain>, and redirects plain http there',
   async () => {
     const ctx = await setupTest();
@@ -156,7 +155,7 @@ test.skipIf(!pebbleUp)(
   },
 );
 
-test.skipIf(!pebbleUp)(
+test.skipIf(!isPebbleRunning())(
   'it serves a public imp on the public listener behind its token, wakes it only with the token, and no other imp there',
   async () => {
     const ctx = await setupTest();

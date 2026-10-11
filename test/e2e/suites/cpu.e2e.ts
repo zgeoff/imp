@@ -12,17 +12,11 @@ import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
 // CPU limits (docs/guides/cpu-limits.md) through each imp's cgroup. Where
-// Docker withholds the cpu controller the limit tests skip and say why; CI
-// must enforce, so there they fail instead.
-const info = await readInfo();
+// Docker does not delegate the cpu controller to a private cgroup namespace,
+// impd reports limits not enforced and the limit tests skip; CI must enforce.
 
-const shouldSkip = info.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '';
-
-if (shouldSkip) {
-  console.warn(
-    'cpu: skipped: impd reports CPU limits not enforced; this Docker does not delegate the cpu controller to a private cgroup namespace',
-  );
-}
+// Bun 1.4.2 has no in-body skip, so the skips' probe runs as the file loads
+const startInfo = await readInfo();
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -41,11 +35,16 @@ test('it still lands docker exec in a cgroup where it may run after the cgroup m
   expect(exec.exitCode).toBe(0);
 });
 
-test.skipIf(shouldSkip)('it reports CPU limits as enforced', () => {
-  expect(info.cpu?.limitsEnforced).toBeTrue();
-});
+test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '')(
+  'it reports CPU limits as enforced',
+  async () => {
+    const info = await readInfo();
 
-test.skipIf(shouldSkip)(
+    expect(info.cpu?.limitsEnforced).toBeTrue();
+  },
+);
+
+test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '')(
   'it holds a busy guest under a limit of half a core, again after a sleep and a wake, and under a limit imp set changes at once',
   async () => {
     const ctx = await setupTest();
@@ -105,7 +104,7 @@ test.skipIf(shouldSkip)(
   },
 );
 
-test.skipIf(shouldSkip)(
+test.skipIf(startInfo.cpu?.limitsEnforced !== true && (process.env['CI'] ?? '') === '')(
   'it prints the imp in imp top with its sampled throttling and weight',
   async () => {
     const ctx = await setupTest();

@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { tryGetFromImp } from '../lib/guest-probe';
@@ -21,9 +22,9 @@ import { writeMetric } from '../lib/write-metric';
 // The public policy (docs/architecture/networking.md#egress): the internet,
 // and no private address. The private listeners are this machine, at the
 // container's gateway, and a netns of 10/8 and link-local in the container.
-const info = await readInfo();
 
-const tailnetIp = info.tailscale.ip;
+// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+const startInfo = await readInfo();
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -115,30 +116,36 @@ test('it lets an open imp reach each private listener, before and after a public
   expect(againGateway.isConnected).toBeTrue();
 });
 
-test.skipIf(tailnetIp === null)('it refuses a public imp the host’s tailnet address', async () => {
-  const ctx = await setupTest();
+test.skipIf(startInfo.tailscale.ip === null)(
+  'it refuses a public imp the host’s tailnet address',
+  async () => {
+    const ctx = await setupTest();
+    const info = await readInfo();
 
-  const pub = `${ctx.prefix}tail-pub`;
+    invariant(info.tailscale.ip);
 
-  await runImp(
-    'new',
-    pub,
-    '--image',
-    resolveImageName('e2e-tiny'),
-    '--memory',
-    '256',
-    '--policy',
-    'public',
-  );
+    const pub = `${ctx.prefix}tail-pub`;
 
-  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, pub));
+    await runImp(
+      'new',
+      pub,
+      '--image',
+      resolveImageName('e2e-tiny'),
+      '--memory',
+      '256',
+      '--policy',
+      'public',
+    );
 
-  await waitForExec(pub);
+    registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, pub));
 
-  const dial = await runTimedDial(pub, tailnetIp ?? '', 7070);
+    await waitForExec(pub);
 
-  expect(dial.isConnected).toBeFalse();
-});
+    const dial = await runTimedDial(pub, info.tailscale.ip, 7070);
+
+    expect(dial.isConnected).toBeFalse();
+  },
+);
 
 test('it lets a public imp fetch from the internet, and removes a private address from its DNS answers', async () => {
   const ctx = await setupTest();

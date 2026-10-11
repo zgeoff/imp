@@ -21,9 +21,9 @@ import { readSuitePrefix } from '../lib/suites';
 // #145: impd builds each image by the digest it inspected. A registry the
 // journey owns proves it (lib/registry-steps.ts), on the suite's
 // IMP_BUILD_ISOLATION=host.
-const REGISTRY_NAME = process.env['E2E_REGISTRY_NAME'] ?? 'imp-e2e-registry.test';
 
-const isReady = await checkRegistryReady(REGISTRY_NAME);
+// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+const isReady = await checkRegistryReady(config.registryName);
 
 // one stack for every release: the trust goes before its registry
 async function setupTest() {
@@ -42,7 +42,7 @@ async function setupTest() {
 
   const container = `${prefix}registry-${String(process.pid)}`;
 
-  const registry = await startRegistry(stack, REGISTRY_NAME, container, dir);
+  const registry = await startRegistry(stack, config.registryName, container, dir);
 
   // the engine reads certs.d on each request: no restart
   const trust = await createRegistryTrust({
