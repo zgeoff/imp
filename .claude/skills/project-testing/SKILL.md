@@ -98,7 +98,8 @@ anything the test registers after calling it. These utils register their own: `s
 the SQLite handle itself, since Kysely closes a driver only after a query started it),
 `buildQueryGate` (it releases a held select), `findFreePorts` (it releases its port claims),
 `startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
-`startStubSshAgent`, `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
+`startStubSshAgent`, `startStubSshServer` (it stops listening and leaves each open connection to its
+client's own end), `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
 `setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`
 and `startStubGithubReleases`.
 
@@ -568,6 +569,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | SSH gateway's impd side      | `test-utils/build-stub-ssh-backend.ts` (`buildStubSshBackend`)                                     | Imp lookup, wake, exec, dial, listen and accept for the gateway                    |
 | SSH client gone silent       | `test-utils/start-stub-silent-tcp-proxy.ts` (`startStubSilentTcpProxy`)                            | A client link that stops relaying, for the gateway's keepalive                     |
 | User's ssh-agent             | `test-utils/start-stub-ssh-agent.ts` (`startStubSshAgent`)                                         | An ssh-agent socket the client forwards                                            |
+| SSH server for the client    | `test-utils/start-stub-ssh-server.ts` (`startStubSshServer`)                                       | A server for `openSshClient`: one password, scripted execs, no forwards            |
 | Agent dial and accept relay  | `test-utils/build-stub-dial-stream.ts` (`buildStubDialStream`)                                     | A `DialStream`: records writes, sends guest events, holds `drained`                |
 | Guest listener               | `test-utils/build-stub-guest-listener.ts` (`buildStubGuestListener`)                               | A `GuestListener` for tunnel listens and reverse forwards                          |
 | Tunnel client                | `test-utils/build-stub-tunnel-peer.ts` (`buildStubTunnelPeer`)                                     | The client end of a `/tunnel` socket: parsed messages, decoded bytes, the close    |
