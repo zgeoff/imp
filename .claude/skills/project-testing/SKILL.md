@@ -738,10 +738,15 @@ ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in
 
 The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
 each test through `test/e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
-`imp-acme-it-<pid>-<random>`, with a cert store in a temp dir. `startPebbleStack` returns once
-Pebble's directory and challtestsrv's management API both answer, and logs each phase's time to
-stderr (containers started, Pebble ready, challtestsrv ready); the first test also logs its issue
-time. `bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
+`imp-acme-it-<pid>-<random>`, with a cert store and Pebble's minica PEM in a temp dir.
+`startPebbleStack(stack, prefix, { minicaDir })` refuses a container or network name that docker
+already shows before it makes anything, defers the removal of each container and the network into
+the caller's stack as soon as it exists, so only what the run made goes, and returns once Pebble's
+directory and challtestsrv's management API both answer. It logs each phase's time to stderr
+(containers started, Pebble ready, challtestsrv ready); the first test also logs its issue time. The
+e2e harness's own stack (`startPebble`, `stopPebble`) is named after the instance, keeps its minica
+PEM under `.cache/e2e`, and takes again a network that a dev instance still holds.
+`bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
 `scripts/pull-pebble-images.ts`, so no test pays for a pull.
 
 ### Booting impd
