@@ -2,7 +2,7 @@
 
 imp gives you small Linux computers that stay yours: each one is a Firecracker microVM with real
 root, its own kernel and Docker inside. `docs/architecture/overview.md` explains how the pieces fit,
-and `docs/guides/development.md` holds the checks, the end-to-end harness, worktree dev instances,
+and `docs/runbooks/development.md` holds the checks, the end-to-end harness, worktree dev instances,
 the hooks, and CI.
 
 ## Required reading
