@@ -814,8 +814,9 @@ file leaves every host on its real origin.
 
 - **Daemon tests.** `broker.test.ts` and `broker-oauth.test.ts` boot impd with `createImpd` and pass
   the file through `loadConfig({ IMP_BROKER_TEST_UPSTREAMS })`, with `IMP_SUBNET` `127.0.0.0/16` so
-  a loopback address stands for a guest. The OAuth token endpoint and a rule's plain-HTTP upstream
-  are MSW handlers, not entries in the file.
+  a loopback address stands for a guest. Each test writes the file with the host it routes, and sets
+  each answer it asserts; a TLS stand-in answers any other path with a 500 that names it. The OAuth
+  token endpoint and a rule's plain-HTTP upstream are MSW handlers, not entries in the file.
 - **End to end.** `scripts/dev.sh` sets
   `IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json`. The `connectors` suite starts
   `test/e2e/lib/start-stub-upstream.ts` (`startStubUpstream`, tested in
