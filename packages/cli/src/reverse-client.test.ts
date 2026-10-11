@@ -1,26 +1,23 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import type { ImpState } from '@imp/api';
-import {
-  FRAME_TYPES,
-  decodeJsonPayload,
-  encodeFrame,
-  encodeJsonFrame,
-} from '@imp/daemon/src/agent-client/frame-codec';
+import { FRAME_TYPES, decodeJsonPayload } from '@imp/daemon/src/agent-client/frame-codec';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import {
+  buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -31,6 +28,7 @@ import { createImpClient } from './create-imp-client';
 import { parseReverse } from './parse-reverse';
 import { startReverseForward } from './reverse-client';
 import { buildStubImpStates } from './test-utils/build-stub-imp-states';
+import { buildStubListenAgent } from './test-utils/build-stub-listen-agent';
 import { buildStubWait } from './test-utils/build-stub-wait';
 
 async function setupTest() {
@@ -67,11 +65,12 @@ async function setupTest() {
   // an agent new enough to dial and listen, which impd checks before each
   vmm.agent.version = '0.18.0';
 
+  // impd boots with a root bearer; each test reads it back for the forward
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -134,15 +133,13 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the image every imp a test creates boots from
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  // the image every imp a test creates boots from, with a rootfs where its
+  // digest names
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   // the tunnel is a WebSocket, so impd listens as main.ts has it
   const server = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' }).server;
@@ -157,49 +154,30 @@ async function setupTest() {
   return {
     // for what the test starts that must stop before impd does
     stack,
+    rootToken,
     dataDir,
     impd,
     url,
-    client: createImpClient({ url, token: 'root-token' }),
+    client: createImpClient({ url, token: rootToken }),
   };
 }
 
 test('it relays a client in the imp to the local unix socket, both ways', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent listens on a socket it makes, has one client waiting at once,
   // and that client says hello, then closes once the local side did
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request, frames) => {
-      const asked: unknown = decodeJsonPayload(request);
-
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      if (frames.length === 1 && op === 'listen') {
-        socket.write(
-          encodeJsonFrame(FRAME_TYPES.response, {
-            ok: true,
-            listener: 'fwd1',
-            path: '/run/imp/fwd1.sock',
-          }),
-        );
-
-        socket.write(encodeJsonFrame(FRAME_TYPES.connection, { id: 1 }));
-      } else if (frames.length === 1) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
-        socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('hello')));
-      } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
-        socket.end(encodeFrame(FRAME_TYPES.stdoutEof));
-      }
-    },
-  );
-
-  ctx.stack.defer(() => {
-    agent.close();
+  const agent = buildStubListenAgent({
+    listening: { path: '/run/imp/fwd1.sock' },
+    clientSends: 'hello',
   });
+
+  const guest = await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    agent.readFrame,
+    { stack: ctx.stack },
+  );
 
   const dir = await mkdtemp(join(tmpdir(), 'reverse-local-'));
 
@@ -219,7 +197,7 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
   app.listen(join(dir, 'app.sock'));
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse(`:${join(dir, 'app.sock')}`),
     { writeNotice: () => {} },
@@ -230,14 +208,14 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
   });
 
   await waitFor(() => {
-    expect(agent.received).toPartiallyContain({ type: FRAME_TYPES.stdinEof });
+    expect(guest.received).toPartiallyContain({ type: FRAME_TYPES.stdinEof });
   });
 
-  const requests = agent.received
+  const requests = guest.received
     .filter((frame) => frame.type === FRAME_TYPES.request)
     .map((frame) => decodeJsonPayload(frame));
 
-  const sent = agent.received
+  const sent = guest.received
     .filter((frame) => frame.type === FRAME_TYPES.stdin)
     .map((frame) => new TextDecoder().decode(frame.payload))
     .join('');
@@ -254,22 +232,21 @@ test('it relays a client in the imp to the local unix socket, both ways', async 
 
 test('it rejects a listen the agent refuses, with the agent’s code', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
-    socket.end(
-      encodeJsonFrame(FRAME_TYPES.response, {
-        error: { code: 'LISTEN_FAILED', message: 'the directory /nope does not exist in the imp' },
-      }),
-    );
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
+
+  agent.refuseListens({
+    code: 'LISTEN_FAILED',
+    message: 'the directory /nope does not exist in the imp',
   });
 
-  ctx.stack.defer(() => {
-    agent.close();
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const starting = startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('/nope/app.sock:9000'),
     { writeNotice: () => {} },
@@ -281,45 +258,37 @@ test('it rejects a listen the agent refuses, with the agent’s code', async () 
   );
 });
 
-test('it fails the forward when the imp is destroyed while it waits for a wake', async () => {
-  const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
-
-  // the agent listens on port 9000 in the imp for each listen
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
-
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
-
-        return;
-      }
-
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-      );
-
-      listens.push(socket);
-    },
+test('it rejects a forward whose tunnel cannot reach impd', () => {
+  // nothing listens there, so the tunnel closes without a handshake
+  const starting = startReverseForward(
+    { url: 'http://127.0.0.1:1', token: 'imp-token', host: null },
+    'box',
+    parseReverse('9000'),
+    { writeNotice: () => {} },
   );
 
-  ctx.stack.defer(() => {
-    agent.close();
+  expect(starting).rejects.toThrowWithMessage(
+    Error,
+    'reverse forward to localhost:9000: could not reach impd',
+  );
+});
+
+test('it fails the forward when the imp is destroyed while it waits for a wake', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
+
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const stub = buildStubWait();
   const watched = mock<(state: ImpState) => void>();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
     {
@@ -333,7 +302,7 @@ test('it fails the forward when the imp is destroyed while it waits for a wake',
     forwarding.stop();
   });
 
-  const [listen] = listens;
+  const [listen] = agent.listens;
 
   invariant(listen);
 
@@ -351,38 +320,64 @@ test('it fails the forward when the imp is destroyed while it waits for a wake',
   expect(failure).toStrictEqual(new Error('box was destroyed'));
 });
 
-test('it waits for an imp that slept to wake before it listens again after a loss', async () => {
+test('it fails the forward with impd’s refusal of the state watch once its token is gone', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
+  const made = await ctx.client.tokens.create({ name: 'runner', scope: 'exec' });
 
   // the agent listens on port 9000 in the imp for each listen
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
 
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
+  });
 
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
+  const stub = buildStubWait();
+  const writeNotice = mock<(text: string) => void>();
 
-        return;
-      }
-
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-      );
-
-      listens.push(socket);
-    },
+  const forwarding = await startReverseForward(
+    { url: ctx.url, token: made.secret, host: null },
+    'box',
+    parseReverse('9000'),
+    { writeNotice, wait: stub.wait },
   );
 
   ctx.stack.defer(() => {
-    agent.close();
+    forwarding.stop();
+  });
+
+  // impd closes the removed token's tunnel, and refuses its watch after the
+  // retry time
+  await ctx.client.tokens.delete({ name: 'runner' });
+
+  await waitFor(() => {
+    expect(stub.calls).toHaveLength(1);
+  });
+
+  const [retry] = stub.calls;
+
+  invariant(retry);
+
+  retry.release();
+
+  const failure = await forwarding.failed;
+
+  expect(writeNotice).toHaveBeenCalledExactlyOnceWith(
+    'reverse forward to localhost:9000: impd closed it (code 1008); listening again once box runs',
+  );
+
+  expect(failure).toMatchObject({ code: 'UNAUTHORIZED', status: 401 });
+});
+
+test('it waits for an imp that slept to wake before it listens again after a loss', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
+
+  // the agent listens on port 9000 in the imp for each listen
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
+
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const stub = buildStubWait();
@@ -390,7 +385,7 @@ test('it waits for an imp that slept to wake before it listens again after a los
   const writeNotice = mock<(text: string) => void>();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000:8080'),
     {
@@ -404,7 +399,7 @@ test('it waits for an imp that slept to wake before it listens again after a los
     forwarding.stop();
   });
 
-  const [listen] = listens;
+  const [listen] = agent.listens;
 
   invariant(listen);
 
@@ -417,7 +412,7 @@ test('it waits for an imp that slept to wake before it listens again after a los
     expect(watched).toHaveBeenCalledExactlyOnceWith('sleeping');
   });
 
-  const listensWhileAsleep = listens.length;
+  const listensWhileAsleep = agent.listens.length;
 
   await ctx.client.imps.start({ name: 'box' });
 
@@ -437,43 +432,20 @@ test('it waits for an imp that slept to wake before it listens again after a los
 
 test('it listens again once the grace passes on an imp that stayed running', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent listens on port 9000 in the imp for each listen
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
 
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
-
-        return;
-      }
-
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-      );
-
-      listens.push(socket);
-    },
-  );
-
-  ctx.stack.defer(() => {
-    agent.close();
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const stub = buildStubWait();
   const watched = mock<(state: ImpState) => void>();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
     {
@@ -487,7 +459,7 @@ test('it listens again once the grace passes on an imp that stayed running', asy
     forwarding.stop();
   });
 
-  const [listen] = listens;
+  const [listen] = agent.listens;
 
   invariant(listen);
 
@@ -505,7 +477,7 @@ test('it listens again once the grace passes on an imp that stayed running', asy
   grace.release();
 
   await waitFor(() => {
-    expect(listens).toHaveLength(2);
+    expect(agent.listens).toHaveLength(2);
   });
 
   expect(grace.ms).toBe(30_000);
@@ -513,51 +485,20 @@ test('it listens again once the grace passes on an imp that stayed running', asy
 
 test('it fails the forward for good when the agent refuses the listen after a loss', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent listens on port 9000 once, then refuses
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
 
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
-
-        return;
-      }
-
-      if (listens.length === 0) {
-        socket.write(
-          encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-        );
-      } else {
-        socket.end(
-          encodeJsonFrame(FRAME_TYPES.response, {
-            error: { code: 'LISTEN_FAILED', message: 'port 9000 is in use in the imp' },
-          }),
-        );
-      }
-
-      listens.push(socket);
-    },
-  );
-
-  ctx.stack.defer(() => {
-    agent.close();
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const stub = buildStubWait();
   const watched = mock<(state: ImpState) => void>();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
     {
@@ -571,10 +512,11 @@ test('it fails the forward for good when the agent refuses the listen after a lo
     forwarding.stop();
   });
 
-  const [listen] = listens;
+  const [listen] = agent.listens;
 
   invariant(listen);
 
+  agent.refuseListens({ code: 'LISTEN_FAILED', message: 'port 9000 is in use in the imp' });
   listen.end();
 
   await waitFor(() => {
@@ -596,43 +538,20 @@ test('it fails the forward for good when the agent refuses the listen after a lo
 
 test('it ends the wait for a wake when the forward stops', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent listens on port 9000 in the imp for each listen
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
 
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
-
-        return;
-      }
-
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-      );
-
-      listens.push(socket);
-    },
-  );
-
-  ctx.stack.defer(() => {
-    agent.close();
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const stub = buildStubWait();
   const watched = mock<(state: ImpState) => void>();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
     {
@@ -647,7 +566,7 @@ test('it ends the wait for a wake when the forward stops', async () => {
     forwarding.stop();
   });
 
-  const [listen] = listens;
+  const [listen] = agent.listens;
 
   invariant(listen);
 
@@ -694,41 +613,18 @@ test('it ends the wait for a wake when the forward stops', async () => {
 
   expect(grace.signal.aborted).toBe(true);
   expect(watched).not.toHaveBeenCalledWith('running');
-  expect(listens).toHaveLength(1);
+  expect(agent.listens).toHaveLength(1);
 });
 
 test('it fails the forward when the imp’s state watch ends while it waits', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent listens on port 9000 in the imp for each listen
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
 
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
-
-        return;
-      }
-
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-      );
-
-      listens.push(socket);
-    },
-  );
-
-  ctx.stack.defer(() => {
-    agent.close();
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   // a watch that ends: impd's own stream opens again instead, so only an
@@ -736,7 +632,7 @@ test('it fails the forward when the imp’s state watch ends while it waits', as
   const states = buildStubImpStates();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
     { writeNotice: () => {}, watchImp: states.watchImp, wait: buildStubWait().wait },
@@ -746,7 +642,7 @@ test('it fails the forward when the imp’s state watch ends while it waits', as
     forwarding.stop();
   });
 
-  const [listen] = listens;
+  const [listen] = agent.listens;
 
   invariant(listen);
 
@@ -760,43 +656,20 @@ test('it fails the forward when the imp’s state watch ends while it waits', as
 
 test('it listens again after the retry time when impd closes the tunnel to restart', async () => {
   const ctx = await setupTest();
-  const imp = await ctx.client.imps.create({ name: 'box' });
-
-  const listens: Socket[] = [];
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent listens on port 9000 in the imp for each listen
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, request) => {
-      const asked: unknown = decodeJsonPayload(request);
+  const agent = buildStubListenAgent({ listening: { port: 9000 } });
 
-      const op: unknown =
-        typeof asked === 'object' && asked !== null ? Reflect.get(asked, 'op') : null;
-
-      // the imp's other agent calls, such as a sleep's, go unanswered
-      if (op !== 'listen') {
-        socket.end();
-
-        return;
-      }
-
-      socket.write(
-        encodeJsonFrame(FRAME_TYPES.response, { ok: true, listener: 'fwd1', port: 9000 }),
-      );
-
-      listens.push(socket);
-    },
-  );
-
-  ctx.stack.defer(() => {
-    agent.close();
+  await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, agent.readFrame, {
+    stack: ctx.stack,
   });
 
   const stub = buildStubWait();
   const writeNotice = mock<(text: string) => void>();
 
   const forwarding = await startReverseForward(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
     { writeNotice, wait: stub.wait },
