@@ -73,10 +73,15 @@ test('it answers the network names of its members', () => {
   });
 });
 
-test('it screens only the addresses it is given', () => {
+test('it screens an address it is given', () => {
   const egress = buildStubEgressService({ screened: ['10.0.0.1'] });
 
   expect(egress.deps.isScreened('10.0.0.1')).toBeTrue();
+});
+
+test('it never screens an address it is not given', () => {
+  const egress = buildStubEgressService({ screened: ['10.0.0.1'] });
+
   expect(egress.deps.isScreened('10.0.0.2')).toBeFalse();
 });
 

@@ -12,7 +12,7 @@ test('it builds a default warm host', () => {
     hostKernel: expect.toSatisfy((kernel: string) => /^\d+\.\d+\.\d+$/v.test(kernel)),
     cpuModel: expect.toSatisfy((model: string) => model.length > 0),
     cpuFlags: expect.toSatisfy((flags: string) => /^[0-9a-f]{64}$/v.test(flags)),
-    dataDir: expect.toSatisfy((dir: string) => dir.startsWith('/')),
+    dataDir: expect.toStartWith('/'),
     storage: 'xfs',
     subnet: '10.66.0.0/16',
     slotCount: 16_384,

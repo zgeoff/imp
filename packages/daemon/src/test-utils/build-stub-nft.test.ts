@@ -34,8 +34,11 @@ test('it refuses as runNft reports nft exiting 1, and takes nothing of the scrip
 
   nft.refuse({ reason: 'Error: Could not process rule: No such file or directory' });
 
-  expect(nft.runNft('add element inet imp_egress allow0 { 192.0.2.1 }\n')).rejects.toThrow(
-    new Error('nft exited 1: Error: Could not process rule: No such file or directory'),
+  expect(
+    nft.runNft('add element inet imp_egress allow0 { 192.0.2.1 }\n'),
+  ).rejects.toThrowWithMessage(
+    Error,
+    'nft exited 1: Error: Could not process rule: No such file or directory',
   );
 
   expect(nft.scripts).toStrictEqual([]);

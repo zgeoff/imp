@@ -102,8 +102,9 @@ test.each([
     stepMib: 200,
   });
 
-  expect(stub.vm.requestPluggedMib(buildImpPaths('/data', 'dev'), mib)).rejects.toThrow(
-    'firecracker PATCH /hotplug/memory: 400',
+  expect(stub.vm.requestPluggedMib(buildImpPaths('/data', 'dev'), mib)).rejects.toThrowWithMessage(
+    Error,
+    `firecracker PATCH /hotplug/memory: 400 requested size ${String(mib)} MiB is not whole blocks within the region`,
   );
 });
 

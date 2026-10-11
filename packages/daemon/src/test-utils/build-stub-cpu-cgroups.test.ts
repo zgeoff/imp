@@ -152,24 +152,37 @@ test('it never removes the cgroup of an imp in the set', () => {
   expect(stub.listGroups()).toStrictEqual(['imp-a']);
 });
 
-test('it reads no OOM kill count and no cpu.stat for an imp without a cgroup', () => {
+test('it reads no OOM kill count for an imp without a cgroup', () => {
   const stub = buildStubCpuCgroups();
 
   stub.oomKills.set('imp-a', 2);
-  stub.cpuStats.set('imp-a', { usageUsec: 10, throttledUsec: 1 });
 
   expect(stub.cgroups.readOomKills('imp-a')).toBeNull();
+});
+
+test('it reads no cpu.stat for an imp without a cgroup', () => {
+  const stub = buildStubCpuCgroups();
+
+  stub.cpuStats.set('imp-a', { usageUsec: 10, throttledUsec: 1 });
+
   expect(stub.cgroups.readCpuStat('imp-a')).toBeNull();
 });
 
-test('it reads the OOM kill count and cpu.stat the test set for a cgroup', () => {
+test('it reads the OOM kill count the test set for a cgroup', () => {
   const stub = buildStubCpuCgroups();
 
   stub.cgroups.setup('imp-a', { limit: null, weight: 100 }, 512);
   stub.oomKills.set('imp-a', 2);
-  stub.cpuStats.set('imp-a', { usageUsec: 10, throttledUsec: 1 });
 
   expect(stub.cgroups.readOomKills('imp-a')).toBe(2);
+});
+
+test('it reads the cpu.stat the test set for a cgroup', () => {
+  const stub = buildStubCpuCgroups();
+
+  stub.cgroups.setup('imp-a', { limit: null, weight: 100 }, 512);
+  stub.cpuStats.set('imp-a', { usageUsec: 10, throttledUsec: 1 });
+
   expect(stub.cgroups.readCpuStat('imp-a')).toStrictEqual({ usageUsec: 10, throttledUsec: 1 });
 });
 

@@ -19,17 +19,22 @@ test('it reads no uplinks by default', () => {
   expect(routes.deps.readUplinks()).resolves.toStrictEqual({ ipv4: [], ipv6: [] });
 });
 
-test('it reads the networks of each family it is given', async () => {
+test('it reads the IPv4 networks it is given', () => {
   const routes = buildStubHostRoutes({
     connected4: ['172.17.0.0/16', '172.17.0.2/32'],
     connected6: ['2001:db8:a::/64'],
   });
 
-  const connected4 = await routes.deps.readConnected4();
-  const connected6 = await routes.deps.readConnected6();
+  expect(routes.deps.readConnected4()).resolves.toStrictEqual(['172.17.0.0/16', '172.17.0.2/32']);
+});
 
-  expect(connected4).toStrictEqual(['172.17.0.0/16', '172.17.0.2/32']);
-  expect(connected6).toStrictEqual(['2001:db8:a::/64']);
+test('it reads the IPv6 networks it is given', () => {
+  const routes = buildStubHostRoutes({
+    connected4: ['172.17.0.0/16', '172.17.0.2/32'],
+    connected6: ['2001:db8:a::/64'],
+  });
+
+  expect(routes.deps.readConnected6()).resolves.toStrictEqual(['2001:db8:a::/64']);
 });
 
 test('it reads the uplinks it is given', () => {
@@ -43,7 +48,10 @@ test('it rejects each route read with the failure it is given', () => {
 
   routes.failUplinks('ip -4 route show default exited 1');
 
-  expect(routes.deps.readUplinks()).rejects.toThrow(new Error('ip -4 route show default exited 1'));
+  expect(routes.deps.readUplinks()).rejects.toThrowWithMessage(
+    Error,
+    'ip -4 route show default exited 1',
+  );
 });
 
 test('it reads the uplinks again once restored', () => {

@@ -29,6 +29,10 @@ test('it holds the write until the test releases it, then runs the real mkfs.ext
     stderr: 'ignore',
   });
 
+  onTestFinished(() => {
+    child.kill();
+  });
+
   await mkfs.waitForStart();
 
   mkfs.release();
@@ -67,6 +71,10 @@ test('it fails the held write with the stderr the test gives', async () => {
   const child = Bun.spawn([join(mkfs.bin, 'mkfs.ext4'), join(ctx.dir, 'rootfs.ext4')], {
     stdout: 'ignore',
     stderr: 'pipe',
+  });
+
+  onTestFinished(() => {
+    child.kill();
   });
 
   await mkfs.waitForStart();
