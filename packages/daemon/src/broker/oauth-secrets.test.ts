@@ -69,13 +69,10 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
-  // the token endpoint every secret in these tests names
-  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
-
-  server.use(tokens.handler);
-
   const impd = await createImpd(config, {
     db,
+
+    // the bearer the test's root client sends
     rootToken: 'root-token',
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
@@ -145,11 +142,15 @@ async function setupTest() {
     }),
   );
 
-  return { stack, config, db, dataDir, tokens, impd, client };
+  return { stack, config, db, dataDir, impd, client };
 }
 
 test('it sends the first refresh once the row is committed', async () => {
   const ctx = await setupTest();
+
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
 
   const seen: { row: SecretRecord | undefined } = { row: undefined };
 
@@ -159,7 +160,7 @@ test('it sends the first refresh once the row is committed', async () => {
     }),
   );
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -173,7 +174,7 @@ test('it sends the first refresh once the row is committed', async () => {
     }),
   });
 
-  expect(ctx.tokens.requests).toStrictEqual([
+  expect(tokens.requests).toStrictEqual([
     {
       contentType: 'application/json',
       accept: 'application/json',
@@ -188,7 +189,11 @@ test('it sends the first refresh once the row is committed', async () => {
 test('it answers a signed-in oauth secret ready, with its account claims only', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', {
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
+  tokens.issue('fake-refresh-0', {
     access_token: 'fake-access-1',
     refresh_token: 'fake-refresh-1',
     id_token: buildStubBrokerJwt({
@@ -234,9 +239,13 @@ test('it answers a signed-in oauth secret ready, with its account claims only', 
 test('it never shows a token of an oauth secret through the API', async () => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   const idToken = buildStubBrokerJwt({ email: 'someone@example.com' });
 
-  ctx.tokens.issue('fake-refresh-0', {
+  tokens.issue('fake-refresh-0', {
     access_token: 'fake-access-1',
     refresh_token: 'fake-refresh-1',
     id_token: idToken,
@@ -264,7 +273,11 @@ test('it never shows a token of an oauth secret through the API', async () => {
 test('it stores the rotated tokens in the value file', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', {
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
+  tokens.issue('fake-refresh-0', {
     access_token: 'fake-access-1',
     refresh_token: 'fake-refresh-1',
     expires_in: 3600,
@@ -331,6 +344,10 @@ test('it answers an oauth secret whose first refresh fails pending', async () =>
 
 test('it lists an oauth secret whose refresh token is dead as needing a new sign-in', async () => {
   const ctx = await setupTest();
+
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
 
   const config = buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' });
 
@@ -455,6 +472,10 @@ test.each([
 test('it sends nothing to the token endpoint for a refused oauth secret', async () => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   const added = ctx.client.secrets.add({
     name: 'codex',
     kind: 'oauth',
@@ -466,17 +487,21 @@ test('it sends nothing to the token endpoint for a refused oauth secret', async 
 
   const listed = await ctx.client.secrets.list();
 
-  expect(ctx.tokens.requests).toStrictEqual([]);
+  expect(tokens.requests).toStrictEqual([]);
   expect(listed).toStrictEqual([]);
 });
 
 test('it keeps the grant through a new refresh token for the same endpoint', async () => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   const config = buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' });
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
-  ctx.tokens.issue('fake-refresh-new', { access_token: 'fake-access-2', expires_in: 3600 });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+  tokens.issue('fake-refresh-new', { access_token: 'fake-access-2', expires_in: 3600 });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -500,7 +525,7 @@ test('it keeps the grant through a new refresh token for the same endpoint', asy
 
   expect(rotated.droppedGrants).toBe(0);
 
-  expect(ctx.tokens.requests.map((request) => request.refreshToken)).toStrictEqual([
+  expect(tokens.requests.map((request) => request.refreshToken)).toStrictEqual([
     'fake-refresh-0',
     'fake-refresh-new',
   ]);
@@ -513,13 +538,17 @@ test.each([
 ] as const)('it refuses another %s without a rebind', async (_, override) => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   const config = buildMockOAuthConfig({
     tokenUrl: 'https://auth.example.com/oauth/token',
     clientId: 'fake-client',
     tokenFormat: 'form',
   });
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -544,13 +573,17 @@ test.each([
 test('it takes another client and drops the grants on a rebind', async () => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   const config = buildMockOAuthConfig({
     tokenUrl: 'https://auth.example.com/oauth/token',
     clientId: 'fake-client',
   });
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -580,13 +613,17 @@ test('it takes another client and drops the grants on a rebind', async () => {
 test('it refreshes on request with the rotated token and answers after it', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', {
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
+  tokens.issue('fake-refresh-0', {
     access_token: 'fake-access-1',
     refresh_token: 'fake-refresh-1',
     expires_in: 3600,
   });
 
-  ctx.tokens.issue('fake-refresh-1', {
+  tokens.issue('fake-refresh-1', {
     access_token: 'fake-access-2',
     refresh_token: 'fake-refresh-2',
     expires_in: 3600,
@@ -611,7 +648,7 @@ test('it refreshes on request with the rotated token and answers after it', asyn
 
   expect(refreshed.oauth?.status).toBe('ready');
 
-  expect(ctx.tokens.requests.map((request) => request.refreshToken)).toStrictEqual([
+  expect(tokens.requests.map((request) => request.refreshToken)).toStrictEqual([
     'fake-refresh-0',
     'fake-refresh-1',
   ]);
@@ -631,7 +668,10 @@ test('it refreshes on request with the rotated token and answers after it', asyn
 test('it answers a forced refresh of a dead refresh token as needing a new sign-in', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -674,9 +714,13 @@ test('it refuses a refresh of a secret that does not exist', async () => {
 test('it holds a replace behind a refresh under way, which never overwrites it', async () => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   const config = buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' });
 
-  ctx.tokens.issue('fake-refresh-0', {
+  tokens.issue('fake-refresh-0', {
     access_token: 'fake-access-1',
     refresh_token: 'fake-refresh-1',
   });
@@ -705,12 +749,12 @@ test('it holds a replace behind a refresh under way, which never overwrites it',
     ),
   );
 
-  ctx.tokens.issue('fake-refresh-1', {
+  tokens.issue('fake-refresh-1', {
     access_token: 'fake-access-2',
     refresh_token: 'fake-refresh-2',
   });
 
-  ctx.tokens.issue('fake-refresh-replacement', {
+  tokens.issue('fake-refresh-replacement', {
     access_token: 'fake-access-3',
     refresh_token: 'fake-refresh-3',
   });
@@ -741,7 +785,7 @@ test('it holds a replace behind a refresh under way, which never overwrites it',
   const stored: unknown = JSON.parse(text);
 
   // the replace's own call came only after the held refresh had answered
-  expect(ctx.tokens.requests.map((request) => request.refreshToken)).toStrictEqual([
+  expect(tokens.requests.map((request) => request.refreshToken)).toStrictEqual([
     'fake-refresh-0',
     'fake-refresh-1',
     'fake-refresh-replacement',
@@ -762,7 +806,10 @@ test('it holds a replace behind a refresh under way, which never overwrites it',
 test('it holds a delete behind a refresh under way, then removes the secret', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1' });
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1' });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -791,7 +838,7 @@ test('it holds a delete behind a refresh under way, then removes the secret', as
     ),
   );
 
-  ctx.tokens.issue('fake-refresh-0', {
+  tokens.issue('fake-refresh-0', {
     access_token: 'fake-access-2',
     refresh_token: 'fake-refresh-2',
   });
@@ -817,7 +864,10 @@ test('it holds a delete behind a refresh under way, then removes the secret', as
 test('it answers not found for a secret deleted outside the lock during its refresh', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1' });
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1' });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -843,7 +893,7 @@ test('it answers not found for a secret deleted outside the lock during its refr
     ),
   );
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-2' });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-2' });
 
   const refreshing = ctx.client.secrets.refresh({ name: 'codex' });
 
@@ -863,7 +913,10 @@ test('it answers not found for a secret deleted outside the lock during its refr
 test('it shows an oauth secret whose value file is gone as needing a new sign-in', async () => {
   const ctx = await setupTest();
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1' });
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1' });
 
   await ctx.client.secrets.add({
     name: 'codex',
@@ -888,6 +941,10 @@ test('it shows an oauth secret whose value file is gone as needing a new sign-in
 test('it refreshes a pending secret when the broker starts', async () => {
   const ctx = await setupTest();
 
+  const tokens = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(tokens.handler);
+
   // the first sign-in meets a network error, so the secret stays pending
   server.use(
     http.post('https://auth.example.com/oauth/token', () => HttpResponse.error(), { once: true }),
@@ -901,7 +958,7 @@ test('it refreshes a pending secret when the broker starts', async () => {
     oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
   });
 
-  ctx.tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+  tokens.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
 
   // the refresh timer runs, as at a real start: its first tick is at once,
   // and its next is a minute away, past the test's end
@@ -910,7 +967,7 @@ test('it refreshes a pending secret when the broker starts', async () => {
   ctx.stack.defer(() => started.stop());
 
   const sent = await waitFor(() => {
-    const [request] = ctx.tokens.requests;
+    const [request] = tokens.requests;
 
     invariant(request);
 
