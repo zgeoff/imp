@@ -24,15 +24,15 @@ test('#findServiceUrl gives null before the imp has a tailnet name', () => {
 });
 
 test('#isTailnetReady is ready with a key and this machine Running', () => {
-  expect(isTailnetReady('Running', true)).toBeTrue();
+  expect(isTailnetReady({ BackendState: 'Running' }, true)).toBeTrue();
 });
 
 test('#isTailnetReady is not ready without a key', () => {
-  expect(isTailnetReady('Running', false)).toBeFalse();
+  expect(isTailnetReady({ BackendState: 'Running' }, false)).toBeFalse();
 });
 
 test('#isTailnetReady is not ready while this machine is logged out', () => {
-  expect(isTailnetReady('NeedsLogin', true)).toBeFalse();
+  expect(isTailnetReady({ BackendState: 'NeedsLogin' }, true)).toBeFalse();
 });
 
 test('#isTailnetReady is not ready without a tailscale status', () => {
@@ -41,13 +41,13 @@ test('#isTailnetReady is not ready without a tailscale status', () => {
 
 test('#requireTailnetReady passes with a key and this machine Running', () => {
   expect(() => {
-    requireTailnetReady('Running', true);
+    requireTailnetReady({ BackendState: 'Running' }, true);
   }).not.toThrow();
 });
 
 test('#requireTailnetReady fails with what the suite lacks while this machine is logged out', () => {
   expect(() => {
-    requireTailnetReady('NeedsLogin', true);
+    requireTailnetReady({ BackendState: 'NeedsLogin' }, true);
   }).toThrowWithMessage(
     Error,
     'tailscale needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth) and this machine on the tailnet',

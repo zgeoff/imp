@@ -28,22 +28,17 @@ async function setupTest() {
   return { prefix: readSuitePrefix('moves-tailnet'), stack, client };
 }
 
-const NOT_READY =
-  'moves-tailnet needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth)';
-
-const hasKey = hasTailscaleE2EKey();
-
-if (!hasKey && !config.acceptance) {
-  console.log(`    ${NOT_READY}; skipped`);
-}
-
-// the definition of done needs the tailnet; any other run skips without it
-test.skipIf(!hasKey && !config.acceptance)(
+// the definition of done needs the tailnet; any other run skips without the
+// tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth)
+test.skipIf(!hasTailscaleE2EKey() && !config.acceptance)(
   'it moves an imp between two tailnet nodes, past the peer check on their tailnet addresses',
   async () => {
     const ctx = await setupTest();
 
-    invariant(hasKey, NOT_READY);
+    invariant(
+      hasTailscaleE2EKey(),
+      'moves-tailnet needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth)',
+    );
 
     const plain = `${ctx.prefix}a`;
 

@@ -47,19 +47,26 @@ export interface TailnetNode {
   readonly tags: readonly string[];
 }
 
-export const TAILNET_NOT_READY =
+const TAILNET_NOT_READY =
   'tailscale needs the tag:imp-e2e OAuth client (op://imp-e2e/imp-e2e-tailscale-oauth) and this machine on the tailnet';
 
 // a tailnet suite runs only with the tag:imp-e2e key for impd's node and this
-// machine on the tailnet to reach it from
-export function isTailnetReady(backendState: string | null, hasKey: boolean): boolean {
-  return hasKey && backendState === 'Running';
+// machine on the tailnet to reach it from; `status` is this machine's
+// `tailscale status`, null when it has none
+export function isTailnetReady(
+  status: Readonly<Pick<TailscaleStatus, 'BackendState'>> | null,
+  hasKey: boolean,
+): boolean {
+  return hasKey && status?.BackendState === 'Running';
 }
 
 // fails a tailnet suite that must run, such as under acceptance, with what
 // it lacks
-export function requireTailnetReady(backendState: string | null, hasKey: boolean): void {
-  if (!isTailnetReady(backendState, hasKey)) {
+export function requireTailnetReady(
+  status: Readonly<Pick<TailscaleStatus, 'BackendState'>> | null,
+  hasKey: boolean,
+): void {
+  if (!isTailnetReady(status, hasKey)) {
     throw new Error(TAILNET_NOT_READY);
   }
 }

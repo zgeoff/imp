@@ -7,7 +7,6 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import {
-  TAILNET_NOT_READY,
   isTailnetReady,
   readLocalTailscaleStatus,
   requireTailnetReady,
@@ -31,22 +30,18 @@ async function setupTest() {
   return { prefix: readSuitePrefix('tailscale'), stack, client };
 }
 
-const localStatus = await readLocalTailscaleStatus();
-
-const hasKey = hasTailscaleE2EKey();
-const ready = isTailnetReady(localStatus?.BackendState ?? null, hasKey);
-
-if (!ready && !config.acceptance) {
-  console.log(`    ${TAILNET_NOT_READY}; skipped`);
-}
+// Bun 1.4.2 has no in-body skip, so the skip's probe runs as the file loads
+const tailscaleStatus = await readLocalTailscaleStatus();
 
 // the definition of done needs the tailnet; any other run skips without it
-test.skipIf(!ready && !config.acceptance)(
+// (requireTailnetReady says what it needs)
+test.skipIf(!isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) && !config.acceptance)(
   'it lets a tailnet member a rule names reach the API without a token, with that scope only',
   async () => {
     const ctx = await setupTest();
+    const status = await readLocalTailscaleStatus();
 
-    requireTailnetReady(localStatus?.BackendState ?? null, hasKey);
+    requireTailnetReady(status, hasTailscaleE2EKey());
 
     const name = `${ctx.prefix}rule`;
 
