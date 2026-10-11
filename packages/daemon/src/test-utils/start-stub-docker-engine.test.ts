@@ -263,7 +263,9 @@ test('it answers the inspect of an image with a pin that impd parses', async () 
 
   const answer: unknown = await response.json();
 
-  expect(PinInspectSchema.safeParse(answer).data).toStrictEqual({
+  const pin: unknown = PinInspectSchema.safeParse(answer).data;
+
+  expect(pin).toStrictEqual({
     Id: expect.stringMatching(/^sha256:[0-9a-f]{64}$/v) as unknown,
     RepoDigests: [],
     Os: 'linux',
