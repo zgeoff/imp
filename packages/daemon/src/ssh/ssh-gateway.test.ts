@@ -750,6 +750,55 @@ test('it drops a logged-in client that stops answering keepalives', async () => 
   expect(proxy.readDropped()).toBeGreaterThan(0);
 });
 
+// the control for the drop above: the same keepalive limits, with a client
+// whose answers reach the gateway
+test('it keeps a logged-in client that answers keepalives', async () => {
+  const ctx = await setupTest();
+
+  const imp = buildMockImpRecord();
+  const key = createEd25519Key();
+
+  ctx.ssh.putImp(imp);
+
+  writeFileSync(ctx.keysPath, `${key.public}\n`, { mode: 0o600 });
+
+  const gateway = await startSshGateway(
+    { ...ctx.deps, limits: { keepaliveIntervalMs: 20, keepaliveCountMax: 2 } },
+    0,
+    '127.0.0.1',
+  );
+
+  onTestFinished(() => gateway.stop());
+
+  const proxy = await startStubSilentTcpProxy(gateway.port);
+
+  const client = await openSshClient({
+    host: '127.0.0.1',
+    port: proxy.port,
+    username: imp.name,
+    privateKey: key.private,
+  });
+
+  const link = { isClosed: false };
+
+  client.on('error', () => {});
+
+  client.once('close', () => {
+    link.isClosed = true;
+  });
+
+  const loggedIn = proxy.readPassedChunks();
+
+  // a client that opens no channel sends only its keepalive answers; twice
+  // keepaliveCountMax answers outlast the drop above
+  await waitFor(() => {
+    expect(proxy.readPassedChunks() - loggedIn).toBeGreaterThanOrEqual(4);
+  });
+
+  expect(link.isClosed).toBe(false);
+  expect(ctx.ssh.tracker.count(imp.id, 'ssh')).toBe(1);
+});
+
 test('it wakes the imp once for a login that opens no channel', async () => {
   const ctx = await setupTest();
 

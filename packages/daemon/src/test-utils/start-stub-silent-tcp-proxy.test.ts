@@ -77,6 +77,38 @@ test('it passes the client’s bytes on to the target and the target’s back', 
   expect(ctx.received).toStrictEqual(['ping']);
 });
 
+test('it counts each chunk of the client’s bytes it passes on, and none it drops', async () => {
+  const ctx = await setupTest();
+  const proxy = await startStubSilentTcpProxy(ctx.targetPort);
+
+  const client = createConnection({ host: '127.0.0.1', port: proxy.port });
+
+  onTestFinished(() => {
+    client.destroy();
+  });
+
+  client.write('one');
+
+  await waitFor(() => {
+    expect(ctx.received.join('')).toBe('one');
+  });
+
+  client.write('two');
+
+  await waitFor(() => {
+    expect(ctx.received.join('')).toBe('onetwo');
+  });
+
+  proxy.silence();
+  client.write('three');
+
+  await waitFor(() => {
+    expect(proxy.readDropped()).toBe(5);
+  });
+
+  expect(proxy.readPassedChunks()).toBe(2);
+});
+
 test('it drops the client’s bytes once silent', async () => {
   const ctx = await setupTest();
   const proxy = await startStubSilentTcpProxy(ctx.targetPort);
