@@ -1,3 +1,4 @@
+// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

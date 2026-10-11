@@ -44,7 +44,7 @@
       "@zgeoff/bun-test-extended": "0.1.0",
       "@zgeoff/bun-test-react": "0.1.0",
       "@zgeoff/format-codemod": "0.1.0",
-      "@zgeoff/oxlint-config": "0.1.0",
+      "@zgeoff/oxlint-config": "0.2.0",
       "acme-client": "5.4.0",
       "citty": "0.2.2",
       "dns-packet": "5.6.1",
