@@ -61,21 +61,14 @@ test('it writes the content of each file into the tar', async () => {
 test('it writes the tar readable by impd alone', async () => {
   const ctx = await setupTest();
 
-  writeFileSync(join(ctx.dir, 'Dockerfile'), 'FROM scratch\n');
+  const context = join(ctx.dir, 'context');
 
-  await writeContextTar(
-    [
-      {
-        path: join(ctx.dir, 'Dockerfile'),
-        name: 'Dockerfile',
-        kind: 'file',
-        size: 13,
-        mode: 0o644,
-        mtimeMs: 0,
-      },
-    ],
-    join(ctx.dir, 'context.tar'),
-  );
+  mkdirSync(context);
+  writeFileSync(join(context, 'Dockerfile'), 'FROM scratch\n');
+
+  const entries = await listLocalEntries(context);
+
+  await writeContextTar(entries, join(ctx.dir, 'context.tar'));
 
   expect(statSync(join(ctx.dir, 'context.tar')).mode & 0o777).toBe(0o600);
 });

@@ -1,13 +1,16 @@
 import { expect, test } from 'bun:test';
 import type { Image } from '@imp/api';
+import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { buildStubRepeat } from '../test-utils/build-stub-repeat';
 import { runImageOp } from './image-op-stream';
 
 test('it sends progress at once and at each phase, then the image', async () => {
   const clock = { now: 0 };
   const phaseReached = Promise.withResolvers<void>();
   const done = Promise.withResolvers<Image>();
+  const image = buildMockImage();
 
   const events = runImageOp(
     async (_signal, setPhase) => {
@@ -34,33 +37,14 @@ test('it sends progress at once and at each phase, then the image', async () => 
 
   const second = await events.next();
 
-  done.resolve({
-    id: 'i1',
-    name: 'web',
-    ref: 'imp/web:latest',
-    digest: 'sha256:x',
-    source: 'oci',
-    createdAt: new Date(0),
-    sizeBytes: 1,
-  });
+  done.resolve(image);
 
   const third = await events.next();
 
   expect([first.value, second.value, third.value]).toStrictEqual([
     { type: 'progress', phase: 'pull', elapsedMs: 0 },
     { type: 'progress', phase: 'unpack', elapsedMs: 4000 },
-    {
-      type: 'image',
-      image: {
-        id: 'i1',
-        name: 'web',
-        ref: 'imp/web:latest',
-        digest: 'sha256:x',
-        source: 'oci',
-        createdAt: new Date(0),
-        sizeBytes: 1,
-      },
-    },
+    { type: 'image', image },
   ]);
 });
 
@@ -68,27 +52,15 @@ test('it records a null failure for work that ends with its image', async () => 
   const records: unknown[] = [];
 
   await Array.fromAsync(
-    runImageOp(
-      () =>
-        Promise.resolve({
-          id: 'i1',
-          name: 'web',
-          ref: 'imp/web:latest',
-          digest: 'sha256:x',
-          source: 'oci' as const,
-          createdAt: new Date(0),
-          sizeBytes: 1,
-        }),
-      {
-        firstPhase: 'pull',
-        signal: new AbortController().signal,
-        keepaliveMs: 10_000,
-        now: () => 0,
-        record: (failure) => {
-          records.push(failure);
-        },
+    runImageOp(() => Promise.resolve(buildMockImage()), {
+      firstPhase: 'pull',
+      signal: new AbortController().signal,
+      keepaliveMs: 10_000,
+      now: () => 0,
+      record: (failure) => {
+        records.push(failure);
       },
-    ),
+    }),
   );
 
   expect(records).toStrictEqual([null]);
@@ -96,7 +68,7 @@ test('it records a null failure for work that ends with its image', async () => 
 
 test('it repeats the progress at each keepalive while the work is silent', async () => {
   const clock = { now: 0 };
-  const timers: { ms: number; tick: () => void }[] = [];
+  const keepalive = buildStubRepeat();
 
   const events = runImageOp(() => Promise.withResolvers<Image>().promise, {
     firstPhase: 'pull',
@@ -104,31 +76,24 @@ test('it repeats the progress at each keepalive while the work is silent', async
     keepaliveMs: 15_000,
     now: () => clock.now,
     record: () => {},
-    repeat: (ms, tick) => {
-      timers.push({ ms, tick });
-
-      return () => {};
-    },
+    repeat: keepalive.repeat,
   });
 
   await events.next();
 
   const second = events.next();
 
-  const timer = await waitFor(() => {
-    invariant(timers[0]);
-
-    return timers[0];
+  await waitFor(() => {
+    expect(keepalive.countRunning(15_000)).toBe(1);
   });
 
   clock.now = 15_000;
 
-  timer.tick();
+  keepalive.tick(15_000);
 
-  const keepalive = await second;
+  const progress = await second;
 
-  expect(timer.ms).toBe(15_000);
-  expect(keepalive.value).toStrictEqual({ type: 'progress', phase: 'pull', elapsedMs: 15_000 });
+  expect(progress.value).toStrictEqual({ type: 'progress', phase: 'pull', elapsedMs: 15_000 });
 });
 
 test('it throws the failure through the stream and records what was thrown', () => {
@@ -189,22 +154,14 @@ test('it writes the audit row of work the client left once the work ends', async
   await events.next();
   await events.return(undefined);
 
-  done.resolve({
-    id: 'i1',
-    name: 'web',
-    ref: 'imp/web:latest',
-    digest: 'sha256:x',
-    source: 'oci',
-    createdAt: new Date(0),
-    sizeBytes: 1,
-  });
+  done.resolve(buildMockImage());
 
   expect(recorded.promise).resolves.toBeNull();
 });
 
 test('it stops the keepalive timer once the work ends', async () => {
   const done = Promise.withResolvers<Image>();
-  const stopped = Promise.withResolvers<void>();
+  const keepalive = buildStubRepeat();
 
   const events = runImageOp(() => done.promise, {
     firstPhase: 'pull',
@@ -212,33 +169,27 @@ test('it stops the keepalive timer once the work ends', async () => {
     keepaliveMs: 10_000,
     now: () => 0,
     record: () => {},
-    repeat: () => () => {
-      stopped.resolve();
-    },
+    repeat: keepalive.repeat,
   });
 
   await events.next();
 
-  const image = events.next();
+  const imageEvent = events.next();
 
-  done.resolve({
-    id: 'i1',
-    name: 'web',
-    ref: 'imp/web:latest',
-    digest: 'sha256:x',
-    source: 'oci',
-    createdAt: new Date(0),
-    sizeBytes: 1,
+  await waitFor(() => {
+    expect(keepalive.countRunning(10_000)).toBe(1);
   });
 
-  await image;
+  done.resolve(buildMockImage());
 
-  expect(stopped.promise).resolves.toBeUndefined();
+  await imageEvent;
+
+  expect(keepalive.countRunning(10_000)).toBe(0);
 });
 
 test('it stops the keepalive timer of a wait the next phase ends', async () => {
-  const stops: number[] = [];
   const phases: ((phase: 'unpack') => void)[] = [];
+  const keepalive = buildStubRepeat();
 
   const events = runImageOp(
     (_signal, setPhase) => {
@@ -252,9 +203,7 @@ test('it stops the keepalive timer of a wait the next phase ends', async () => {
       keepaliveMs: 10_000,
       now: () => 0,
       record: () => {},
-      repeat: () => () => {
-        stops.push(stops.length);
-      },
+      repeat: keepalive.repeat,
     },
   );
 
@@ -268,9 +217,13 @@ test('it stops the keepalive timer of a wait the next phase ends', async () => {
     return phases[0];
   });
 
+  await waitFor(() => {
+    expect(keepalive.countRunning(10_000)).toBe(1);
+  });
+
   setPhase('unpack');
 
   await next;
 
-  expect(stops).toStrictEqual([0]);
+  expect(keepalive.countRunning(10_000)).toBe(0);
 });
