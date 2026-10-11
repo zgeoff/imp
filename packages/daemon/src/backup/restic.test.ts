@@ -1,7 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
-import * as z from 'zod';
 import { buildMockBackupConfig } from '../test-utils/build-mock-backup-config';
 import { buildStubResticLockRunner } from '../test-utils/build-stub-restic-lock-runner';
 import { buildStubResticRunner } from '../test-utils/build-stub-restic-runner';
@@ -555,5 +554,14 @@ test('#parseSnapshots reads empty output as no snapshots', () => {
 });
 
 test('#parseBackupSummary rejects backup output without a summary', () => {
-  expect(() => parseBackupSummary('{"message_type":"status"}\n')).toThrow(z.ZodError);
+  expect(() =>
+    parseBackupSummary(
+      '{"message_type":"status","snapshot_id":"4f1c","files_new":1,"files_changed":2,"files_unmodified":3,"data_added":512}\n',
+    ),
+  ).toThrow(
+    expect.objectContaining({
+      name: 'ZodError',
+      issues: expect.toPartiallyContain({ path: ['message_type'], code: 'invalid_value' }),
+    }),
+  );
 });
