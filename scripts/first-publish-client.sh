@@ -15,7 +15,7 @@ npm whoami > /dev/null || {
 }
 
 if npm view "$name" version > /dev/null 2>&1; then
-  echo "$name is on npm already: releases publish it (RELEASING.md)" >&2
+  echo "$name is on npm already: releases publish it (docs/runbooks/releasing.md)" >&2
   exit 1
 fi
 

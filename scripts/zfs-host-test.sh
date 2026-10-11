@@ -4,7 +4,7 @@
 #   1. scripts/test-zfs.sh: the backend's tests against a throwaway pool.
 #   2. A dev instance on a second throwaway pool runs e2e suites (default
 #      checkpoints and sleep). impd's log lines and the suites' metrics then
-#      give the STATUS.md numbers on ZFS: checkpoint, restore, fork, sleep.
+#      time impd on ZFS: checkpoint, restore, fork, sleep.
 #
 #   scripts/zfs-host-test.sh
 #
@@ -174,7 +174,7 @@ summarize() {
 }
 
 report() {
-  echo "zfs-host-test: impd timings on ZFS (STATUS.md has the XFS ones)"
+  echo "zfs-host-test: impd timings on ZFS"
   summarize checkpoint 'checkpoint cp-[a-z0-9]+ in [0-9]+ms'
   summarize restore 'restored cp-[a-z0-9]+ in [0-9]+ms'
   summarize 'disk clone (new/fork)' 'disk cloned in [0-9]+ms'

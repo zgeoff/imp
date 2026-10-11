@@ -37,7 +37,8 @@ snapshot to check it.
 3. The storage backend lays out the tree. On XFS it is reflink clones, and a disk that did not
    change keeps last run's clone, so restic skips it unread. On ZFS it is read-only clones of
    snapshots, mounted at the tree's paths, whose files keep their inodes and times from run to run
-   for the same reason.
+   for the same reason. A disk restic does read costs CPU for its whole size, because restic reads
+   every hole of a sparse disk as zeros.
 4. restic reads the tree with no imp lock held, so imps start, stop, sleep and get destroyed while
    it reads. A destroy retires its disk as usual, and the reclaim waits for the run's clones.
 5. restic applies the retention, and the tree closes.

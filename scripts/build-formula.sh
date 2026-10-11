@@ -1,7 +1,7 @@
 #!/bin/bash
 # Print the Homebrew formula for one released version, with each platform's
 # checksum read from the release's SHA256SUMS. The release workflow commits
-# it to the tap (RELEASING.md); `brew install zgeoff/tap/imp` then installs
+# it to the tap (docs/runbooks/releasing.md); `brew install zgeoff/tap/imp` then installs
 # the binary and its shell completions.
 #
 #   scripts/build-formula.sh <version> <path to SHA256SUMS>

@@ -79,10 +79,10 @@ restarts and day-to-day care.
 ## What `dev.sh up` does
 
 - Builds the `dev` target of `host/Dockerfile` as the host image, tagged for this checkout
-  ([worktrees](./development.md#worktrees)), and rebuilds `build/imp-system.squashfs` (the agent's
-  system drive) from `agent/`, so a changed agent reaches the next imp. The Docker cache makes the
-  rebuild take about half a second when the agent is unchanged. With `IMP_SYSTEM_DRIVE` set, it uses
-  that drive as it is.
+  ([worktrees](../runbooks/development.md#worktrees)), and rebuilds `build/imp-system.squashfs` (the
+  agent's system drive) from `agent/`, so a changed agent reaches the next imp. The Docker cache
+  makes the rebuild take about half a second when the agent is unchanged. With `IMP_SYSTEM_DRIVE`
+  set, it uses that drive as it is.
 - Starts `<name>-docker-proxy` first: this checkout's proxy, compiled with `bun build --compile` as
   the release image compiles it, with the proxy's privileges from `deploy/imp-host.args.json`. Its
   socket directory and token are Docker volumes of their own, which `dev.sh down` removes.
@@ -234,8 +234,8 @@ to half of RAM. On a 64 GB box:
 | ZFS ARC cap (`zfs_arc_max`)             | none    | 6,400   |
 | `IMP_RAM_BUDGET_MIB`                    | 54,400  | 48,000  |
 
-On XFS that is about 170 awake imps at the 317 MiB that `STATUS.md` measured for an imp filling 256
-MiB, or 26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
+On XFS that is about 170 awake imps at the 317 MiB that the end-to-end scale test measured for an
+imp filling 256 MiB, or 26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
 
 The script writes the budget when the env file holds the template's `16384` or nothing. Any other
 value is yours and stays. On a host too small for the formula, where the budget comes out below 512
@@ -407,8 +407,13 @@ Each release pushes the image to `ghcr.io/zgeoff/imp-host`, tagged with its vers
 for linux/amd64 only. The GitHub release has the CLI for Linux and macOS (`imp-linux-x64`,
 `imp-linux-arm64`, `imp-darwin-x64`, `imp-darwin-arm64`), the guest kernel `vmlinux` and the system
 drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and `SHA256SUMS` over
-all of them. [RELEASING.md](../../RELEASING.md) shows how to check the checksums and the provenance
-attestations.
+all of them. Check an asset or the image against them:
+
+```sh
+sha256sum -c SHA256SUMS
+gh attestation verify imp-linux-x64 -R zgeoff/imp
+gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
+```
 
 <!-- x-release-please-start-version -->
 

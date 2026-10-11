@@ -21,7 +21,7 @@ Each release also publishes `images/base` as `ghcr.io/zgeoff/imp-base:X.Y.Z`, li
 a provenance attestation. A published tag never moves, but pin it by digest anyway
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`): the digest names the exact bytes, and
 `gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp` checks where they came
-from ([releasing](../../RELEASING.md#what-a-release-ships)).
+from.
 
 ## Add an image
 

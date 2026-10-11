@@ -17,13 +17,6 @@ The next request to its URL wakes it in about a tenth of a second, with every pr
 Checkpoint it before you let an agent loose, roll it back when the agent makes a mess, or fork it
 and try two things at once.
 
-```sh
-imp new box                       # create and boot an imp
-imp console box                   # a shell that outlives the terminal
-imp checkpoint box clean          # name a known-good state
-imp restore box clean             # and back
-```
-
 ## Install
 
 imp runs on one Linux machine with `/dev/kvm`: bare metal, or a VM with nested virtualization, with
@@ -32,7 +25,12 @@ host and starts impd ([bootstrap a server](./docs/guides/install.md#bootstrap-a-
 [NixOS](./docs/guides/nixos.md) has a module. Then install the CLI on your own machine:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh   # install the CLI
+imp login https://imp.example.ts.net  # point it at your impd and its token
+imp new box                           # create and boot an imp
+imp console box                       # a shell that outlives the terminal
+imp checkpoint box clean              # name a known-good state
+imp restore box clean                 # and back
 ```
 
 The [install guide](./docs/guides/install.md) also covers a dev instance from the repo and the
@@ -62,8 +60,6 @@ release image.
   [dashboard](./docs/guides/dashboard.md).
 - **Backups** off the host with restic ([backups](./docs/guides/backups.md)), and **moves** between
   hosts ([more than one host](./docs/guides/hosts.md)).
-
-[The CLI](./docs/guides/cli.md) lists every command.
 
 ## Configuration
 

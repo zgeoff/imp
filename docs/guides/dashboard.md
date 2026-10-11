@@ -62,9 +62,9 @@ query goes through the SDK and oRPC's wire format. They run in their own `bun te
 register must not reach the daemon's tests, and the root `bun test` skips the package.
 
 The end-to-end test logs in, creates an imp, runs a command in its console, sleeps and destroys it,
-then logs out. The `dashboard` suite of the [end-to-end harness](./development.md#end-to-end-tests)
-builds the dashboard, installs Playwright's pinned Chromium and runs it; it is in the `fast` set CI
-runs:
+then logs out. The `dashboard` suite of the
+[end-to-end harness](../runbooks/development.md#end-to-end-tests) builds the dashboard, installs
+Playwright's pinned Chromium and runs it; it is in the `fast` set CI runs:
 
 ```sh
 scripts/test-e2e.sh --only dashboard

@@ -299,9 +299,9 @@ What the restored database means at start:
 ## Checks
 
 `scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each: the
-[development guide](./development.md#end-to-end-tests) lists them, from the lifecycle and the scale
-test to the chaos suite and the backup restore drill. [STATUS.md](../../STATUS.md) has the latest
-results. The development guide lists the other checks.
+[development guide](../runbooks/development.md#end-to-end-tests) lists them, from the lifecycle and
+the scale test to the chaos suite and the backup restore drill. The development guide lists the
+other checks.
 
 ## A broken container
 

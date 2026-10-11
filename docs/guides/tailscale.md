@@ -124,9 +124,9 @@ name that this host serves. It is off by default.
 
 **CAUTION:** Per-imp names have not run against a live tailnet yet. Before anyone turns
 `IMP_TAILNET_NAMES` on, run the live test once with the OAuth client
-([development](./development.md#end-to-end-tests)), and replace the unit tests' fake API answers and
-`tailscale serve status` output with what the live run returned for a name a device holds and for a
-served name.
+([development](../runbooks/development.md#end-to-end-tests)), and replace the unit tests' fake API
+answers and `tailscale serve status` output with what the live run returned for a name a device
+holds and for a served name.
 
 **NOTE:** [A domain of your own](./https.md) is the recommended way to give imps names. It needs no
 API credential, puts no name in the tailnet's service list, and one wildcard certificate covers

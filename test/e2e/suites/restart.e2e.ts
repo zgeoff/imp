@@ -20,7 +20,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// impd restarts and instance reboots keep every imp (docs/guides/development.md).
+// impd restarts and instance reboots keep every imp (docs/runbooks/development.md).
 // The inventory holds every imp on the instance: in the acceptance run that
 // is scale's fleet too, which the harness keeps for this suite.
 
