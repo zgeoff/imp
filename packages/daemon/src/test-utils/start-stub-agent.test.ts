@@ -3,7 +3,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { FRAME_TYPES, encodeFrame, encodeJsonFrame } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
@@ -257,26 +256,28 @@ test('it stops accepting connections once closed', async () => {
 });
 
 test('it closes when the test finishes', async () => {
-  const ctx = await setupTest();
+  // an abstract socket has no file, so no temp dir's removal can hide the
+  // close; a name already bound refuses the listen
+  const path = `\0stub-agent-${crypto.randomUUID()}`;
 
-  const run = runChildTests(
-    ctx.dir,
-    [
-      "import { expect, test } from 'bun:test';",
-      "import { createConnection } from 'node:net';",
-      `import { startStubAgent } from ${JSON.stringify(join(import.meta.dir, 'start-stub-agent.ts'))};`,
-      `const path = ${JSON.stringify(join(ctx.dir, 'v.sock'))};`,
-      "test('it starts', async () => { await startStubAgent(path, () => {}); });",
-      "test('it finds it closed', () => {",
-      '  const client = createConnection(path);',
-      "  const failed = new Promise((resolve) => { client.once('error', resolve); });",
-      '  expect(failed).resolves.toMatchObject({ code: expect.stringMatching(/ENOENT|ECONNREFUSED/) });',
-      '});',
-    ].join('\n'),
-  );
+  await startStubAgent(path, () => {});
 
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 2 pass');
+  // runs after the stand-in's own close
+  onTestFinished(async () => {
+    const refused = await new Promise((resolve) => {
+      const client = createConnection(path);
+
+      client.once('connect', () => {
+        client.destroy();
+
+        resolve('connected');
+      });
+
+      client.once('error', resolve);
+    });
+
+    expect(refused).toMatchObject({ code: 'ECONNREFUSED' });
+  });
 });
 
 test('it closes when the stack it was given is released', async () => {
@@ -304,27 +305,31 @@ test('it closes when the stack it was given is released', async () => {
 });
 
 test('it leaves its close to the stack it was given, not the test’s end', async () => {
-  const ctx = await setupTest();
+  // an abstract socket has no file, so no temp dir's removal can hide the
+  // close; a name already bound refuses the listen
+  const path = `\0stub-agent-${crypto.randomUUID()}`;
 
-  const run = runChildTests(
-    ctx.dir,
-    [
-      "import { expect, test } from 'bun:test';",
-      "import { createConnection } from 'node:net';",
-      `import { startStubAgent } from ${JSON.stringify(join(import.meta.dir, 'start-stub-agent.ts'))};`,
-      `const path = ${JSON.stringify(join(ctx.dir, 'v.sock'))};`,
-      'const stack = new AsyncDisposableStack();',
-      "test('it starts', async () => { await startStubAgent(path, () => {}, { stack }); });",
-      "test('it finds it open', async () => {",
-      '  const client = createConnection(path);',
-      "  const connected = new Promise((resolve) => { client.once('connect', resolve); });",
-      '  await expect(connected).resolves.toBeUndefined();',
-      '  client.destroy();',
-      '  await stack.disposeAsync();',
-      '});',
-    ].join('\n'),
-  );
+  const stack = new AsyncDisposableStack();
 
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 2 pass');
+  await startStubAgent(path, () => {}, { stack });
+
+  // runs after any close the stand-in registered for the test's end, and
+  // releases the stack, which holds only the agent's close, before it asserts
+  onTestFinished(async () => {
+    const reached = await new Promise((resolve) => {
+      const client = createConnection(path);
+
+      client.once('connect', () => {
+        client.destroy();
+
+        resolve('connected');
+      });
+
+      client.once('error', resolve);
+    });
+
+    await stack.disposeAsync();
+
+    expect(reached).toBe('connected');
+  });
 });

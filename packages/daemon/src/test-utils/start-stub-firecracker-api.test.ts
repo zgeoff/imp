@@ -1,7 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { startStubFirecrackerApi } from './start-stub-firecracker-api';
 
 function setupTest() {
@@ -89,26 +90,34 @@ test('it sends a string answer as it is', async () => {
   expect(body).toBe('not json');
 });
 
-test('it never answers when wedged', () => {
+test('it never answers when wedged', async () => {
   const ctx = setupTest();
+  const api = startStubFirecrackerApi(ctx.socket, { isWedged: true });
+  const response = fetch('http://localhost/vm', { method: 'PATCH', unix: ctx.socket });
 
-  startStubFirecrackerApi(ctx.socket, { isWedged: true });
+  // runs after the stand-in's own stop, which cuts the request it still holds
+  onTestFinished(() => {
+    expect(response).rejects.toMatchObject({ code: 'ECONNRESET' });
+  });
 
-  expect(
-    fetch('http://localhost/vm', {
-      method: 'PATCH',
-      unix: ctx.socket,
-      signal: AbortSignal.timeout(50),
-    }),
-  ).rejects.toMatchObject({ name: 'TimeoutError' });
+  await waitFor(() => {
+    expect(api.calls).toHaveLength(1);
+  });
+
+  expect(Bun.peek.status(response)).toBe('pending');
 });
 
 test('it stops when the test ends', () => {
-  const ctx = setupTest();
+  // an abstract socket has no file, so no temp dir's removal can hide the
+  // stop; a name already bound refuses the listen
+  const socket = `\0imp-fc-api-${crypto.randomUUID()}`;
 
-  startStubFirecrackerApi(ctx.socket);
+  startStubFirecrackerApi(socket);
 
+  // runs after the stand-in's own stop
   onTestFinished(() => {
-    expect(existsSync(ctx.socket)).toBeFalse();
+    expect(fetch('http://localhost/version', { unix: socket })).rejects.toMatchObject({
+      code: 'FailedToOpenSocket',
+    });
   });
 });

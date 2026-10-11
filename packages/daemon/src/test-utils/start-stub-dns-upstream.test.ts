@@ -1,9 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { buildMockDnsQuery } from './build-mock-dns-query';
 import { buildMockDnsReply } from './build-mock-dns-reply';
@@ -300,31 +296,22 @@ test('it listens on the loopback address it is given', async () => {
 });
 
 test('it frees its port when the test that started it finishes', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'stub-dns-upstream-'));
-
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
-
   const port = findFreePorts(1).take();
 
-  const run = runChildTests(
-    dir,
-    [
-      "import { expect, test } from 'bun:test';",
-      `import { startStubDnsUpstream } from ${JSON.stringify(join(import.meta.dir, 'start-stub-dns-upstream.ts'))};`,
-      `test('it starts', async () => { await startStubDnsUpstream({ port: ${String(port)} }); });`,
-      "test('it finds the port free', async () => {",
-      `  const udp = await Bun.udpSocket({ hostname: '127.0.0.1', port: ${String(port)} });`,
-      `  const tcp = Bun.listen({ hostname: '127.0.0.1', port: ${String(port)}, socket: { data: () => {} } });`,
-      '  const udpPort = udp.port;',
-      '  const tcpPort = tcp.port;',
-      '  udp.close();',
-      '  tcp.stop(true);',
-      `  expect(udpPort).toBe(${String(port)});`,
-      `  expect(tcpPort).toBe(${String(port)});`,
-      '});',
-    ].join('\n'),
-  );
+  await startStubDnsUpstream({ port });
 
-  expect(run.exitCode).toBe(0);
-  expect(run.output).toInclude(' 2 pass');
+  // runs after the stand-in's own release: both sockets bind its port again
+  onTestFinished(async () => {
+    const udp = await Bun.udpSocket({ hostname: '127.0.0.1', port });
+
+    const tcp = Bun.listen({ hostname: '127.0.0.1', port, socket: { data: () => {} } });
+    const udpPort = udp.port;
+    const tcpPort = tcp.port;
+
+    udp.close();
+    tcp.stop(true);
+
+    expect(udpPort).toBe(port);
+    expect(tcpPort).toBe(port);
+  });
 });
