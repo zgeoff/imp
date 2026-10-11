@@ -49,6 +49,8 @@ type Manager struct {
 	// and /proc/<pid>/root, or a spawner in the test's own process
 	startInit func(cgroup *os.File) (*initProc, error)
 	rootOf    func(pid int) string
+	// firstBackoff is a restart's first wait, minBackoff outside tests
+	firstBackoff time.Duration
 
 	mu      sync.Mutex
 	current *client
@@ -71,9 +73,10 @@ type Manager struct {
 // New makes the container's manager; Launch starts it.
 func New(r *reaper.Reaper, cfg Config) *Manager {
 	return &Manager{
-		stopCh:    make(chan struct{}),
-		cfg:       cfg,
-		cgroupDir: CgroupDir,
+		stopCh:       make(chan struct{}),
+		cfg:          cfg,
+		cgroupDir:    CgroupDir,
+		firstBackoff: minBackoff,
 		startInit: func(cgroup *os.File) (*initProc, error) {
 			return startInit(r, AgentBinary,
 				syscall.CLONE_NEWNS|syscall.CLONE_NEWPID|syscall.CLONE_NEWCGROUP, cgroup, cfg.env())
@@ -225,7 +228,7 @@ func (b *badStarts) exhausted(now time.Time) bool {
 // restartLoop starts the container again with backoff, until it is up, the
 // manager stops, or the bad starts in the window run out.
 func (m *Manager) restartLoop() {
-	backoff := minBackoff
+	backoff := m.firstBackoff
 	for {
 		m.mu.Lock()
 		if m.stopped {
