@@ -40,6 +40,17 @@ test('it records a stdin frame as its text and byte count', () => {
   expect(peer.received).toStrictEqual([{ type: 'stdin', text: 'typed', bytes: 5 }]);
 });
 
+test('it refuses binary data the client sends that is not a Uint8Array', () => {
+  const peer = buildStubExecPeer();
+  const socket = peer.connect('ws://impd.test/exec');
+
+  expect(() => {
+    socket.send(new ArrayBuffer(4));
+  }).toThrowWithMessage(TypeError, 'the client sent binary data that is not a Uint8Array');
+
+  expect(peer.received).toBeEmpty();
+});
+
 test('it delivers a message, raw text and a frame on any channel to the client in order', async () => {
   const peer = buildStubExecPeer((link) => {
     link.send({ type: 'started', pid: 7 });

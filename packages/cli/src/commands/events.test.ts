@@ -2,6 +2,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
@@ -12,9 +13,11 @@ import {
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@imp/test-utils/invariant';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from '@zgeoff/imp-client';
 import { printEvents } from './events';
@@ -52,11 +55,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back for its client
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -131,39 +135,48 @@ async function setupTest() {
 
   const port = findFreePorts(1).take();
 
-  impd.api.app.listen({ port, hostname: '127.0.0.1' });
+  // each listen registers the stop of its own server; a Bun server that a
+  // test stopped already stops again as a no-op
+  const startListener = (): void => {
+    impd.api.app.listen({ port, hostname: '127.0.0.1' });
 
-  // a test may have stopped it already
-  stack.defer(async () => {
-    if (impd.api.app.server !== null) {
-      await impd.api.app.stop(true);
-    }
-  });
+    const server = impd.api.app.server;
+
+    invariant(server, 'impd listens once listen returns');
+
+    stack.defer(() => server.stop(true));
+  };
+
+  startListener();
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 
   return {
     stack,
     sendRequest,
-    client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendRequest }),
+    rootToken,
+    client: createImpClient({ url: 'http://impd.test', token: rootToken, fetch: sendRequest }),
     db,
     dataDir,
     url: `http://127.0.0.1:${String(port)}`,
     stopListener: () => impd.api.app.stop(true),
-    startListener: () => impd.api.app.listen({ port, hostname: '127.0.0.1' }),
+    startListener,
   };
 }
 
 test('it prints only the named imp’s events, and reconnects after impd’s connection drops', async () => {
   const ctx = await setupTest();
 
-  await createImage(ctx.db, { name: 'base', ref: 'base:1', digest: 'sha256:base', sizeBytes: 6 });
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   await ctx.client.imps.create({ name: 'dev', image: 'base' });
   await ctx.client.imps.create({ name: 'web', image: 'base' });
 
-  const live = createImpClient({ url: ctx.url, token: 'root-token' });
+  const live = createImpClient({ url: ctx.url, token: ctx.rootToken });
   const warn = mock<(line: string) => void>();
 
   const wait = mock((ms: number) => {
@@ -231,13 +244,16 @@ test('it prints only the named imp’s events, and reconnects after impd’s con
 test('it prints every imp’s events when no imp is named', async () => {
   const ctx = await setupTest();
 
-  await createImage(ctx.db, { name: 'base', ref: 'base:1', digest: 'sha256:base', sizeBytes: 6 });
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await Bun.write(buildImagePaths(ctx.dataDir, 'sha256:base').rootfs, 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   await ctx.client.imps.create({ name: 'dev', image: 'base' });
   await ctx.client.imps.create({ name: 'web', image: 'base' });
 
-  const live = createImpClient({ url: ctx.url, token: 'root-token' });
+  const live = createImpClient({ url: ctx.url, token: ctx.rootToken });
   const lines: string[] = [];
 
   const printing = printEvents(
@@ -278,7 +294,7 @@ test('it starts the count and the backoff again after a stream that lasted', asy
 
   await ctx.stopListener();
 
-  const live = createImpClient({ url: ctx.url, token: 'root-token' });
+  const live = createImpClient({ url: ctx.url, token: ctx.rootToken });
   const clock = { now: 0 };
 
   const wait = mock((ms: number) => {

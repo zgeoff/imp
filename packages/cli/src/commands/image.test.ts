@@ -2,12 +2,18 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -46,11 +52,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back for the CLI
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -131,10 +138,10 @@ async function setupTest() {
 
   invariant(app.server?.port);
 
-  return { db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
+  return { rootToken, db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
 }
 
-test('it refuses a relative path for --on-host, which names no directory on the impd host', async () => {
+test('#imageCommand refuses a relative path for --on-host, which names no directory on the impd host', async () => {
   const result = await runCli({
     args: ['image', 'build', 'images/base', '--name', 'base', '--on-host'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
@@ -147,7 +154,7 @@ test('it refuses a relative path for --on-host, which names no directory on the 
   });
 });
 
-test('it refuses a build context without a Dockerfile before any upload', async () => {
+test('#imageCommand refuses a build context without a Dockerfile before any upload', async () => {
   const context = await mkdtemp(join(tmpdir(), 'imp-empty-context-'));
 
   onTestFinished(() => rm(context, { recursive: true, force: true }));
@@ -166,21 +173,19 @@ test('it refuses a build context without a Dockerfile before any upload', async 
   });
 });
 
-test('it refuses to remove a docker image as a template', async () => {
+test('#templateCommand refuses to remove a docker image as a template', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  // a docker image, with a rootfs where its digest names
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const result = await runCli({
     args: ['template', 'rm', 'ubuntu'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({

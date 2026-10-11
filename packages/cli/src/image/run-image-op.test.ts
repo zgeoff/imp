@@ -2,12 +2,18 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -52,11 +58,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back for its client
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({
       dataDir,
       cloneFile: async (source, target) => {
@@ -125,16 +132,6 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the image the imp is created from
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
-
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
-
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 
   // the procedure of each call the client sends, such as `system/info`
@@ -142,7 +139,7 @@ async function setupTest() {
 
   const client = createImpClient({
     url: 'http://impd.test',
-    token: 'root-token',
+    token: rootToken,
     fetch: (request) => {
       calls.push(new URL(request.url).pathname.slice('/rpc/'.length));
 
@@ -150,13 +147,20 @@ async function setupTest() {
     },
   });
 
-  return { client, sendRequest, calls };
+  return { rootToken, dataDir, db, client, sendRequest, calls };
 }
 
 test('#runImageAdd makes a template from an imp through the stream of a current impd', async () => {
   const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'box' });
+  // the image the imp is created from, with a rootfs where its digest names
+  const base = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, base.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, base);
+
+  await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const image = await runImageAdd(ctx.client, { imp: 'box', name: 'tpl' }, 'imp template create');
 
@@ -221,12 +225,19 @@ test('#runOnHostBuild passes on a current impd’s refusal of a host build', asy
 test('#runImageAdd adds through the call that answers at the end on an impd from before imageOpStream', async () => {
   const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'box' });
+  // the image the imp is created from, with a rootfs where its digest names
+  const base = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, base.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, base);
+
+  await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const older = buildStubOlderImpdFetch(ctx.sendRequest, { withoutFeatures: ['imageOpStream'] });
 
   const added = await runImageAdd(
-    createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: older.fetch }),
+    createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: older.fetch }),
     { imp: 'box', name: 'tpl' },
     'imp template create',
   );
@@ -262,7 +273,7 @@ test.skipIf(!checkDockerBuildx())(
     });
 
     const built = await runOnHostBuild(
-      createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: older.fetch }),
+      createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: older.fetch }),
       { contextDir, name: 'img' },
     );
 
@@ -286,14 +297,21 @@ test.skipIf(!checkDockerBuildx())(
 test('#runImageAdd rejects when impd faults by ending the stream before it answers the image', async () => {
   const ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'box' });
+  // the image the imp is created from, with a rootfs where its digest names
+  const base = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, base.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, base);
+
+  await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const faulty = buildStubOlderImpdFetch(ctx.sendRequest, {
     withoutEvents: { 'images/addStream': ['image'] },
   });
 
   const adding = runImageAdd(
-    createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: faulty.fetch }),
+    createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: faulty.fetch }),
     { imp: 'box', name: 'tpl' },
     'imp template create',
   );

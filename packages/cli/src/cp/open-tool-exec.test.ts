@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { EXEC_MAX_STDIN_FRAME_BYTES, EXEC_STDIN_WINDOW_BYTES } from '@imp/api';
 import {
   FRAME_TYPES,
@@ -15,11 +16,13 @@ import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
 import {
+  buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -32,8 +35,8 @@ import tar from 'tar-stream';
 import { buildStubExecPeer } from '../test-utils/build-stub-exec-peer';
 import { openToolExec } from './open-tool-exec';
 
-// impd, booted on stand-ins and listening on a loopback port, with a
-// running imp `box` whose agent each test starts on its vsock path
+// impd, booted on stand-ins and listening on a loopback port, and the root
+// token's client and config for it
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -65,11 +68,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test's config sends it
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -142,33 +146,31 @@ async function setupTest() {
 
   const url = `http://127.0.0.1:${String(app.server.port)}`;
 
-  // the image the imp is created from
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  // the image a test's imp boots from, with a rootfs where its digest names
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
 
-  const imp = await createImpClient({ url, token: 'root-token' }).imps.create({ name: 'box' });
+  await createImage(db, image);
 
   return {
-    config: { url, token: 'root-token', host: null },
-    paths: buildImpPaths(dataDir, imp.id),
+    dataDir,
+    client: createImpClient({ url, token: rootToken }),
+    config: { url, token: rootToken, host: null },
   };
 }
 
 test('it sends an archive whole through impd to the imp’s tool and returns its exit code', async () => {
   const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const identity = readVmIdentity(ctx.paths);
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
 
   invariant(identity);
 
   // an agent with imp cp
-  writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.18.0' });
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
   const archive = tar.extract();
   const names: string[] = [];
@@ -183,7 +185,7 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
     }
   })();
 
-  const agent = await startStubAgent(ctx.paths.vsockSocket, (socket, _request, frames) => {
+  const agent = await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
     const frame = frames.at(-1);
 
     if (frames.length === 1) {
@@ -249,6 +251,8 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
 
 test('it rejects with impd’s code and message when impd refuses the exec', async () => {
   const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the stub VMM records an agent from before imp cp
   const opening = openToolExec({
@@ -349,19 +353,21 @@ test('it holds its stdout ack while the caller is still writing the output', asy
 
 test('it acks a tool’s stdout to impd so a download past the window completes', async () => {
   const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const identity = readVmIdentity(ctx.paths);
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
 
   invariant(identity);
 
   // an agent with imp cp
-  writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.18.0' });
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
   // three 512 KiB frames: past impd's 1 MiB window, so the exit reaches the
   // client only after its acks reached impd
   const frame = new Uint8Array(512 * 1024).fill(7);
 
-  await startStubAgent(ctx.paths.vsockSocket, (socket, _request, frames) => {
+  await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
     if (frames.length === 1) {
       socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
       socket.write(encodeFrame(FRAME_TYPES.stdout, frame));
@@ -437,15 +443,17 @@ test('it rejects and names impd when impd faults by closing the connection unans
 
 test('it rejects with impd’s message when the imp’s agent drops the exec after the start', async () => {
   const ctx = await setupTest();
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const identity = readVmIdentity(ctx.paths);
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
 
   invariant(identity);
 
   // an agent with imp cp
-  writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.18.0' });
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
-  await startStubAgent(ctx.paths.vsockSocket, (socket, _request, frames) => {
+  await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
     if (frames.length === 1) {
       socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
     } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {

@@ -2,17 +2,20 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { sendServicesAdd } from '@imp/daemon/src/agent-client/service-requests';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import {
+  buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -58,9 +61,12 @@ async function setupTest() {
   // each boot reports an agent with the services API (0.10.0)
   vmm.agent.version = '0.10.0';
 
+  // impd boots with a root bearer; each test reads it back for the CLI
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -135,23 +141,21 @@ async function setupTest() {
 
   const client = createImpClient({
     url: 'http://impd.test',
-    token: 'root-token',
+    token: rootToken,
     fetch: (request) => impd.api.app.handle(request),
   });
 
-  // the image a test's imps boot from
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  // the image a test's imps boot from, with a rootfs where its digest names
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   return {
     // a test defers what must stop before impd, such as a guest's agent
     stack,
+    rootToken,
     dataDir,
     client,
     url: `http://127.0.0.1:${String(port)}`,
@@ -291,7 +295,7 @@ test('#serviceCommand sends the definition to the guest with --env given more th
       '--cmd',
       'httpd -f',
     ],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0 });
@@ -316,7 +320,7 @@ test('#serviceCommand adds the service and then sets the imp’s HTTP port for -
 
   const result = await runCli({
     args: ['service', 'add', 'box', 'web', '--cmd', 'httpd -f -p 8081', '--http-port', '8081'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   const updated = await ctx.client.imps.get({ name: 'box' });
@@ -360,7 +364,7 @@ test('#serviceCommand sets no HTTP port when the guest refuses the add', async (
 
   const result = await runCli({
     args: ['service', 'add', 'box', 'web', '--cmd', 'httpd -f -p 8081', '--http-port', '8081'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   const updated = await ctx.client.imps.get({ name: 'box' });
@@ -435,7 +439,7 @@ test('#serviceCommand says when a sleeping imp’s last sleep recorded no list',
 
   const result = await runCli({
     args: ['service', 'ls', 'box', '--json'],
-    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({

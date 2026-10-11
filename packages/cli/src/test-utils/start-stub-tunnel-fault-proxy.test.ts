@@ -7,8 +7,8 @@ function setupTest() {
 
   onTestFinished(() => stack.disposeAsync());
 
-  // the target: answers HTTP with its path, echoes each WebSocket text as
-  // `echo <text>`, and closes a WebSocket that sends `drop` without a frame
+  // the target: answers HTTP with its path, and echoes each WebSocket text
+  // as `echo <text>`
   const target = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -16,12 +16,6 @@ function setupTest() {
       server.upgrade(request) ? undefined : new Response(new URL(request.url).pathname),
     websocket: {
       message: (ws, data) => {
-        if (data === 'drop') {
-          ws.terminate();
-
-          return;
-        }
-
         ws.send(`echo ${String(data)}`);
       },
     },
@@ -117,7 +111,25 @@ test('it refuses a fault for a WebSocket that never opened', () => {
 test('it drops the client without a close frame when the target drops its side', async () => {
   const ctx = setupTest();
 
-  const ws = new WebSocket(`${ctx.proxy.url.replace('http:', 'ws:')}/tunnel`);
+  // a target that drops each WebSocket without a frame once it sends
+  const dropping = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request, server) => (server.upgrade(request) ? undefined : new Response('')),
+    websocket: {
+      message: (target) => {
+        target.terminate();
+      },
+    },
+  });
+
+  ctx.stack.defer(async () => {
+    await dropping.stop(true);
+  });
+
+  const proxy = startStubTunnelFaultProxy(ctx.stack, `http://127.0.0.1:${String(dropping.port)}`);
+
+  const ws = new WebSocket(`${proxy.url.replace('http:', 'ws:')}/tunnel`);
 
   const closed = Promise.withResolvers<number>();
 

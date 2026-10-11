@@ -3,17 +3,20 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import { createGenerationLog } from '@imp/daemon/src/session-logs/generation-log';
 import {
+  buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -56,9 +59,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; the CLI reads it back from env
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -135,26 +141,24 @@ async function setupTest() {
 
   const client = createImpClient({
     url: 'http://impd.test',
-    token: 'root-token',
+    token: rootToken,
     fetch: sendRequest,
   });
 
   // the image a test's imps boot from
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   return {
     stack,
     dataDir,
     sendRequest,
     client,
-    env: { IMP_URL: `http://127.0.0.1:${String(port)}`, IMP_TOKEN: 'root-token' },
+    rootToken,
+    env: { IMP_URL: `http://127.0.0.1:${String(port)}`, IMP_TOKEN: rootToken },
   };
 }
 
@@ -384,6 +388,89 @@ test('it deletes the logs of the session it names', async () => {
   expect(existsSync(dir)).toBe(false);
 });
 
+test('it never deletes the logs of another session or another imp', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+  const web = await ctx.client.imps.create({ name: 'web' });
+
+  const named = join(buildImpPaths(ctx.dataDir, dev.id).sessionLogsDir, 'c'.repeat(32));
+
+  const namedLog = await createGenerationLog(
+    {
+      dir: named,
+      segmentBytes: 64,
+      maxBytes: 128,
+      requireRoom: () => Promise.resolve(),
+      now: () => Date.UTC(2026, 9, 4),
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'c'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  await namedLog.append(new TextEncoder().encode('abcdef'));
+  await namedLog.finish({ end: 6, exitCode: 0 });
+
+  const otherSession = join(buildImpPaths(ctx.dataDir, dev.id).sessionLogsDir, 'd'.repeat(32));
+
+  const otherSessionLog = await createGenerationLog(
+    {
+      dir: otherSession,
+      segmentBytes: 64,
+      maxBytes: 128,
+      requireRoom: () => Promise.resolve(),
+      now: () => Date.UTC(2026, 9, 4),
+      log: () => {},
+    },
+    {
+      session: 'work',
+      executionGeneration: 'd'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  await otherSessionLog.append(new TextEncoder().encode('abcdef'));
+  await otherSessionLog.finish({ end: 6, exitCode: 0 });
+
+  const otherImp = join(buildImpPaths(ctx.dataDir, web.id).sessionLogsDir, 'e'.repeat(32));
+
+  const otherImpLog = await createGenerationLog(
+    {
+      dir: otherImp,
+      segmentBytes: 64,
+      maxBytes: 128,
+      requireRoom: () => Promise.resolve(),
+      now: () => Date.UTC(2026, 9, 4),
+      log: () => {},
+    },
+    {
+      session: 'main',
+      executionGeneration: 'e'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    },
+  );
+
+  await otherImpLog.append(new TextEncoder().encode('abcdef'));
+  await otherImpLog.finish({ end: 6, exitCode: 0 });
+
+  const result = await runCli({ args: ['sessions', 'log-rm', 'dev', 'main'], env: ctx.env });
+
+  expect(result).toStrictEqual({
+    stdout: 'deleted 1 session logs of dev\n',
+    stderr: '',
+    code: 0,
+  });
+
+  expect([existsSync(named), existsSync(otherSession), existsSync(otherImp)]).toStrictEqual([
+    false,
+    true,
+    true,
+  ]);
+});
+
 test('it refuses to read a log from an impd from before sessionLog, before any read', async () => {
   const ctx = await setupTest();
 
@@ -391,7 +478,7 @@ test('it refuses to read a log from an impd from before sessionLog, before any r
 
   const result = await runCli({
     args: ['sessions', 'log', 'dev', 'main'],
-    env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+    env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
   });
 
   expect(result).toStrictEqual({

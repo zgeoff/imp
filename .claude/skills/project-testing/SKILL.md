@@ -686,8 +686,13 @@ sent a body and still waits for its answer.
 
 The cli package's tests that talk to impd boot it with `createImpd` in their file's `setupTest()`
 and spawn the real binary (`packages/cli/src/test-utils/start-cli.ts`) against its app on a loopback
-port; the parser, formatter, config and other pure tests boot nothing. The stand-ins in
-`packages/cli/src/test-utils/` sit in front of the real app or replace only a transport:
+port; the parser, formatter, config and other pure tests boot nothing. `commands/imps.test.ts`,
+which saves several hosts, instead calls `startImpdHost(stack, { env })`
+(`packages/cli/src/test-utils/start-impd-host.ts`) once per host in the test body: one real impd on
+the stub VMM with its own data dir, database, loopback port and generated `rootToken`, booted on the
+`env` impd settings the test passes, whose `ksm.profitMib` sets each awake VM's KSM saving. The
+stand-ins in `packages/cli/src/test-utils/` sit in front of the real app or replace only a
+transport:
 
 - `start-stub-older-impd.ts` (over `build-stub-older-impd-fetch.ts`): an older release. It drops
   named feature flags or the whole features object from `system.info`, sends a procedure the release
@@ -706,6 +711,13 @@ port; the parser, formatter, config and other pure tests boot nothing. The stand
   `cp/open-tool-exec.ts` through `connect`.
 - `start-warm-move-hosts.ts`: `createMoveHosts(stack, { isShared: true })` with both apps on
   loopback, because two impds in one process cannot share the data dir a warm move needs.
+- `build-stub-listen-agent.ts`: an imp's agent for `reverse-client.ts`, which answers a listen with
+  a forward id, opens one connection that sends `clientSends`, and can refuse listens; the reverse
+  tests put it on the imp's vsock path with the daemon's `startStubAgent`.
+- `build-stub-timeouts.ts`: the `StartTimer` of `fan-out.ts`, which records each timer's delay and
+  state and fires only when the test calls `firePending()`.
+- `build-stub-terminal.ts` and `build-stub-wait.ts`: the exec client's terminal modes and the
+  reverse forward's retry wait, which ends only when the test releases it or its signal aborts.
 
 The cli's services tests put the daemon's `startStubServiceAgent` on the imp's vsock path.
 

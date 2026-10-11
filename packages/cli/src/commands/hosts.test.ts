@@ -2,26 +2,25 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  FRAME_TYPES,
-  encodeFrame,
-  encodeJsonFrame,
-} from '@imp/daemon/src/agent-client/frame-codec';
+import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
 import {
+  buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '@imp/daemon/src/test-utils/build-stub-exec-guest';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
+import { startStubExecAgent } from '@imp/daemon/src/test-utils/start-stub-exec-agent';
 import { invariant } from '@imp/test-utils/invariant';
 import { createImpClient } from '@zgeoff/imp-client';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
@@ -67,11 +66,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back to log in with it
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the token impd takes
-    rootToken: 'login-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -142,16 +142,16 @@ async function setupTest() {
 
   invariant(app.server?.port);
 
-  return { env, db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
+  return { env, rootToken, db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
 }
 
-test('it saves the host as current when impd accepts the token', async () => {
+test('#login saves the host as current when impd accepts the token', async () => {
   const ctx = await setupTest();
 
   const login = await runCli({
     args: ['login', ctx.url, '--name', 'home'],
     env: ctx.env,
-    stdin: 'login-token\n',
+    stdin: `${ctx.rootToken}\n`,
   });
 
   expect(login).toStrictEqual({
@@ -162,11 +162,29 @@ test('it saves the host as current when impd accepts the token', async () => {
 
   expect(readHostConfig(ctx.env)).toStrictEqual({
     current: 'home',
-    hosts: { home: { url: ctx.url, token: 'login-token' } },
+    hosts: { home: { url: ctx.url, token: ctx.rootToken } },
   });
 });
 
-test('it lists the saved hosts without their tokens', async () => {
+test('#login refuses a URL that is not http(s) and saves nothing', async () => {
+  const ctx = await setupTest();
+
+  const login = await runCli({
+    args: ['login', 'ftp://imp.example'],
+    env: ctx.env,
+    stdin: 'login-token\n',
+  });
+
+  expect(login).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: not an http(s) URL: ftp://imp.example\n',
+    code: 2,
+  });
+
+  expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
+});
+
+test('#hosts lists the saved hosts without their tokens', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
@@ -183,7 +201,7 @@ test('it lists the saved hosts without their tokens', async () => {
   });
 });
 
-test('it saves nothing when impd refuses the token', async () => {
+test('#login saves nothing when impd refuses the token', async () => {
   const ctx = await setupTest();
   const login = await runCli({ args: ['login', ctx.url], env: ctx.env, stdin: 'wrong\n' });
 
@@ -196,7 +214,7 @@ test('it saves nothing when impd refuses the token', async () => {
   expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
-test('it saves nothing when the token is empty', async () => {
+test('#login saves nothing when the token is empty', async () => {
   const ctx = await setupTest();
 
   // nothing listens there: a check would fail on the connection instead
@@ -211,7 +229,7 @@ test('it saves nothing when the token is empty', async () => {
   expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
-test('it saves nothing when impd is out of reach', async () => {
+test('#login saves nothing when impd is out of reach', async () => {
   const ctx = await setupTest();
 
   const login: unknown = await runCli({
@@ -231,7 +249,7 @@ test('it saves nothing when impd is out of reach', async () => {
   expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
-test('it saves without asking impd and warns of plain http under --no-verify', async () => {
+test('#login saves without asking impd and warns of plain http under --no-verify', async () => {
   const ctx = await setupTest();
 
   const login = await runCli({
@@ -253,7 +271,7 @@ test('it saves without asking impd and warns of plain http under --no-verify', a
   });
 });
 
-test('it leaves a damaged config.json as it was and asks impd nothing on login', async () => {
+test('#login leaves a damaged config.json as it was and asks impd nothing', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, { current: null, hosts: {} });
@@ -278,7 +296,7 @@ test('it leaves a damaged config.json as it was and asks impd nothing on login',
   expect(config).toBe('{ damaged');
 });
 
-test('it makes a saved host current on host use', async () => {
+test('#host makes a saved host current on host use', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
@@ -295,7 +313,7 @@ test('it makes a saved host current on host use', async () => {
   expect(readHostConfig(ctx.env).current).toBe('work');
 });
 
-test('it refuses a host use of a host it has not saved', async () => {
+test('#host refuses a host use of a host it has not saved', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
@@ -314,7 +332,7 @@ test('it refuses a host use of a host it has not saved', async () => {
   expect(readHostConfig(ctx.env).current).toBe('home');
 });
 
-test('it forgets the current host and clears current on host rm', async () => {
+test('#host forgets the current host and clears current on host rm', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
@@ -335,12 +353,12 @@ test('it forgets the current host and clears current on host rm', async () => {
   });
 });
 
-test('it sends the saved token of --host over IMP_TOKEN, with a note', async () => {
+test('#--host sends the saved token over IMP_TOKEN, with a note', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, {
     current: null,
-    hosts: { work: { url: ctx.url, token: 'login-token' } },
+    hosts: { work: { url: ctx.url, token: ctx.rootToken } },
   });
 
   const listed = await runCli({
@@ -355,7 +373,7 @@ test('it sends the saved token of --host over IMP_TOKEN, with a note', async () 
   });
 });
 
-test('it names the --host in a 401 for a saved token impd refuses', async () => {
+test('#--host names the host in a 401 for a saved token impd refuses', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
@@ -369,7 +387,7 @@ test('it names the --host in a 401 for a saved token impd refuses', async () => 
   });
 });
 
-test('it names the --host when impd refuses the saved token on exec’s socket', async () => {
+test('#--host names the host when impd refuses the saved token on exec’s socket', async () => {
   const ctx = await setupTest();
 
   writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
@@ -386,20 +404,19 @@ test('it names the --host when impd refuses the saved token on exec’s socket',
   });
 });
 
-test('it sends the saved token of --host over IMP_TOKEN on exec’s socket', async () => {
+test('#--host sends the saved token over IMP_TOKEN on exec’s socket', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  // the image the imp boots from, with a rootfs where its digest names
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  const imp = await createImpClient({ url: ctx.url, token: 'login-token' }).imps.create({
+  await createImage(ctx.db, image);
+
+  const imp = await createImpClient({ url: ctx.url, token: ctx.rootToken }).imps.create({
     name: 'box',
+    image: 'ubuntu',
   });
 
   const paths = buildImpPaths(ctx.dataDir, imp.id);
@@ -410,32 +427,26 @@ test('it sends the saved token of --host over IMP_TOKEN on exec’s socket', asy
   // an agent that runs outer execs; the stub VMM records an older one
   writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
-  await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
-    if (frames.length === 1) {
-      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
-      socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('ran')));
-      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
-    }
-  });
+  await startStubExecAgent(paths.vsockSocket, buildStubExecGuest());
 
   writeHostConfig(ctx.env, {
     current: null,
-    hosts: { work: { url: ctx.url, token: 'login-token' } },
+    hosts: { work: { url: ctx.url, token: ctx.rootToken } },
   });
 
   const exec = await runCli({
-    args: ['--host', 'work', 'exec', 'box', '--', 'true'],
+    args: ['--host', 'work', 'exec', 'box', '--', 'echo', 'ran'],
     env: { ...ctx.env, IMP_TOKEN: 'ignored' },
   });
 
   expect(exec).toStrictEqual({
-    stdout: 'ran',
+    stdout: 'ran\n',
     stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
     code: 0,
   });
 });
 
-test('it refuses --host without a saved host name', async () => {
+test('#--host refuses a flag without a saved host name', async () => {
   const ctx = await setupTest();
   const listed = await runCli({ args: ['ls', '--host'], env: ctx.env });
 
@@ -446,7 +457,7 @@ test('it refuses --host without a saved host name', async () => {
   });
 });
 
-test('it prints the version with --host and no saved host', async () => {
+test('#--host leaves --version to print the version with no saved host', async () => {
   const ctx = await setupTest();
   const version: unknown = await runCli({ args: ['--host', 'work', '--version'], env: ctx.env });
 
@@ -457,7 +468,7 @@ test('it prints the version with --host and no saved host', async () => {
   });
 });
 
-test('it prints the help with --host and no saved host', async () => {
+test('#--host leaves --help to print the help with no saved host', async () => {
   const ctx = await setupTest();
   const help: unknown = await runCli({ args: ['--host', 'work', '--help'], env: ctx.env });
 
@@ -468,7 +479,7 @@ test('it prints the help with --host and no saved host', async () => {
   });
 });
 
-test('it prints one line, not a stack, when exec cannot read config.json', async () => {
+test('#exec prints one line, not a stack, when it cannot read config.json', async () => {
   const ctx = await setupTest();
 
   await mkdir(resolveConfigPath(ctx.env), { recursive: true });
