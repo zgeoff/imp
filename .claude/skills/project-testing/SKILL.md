@@ -475,6 +475,24 @@ The flake's two checks test `deploy/nixos/module.nix`:
 own job; the `vm` job opens `/dev/kvm` to the builders. The local `nixfmt` must be the pinned
 nixpkgs' version (1.5.0) for its output to match.
 
+## Agent Go timers
+
+Five agent timers sit on unexported fields that each constructor sets from the package's constant. A
+test in the same package shortens or lengthens one before it starts the work, and nothing outside
+the package changes it:
+
+| Package             | Field          | Default constant | What it bounds                                            |
+| ------------------- | -------------- | ---------------- | --------------------------------------------------------- |
+| `internal/exec`     | `drainGrace`   | `drainGrace`     | output forwarded after the process exits                  |
+| `internal/exec`     | `hangupGrace`  | `hangupGrace`    | the wait for a process after the host hangs up            |
+| `internal/session`  | `killGrace`    | `killGrace`      | the gap between a killed session's SIGHUP and its SIGKILL |
+| `internal/inner`    | `firstBackoff` | `minBackoff`     | the first wait before the container restarts              |
+| `internal/services` | `firstBackoff` | `minBackoff`     | the first wait before a service restarts                  |
+
+A test in each package checks the constructor's default. The session manager's `recorded` hook is
+nil outside tests. It gets each retired run once the manager has kept or passed over it, so a test
+waits on it for a run that ended after its replacement.
+
 ## CI
 
 `.github/workflows/ci.yml`:
