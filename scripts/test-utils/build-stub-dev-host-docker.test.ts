@@ -265,6 +265,105 @@ test('it prints no log for a container without one', () => {
   });
 });
 
+test("it prints impd's pids for pgrep in the container", () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({
+      containers: {},
+      hasImage: true,
+      hasSocket: true,
+      impdPids: [4242, 4243],
+    }),
+  );
+
+  const result = Bun.spawnSync(
+    ['docker', 'exec', 'imp-dev', 'pgrep', '-f', 'bun .*/daemon/src/main.ts'],
+    { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
+  );
+
+  expect({ exitCode: result.exitCode, stdout: result.stdout.toString() }).toStrictEqual({
+    exitCode: 0,
+    stdout: '4242\n4243\n',
+  });
+});
+
+test('it fails pgrep with no output when impd has no pids', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({ containers: {}, hasImage: true, hasSocket: true }),
+  );
+
+  const result = Bun.spawnSync(
+    ['docker', 'exec', 'imp-dev', 'pgrep', '-f', 'bun .*/daemon/src/main.ts'],
+    { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
+  );
+
+  expect({ exitCode: result.exitCode, stdout: result.stdout.toString() }).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+  });
+});
+
+test('it takes the SIGHUP to impd', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({ containers: {}, hasImage: true, hasSocket: true, impdPids: [4242] }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-dev', 'kill', '-HUP', '4242'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.exitCode).toBe(0);
+});
+
+test('it fails kill -0 of impd once impd has exited, by default', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({ containers: {}, hasImage: true, hasSocket: true, impdPids: [4242] }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-dev', 'kill', '-0', '4242'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.exitCode).toBe(1);
+});
+
+test('it passes kill -0 of an impd that does not exit', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({
+      containers: {},
+      hasImage: true,
+      hasSocket: true,
+      impdPids: [4242],
+      impdExits: false,
+    }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-dev', 'kill', '-0', '4242'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.exitCode).toBe(0);
+});
+
 test('it fails a call that up and restart do not make, naming it', () => {
   const ctx = setupTest();
 

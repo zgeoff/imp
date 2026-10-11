@@ -64,6 +64,9 @@
 #      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
 #      IMP_DEV_BACKUP_ENV_FILE is a docker --env-file with the repository's
 #      AWS_* keys, so this shell's own AWS_* never reach the container.
+#      IMP_DEV_READY_TIMEOUT_S (default 600 for up, 60 for restart) bounds the
+#      wait for impd's /health, and IMP_DEV_STOP_TIMEOUT_S (default 30) the
+#      wait for the old impd to exit on restart; the tests shorten both.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -197,7 +200,8 @@ start_proxy() {
 
 # wait_ready waits until /health reports ready (default image seeded).
 wait_ready() {
-  local deadline=$((SECONDS + ${1:-600}))
+  local seconds=${IMP_DEV_READY_TIMEOUT_S:-${1:-600}}
+  local deadline=$((SECONDS + seconds))
   until curl -fsS "$api/health" 2>/dev/null | grep -q '"ready":true'; do
     if ! is_running; then
       echo "dev.sh: $name stopped; last log lines:" >&2
@@ -205,7 +209,7 @@ wait_ready() {
       return 1
     fi
     if [ $SECONDS -ge $deadline ]; then
-      echo "dev.sh: impd not ready after ${1:-600}s" >&2
+      echo "dev.sh: impd not ready after ${seconds}s" >&2
       return 1
     fi
     sleep 0.5
@@ -379,7 +383,7 @@ case ${1:-} in
     if [ -n "$old" ]; then
       mapfile -t pids <<<"$old"
       docker exec "$name" kill -HUP "${pids[@]}"
-      deadline=$((SECONDS + 30))
+      deadline=$((SECONDS + ${IMP_DEV_STOP_TIMEOUT_S:-30}))
       while docker exec "$name" kill -0 "${pids[@]}" 2>/dev/null; do
         [ $SECONDS -lt $deadline ] || { echo "dev.sh: impd ${pids[*]} did not exit" >&2; exit 1; }
         sleep 0.2

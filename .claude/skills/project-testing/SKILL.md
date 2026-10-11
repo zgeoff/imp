@@ -331,6 +331,11 @@ sources, so a changed fixture builds anew.
 | `IMP_DEV_NAME`                       | `imp-dev`   | the dev container                                  |
 | `IMP_DEV_PORT_OFFSET`                | 0           | shifts every published port; needs `IMP_DEV_NAME`  |
 | `IMP_DEV_DATA`                       | `.data/dev` | the instance's data dir, mounted at `/data`        |
+| `IMP_DEV_READY_TIMEOUT_S`            | 600, 60     | `dev.sh`'s wait for /health on up, on restart      |
+| `IMP_DEV_STOP_TIMEOUT_S`             | 30          | `dev.sh restart`'s wait for the old impd to exit   |
+
+`scripts/dev.test.ts` sets each of the two `dev.sh` deadlines to 1 s, against an impd that never
+gets ready or never exits, beside a run where it does.
 
 `main.ts` sets `E2E_KEEP`, `E2E_ACCEPTANCE`, and `E2E_METRICS_FILE` for each suite process. It no
 longer sets `E2E_SUITES`: `scale` read it to keep its imps for `restart`, and that choice is now the

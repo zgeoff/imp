@@ -120,6 +120,156 @@ test('it fails a restart whose new proxy stops without a socket, printing its lo
   });
 });
 
+test('it fails a restart whose impd is not ready by IMP_DEV_READY_TIMEOUT_S', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({
+      containers: { 'imp-dev': true, 'imp-dev-docker-proxy': true },
+      hasImage: true,
+      hasSocket: true,
+    }),
+  );
+
+  // impd answers /health, but never ready
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":false}'`);
+
+  // the group of the docker socket, which a host without Docker lacks
+  createStubBin(ctx.dir, 'stat', 'echo 999');
+
+  const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'restart'], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_DEV_DATA: join(ctx.dir, 'data'),
+      IMP_HOST_IMAGE: 'imp-host:dev-test',
+      IMP_DEV_READY_TIMEOUT_S: '1',
+    },
+  });
+
+  expect({
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'dev.sh: impd not ready after 1s\n',
+  });
+});
+
+test('it finishes a restart under IMP_DEV_READY_TIMEOUT_S once impd reports ready', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({
+      containers: { 'imp-dev': true, 'imp-dev-docker-proxy': true },
+      hasImage: true,
+      hasSocket: true,
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  // the group of the docker socket, which a host without Docker lacks
+  createStubBin(ctx.dir, 'stat', 'echo 999');
+
+  const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'restart'], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_DEV_DATA: join(ctx.dir, 'data'),
+      IMP_HOST_IMAGE: 'imp-host:dev-test',
+      IMP_DEV_READY_TIMEOUT_S: '1',
+    },
+  });
+
+  expect({
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
+});
+
+test('it fails a restart whose old impd does not exit by IMP_DEV_STOP_TIMEOUT_S', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({
+      containers: { 'imp-dev': true, 'imp-dev-docker-proxy': true },
+      hasImage: true,
+      hasSocket: true,
+      impdPids: [4242],
+      impdExits: false,
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  // the group of the docker socket, which a host without Docker lacks
+  createStubBin(ctx.dir, 'stat', 'echo 999');
+
+  const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'restart'], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_DEV_DATA: join(ctx.dir, 'data'),
+      IMP_HOST_IMAGE: 'imp-host:dev-test',
+      IMP_DEV_STOP_TIMEOUT_S: '1',
+    },
+  });
+
+  expect({
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'dev.sh: impd 4242 did not exit\n',
+  });
+});
+
+test('it finishes a restart under IMP_DEV_STOP_TIMEOUT_S once the old impd exits', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubDevHostDocker({
+      containers: { 'imp-dev': true, 'imp-dev-docker-proxy': true },
+      hasImage: true,
+      hasSocket: true,
+      impdPids: [4242],
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  // the group of the docker socket, which a host without Docker lacks
+  createStubBin(ctx.dir, 'stat', 'echo 999');
+
+  const result = Bun.spawnSync([new URL('dev.sh', import.meta.url).pathname, 'restart'], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_DEV_DATA: join(ctx.dir, 'data'),
+      IMP_HOST_IMAGE: 'imp-host:dev-test',
+      IMP_DEV_STOP_TIMEOUT_S: '1',
+    },
+  });
+
+  expect({
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
+
+  expect(readFileSync(docker.calls, 'utf8')).toInclude('docker exec imp-dev kill -HUP 4242\n');
+});
+
 test('it refuses up without a kernel before it asks docker anything', () => {
   const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', 'exit 1');
