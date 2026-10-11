@@ -59,6 +59,10 @@ test('it boots an imp inside the prefix with imp_create, and refuses one outside
 
   expect(readToolData(created)).toMatchObject({ imp: { name, state: 'running' } });
   expect(outside.isError).toBeTrue();
+
+  expect(outside.content[0]?.text).toStartWith(
+    `GUARD: imp ${other} is outside this server's guard`,
+  );
 });
 
 test.each([
@@ -188,6 +192,11 @@ test('it carries bytes that are not UTF-8 as base64', async () => {
   });
 
   expect(asText.isError).toBeTrue();
+
+  expect(asText.content[0]?.text).toStartWith(
+    '/tmp/bin.dat is not valid UTF-8; read it with encoding base64\n',
+  );
+
   expect(readToolData(asBase64)).toMatchObject({ bytes: 5, content: bytes });
 });
 
@@ -308,8 +317,8 @@ test('it runs a 15 s command over HTTP for a token held to the prefix, and refus
     await agent.close();
   });
 
-  // longer than the API server's 10 s idle timeout; the answer comes as SSE,
-  // with a keepalive comment every 5 s
+  // a long call answers as SSE, with a keepalive comment every 5 s; that the
+  // stream outlasts the API's idle timeout is mcp-endpoint.test.ts's to prove
   const startedAt = performance.now();
 
   const long = await agent.runTool('imp_exec', {
