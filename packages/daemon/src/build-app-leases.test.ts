@@ -11,9 +11,9 @@ import { createImpd } from './create-impd';
 import { createImage } from './db/images';
 import { listLeases, writeLease } from './db/leases';
 import { openDatabase } from './db/open-database';
-import { readPresentedLeases } from './imps/imp-presenter';
 import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildQueryGate } from './test-utils/build-query-gate';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
@@ -62,8 +62,11 @@ async function setupTest(options: SetupOptions = {}) {
   // each unexpected failure behind an RPC, which impd logs to stderr
   const rpcFailures: unknown[] = [];
 
+  // holds impd's next read of the leases once a test arms it
+  const leaseReads = buildQueryGate('imp_leases');
+
   const impd = await createImpd(config, {
-    db,
+    db: db.withPlugin(leaseReads.plugin),
 
     // the bearer the root client sends
     rootToken: 'root-token',
@@ -165,6 +168,7 @@ async function setupTest(options: SetupOptions = {}) {
     clock,
     events,
     rpcFailures,
+    leaseReads,
     sendToImpd,
     client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendToImpd }),
   };
@@ -1007,13 +1011,24 @@ test('it emits held on hold 0 even when it releases nothing', async () => {
   expect(held).toMatchObject([{ ev: 'ImpChanged', reason: 'held' }]);
 });
 
-test('it names an imp’s lease owners from the presenter’s one read', async () => {
+// a second read would see the lease acquired while the first one is held
+test('it names an imp’s lease owners as of the one read that shows the imp', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
 
-  const presented = await ctx.impd.imps.getImp('dev');
+  ctx.leaseReads.arm();
 
-  expect(readPresentedLeases(presented)?.map((lease) => lease.label)).toStrictEqual(['job']);
+  const getting = ctx.client.imps.get({ name: 'dev' });
+
+  await ctx.leaseReads.reached;
+
+  await ctx.client.leases.acquire({ name: 'dev', label: 'late', ttlSeconds: 60 });
+
+  ctx.leaseReads.release();
+
+  const imp = await getting;
+
+  expect(imp.leases?.leases.map((lease) => lease.owner.label)).toStrictEqual(['job']);
 });
