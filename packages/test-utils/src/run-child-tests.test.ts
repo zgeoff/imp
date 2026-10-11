@@ -78,6 +78,7 @@ test('it kills a child that hangs past its deadline', async () => {
       "import { test } from 'bun:test';",
       "test('it hangs', () => new Promise(() => {}), 60_000);",
     ].join('\n'),
+    500,
   );
 
   expect(run.isTimedOut).toBeTrue();

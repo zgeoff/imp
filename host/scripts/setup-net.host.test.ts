@@ -52,6 +52,8 @@ test.skipIf(
   // lo stands in for eth0 and tailscale0: anything that is not imp+. The
   // first INPUT rule accepts it all, as tailscaled's ts-input does later.
   // The listener says when both ports are bound, and the probes wait on it.
+  // Each probe prints its exit: 0 connected, 124 timed out (a drop), and 1 a
+  // refusal, so a port that answers with a reset does not pass as dropped.
   const run = runInNetns({
     script: `
 ip link add up0 type dummy
@@ -64,7 +66,9 @@ iptables -I INPUT 1 -j ACCEPT
 coproc LISTENER { exec "$BUN" -e 'for (const port of [7081, 7082]) Bun.listen({ hostname: "0.0.0.0", port, socket: { data() {} } }); console.log("listening")'; }
 read -r _ <&"\${LISTENER[0]}"
 for port in 7081 7082; do
-  if timeout 1 bash -c "exec 3<>/dev/tcp/192.0.2.2/$port" 2>/dev/null; then echo "$port open"; else echo "$port dropped"; fi
+  code=0
+  timeout 1 bash -c "exec 3<>/dev/tcp/192.0.2.2/$port" 2>/dev/null || code=$?
+  echo "$port $code"
 done
 kill "$LISTENER_PID"
 `,
@@ -72,8 +76,52 @@ kill "$LISTENER_PID"
     mount: false,
   });
 
-  expect(run).toStrictEqual({ stdout: '7081 dropped\n7082 open\n', stderr: '', exitCode: 0 });
+  expect(run).toStrictEqual({ stdout: '7081 124\n7082 0\n', stderr: '', exitCode: 0 });
 });
+
+test.skipIf(!canUnshare(['sh', '-c', 'iptables -t nat -S && ip link && command -v sysctl']))(
+  'it refuses to start with IPv4 forwarding off',
+  () => {
+    const run = runInNetns({
+      script: `
+ip link add up0 type dummy
+ip link set up0 up
+ip addr add 192.0.2.2/24 dev up0
+ip route add default via 192.0.2.1
+sysctl -qw net.ipv4.ip_forward=0
+bash "$SETUP_NET"
+`,
+      env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+      mount: false,
+    });
+
+    expect(run).toStrictEqual({
+      stdout: '',
+      stderr:
+        'setup-net: net.ipv4.ip_forward is off; run the container with --sysctl net.ipv4.ip_forward=1\n',
+      exitCode: 1,
+    });
+  },
+);
+
+test.skipIf(!canUnshare(['sh', '-c', 'iptables -t nat -S && ip link && command -v sysctl']))(
+  'it refuses to start without a default route',
+  () => {
+    const run = runInNetns({
+      script: `
+ip link add up0 type dummy
+ip link set up0 up
+ip addr add 192.0.2.2/24 dev up0
+sysctl -qw net.ipv4.ip_forward=1
+bash "$SETUP_NET"
+`,
+      env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+      mount: false,
+    });
+
+    expect(run).toStrictEqual({ stdout: '', stderr: 'setup-net: no default route\n', exitCode: 1 });
+  },
+);
 
 test.skipIf(
   !canUnshare([
