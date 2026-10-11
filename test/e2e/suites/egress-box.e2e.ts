@@ -287,10 +287,11 @@ test('it ends the broker tunnels a tighter policy denies, even one whose head co
     }
   });
 
-  // one that connects now and sends its head 4 s later, after the change
+  // one that connects now and sends its head once the change is in
+  // (/tmp/tun-go), then stays open until the broker's answer comes
   await runShellInImp(
     name,
-    `setsid sh -c "(sleep 4; printf '${head}'; sleep 5) | nc ${broker} > /tmp/tun-late" </dev/null >/dev/null 2>&1 &`,
+    `setsid sh -c "(until [ -f /tmp/tun-go ]; do sleep 0.1; done; printf '${head}'; until grep -q ' 403 ' /tmp/tun-late; do sleep 0.1; done) | nc ${broker} > /tmp/tun-late" </dev/null >/dev/null 2>&1 &`,
   );
 
   // both connections established to the broker's port, 7081 (1BA9): the
@@ -307,6 +308,7 @@ test('it ends the broker tunnels a tighter policy denies, even one whose head co
   });
 
   await runImp('policy', name, 'box', '--allow', 'example.com');
+  await runShellInImp(name, 'touch /tmp/tun-go');
 
   const ended = await waitFor('the held tunnel to end', async () => {
     const done = await tryInImp(name, 'test -f /tmp/tun-done');
