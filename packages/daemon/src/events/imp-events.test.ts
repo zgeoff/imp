@@ -477,7 +477,13 @@ test('it ends a dashboard stream at the session’s expiry', async () => {
     }),
   );
 
-  const events = await dashboard.events.stream();
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const events = await dashboard.events.stream(undefined, { signal: controller.signal });
 
   const stream = readInBackground(events);
 
@@ -507,7 +513,15 @@ test('it ends a dashboard stream at any logout, and leaves a token’s stream op
     }),
   );
 
-  const dashboardEvents = await dashboard.events.stream();
+  const dashboardController = new AbortController();
+
+  onTestFinished(() => {
+    dashboardController.abort();
+  });
+
+  const dashboardEvents = await dashboard.events.stream(undefined, {
+    signal: dashboardController.signal,
+  });
 
   const dashboardStream = readInBackground(dashboardEvents);
 
