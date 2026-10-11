@@ -37,10 +37,20 @@ test('it ends a wait at once when its signal aborts', async () => {
 test('it leaves a wait open until it is released or aborted', async () => {
   const stub = buildStubWait();
   const waited = stub.wait(30_000, new AbortController().signal);
+  const state = { isEnded: false };
 
-  // a race takes the first settled promise in order, so an ended wait (which
-  // gives undefined) wins and only an open one loses to the resolved sentinel
-  const first = await Promise.race([waited, Promise.resolve('open')]);
+  const waitForEnd = async (): Promise<void> => {
+    await waited;
 
-  expect(first).toBe('open');
+    state.isEnded = true;
+  };
+
+  void waitForEnd();
+
+  // every settled promise's reactions run before the next macrotask
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+
+  expect(state.isEnded).toBeFalse();
 });
