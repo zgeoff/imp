@@ -2,11 +2,8 @@ import { expect, mock, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
 import { buildStubBrowserFetch } from './build-stub-browser-fetch';
 
-// oxlint-disable-next-line prefer-readonly-parameter-types -- fetch's own parameter types
-type SendRequest = (input: Parameters<typeof fetch>[0]) => Promise<Response>;
-
 test('it marks a request to the page origin as same-origin', async () => {
-  const sendRequest = mock<SendRequest>(() => Promise.resolve(new Response(null, { status: 204 })));
+  const sendRequest = mock<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
   const innerFetch = Object.assign(sendRequest, { preconnect: fetch.preconnect });
   const browserFetch = buildStubBrowserFetch(innerFetch, 'http://impd.test/ui/');
 
@@ -23,7 +20,7 @@ test('it marks a request to the page origin as same-origin', async () => {
 });
 
 test('it resolves a relative URL against the page', async () => {
-  const sendRequest = mock<SendRequest>(() => Promise.resolve(new Response(null, { status: 204 })));
+  const sendRequest = mock<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
   const innerFetch = Object.assign(sendRequest, { preconnect: fetch.preconnect });
   const browserFetch = buildStubBrowserFetch(innerFetch, 'http://impd.test/ui/');
 
@@ -40,7 +37,7 @@ test('it resolves a relative URL against the page', async () => {
 });
 
 test('it leaves a request to another origin unmarked', async () => {
-  const sendRequest = mock<SendRequest>(() => Promise.resolve(new Response(null, { status: 204 })));
+  const sendRequest = mock<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
   const innerFetch = Object.assign(sendRequest, { preconnect: fetch.preconnect });
   const browserFetch = buildStubBrowserFetch(innerFetch, 'http://impd.test/ui/');
 
