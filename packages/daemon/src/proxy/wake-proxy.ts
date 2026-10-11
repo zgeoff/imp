@@ -52,6 +52,23 @@ interface WakeProxyDeps {
 
   // how long an upstream WebSocket may take to open; 10 s by default
   readonly upstreamSocketTimeoutMs?: number;
+
+  // that deadline's timer, returning its cancel; setTimeout by default
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+}
+
+// how long an upstream WebSocket may take to open, and the timer that waits
+interface OpenDeadline {
+  readonly timeoutMs: number;
+  readonly startTimer: (fire: () => void, ms: number) => () => void;
+}
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
 }
 
 // Where a request goes: an imp, which it wakes, impd's own API, nowhere,
@@ -125,6 +142,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   };
 
   const upstreamSocketTimeoutMs = deps.upstreamSocketTimeoutMs ?? UPSTREAM_SOCKET_TIMEOUT_MS;
+  const startTimer = deps.startTimer ?? startRealTimer;
   const syncSlot = createSemaphore(1);
 
   const websocket: WebSocketHandler<SocketData> = {
@@ -350,7 +368,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const pending: (string | ArrayBuffer)[] = [];
 
     try {
-      upstream = await openUpstreamSocket(target, protocols, headers, upstreamSocketTimeoutMs);
+      upstream = await openUpstreamSocket(target, protocols, headers, {
+        timeoutMs: upstreamSocketTimeoutMs,
+        startTimer,
+      });
     } catch (error) {
       release();
 
@@ -562,7 +583,7 @@ function openUpstreamSocket(
   target: string,
   protocols: readonly string[],
   headers: Readonly<Headers>,
-  timeoutMs: number,
+  deadline: Readonly<OpenDeadline>,
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(target, {
@@ -572,19 +593,19 @@ function openUpstreamSocket(
 
     socket.binaryType = 'arraybuffer';
 
-    const timer = setTimeout(() => {
+    const cancelTimer = deadline.startTimer(() => {
       socket.close();
 
       reject(new Error('timed out'));
-    }, timeoutMs);
+    }, deadline.timeoutMs);
 
     socket.addEventListener('open', () => {
-      clearTimeout(timer);
+      cancelTimer();
       resolve(socket);
     });
 
     socket.addEventListener('error', () => {
-      clearTimeout(timer);
+      cancelTimer();
       reject(new Error('connection failed'));
     });
   });

@@ -22,6 +22,7 @@ import { openDatabase } from '../db/open-database';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
@@ -164,12 +165,10 @@ test('it sends the snapshot, then each change with its reason', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'old', image: 'ubuntu' });
 
@@ -228,12 +227,10 @@ test('it counts a young guest’s wait before a sleep in the slept event’s pre
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -276,12 +273,10 @@ test('it sends a repaired event when a check finds an imp’s VM gone', async ()
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dead', image: 'ubuntu' });
 
@@ -323,12 +318,10 @@ test('it reports an adopted change when a restarted impd adopts a running VM', a
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'alive', image: 'ubuntu' });
 
@@ -390,12 +383,10 @@ test('it puts a secret’s value in no event and no audit row', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -486,7 +477,13 @@ test('it ends a dashboard stream at the session’s expiry', async () => {
     }),
   );
 
-  const events = await dashboard.events.stream();
+  const controller = new AbortController();
+
+  onTestFinished(() => {
+    controller.abort();
+  });
+
+  const events = await dashboard.events.stream(undefined, { signal: controller.signal });
 
   const stream = readInBackground(events);
 
@@ -500,12 +497,10 @@ test('it ends a dashboard stream at any logout, and leaves a token’s stream op
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const dashboard: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
@@ -518,7 +513,15 @@ test('it ends a dashboard stream at any logout, and leaves a token’s stream op
     }),
   );
 
-  const dashboardEvents = await dashboard.events.stream();
+  const dashboardController = new AbortController();
+
+  onTestFinished(() => {
+    dashboardController.abort();
+  });
+
+  const dashboardEvents = await dashboard.events.stream(undefined, {
+    signal: dashboardController.signal,
+  });
 
   const dashboardStream = readInBackground(dashboardEvents);
 
@@ -564,12 +567,10 @@ test('it records a dashboard session’s calls in the audit log as the dashboard
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -662,12 +663,10 @@ test('it drops a snapshot imp that fails the schema and goes on', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'bad', image: 'ubuntu' });
   await ctx.client.imps.create({ name: 'good', image: 'ubuntu' });

@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -101,6 +101,33 @@ test('it rejects when the handshake gets no answer within the timeout', async ()
     Error,
     'vsock handshake timed out after 1 ms',
   );
+});
+
+test('it rejects with the connect error when nothing listens on the vsock socket', async () => {
+  const ctx = setupTest();
+
+  // a socket file whose listener is gone: a link to a server's socket outlives the server
+  const server = createServer(() => {});
+  const listenPath = `${ctx.vsockPath}.listen`;
+
+  await new Promise<void>((resolve) => {
+    server.listen(listenPath, resolve);
+  });
+
+  // a close of a closed server hands its callback the error
+  onTestFinished(() => {
+    server.close(() => {});
+  });
+
+  linkSync(listenPath, ctx.vsockPath);
+
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+
+  expect(openAgentConnection(ctx.vsockPath)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
 });
 
 test('it rejects a vsock path that is not a socket', () => {

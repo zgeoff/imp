@@ -30,9 +30,10 @@ import { SERVICE_TAG, createTailnetNames } from './tailnet-names';
 import type { TailnetNamesDeps } from './tailnet-names';
 
 interface SetupOptions {
-  // impd's own per-imp names (IMP_TAILNET_NAMES=1) on a tailnet node, which
-  // serve through the stub `tailscale serve` and the stub API
-  readonly isNamed?: boolean;
+  // '1' wires impd's own per-imp names (IMP_TAILNET_NAMES) on a tailnet node
+  // (IMP_TAILSCALE_NODE), which serve through the stub `tailscale serve`
+  // and the stub API; left out, impd claims no names
+  readonly tailnetNames?: '1';
 }
 
 async function setupTest(options: SetupOptions = {}) {
@@ -55,7 +56,8 @@ async function setupTest(options: SetupOptions = {}) {
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-    ...(options.isNamed === true && { IMP_TAILNET_NAMES: '1', IMP_TAILSCALE_NODE: '1' }),
+    IMP_TAILNET_NAMES: options.tailnetNames,
+    IMP_TAILSCALE_NODE: options.tailnetNames,
   });
 
   const tailscale = buildStubTailscaleServe();
@@ -191,7 +193,9 @@ async function setupTest(options: SetupOptions = {}) {
     serve: createServiceServe(tailscale.runChecked),
     findPort: (slot) => deriveSlotAddress(slot, config).tailnetPort,
     isImpPresent: createPresenceCheck(impd.imps, db),
-    readSuffix: () => Promise.resolve('tail1234.ts.net'),
+
+    // a sync runs without the suffix, which only a name's URL needs
+    readSuffix: () => Promise.resolve(null),
     log: (line) => {
       logs.push(line);
     },
@@ -289,7 +293,11 @@ test('it gives a live name its https URL on the tailnet', async () => {
 
   await ctx.client.imps.create({ name: 'box' });
 
-  const names = createTailnetNames({ ...ctx.namesDeps, hostId: 'host-a' });
+  const names = createTailnetNames({
+    ...ctx.namesDeps,
+    hostId: 'host-a',
+    readSuffix: () => Promise.resolve('tail1234.ts.net'),
+  });
 
   await names.runSync();
 
@@ -749,7 +757,7 @@ test('it logs a removal that fails, and goes on with the pass', async () => {
 });
 
 test('it shows an imp’s service URL once its name is live', async () => {
-  const ctx = await setupTest({ isNamed: true });
+  const ctx = await setupTest({ tailnetNames: '1' });
 
   const oauthFile = ctx.config.tailnetNames?.oauthFile;
 
@@ -776,7 +784,7 @@ test('it shows an imp’s service URL once its name is live', async () => {
 });
 
 test('it shows no service URL before the name is live', async () => {
-  const ctx = await setupTest({ isNamed: true });
+  const ctx = await setupTest({ tailnetNames: '1' });
 
   await ctx.client.imps.create({ name: 'box' });
 

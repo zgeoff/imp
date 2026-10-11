@@ -8,6 +8,7 @@ import { invariant } from '@imp/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import { buildStubRepeat } from '../../mcp/src/test-utils/build-stub-repeat';
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
 import type { ImpdDeps } from './create-impd';
@@ -17,6 +18,8 @@ import { openDatabase } from './db/open-database';
 import { HOST_ADD_WARNING, HOST_BUILD_WARNING } from './images/image-service';
 import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockNewImage } from './test-utils/build-mock-new-image';
+import { buildMockNewImp } from './test-utils/build-mock-new-imp';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
@@ -167,12 +170,10 @@ test('it creates a running imp through the API it serves', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
@@ -184,12 +185,10 @@ test('it adopts a running VM through the new runner when it boots again', async 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -303,22 +302,15 @@ test('it removes a system drive that no imp uses when it boots', async () => {
 test('it removes a builder that a stopped impd left when it boots', async () => {
   const ctx = await setupTest();
 
-  const image = await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  const image = await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
-  await createImp(ctx.db, {
-    name: 'imp-build-left',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 0,
-    ip: '10.66.0.2',
-    kind: 'builder',
-  });
+  await createImp(
+    ctx.db,
+    buildMockNewImp({ name: 'imp-build-left', imageId: image.id, kind: 'builder' }),
+  );
 
   const restarted = await createImpd(
     { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
@@ -385,12 +377,10 @@ test('it ends a lease once its clock passes the lease end', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 30 });
@@ -412,12 +402,10 @@ test('it sets a lease end from the wall clock when no clock is given', async () 
 
   await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -451,9 +439,16 @@ test('it sets a lease end from the wall clock when no clock is given', async () 
 test('it sends a streamed build its progress at the keepalive gap it is given', async () => {
   const ctx = await setupTest();
 
+  const repeat = buildStubRepeat();
+
   const quick = await createImpd(
     { ...ctx.config, egressDnsPort: findFreePorts(1).take() },
-    { ...ctx.deps, vms: ctx.vmm.startGeneration(), keepaliveMs: 20 },
+    {
+      ...ctx.deps,
+      vms: ctx.vmm.startGeneration(),
+      keepaliveMs: 20,
+      keepaliveRepeat: repeat.repeat,
+    },
   );
 
   ctx.stack.defer(() => quick.broker.stop());
@@ -494,18 +489,30 @@ test('it sends a streamed build its progress at the keepalive gap it is given', 
     new Request('http://impd.test/images/build?name=web', init),
   );
 
-  const lines: string[] = [];
-  const body: AsyncIterable<Uint8Array> = response.body ?? new ReadableStream<Uint8Array>();
+  const body: ReadableStream<Uint8Array> | null = response.body;
 
-  for await (const chunk of body) {
-    lines.push(...new TextDecoder().decode(chunk).split('\n').filter(Boolean));
+  invariant(body);
 
-    if (lines.length >= 4) {
-      break;
-    }
-  }
+  const reader = body.getReader();
 
-  expect(lines.slice(0, 4).map((line) => JSON.parse(line) as unknown)).toStrictEqual([
+  onTestFinished(() => reader.cancel());
+
+  // three gaps of 20 ms pass; a gap of any other length moves nothing
+  repeat.tick(20);
+  repeat.tick(20);
+  repeat.tick(20);
+
+  // each progress event is one chunk of the stream
+  const first = await reader.read();
+  const second = await reader.read();
+  const third = await reader.read();
+  const fourth = await reader.read();
+
+  const events = [first, second, third, fourth].map(
+    (chunk) => JSON.parse(new TextDecoder().decode(chunk.value)) as unknown,
+  );
+
+  expect(events).toStrictEqual([
     { type: 'progress', phase: 'upload', elapsedMs: 0 },
     { type: 'progress', phase: 'upload', elapsedMs: 0 },
     { type: 'progress', phase: 'upload', elapsedMs: 0 },

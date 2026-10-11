@@ -229,7 +229,16 @@ test('it records the copy in the API audit log', async () => {
     return copies;
   });
 
-  expect(audit).toMatchObject([{ actor: 'token', outcome: 'ok' }]);
+  expect(audit).toStrictEqual([
+    {
+      at: new Date(Date.UTC(2026, 0, 2, 3, 4, 5)),
+      procedure: 'system.copyDatabase',
+      actor: 'token',
+      actorName: 'root',
+      outcome: 'ok',
+      durationMs: 0,
+    },
+  ]);
 });
 
 test('it names a copy without a name for the time it was taken', async () => {

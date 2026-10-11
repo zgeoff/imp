@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
-import type { ResumeFrom } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
@@ -12,6 +11,7 @@ import type { ExecStream } from '../agent-client/exec-stream';
 import { buildMockAgentSession } from '../test-utils/build-mock-agent-session';
 import { buildMockSessionOutput } from '../test-utils/build-mock-session-output';
 import { buildStubGenerationLogGate } from '../test-utils/build-stub-generation-log-gate';
+import { buildStubTapOpener } from '../test-utils/build-stub-tap-opener';
 import { buildStubTapStream } from '../test-utils/build-stub-tap-stream';
 import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { createGenerationLog, readGenerationMeta } from './generation-log';
@@ -27,8 +27,8 @@ async function setupTest() {
 
   stack.defer(() => rm(root, { recursive: true, force: true }));
 
-  const calls: { session: string; resumeFrom: ResumeFrom | undefined }[] = [];
-  const answers: (() => Promise<ExecStream>)[] = [];
+  // the agent's tap: each call takes the next answer the test queued
+  const taps = buildStubTapOpener();
   const looks = { done: 0 };
 
   return {
@@ -36,18 +36,10 @@ async function setupTest() {
     root,
     sessionLogsDir: join(root, 'session-logs'),
     timers: buildStubTimers(),
-    calls,
-    answers,
+    calls: taps.calls,
+    answers: taps.answers,
     looks,
-
-    // the agent's tap: each call takes the next answer the test queued
-    openTap: (_vsockPath: string, session: string, resumeFrom?: ResumeFrom) => {
-      calls.push({ session, resumeFrom });
-
-      const answer = answers.shift() ?? (() => Promise.reject(new Error('no tap queued')));
-
-      return answer();
-    },
+    openTap: taps.openTap,
     onLookDone: () => {
       looks.done += 1;
     },

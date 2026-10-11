@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpEvent } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { loadConfig } from './config';
@@ -11,21 +13,16 @@ import { createImpd } from './create-impd';
 import { createImage } from './db/images';
 import { listLeases, writeLease } from './db/leases';
 import { openDatabase } from './db/open-database';
-import { readPresentedLeases } from './imps/imp-presenter';
 import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildQueryGate } from './test-utils/build-query-gate';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 
-interface SetupOptions {
-  // impd's environment past what every test boots with
-  readonly env?: Readonly<Record<string, string>>;
-}
-
 // impd's real app on stub VMs, on a clock the test steps, with every event
 // it emits and a root client that reaches the app in process
-async function setupTest(options: SetupOptions = {}) {
+async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -45,7 +42,7 @@ async function setupTest(options: SetupOptions = {}) {
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-    ...options.env,
+    ...readImpEnv(),
   });
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
@@ -62,8 +59,11 @@ async function setupTest(options: SetupOptions = {}) {
   // each unexpected failure behind an RPC, which impd logs to stderr
   const rpcFailures: unknown[] = [];
 
+  // holds impd's next read of the leases once a test arms it
+  const leaseReads = buildQueryGate('imp_leases');
+
   const impd = await createImpd(config, {
-    db,
+    db: db.withPlugin(leaseReads.plugin),
 
     // the bearer the root client sends
     rootToken: 'root-token',
@@ -165,6 +165,7 @@ async function setupTest(options: SetupOptions = {}) {
     clock,
     events,
     rpcFailures,
+    leaseReads,
     sendToImpd,
     client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendToImpd }),
   };
@@ -778,9 +779,10 @@ test('it sleeps a leased imp in the shutdown pass and keeps its lease', async ()
 
 test('it names only the protected imps the caller may read in a RAM refusal', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  const ctx = await setupTest({
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
-  });
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.sleep({ name: 'dev-a' });
@@ -816,9 +818,10 @@ test('it names only the protected imps the caller may read in a RAM refusal', as
 
 test('it emits the governor’s refusal with every protected imp counted', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  const ctx = await setupTest({
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
-  });
+  updateEnv('IMP_RAM_BUDGET_MIB', '800');
+  updateEnv('IMP_DEFAULT_MEMORY_MIB', '512');
+
+  const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev-a' });
   await ctx.client.imps.sleep({ name: 'dev-a' });
@@ -1007,13 +1010,24 @@ test('it emits held on hold 0 even when it releases nothing', async () => {
   expect(held).toMatchObject([{ ev: 'ImpChanged', reason: 'held' }]);
 });
 
-test('it names an imp’s lease owners from the presenter’s one read', async () => {
+// a second read would see the lease acquired while the first one is held
+test('it names an imp’s lease owners as of the one read that shows the imp', async () => {
   const ctx = await setupTest();
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
 
-  const presented = await ctx.impd.imps.getImp('dev');
+  ctx.leaseReads.arm();
 
-  expect(readPresentedLeases(presented)?.map((lease) => lease.label)).toStrictEqual(['job']);
+  const getting = ctx.client.imps.get({ name: 'dev' });
+
+  await ctx.leaseReads.reached;
+
+  await ctx.client.leases.acquire({ name: 'dev', label: 'late', ttlSeconds: 60 });
+
+  ctx.leaseReads.release();
+
+  const imp = await getting;
+
+  expect(imp.leases?.leases.map((lease) => lease.owner.label)).toStrictEqual(['job']);
 });

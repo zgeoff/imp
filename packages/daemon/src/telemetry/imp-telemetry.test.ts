@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { EVENT_VERSION } from '@imp/api';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
 import { invariant } from '@imp/test-utils/invariant';
@@ -18,6 +18,8 @@ test('it records imp.lifecycle.transitions per reason', async () => {
     readStateCounts: () => Promise.resolve(new Map()),
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
+
+  onTestFinished(stop);
 
   bus.publish({
     v: EVENT_VERSION,
@@ -66,6 +68,8 @@ test('it records imp.lifecycle.duration per timed reason', async () => {
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
 
+  onTestFinished(stop);
+
   bus.publish({
     v: EVENT_VERSION,
     at: new Date(),
@@ -113,6 +117,8 @@ test('it records imp.governor.decisions per decision', async () => {
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
 
+  onTestFinished(stop);
+
   bus.publish(buildMockGovernorDecision({ decision: 'refused' }));
   bus.publish(buildMockGovernorDecision({ decision: 'admitted' }));
   bus.publish(buildMockGovernorDecision({ decision: 'refused' }));
@@ -135,6 +141,8 @@ test('it records a span per timed transition, with each step a child in turn', (
     readStateCounts: () => Promise.resolve(new Map()),
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
+
+  onTestFinished(stop);
 
   bus.publish({
     v: EVENT_VERSION,
@@ -191,6 +199,8 @@ test('it puts the trigger and the cold boot reason on the span', () => {
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
 
+  onTestFinished(stop);
+
   bus.publish({
     v: EVENT_VERSION,
     at: new Date(),
@@ -218,6 +228,8 @@ test('it records no span for a transition without a duration', () => {
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
 
+  onTestFinished(stop);
+
   bus.publish({
     v: EVENT_VERSION,
     at: new Date(),
@@ -240,9 +252,9 @@ test('it reads the imps by state into imp.imps', async () => {
     readRam: () => Promise.resolve({ usedMib: 600, budgetMib: 4096 }),
   });
 
-  const points = await recorded.readPoints('imp.imps');
+  onTestFinished(stop);
 
-  stop();
+  const points = await recorded.readPoints('imp.imps');
 
   expect(points).toStrictEqual([
     { attributes: { state: 'creating' }, value: 0 },
@@ -262,9 +274,9 @@ test('it reads the RAM in use into imp.ram.used', async () => {
     readRam: () => Promise.resolve({ usedMib: 600, budgetMib: 4096 }),
   });
 
-  const points = await recorded.readPoints('imp.ram.used');
+  onTestFinished(stop);
 
-  stop();
+  const points = await recorded.readPoints('imp.ram.used');
 
   expect(points).toStrictEqual([{ attributes: {}, value: 600 }]);
 });
@@ -278,9 +290,9 @@ test('it reads the RAM budget into imp.ram.budget', async () => {
     readRam: () => Promise.resolve({ usedMib: 600, budgetMib: 4096 }),
   });
 
-  const points = await recorded.readPoints('imp.ram.budget');
+  onTestFinished(stop);
 
-  stop();
+  const points = await recorded.readPoints('imp.ram.budget');
 
   expect(points).toStrictEqual([{ attributes: {}, value: 4096 }]);
 });
@@ -295,9 +307,9 @@ test('it reads the disk the imps take on their own into imp.disk.used', async ()
     readDiskUsedBytes: () => 3_221_225_472,
   });
 
-  const points = await recorded.readPoints('imp.disk.used');
+  onTestFinished(stop);
 
-  stop();
+  const points = await recorded.readPoints('imp.disk.used');
 
   expect(points).toStrictEqual([{ attributes: {}, value: 3_221_225_472 }]);
 });
@@ -311,6 +323,7 @@ test('it reads no gauge once stopped', async () => {
     readRam: () => Promise.resolve({ usedMib: 600, budgetMib: 4096 }),
   });
 
+  onTestFinished(stop);
   stop();
 
   const points = await recorded.readPoints('imp.imps');
@@ -332,6 +345,8 @@ test('it feeds each sampler pass to the CPU, network and awake instruments', asy
       return () => {};
     },
   });
+
+  onTestFinished(stop);
 
   const [listener] = listeners;
 
@@ -362,8 +377,6 @@ test('it feeds each sampler pass to the CPU, network and awake instruments', asy
   const network = await recorded.readPoints('imp.network.io');
   const awake = await recorded.readPoints('imp.awake.time');
 
-  stop();
-
   expect(usage).toStrictEqual([{ attributes: {}, value: 2 }]);
 
   expect(utilization).toStrictEqual([
@@ -388,6 +401,8 @@ test('it stays inert without a registered meter provider', () => {
     readStateCounts: () => Promise.resolve(new Map()),
     readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
   });
+
+  onTestFinished(stop);
 
   expect(() => {
     bus.publish({

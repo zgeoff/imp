@@ -3,10 +3,12 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { readImpEnv } from '@imp/test-utils/read-imp-env';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import { buildApiListenOptions } from '../api-listen-options';
-import type { TailnetPeer } from '../auth/tailnet-identity';
+import { runWhois } from '../auth/tailnet-identity';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
@@ -19,16 +21,14 @@ import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../st
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
+import { buildStubTailscale } from '../test-utils/build-stub-tailscale';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
 
 interface SetupOptions {
-  // impd's environment past what every test boots with
-  readonly env?: Readonly<Record<string, string>>;
-
-  // `tailscale whois`; nobody on the tailnet by default
-  readonly whois?: (address: string) => Promise<TailnetPeer | null>;
+  // the `tailscale` CLI that impd's whois runs; its peers are the test's
+  readonly tailscale: Pick<ReturnType<typeof buildStubTailscale>, 'run'>;
 
   // the API's idle timeout in seconds; main.ts's by default
   readonly idleTimeoutS?: number;
@@ -36,7 +36,7 @@ interface SetupOptions {
 
 // impd's real app on a loopback port, as a remote agent reaches /mcp, a root
 // client for the scenario, and `stack`, whose releases run before impd stops
-async function setupTest(options: SetupOptions = {}) {
+async function setupTest(options: SetupOptions) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -56,7 +56,7 @@ async function setupTest(options: SetupOptions = {}) {
     IMP_JAILER: 'false',
     IMP_BOOT_TEMPLATES: 'false',
     IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-    ...options.env,
+    ...readImpEnv(),
   });
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
@@ -104,7 +104,7 @@ async function setupTest(options: SetupOptions = {}) {
     resolveIpv6: () => Promise.resolve(null),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
-    whois: options.whois ?? (() => Promise.resolve(null)),
+    whois: (address) => runWhois(address, options.tailscale.run),
     cgroups: buildStubCpuCgroups().cgroups,
     vms: vmm.startGeneration(),
     taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
@@ -175,7 +175,7 @@ async function setupTest(options: SetupOptions = {}) {
 }
 
 test('it names a nameless create under the one prefix its token may touch', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const made = await ctx.client.tokens.create({
     name: 'agent',
@@ -230,7 +230,7 @@ test('it names a nameless create under the one prefix its token may touch', asyn
 });
 
 test('it audits a tool call as the token that made it', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const made = await ctx.client.tokens.create({
     name: 'agent',
@@ -279,7 +279,7 @@ test('it audits a tool call as the token that made it', async () => {
 });
 
 test('it runs a command in an imp its token may touch', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const guest = buildStubExecGuest();
 
@@ -345,7 +345,7 @@ test('it runs a command in an imp its token may touch', async () => {
 });
 
 test('it refuses a create outside the patterns of its token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const made = await ctx.client.tokens.create({
     name: 'agent',
@@ -400,7 +400,7 @@ test('it refuses a create outside the patterns of its token', async () => {
 });
 
 test('it lists only the read tools to a read token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'reader', scope: 'read' });
 
   const opened = await fetch(`${ctx.url}/mcp`, {
@@ -449,7 +449,7 @@ test('it lists only the read tools to a read token', async () => {
 });
 
 test('it lists the imps to a read token', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -503,7 +503,7 @@ test.each([
   ['imp_write_file', { name: 'box', path: '/x', content: 'x' }],
   ['imp_destroy', { name: 'box' }],
 ])('it refuses %s to a read token before it reaches the guest', async (tool, args) => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const guest = buildStubExecGuest();
 
@@ -570,7 +570,7 @@ test.each([
 });
 
 test('it refuses a fork to a token that may grant secrets', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'agent-a' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126' });
@@ -632,7 +632,7 @@ test('it refuses a fork to a token that may grant secrets', async () => {
 });
 
 test('it asks a token with two patterns to name the imp it creates', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const made = await ctx.client.tokens.create({
     name: 'two',
@@ -693,7 +693,7 @@ test('it asks a token with two patterns to name the imp it creates', async () =>
 });
 
 test('it refuses a session to a caller other than the one that opened it', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const first = await ctx.client.tokens.create({ name: 'first', scope: 'read' });
   const second = await ctx.client.tokens.create({ name: 'second', scope: 'read' });
 
@@ -731,7 +731,7 @@ test('it refuses a session to a caller other than the one that opened it', async
 });
 
 test('it ends the streamed call and running command of a token that is removed', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const guest = buildStubExecGuest();
 
@@ -812,7 +812,7 @@ test('it ends the streamed call and running command of a token that is removed',
 });
 
 test('it refuses the session of a removed token with 401', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
   const made = await ctx.client.tokens.create({ name: 'agent', scope: 'exec' });
 
   const opened = await fetch(`${ctx.url}/mcp`, {
@@ -851,11 +851,13 @@ test('it refuses the session of a removed token with 401', async () => {
 });
 
 test('it refuses a caller with no token and no handed-over address with 401', async () => {
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
   const ctx = await setupTest({
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
+    tailscale: buildStubTailscale(),
   });
 
   const response = await fetch(`${ctx.url}/mcp`, {
@@ -873,22 +875,19 @@ test('it refuses a caller with no token and no handed-over address with 401', as
 });
 
 test('it serves a tailnet identity the wake proxy hands over the imps its rule allows', async () => {
-  const ctx = await setupTest({
-    // alice's laptop may exec on dev-* imps
-    env: {
-      IMP_TAILNET_IDENTITIES:
-        '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
-    },
-    whois: (address) => {
-      const peers = new Map([
-        [
-          '100.101.102.103',
-          { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null },
-        ],
-      ]);
+  // alice's laptop is the one tailnet peer
+  const tailscale = buildStubTailscale();
 
-      return Promise.resolve(peers.get(address) ?? null);
-    },
+  tailscale.registerPeer('100.101.102.103', { node: 'laptop', login: 'alice@example.com' });
+
+  // alice's laptop may exec on dev-* imps
+  updateEnv(
+    'IMP_TAILNET_IDENTITIES',
+    '[{"match":"user:alice@example.com","scope":"exec","imps":["dev-*"]}]',
+  );
+
+  const ctx = await setupTest({
+    tailscale,
   });
 
   await ctx.client.imps.create({ name: 'dev-a' });
@@ -954,7 +953,7 @@ test.each([
   ],
   ['its own host as the Origin, over another scheme', { origin: 'https://impd.example' }, 400],
 ])('it answers a page that sends %s with %d', async (_label, headers, status) => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -972,7 +971,7 @@ test.each([
 });
 
 test('it answers a tool call through the wake proxy’s API route', async () => {
-  const ctx = await setupTest();
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -1045,7 +1044,7 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
 });
 
 test('it answers a JSON tool call that outlasts the idle timeout through the wake proxy', async () => {
-  const ctx = await setupTest({ idleTimeoutS: 1 });
+  const ctx = await setupTest({ tailscale: buildStubTailscale(), idleTimeoutS: 1 });
 
   const guest = buildStubExecGuest();
 
@@ -1133,7 +1132,7 @@ test('it answers a JSON tool call that outlasts the idle timeout through the wak
 }, 20_000);
 
 test('it keeps a call answered as server-sent events open through the wake proxy past the idle timeout that ends an unprotected stream', async () => {
-  const ctx = await setupTest({ idleTimeoutS: 1 });
+  const ctx = await setupTest({ tailscale: buildStubTailscale(), idleTimeoutS: 1 });
 
   // the guest's `wait` runs until the test lets it end
   const done = Promise.withResolvers<void>();

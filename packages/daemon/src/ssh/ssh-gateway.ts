@@ -52,6 +52,9 @@ export interface SshGatewayDeps {
 
   // the defaults outside tests
   readonly limits?: Partial<SshGatewayLimits>;
+
+  // the auth timeout's timer, returning its cancel; setTimeout by default
+  readonly startTimer?: (fire: () => void, ms: number) => () => void;
 }
 
 export interface SshGateway {
@@ -64,7 +67,17 @@ export interface SshGateway {
 // a connection that has not logged in yet
 interface PendingSocket {
   readonly socket: Socket;
-  readonly timer: Timer;
+
+  // cancels the auth timeout
+  readonly cancelTimer: () => void;
+}
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
 }
 
 // a full login with its imp and who it runs as, a key query to accept, or
@@ -88,6 +101,7 @@ export async function startSshGateway(
   host: string,
 ): Promise<SshGateway> {
   const limits: SshGatewayLimits = { ...DEFAULT_LIMITS, ...deps.limits };
+  const startTimer = deps.startTimer ?? startRealTimer;
 
   const pending = new Map<string, PendingSocket>();
   const clients = new Set<Connection>();
@@ -121,8 +135,7 @@ export async function startSshGateway(
       });
 
       handleClient(client, info, entry.socket, deps, limits.maxAuthFailures, () => {
-        clearTimeout(entry.timer);
-
+        entry.cancelTimer();
         pending.delete(key);
       });
     },
@@ -137,14 +150,14 @@ export async function startSshGateway(
 
     const key = buildRemoteKey(socket.remoteAddress ?? '', socket.remotePort ?? 0);
 
-    const timer = setTimeout(() => {
+    const cancelTimer = startTimer(() => {
       socket.destroy();
     }, limits.authTimeoutMs);
 
-    pending.set(key, { socket, timer });
+    pending.set(key, { socket, cancelTimer });
 
     socket.once('close', () => {
-      clearTimeout(timer);
+      cancelTimer();
 
       pending.delete(key);
     });

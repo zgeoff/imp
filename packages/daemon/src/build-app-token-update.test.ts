@@ -17,6 +17,7 @@ import { findSecret } from './db/secrets';
 import { listTokenRecords } from './db/tokens';
 import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
@@ -144,7 +145,7 @@ async function setupTest() {
   // the default image, which every imps.create boots when it names none
   await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  await createImage(db, buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }));
 
   const sendToImpd = (request: Request) => impd.api.app.handle(request);
 
