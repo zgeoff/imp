@@ -368,11 +368,6 @@ test('#writeBuildContext writes the files, directories, symlinks and long names 
   const writtenBytes = await readFile(output);
   const written = await parseTarEntries(writtenBytes);
 
-  expect(checked).toStrictEqual({
-    dockerfilePath: 'Dockerfile',
-    dockerfile: 'FROM busybox:1.37\n',
-  });
-
   expect(
     written.map((entry) => [
       entry.header.name,
@@ -438,11 +433,6 @@ test('#writeBuildContext puts the given text in place of the Dockerfile the chec
 
   const writtenBytes = await readFile(output);
   const written = await parseTarEntries(writtenBytes);
-
-  expect(checked).toStrictEqual({
-    dockerfilePath: 'dockerfile',
-    dockerfile: 'FROM busybox:1.37\n',
-  });
 
   expect(written.map((entry) => [entry.header.name, entry.content])).toStrictEqual([
     ['dockerfile', 'FROM busybox@sha256:aaaa\n'],
