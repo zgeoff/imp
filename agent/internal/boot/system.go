@@ -118,7 +118,7 @@ func Run() error {
 	}
 
 	// Each non-tty exec gets a cgroup leaf, so a stop kills its escapees too
-	// (docs/architecture/agent.md#exec-cgroups).
+	// (docs/architecture/guest/agent.md#execs-and-services).
 	execCgroups, err := cgroup.NewTree(inner.ExecCgroupDir)
 	if err != nil {
 		log.Printf("boot: exec cgroups: %v; a stop reaches only the process group", err)

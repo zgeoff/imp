@@ -2,7 +2,7 @@
 # imp host container: impd, Firecracker and tailscaled; the same image runs
 # imp-docker-proxy, the only Docker socket imp-host sees.
 # Run with the privileges of deploy/imp-host.args.json, not --privileged
-# (docs/architecture/host-contract.md#privileges), and its own network namespace.
+# (docs/architecture/host.md#privileges), and its own network namespace.
 #
 # Build from the repo root (.dockerignore keeps outputs and data out):
 #
@@ -18,7 +18,7 @@
 FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS bun
 
 # --- ksm-exec: starts Firecracker so KSM may merge its guest memory, when
-# IMP_KSM is on (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages) ---
+# IMP_KSM is on (docs/architecture/lifecycle/ram-governor.md#ksm) ---
 FROM golang:1.26.8-trixie@sha256:eae2aaa6add2936cbf350dd0d2628b363461542f0c4b3c0b558957e0f2997379 AS ksm-exec
 WORKDIR /src/agent
 COPY agent/go.mod agent/go.sum ./
@@ -34,7 +34,7 @@ ARG FIRECRACKER_VERSION=v1.17.0
 # sha256 of firecracker-${FIRECRACKER_VERSION}-x86_64.tgz, as in the release's .sha256.txt
 ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
 ARG DEBIAN_FRONTEND=noninteractive
-# off-host backups (docs/architecture/backups.md); sha256 of
+# off-host backups (docs/architecture/storage/backups.md); sha256 of
 # restic_${RESTIC_VERSION}_linux_amd64.bz2, as in the release's SHA256SUMS
 ARG RESTIC_VERSION=0.19.1
 ARG RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
@@ -50,7 +50,7 @@ RUN apt-get update \
 # Ubuntu 26.04 hosts ship; trixie itself has 2.3. Backports drop a version
 # once a newer one lands, so it comes from a dated snapshot, pinned. Only the
 # userland: the module comes from the host kernel through /dev/zfs, and impd
-# refuses a different major version (docs/architecture/storage.md#versions).
+# refuses a different major version (docs/architecture/storage/storage.md#zfs).
 # check-valid-until=no: a snapshot's Release file expires after a week.
 ARG ZFS_SNAPSHOT=20261001T000000Z
 ARG ZFS_VERSION=2.4.4-1~bpo13+1

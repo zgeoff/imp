@@ -1,6 +1,6 @@
 // Package outer runs an exec in the agent's own world, outside the inner
 // container: `imp exec --agent`, to see why the container is down or what
-// is left on /user (docs/architecture/agent.md#outer-exec). It runs as
+// is left on /user (docs/architecture/guest/agent.md#execs-and-services). It runs as
 // root, with the busybox on the system drive.
 package outer
 

@@ -13,10 +13,10 @@ imp runs on one Linux machine, in one host container, in one of two ways:
 
 - `/dev/kvm`: bare metal, or a VM with nested virtualization (WSL2 works).
 - Docker. The host container runs as root with the capabilities in
-  [privileges](../architecture/host-contract.md#privileges). It reaches Docker through
-  `imp-docker-proxy`, a second container, never the host's socket
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). That closes the Docker
-  socket path only: `SYS_ADMIN` still lets root out of the container.
+  [privileges](../architecture/host.md#privileges). It reaches Docker through `imp-docker-proxy`, a
+  second container, never the host's socket
+  ([the Docker socket](../architecture/host.md#the-docker-socket)). That closes the Docker socket
+  path only: `SYS_ADMIN` still lets root out of the container.
 - A host kernel with the iptables `rpfilter` and `addrtype` matches (`xt_rpfilter`, `xt_addrtype`).
   The host container loads its rules into its own network namespace, and the guard against spoofed
   guest addresses and the broker's port rule need both. Most distribution kernels and WSL2 have
@@ -154,8 +154,7 @@ The phases run in order:
   refuses in a container and on a kernel older than 6.10. `--no-ksm` removes the rule, writes 2 to
   `/sys/kernel/mm/ksm/run`, which stops ksmd and unmerges every merged page, and sets `IMP_KSM=0`. A
   running imp keeps its merge flag until it restarts, and impd logs each such VM it adopts. Off by
-  default: read the caution in
-  [KSM](../architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages) first.
+  default: read the caution in [KSM](../architecture/lifecycle/ram-governor.md#ksm) first.
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
   `imp-firewall.service`, after `nft -c` accepts the ruleset. It refuses while `nftables.service` is
   enabled. With `--host-firewall none`, it does none of this ([Firewall](#firewall)).
@@ -166,7 +165,7 @@ The phases run in order:
   the env file (or loads `--image-archive`), and refuses an image whose `imp.host-contract` label is
   not `socket-proxy`. It starts the proxy, then imp-host. The proxy is the only Docker socket
   imp-host sees, and closes that path only: `SYS_ADMIN` still lets root out of the container
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The unit has
+  ([the Docker socket](../architecture/host.md#the-docker-socket)). The unit has
   `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
   orders it after `zfs.target`.
 - **tailscale:** With a key in the env file, waits for the node to be `Running`, then blanks the key
@@ -201,7 +200,7 @@ one. ZFS needs a device; the script makes no pool on a file.
 
 ### ZFS
 
-`--storage zfs` puts imp on a ZFS pool instead ([storage](../architecture/storage.md#zfs)):
+`--storage zfs` puts imp on a ZFS pool instead ([storage](../architecture/storage/storage.md#zfs)):
 
 ```sh
 bash bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1   # pool tank, dataset tank/imp
@@ -218,7 +217,8 @@ bash bootstrap.sh --yes --storage zfs --zfs-pool fast              # an existing
   backends, since the imps would stay behind on the old one.
 - ZFS takes no `--loop-file`.
 - The host image ships the 2.4 tools, which match Ubuntu 26.04's module. On Ubuntu 24.04 (module
-  2.2) impd starts and warns about the minor skew ([versions](../architecture/storage.md#versions)).
+  2.2) impd starts and warns about the minor skew
+  ([versions](../architecture/storage/storage.md#zfs)).
 
 ### RAM budget
 
@@ -277,13 +277,13 @@ host rules and leaves `ufw` and `firewalld` alone, and the env file records
 `IMP_HOST_FIREWALL=none`, so later runs keep it. On a host that an earlier run gave the `imp_host`
 table, the flag removes the table and `imp-firewall.service`. Without the flag, a table that is
 still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. imp
-needs no inbound port either way ([host contract](../architecture/host-contract.md#firewall)).
+needs no inbound port either way ([host contract](../architecture/host.md#the-host-firewall)).
 
 ### IPv6
 
 Imps get IPv6 only when the `imp-host` container has an IPv6 default route
-([IPv6](../architecture/networking.md#ipv6)). Docker's default bridge is IPv4 only, so with IPv6 on,
-`imp-host` runs on its own Docker network instead:
+([IPv6](../architecture/network/networking.md#ipv6)). Docker's default bridge is IPv4 only, so with
+IPv6 on, `imp-host` runs on its own Docker network instead:
 
 ```sh
 docker network create --ipv6 --subnet <IMP_HOST_SUBNET6> \
@@ -310,7 +310,7 @@ admit it; on NixOS the module does ([IPv6 on NixOS](./nixos.md#ipv6)).
   only creates the network when it is missing, so after a manual change run the script.
 - **Off again:** `--ipv6 off` stops `imp-host`, removes the network and the router advert file
   below, and `imp-host` comes back on the default bridge. Every imp that has an IPv6 prefix boots
-  cold at its next start ([a new prefix](../architecture/networking.md#a-new-prefix)). An env file
+  cold at its next start ([a new prefix](../architecture/network/networking.md#ipv6)). An env file
   that says off beside the network is drift: `--check` exits 2, and `--yes` refuses.
 
 **CAUTION:** Docker turns on `net.ipv6.conf.all.forwarding` for an IPv6 network. With forwarding on,
@@ -343,7 +343,7 @@ bridges to host services that imps must not reach, such as a k3s API or a databa
 address.
 
 A routed /64 instead of NAT66 is not automated: set `IMP_SUBNET6=<prefix>` and route the prefix to
-the container's address on `imp-host` ([IPv6](../architecture/networking.md#ipv6)).
+the container's address on `imp-host` ([IPv6](../architecture/network/networking.md#ipv6)).
 
 ### Test it
 
@@ -489,7 +489,7 @@ hand.
 
 Use one of the two, not both. Both run the container with the privileges of
 [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json)
-([privileges](../architecture/host-contract.md#privileges)) in a private cgroup namespace (for
+([privileges](../architecture/host.md#privileges)) in a private cgroup namespace (for
 [CPU limits](./cpu-limits.md)), the socket of `imp-docker-proxy` and `/var/lib/imp`, and give impd
 120 seconds to sleep every imp on stop. Both need the seccomp profile at
 `/etc/imp/imp-host.seccomp.json`:
@@ -501,7 +501,7 @@ install -D -m 0644 deploy/imp-host.seccomp.json /etc/imp/imp-host.seccomp.json
 - **systemd:** [`deploy/imp-host.service`](../../deploy/imp-host.service) runs `docker run` in the
   foreground, so systemd supervises it. It wants and starts after
   [`deploy/imp-docker-proxy.service`](../../deploy/imp-docker-proxy.service), the only Docker socket
-  imp-host sees ([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
+  imp-host sees ([the Docker socket](../architecture/host.md#the-docker-socket)).
 
   ```sh
   install -m 0644 deploy/imp-host.service deploy/imp-docker-proxy.service /etc/systemd/system/
@@ -522,7 +522,7 @@ install -D -m 0644 deploy/imp-host.seccomp.json /etc/imp/imp-host.seccomp.json
 
   Compose does not read the host's addresses into `IMP_HOST_ADDRESSES`, as the unit does at each
   start. With `public` imps, list the host's addresses and networks (`ip -o addr show scope global`)
-  in `IMP_EGRESS_DENY` in the env file ([public](../architecture/networking.md#public)).
+  in `IMP_EGRESS_DENY` in the env file ([public](../architecture/network/egress.md#public)).
 
   With `IMP_STORAGE_BACKEND=zfs`, add `-f deploy/compose.zfs.yaml` for `/dev/zfs`. On a host booted
   with `ipv6.disable=1`, delete the `net.ipv6` sysctls from the compose file: Docker refuses a

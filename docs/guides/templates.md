@@ -21,7 +21,7 @@ and egress settings of a new imp come from the create call, not from the source 
 ## Making a template
 
 impd copies the disk the same way as a checkpoint
-([storage](../architecture/storage.md#checkpoints-restores-and-forks)):
+([storage](../architecture/storage/storage.md#checkpoints-restores-and-forks)):
 
 - A running imp is frozen (`sync` and `FIFREEZE` in the guest) for the time of the clone, then
   thawed.
@@ -98,9 +98,9 @@ config).
 
 On ZFS the template's dataset is a clone of the source's disk, and the template's imps are clones of
 the template's `@base`. Each one can go in any order: the source, the template or its imps. The
-[reclaim](../architecture/storage.md#reclaim) promotes the next clone and frees the blocks once the
-last user is gone.
+[reclaim](../architecture/storage/storage.md#zfs) promotes the next clone and frees the blocks once
+the last user is gone.
 
-[Backups](../architecture/backups.md) carry every image, templates included. A restore brings back
-each imp's image before the imp. A restore of all imps also brings back every template, even one
-that no imp uses, because a template cannot be pulled again from a registry.
+[Backups](../architecture/storage/backups.md) carry every image, templates included. A restore
+brings back each imp's image before the imp. A restore of all imps also brings back every template,
+even one that no imp uses, because a template cannot be pulled again from a registry.

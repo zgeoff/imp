@@ -25,7 +25,7 @@ notices. Use `reboot` after a change to `host/`. Data stays in `.data/dev` acros
 After a crash (impd or the container killed without a signal), an imp with no live VM comes back
 `stopped` and boots cold on the next use. Its disk is intact; its memory is lost. Sleeping imps stay
 asleep. A VM that the dead impd left behind is adopted or killed, so no imp ends with two.
-[Sleep and wake](../architecture/sleep-and-wake.md#restarts) has the details.
+[Sleep and wake](../architecture/lifecycle/lifecycle.md#recovery-after-a-restart) has the details.
 
 ## Upgrade
 
@@ -68,11 +68,11 @@ bash upgrade.sh
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It installs the new image's seccomp profile in `/etc/imp/imp-host.seccomp.json` and, for the
    systemd unit, its `imp-host.service` and `imp-docker-proxy.service`, so a change to the
-   [privileges](../architecture/host-contract.md#privileges) or the
-   [Docker socket](../architecture/host-contract.md#the-docker-socket) reaches the server. Keep
-   local changes to a unit in a drop-in (`imp-host.service.d/`). The installed units drop the
-   release-please marker comments. A compose file is the operator's: upgrade.sh leaves it, and says
-   when it still runs `--privileged` or still gives imp-host the host's `docker.sock`. Then take the
+   [privileges](../architecture/host.md#privileges) or the
+   [Docker socket](../architecture/host.md#the-docker-socket) reaches the server. Keep local changes
+   to a unit in a drop-in (`imp-host.service.d/`). The installed units drop the release-please
+   marker comments. A compose file is the operator's: upgrade.sh leaves it, and says when it still
+   runs `--privileged` or still gives imp-host the host's `docker.sock`. Then take the
    `imp-docker-proxy` service and imp-host's volumes from this release's `deploy/compose.yaml`. The
    proxy closes the Docker socket path only: `SYS_ADMIN` still lets root out of the container.
 
@@ -95,8 +95,9 @@ bash upgrade.sh
    and lists the imps.
 
 Imps then wake on demand. Each sleeping imp either restores its memory or boots its disk cold. The
-disk is never touched. [Snapshot identity](../architecture/sleep-and-wake.md#snapshot-identity) has
-the full rule:
+disk is never touched.
+[Snapshot identity](../architecture/lifecycle/sleep-and-wake.md#snapshot-identity) has the full
+rule:
 
 - A new impd alone, or a new agent drive: memory restores. impd keeps the old drive while a snapshot
   needs it, and the woken imp runs its old agent until its next cold boot.
@@ -178,7 +179,7 @@ and the dashboard, and impd logs it. Set `IMP_WATCHDOG_ACTION=restart` to boot s
 ## Backups
 
 With `IMP_BACKUP_REPOSITORY` set, impd backs up every imp to a restic repository on a schedule
-([backups](../architecture/backups.md), [settings](./configuration.md#backups)).
+([backups](../architecture/storage/backups.md), [settings](./configuration.md#backups)).
 
 - `imp backup ls` shows the restore points and the last prune and check.
 - `impd: backup: CHECK FAILED` in the log, or `FAILED` in `imp backup ls`, means the repository may
@@ -190,7 +191,7 @@ With `IMP_BACKUP_REPOSITORY` set, impd backs up every imp to a restic repository
 ## Storage cleanup
 
 impd removes what a crash leaves at start and every hour
-([cleanup](../architecture/storage.md#cleanup)). `imp gc` runs the same sweep now.
+([cleanup](../architecture/storage/disk-space.md#the-sweep)). `imp gc` runs the same sweep now.
 
 - `imp gc --dry-run` lists what would go, and removes nothing.
 - A disk, image, checkpoint or memory snapshot that no row names is an orphan. impd keeps it, with
@@ -289,8 +290,7 @@ What the restored database means at start:
 - `scripts/dev.sh logs` follows impd. Every boot, sleep and wake logs a line with its time and a
   breakdown per step.
 - `docker logs imp-docker-proxy` (`<name>-docker-proxy` for a dev instance) shows each Docker call
-  the proxy refused, with the rule
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
+  the proxy refused, with the rule ([the Docker socket](../architecture/host.md#the-docker-socket)).
 - Each imp's serial console and Firecracker log go to `/var/lib/imp/imps/<id>/run/firecracker.log`
   in the container (`scripts/dev.sh shell`).
 - A service's output goes to `/var/log/imp/<name>.log` inside the imp. `imp logs <imp> <service>`
@@ -306,10 +306,10 @@ results. The development guide lists the other checks.
 ## A broken container
 
 User code runs in a container inside the guest
-([agent](../architecture/agent.md#the-inner-container)). When it is down, or its root was wiped,
-`imp exec` fails with `INNER_DOWN` or `EXEC_FAILED`. `imp exec --agent` runs a command as root in
-the agent's own world instead, with busybox, while the container is down too. It needs a token with
-host-wide `manage` scope.
+([agent](../architecture/guest/agent.md#the-inner-container)). When it is down, or its root was
+wiped, `imp exec` fails with `INNER_DOWN` or `EXEC_FAILED`. `imp exec --agent` runs a command as
+root in the agent's own world instead, with busybox, while the container is down too. It needs a
+token with host-wide `manage` scope.
 
 ```sh
 imp exec --agent box -- cat /sys/fs/cgroup/user/cgroup.events   # is anything left inside?

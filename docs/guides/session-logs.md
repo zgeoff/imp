@@ -3,8 +3,8 @@
 A session started with `log` keeps its output on the host. A client can then read output that the
 agent's ring no longer holds, and the output of a generation that has ended: after the session
 exited, after the imp stopped, and after a cold boot. The log uses the same offsets and `gap` rules
-as a [resume](../architecture/daemon.md#output-offsets). Nothing changes for a session started
-without `log`.
+as a [resume](../architecture/guest/sessions.md#generations-boots-and-offsets). Nothing changes for
+a session started without `log`.
 
 ```sh
 imp console dev --session build --log      # start a logged session (attaching changes nothing)
@@ -61,9 +61,9 @@ has `logs`, `readLog` and `deleteLog`.
 
 A log writes in segments of half its bound, and each new segment checks the host's free space
 against `IMP_DISK_RESERVE_GIB`, as every other write does
-([disk reserve](../architecture/storage.md#disk-sizes)). A segment the reserve refuses stops the log
-for good: `stopped: 'disk_full'`, and the session runs on unlogged. When an imp's logs pass
-`IMP_SESSION_LOG_IMP_MAX_MIB` with no ended log left to remove and every live log down to one
+([disk reserve](../architecture/storage/disk-space.md#disk-sizes)). A segment the reserve refuses
+stops the log for good: `stopped: 'disk_full'`, and the session runs on unlogged. When an imp's logs
+pass `IMP_SESSION_LOG_IMP_MAX_MIB` with no ended log left to remove and every live log down to one
 segment, its newest live log stops the same way: `stopped: 'imp_limit'`.
 
 A logged session's program waits for impd, as on a slow terminal, rather than lose bytes: the agent
@@ -72,7 +72,7 @@ time. Past that, as when impd is down, the session runs on and the log gets a ho
 s stall with no tap, the output runs on unheld until a tap attaches again.
 
 A host crash loses at most the last second of output, and the log never returns bytes that did not
-reach the disk ([daemon](../architecture/daemon.md#session-logs)).
+reach the disk ([daemon](../architecture/guest/sessions.md#session-logs)).
 
 ## What survives
 

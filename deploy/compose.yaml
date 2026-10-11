@@ -7,11 +7,11 @@
 #
 # /var/lib/imp on the host must be XFS with reflink (docs/guides/install.md),
 # or, with IMP_STORAGE_BACKEND=zfs, IMP_ZFS_ROOT a legacy-mounted dataset the
-# container mounts itself (docs/architecture/storage.md#zfs). The container
+# container mounts itself (docs/architecture/storage/storage.md#zfs). The container
 # refuses to start otherwise.
 #
 # imp-host reaches Docker through imp-docker-proxy, never the host's socket
-# (docs/architecture/host-contract.md#the-docker-socket). That closes the
+# (docs/architecture/host.md#the-docker-socket). That closes the
 # Docker socket path only: imp-host keeps SYS_ADMIN, which still lets root
 # out of the container. The proxy joins the group of /var/run/docker.sock:
 # set IMP_DOCKER_GID to `stat -c %g /var/run/docker.sock` in the shell or a
@@ -65,9 +65,9 @@ services:
     image: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:0.40.4} # x-release-please-version
     container_name: imp-host
     # restic's backup locks name the host: a fixed one lets impd drop a lock
-    # its own crashed run left (docs/architecture/backups.md)
+    # its own crashed run left (docs/architecture/storage/backups.md)
     hostname: imp-host
-    # Not privileged: docs/architecture/host-contract.md#privileges. The
+    # Not privileged: docs/architecture/host.md#privileges. The
     # seccomp profile is deploy/imp-host.seccomp.json. With
     # IMP_STORAGE_BACKEND=zfs, add deploy/compose.zfs.yaml for /dev/zfs; on a
     # host booted with ipv6.disable=1, drop the net.ipv6 sysctls.
@@ -107,7 +107,7 @@ services:
         required: true
     # Unlike the systemd unit, compose does not read this host's addresses
     # into IMP_HOST_ADDRESSES: list them in IMP_EGRESS_DENY in the env file,
-    # or public imps can reach them (docs/architecture/networking.md#public).
+    # or public imps can reach them (docs/architecture/network/egress.md#public).
     # impd pulls and builds imp images through the proxy's socket
     environment:
       DOCKER_HOST: unix:///run/imp-docker/docker.sock
@@ -117,7 +117,7 @@ services:
     volumes:
       - ${IMP_HOST_DATA:-/var/lib/imp}:/var/lib/imp
       - imp-docker:/run/imp-docker:ro
-      # the restic password file for backups (docs/architecture/backups.md)
+      # the restic password file for backups (docs/architecture/storage/backups.md)
       - /etc/imp:/etc/imp:ro
     # Local only: the tailnet reaches impd and every imp through the
     # container's own tailscaled, so nothing else is published.

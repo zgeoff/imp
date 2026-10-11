@@ -1,6 +1,6 @@
 # The imp host on NixOS: what deploy/bootstrap.sh does on Ubuntu and Debian,
 # as a module. imp's flake exports it as nixosModules.imp. The host contract
-# is in docs/architecture/host-contract.md; the guide is docs/guides/nixos.md.
+# is in docs/architecture/host.md; the guide is docs/guides/nixos.md.
 #
 # The module takes pkgs from the system that imports it and never imports
 # nixpkgs itself; the flake's own pin is for its checks.
@@ -436,7 +436,7 @@ in
       example = "/var/lib/imp-host/secrets/backup-password";
       description = ''
         The restic repository password for backups
-        (docs/architecture/backups.md), outside the Nix store. A copy is
+        (docs/architecture/storage/backups.md), outside the Nix store. A copy is
         mounted read-only into the container at each start, and
         IMP_BACKUP_PASSWORD_FILE names it. A missing or empty file only
         warns, and backups stay off. IMP_BACKUP_REPOSITORY and the AWS_*
@@ -581,7 +581,7 @@ in
       ];
       description = ''
         IMP_EGRESS_DENY: IPv4 and IPv6 addresses and CIDRs no public imp
-        reaches (docs/architecture/networking.md#public). The module writes
+        reaches (docs/architecture/network/egress.md#public). The module writes
         this host's global addresses into IMP_HOST_ADDRESSES at each start;
         list what that misses. IMP_PUBLIC_IP is always in it.
       '';
@@ -771,7 +771,7 @@ in
 
     systemd.services.imp-docker-proxy = {
       description = "imp Docker socket proxy (the Docker API calls impd makes)";
-      documentation = [ "https://github.com/zgeoff/imp/blob/main/docs/architecture/host-contract.md" ];
+      documentation = [ "https://github.com/zgeoff/imp/blob/main/docs/architecture/host.md" ];
       wantedBy = [ "multi-user.target" ];
       requires = [
         "docker.service"

@@ -40,7 +40,7 @@ EnvironmentFile=-/run/imp-host/probed.env
 ExecStartPre=/bin/sh -c 'a=; [ -e /dev/zfs ] && a="$$a --device /dev/zfs"; [ -e /proc/sys/net/ipv6 ] && a="$$a --sysctl net.ipv6.conf.all.forwarding=1 --sysctl net.ipv6.conf.default.accept_ra=0 --sysctl net.ipv6.conf.default.accept_redirects=0 --sysctl net.ipv6.conf.default.disable_ipv6=0"; { echo "IMP_HOST_PROBED=$$a"; echo "IMP_HOST_ADDRESSES=$$(ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,)"; } >/run/imp-host/probed.env'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
-# --hostname: restic's backup locks name the host (docs/architecture/backups.md)
+# --hostname: restic's backup locks name the host (docs/architecture/storage/backups.md)
 # $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
 # public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps);
 # $IMP_HOST_NETWORK too: with IPv6, `--network imp-host`

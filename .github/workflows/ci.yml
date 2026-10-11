@@ -93,7 +93,7 @@ jobs:
       # its findings without failing the run.
       - name: Doc length and prose
         continue-on-error: true
-        run: bash .claude/skills/docs-writing/scripts/check-length.sh
+        run: bash .claude/skills/docs-writing/scripts/check-length.sh --package README.md
 
       - name: Typecheck
         run: bun run typecheck

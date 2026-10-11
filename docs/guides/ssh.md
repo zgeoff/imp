@@ -2,8 +2,8 @@
 
 impd has an SSH gateway. `ssh box@imp` lands in the imp `box`, and wakes it first if it sleeps. Any
 SSH client works: `ssh`, `scp`, `sftp`, git over SSH, and editors that open a remote folder over
-SSH, such as VS Code Remote SSH. The [daemon page](../architecture/daemon.md#ssh-the-gateway) covers
-how it works inside impd.
+SSH, such as VS Code Remote SSH. The
+[daemon page](../architecture/network/ingress.md#the-ssh-gateway) covers how it works inside impd.
 
 ## Set up
 
@@ -223,7 +223,8 @@ ssh -N -R /tmp/app.sock:/run/user/1000/app.sock box@imp
 `IMP_SSH_PORT` (default 22, `0` turns the gateway off) on IPv4, in the host container's own network
 namespace. That namespace has the tailnet (`tailscale0`), the container's own link and the imps'
 taps. The firewall drops guest traffic to the host container over IPv4 and IPv6
-([networking](../architecture/networking.md#iptables)), so an imp cannot reach the gateway.
+([networking](../architecture/network/networking.md#the-base-firewall)), so an imp cannot reach the
+gateway.
 
 - On the tailnet, `ssh box@imp` reaches it on port 22. The ACL decides who can connect.
 - The compose file and the systemd unit publish nothing for SSH.

@@ -99,7 +99,7 @@ From the milestone work:
 - On a host kernel before Linux 6.7, an `imp sleep` within 1.5 s of a cold boot waits up to about
   1.2 s first; without the wait the next wake takes 0.75–1.1 s. A governor sleep does not wait, so
   its victim's next wake can be that slow
-  ([young guests](docs/architecture/sleep-and-wake.md#young-guests),
+  ([young guests](docs/architecture/lifecycle/sleep-and-wake.md#young-guests),
   [#33](https://github.com/zgeoff/imp/issues/33)). `scripts/bench-wake.sh` has not run on a host
   with the fix yet.
 - The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
@@ -121,13 +121,13 @@ From the milestone work:
   in a chroot as its own uid, with seccomp and a memory limit; the `jail` e2e suite checks it, the
   OOM report, a restart and a rollback to `IMP_JAILER=false`. The host container runs without
   `--privileged` ([#75](https://github.com/zgeoff/imp/issues/75)), on an explicit capability list
-  ([privileges](./docs/architecture/host-contract.md#privileges)). That stops accidents, not an
-  escape: root in the container can still become root on the host through `SYS_ADMIN` (a new procfs,
-  then `core_pattern`), so it is no security boundary. The Docker socket path is closed
+  ([privileges](./docs/architecture/host.md#privileges)). That stops accidents, not an escape: root
+  in the container can still become root on the host through `SYS_ADMIN` (a new procfs, then
+  `core_pattern`), so it is no security boundary. The Docker socket path is closed
   ([#83](https://github.com/zgeoff/imp/issues/83)): imp-host reaches Docker only through
   `imp-docker-proxy`, which lets through the calls impd makes
-  ([the Docker socket](./docs/architecture/host-contract.md#the-docker-socket)), and the `socket`
-  e2e suite checks the refusals. Builds run on BuildKit with no session and a pinned frontend
+  ([the Docker socket](./docs/architecture/host.md#the-docker-socket)), and the `socket` e2e suite
+  checks the refusals. Builds run on BuildKit with no session and a pinned frontend
   ([#129](https://github.com/zgeoff/imp/issues/129)).
 - Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
   in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
@@ -140,7 +140,7 @@ From the milestone work:
 - A stop kills an exec's whole cgroup ([#69](https://github.com/zgeoff/imp/issues/69)), but a
   process that moves itself to another cgroup, and the containers of a dockerd started from an exec,
   live on. A tty exec has no cgroup of its own
-  ([exec cgroups](docs/architecture/agent.md#exec-cgroups)).
+  ([exec cgroups](docs/architecture/guest/agent.md#execs-and-services)).
 - If impd dies after a wake sets the snapshot record aside and before Firecracker starts, the next
   start drops a good snapshot: the imp boots cold and loses its memory, and its disk is safe
   ([#39](https://github.com/zgeoff/imp/issues/39)).

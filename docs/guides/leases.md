@@ -65,7 +65,7 @@ impd moved a hold that was live at the upgrade to the owner `legacy`, label `hol
 
 `holdUntil` on an imp is the latest end of its live leases, of every kind. The idle loop and the
 governor never sleep an imp with a live lease or hold
-([sleep and wake](../architecture/sleep-and-wake.md#idle-detection)).
+([sleep and wake](../architecture/lifecycle/sleep-and-wake.md#idle-detection)).
 
 ## Sleep and stop
 

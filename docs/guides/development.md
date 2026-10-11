@@ -136,14 +136,14 @@ about 280 MiB at the default sizes, so 9 fit in 2560 MiB, and a cold-booted one 
 suite holds what the Firecrackers own (`Pss_Anon` + `Pss_Shmem`, read from `smaps_rollup` without
 impd) to the budget, and reports their full PSS, which also has clean file pages the governor does
 not count
-([what the governor measures](../architecture/sleep-and-wake.md#5-ram-what-the-governor-measures)).
-A guest grows past its boot reserve after admission, so use may pass the budget until a governor
-sleep ends. The suite follows every imp's sleep in the event stream (`ImpChanged slept`, which
-started `detail.durationMs` plus `detail.prepareMs` before its time). Use may fall back under the
-budget for any reason. It fails when impd's figure or the owned figure goes over by more than a
-guest can grow past its reserve, or stays over for one enforce period plus one sample with no
-enforce sleep (`detail.trigger` `RAM over budget`) started by then, or is still over after that
-sleep ends, or when the sleep takes more than 30 s.
+([what the governor measures](../architecture/lifecycle/ram-governor.md#what-it-measures)). A guest
+grows past its boot reserve after admission, so use may pass the budget until a governor sleep ends.
+The suite follows every imp's sleep in the event stream (`ImpChanged slept`, which started
+`detail.durationMs` plus `detail.prepareMs` before its time). Use may fall back under the budget for
+any reason. It fails when impd's figure or the owned figure goes over by more than a guest can grow
+past its reserve, or stays over for one enforce period plus one sample with no enforce sleep
+(`detail.trigger` `RAM over budget`) started by then, or is still over after that sleep ends, or
+when the sleep takes more than 30 s.
 
 The connectors suite runs a fake github.com on this machine, which the dev container reaches on its
 default gateway. A dev instance reads `<IMP_DEV_DATA>/broker-test-upstreams.json` when it exists
@@ -164,9 +164,9 @@ measure. A suite file also runs on its own against a running instance:
 
 `scripts/bench-wake.sh` is a manual check, not part of the harness or CI. It times wakes of an imp
 put to sleep right after a cold boot, which a host kernel before Linux 6.7 makes slow
-([young guests](../architecture/sleep-and-wake.md#young-guests)). It drives impd through the CLI
-only, so it runs against any host, and it fails when the median wake passes `--limit-ms` (default
-500):
+([young guests](../architecture/lifecycle/sleep-and-wake.md#young-guests)). It drives impd through
+the CLI only, so it runs against any host, and it fails when the median wake passes `--limit-ms`
+(default 500):
 
 ```sh
 scripts/bench-wake.sh --cycles 3       # IMP_URL and IMP_TOKEN, or the saved login

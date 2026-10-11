@@ -1,0 +1,138 @@
+# The lifecycle
+
+The lifecycle service owns every imp's state and is the one part of impd that starts, sleeps, wakes,
+stops and destroys VMs. Every other part that needs a running guest, such as the API, the wake
+proxy, the SSH gateway or a tunnel, asks the lifecycle for one.
+[Sleep and wake](./sleep-and-wake.md) covers how a sleep and a wake run, and
+[the RAM governor](./ram-governor.md) covers the admission every boot and wake passes.
+
+## States
+
+An imp is in one of five states. A transition table names the legal moves, and any other move fails
+with `INVALID_STATE`. A destroy works from every state and is no transition: it removes the imp.
+
+```mermaid
+stateDiagram-v2
+  [*] --> creating
+  creating --> running
+  creating --> error
+  running --> sleeping
+  running --> stopped
+  running --> error
+  sleeping --> running
+  sleeping --> stopped
+  sleeping --> error
+  stopped --> running
+  stopped --> error
+  error --> running
+  error --> stopped
+```
+
+A create writes the imp's row as `creating`, clones its disk from the image and boots it. A create
+that the governor turns away deletes the row again, so a refused create leaves nothing behind.
+`running` means a VM is up and its agent answered. `sleeping` means the VM is gone and a committed
+memory snapshot is on disk. `stopped` means there is neither, and the next use boots the disk cold.
+`error` holds an imp whose create or boot failed in a way impd could not undo, and a start or a stop
+leaves it.
+
+Anything that needs a VM wakes a sleeping imp and boots a stopped one: an exec, a console, a proxied
+request, an SSH login, a tunnel, a service change, a checkpoint and a lease. A stop frees the imp's
+RAM and its snapshot. It does not keep the imp off, because the next request boots it again.
+
+## The lock
+
+Each imp has one lifecycle lock, a FIFO queue in impd's memory keyed by the imp's ID. Every change
+to one imp's VM or state runs under it, so two calls never change one imp at once, and a second wake
+that queues behind the first finds the imp running and returns. Under the lock the caller gets the
+imp's record read again, as a type only the lock module can make, and the VM operations take only
+that type. So no boot, sleep or wake can run without the lock. A new imp's row is written under the
+lock it is created with, and nothing else reaches the imp before its create holds it.
+
+Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
+controller try the lock and skip the imp when anything holds it or waits for it. The governor holds
+its own admission lock while it sleeps imps, and a boot waiting for admission holds an imp's lock,
+so a governor that waited for imp locks could deadlock with it.
+
+The lock also gates moves. While an imp is marked as moving between hosts, the lock refuses every
+call by name with `MOVING`, except the move's own steps
+([moves](../storage/moves.md#one-live-copy)). Every operation under the lock joins the storage gate
+too, so the storage sweep never takes a disk that an operation is about to name
+([disk space](../storage/disk-space.md#the-sweep)).
+
+## What keeps an imp awake
+
+impd counts the host-side connections to each imp: exec sessions, attached consoles, proxied
+requests and WebSockets, SSH connections and tunnels. An exec counts its session before it asks for
+the wake, so no background sleep slips in between. The idle loop adds what the guest reports: open
+TCP connections and real CPU work ([idle detection](./sleep-and-wake.md#idle-detection)).
+
+A lease keeps an imp awake on purpose. Each lease belongs to one caller, by its principal, has a
+label and an end, and an acquire wakes or boots the imp. The imp's hold is the latest end of its
+live leases, and the idle loop and the governor both skip a held imp. A lease taken through the
+lease API also blocks a user's sleep or stop, which fails with `LEASED` unless the caller passes
+`force`, and that ends the leases. The `hold` label that `imp hold` writes keeps the imp awake but
+never blocks a sleep or stop. Nothing renews a lease for its holder: a holder that dies leaves its
+lease to run out at its end, and deleting a token ends none of its leases.
+
+A builder imp, which runs one image build, never sleeps in the background, because its build would
+stall until a wake.
+
+## The watchdog
+
+The idle loop asks every running agent for its activity, and the watchdog counts the answers. An
+agent silent past the watchdog's timeout gets one longer ping. A silence that outlasts it is
+reported in the log and in each imp's listing, and an answer or a lifecycle operation on the imp
+clears it. What happens next is the owner's choice. The default only reports, because the proxy
+reaches the guest's servers without the agent, so a deaf agent can still serve. A restart kills the
+VM and boots the disk cold, and a snapshot first keeps the VM's memory for a post-mortem. A recovery
+takes the imp's lock with a try, as a background sleep does, and the recoveries back off and stop
+after a few in an hour, so a guest that hangs on every boot does not loop.
+
+## Stop and destroy
+
+A stop asks the agent to shut the guest down, kills Firecracker if it outlives a grace period,
+removes the imp's cgroup and drops its snapshot. A destroy kills the VM, then removes the cgroup,
+the jail, the tap, the slot and the files, and deletes the row last. So a destroy that a crash cuts
+short leaves a row that names what is left, and the next destroy finishes it.
+
+## impd's own stop
+
+impd closes a shutdown gate before it stops, and after that no VM boots or wakes: those calls fail
+with `SERVICE_UNAVAILABLE`, and a create cut short goes to `error`. Two signals decide what happens
+to the VMs:
+
+- **SIGTERM or SIGINT** sleeps every awake imp, so a container restart keeps every imp's memory. The
+  pass covers sleeping and stopped imps too, since one may be waking or booting under its lock, and
+  it runs them together, bounded by the host's sleep slots.
+- **SIGHUP** sleeps nothing. It waits for the wakes and boots under way, so none leaves a
+  Firecracker that no record names, and exits with every VM running.
+
+The whole stop runs against one deadline. If the sleep pass runs out of it, impd exits without
+closing the database, since a sleep may still be writing to it.
+
+## Recovery after a restart
+
+The locks, the governor's reservations and every counter are in memory, so a new impd starts from
+the database and the processes it finds. Firecracker runs detached, and impd finds each VM by the
+API socket in its argv and its pid file. A jailed process can put any socket in its argv, so impd
+takes a process as an imp's VM only when it runs as that imp's jail uid, as root for an unjailed VM,
+or in that imp's cgroup. A jail can change none of those, so it cannot get another imp's VM killed
+or its snapshot dropped.
+
+impd then settles each imp under its lock:
+
+- A VM that no record owns is killed: a second VM on one imp's socket, a VM on a stopped imp's
+  socket, or a VM of an imp with no row.
+- A running imp with a live VM is adopted as it is. One whose sleep was cut short left its VM
+  paused, and impd resumes it.
+- A running imp with no live VM is marked `stopped`, and its next use boots cold. The exception is
+  an imp whose snapshot is newer than its last activity: impd died between the snapshot's commit and
+  the record, so the imp is marked `sleeping` and keeps its memory.
+- A wake cut short is settled from its snapshot's state ([wake](./sleep-and-wake.md#wake)).
+- A `creating` imp goes to `error`, and its VM is killed.
+- Half-written snapshot and identity files go, and so do the jails and cgroups of imps that no
+  longer exist.
+
+A VM that will not die keeps its pid on the record, and impd starts anyway, so one stuck process
+never keeps impd down; the next start or destroy kills it again. Sleeping imps stay asleep, and each
+wakes on its next request.

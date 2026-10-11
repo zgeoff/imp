@@ -1,130 +1,140 @@
 # Architecture overview
 
-imp is a self-hosted take on Fly.io Sprites: persistent Linux microVMs that boot in about a second,
-sleep when idle with their memory intact, wake on an HTTP request, and checkpoint, restore and fork
-their disks instantly. One host runs everything. The control plane, impd, lives in one container
-next to the Firecracker processes it starts. Inside each guest, a small Go agent runs as PID 1 and
-talks to impd over vsock.
+An imp is a persistent Linux microVM that sleeps when it is idle and wakes on the next request to
+it. A sleeping imp holds no RAM: its memory is a snapshot on disk, and a wake loads it back with
+every process where it was. Its disk is a copy-on-write clone, so a checkpoint, a restore or a fork
+costs no copy. One host runs every imp, and one daemon, impd, owns them all. impd keeps every awake
+imp under a RAM budget the owner sets, and sleeps the least recently active ones to make room.
 
-This page gives the shape and the main decisions. The other architecture pages go deeper:
+The code is one Bun workspace and one Go module. impd is `packages/daemon`. Its typed contract,
+`packages/api`, is shared with the CLI, the npm client, the MCP server and the dashboard. The guest
+agent is `agent/`.
 
-- [Daemon](./daemon.md): the modules inside impd.
-- [Guest agent and kernel](./agent.md): how a guest boots, and the custom kernel.
-- [Agent protocol](./protocol.md): the host ↔ guest wire format.
-- [Storage and images](./storage.md): XFS reflinks or ZFS, the data layout, OCI images to ext4.
-- [Networking](./networking.md): taps, /30s, iptables, the wake proxy and the URLs.
-- [Sleep and wake](./sleep-and-wake.md): memory snapshots, idle detection and the RAM governor.
-- [Backups](./backups.md): restic backups of disks, checkpoints and images, off the host.
-- [Boot templates](./boot-templates.md): a cold boot restored from a snapshot of a parked guest.
-- [Elastic memory](./memory.md): `--max-memory`, a guest that grows and shrinks with virtio-mem.
-- [Moves](./moves.md): an imp's move from one host to another.
+## The path of a request
 
-## Shape
+Every way into an imp passes impd, and every path that needs the guest wakes it first.
 
-```text
- CLI (bun)  ──oRPC/HTTP──┐
- browser/curl ──HTTP─────┤
- ssh/scp/sftp ──SSH──────┤
-                         ▼
- ┌──────────── imp host container (root, own netns) ──────────────────┐
- │  impd (bun)                                                        │
- │   ├─ rpc        oRPC router (control) + WebSocket (exec streams)   │
- │   ├─ proxy      wake-on-request HTTP/WebSocket proxy               │
- │   ├─ broker     credential connectors: CONNECT proxy on gateways   │
- │   ├─ ssh        SSH gateway: shells, SFTP, forwards into imps      │
- │   ├─ imps       lifecycle service, one state machine per imp       │
- │   ├─ governor   RAM budget; idle loop sleeps quiet imps            │
- │   ├─ vmm        Firecracker API client (HTTP over unix socket)     │
- │   ├─ agent      host side of the vsock agent protocol              │
- │   ├─ images     OCI image → ext4 builder                           │
- │   ├─ storage    XFS reflink clones or ZFS clones, the data layout  │
- │   ├─ net        tap devices, routes, iptables                      │
- │   └─ db         Kysely + bun:sqlite                                │
- │                                                                    │
- │  firecracker ×N (detached; survive an impd restart)                │
- │  tailscaled (optional)                                             │
- └────────────────────────────────────────────────────────────────────┘
-                         │ virtio-blk / virtio-net / vsock
-                         ▼
- ┌──────────────── guest (one per imp) ────────────────┐
- │ /dev/vda  user rootfs (ext4, rw) from any OCI image  │
- │ /dev/vdb  imp system drive (ro): imp-agent           │
- │ PID 1 = imp-agent: mounts, network, zombie reaper,   │
- │   service supervisor, exec/PTY over vsock            │
- │   └─ inner container (root = /dev/vda): user code,   │
- │      service processes, PID 1 = imp-agent inner      │
- └──────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  C["CLI, client,<br>MCP, dashboard"] -->|"oRPC, WebSocket"| API["impd API"]
+  B["browser, curl"] -->|"HTTP, HTTPS"| P["wake proxy"]
+  S["ssh, scp, sftp"] --> G["SSH gateway"]
+  API --> L{"the imp's lock"}
+  P --> L
+  G --> L
+  L -->|"asleep"| W["wake: load<br>the snapshot"]
+  L -->|"stopped"| K["cold boot"]
+  L -->|"running"| V["the guest"]
+  W --> V
+  K --> V
 ```
 
-## Isolation: Firecracker microVMs
+A control call, such as a create or a checkpoint, is an oRPC procedure. The API checks the caller's
+credential and scope before it runs the handler ([auth](./control/auth.md)). A command or a shell in
+the guest is a WebSocket that impd bridges to the guest agent ([the API](./control/api.md)). The
+wake proxy takes HTTP for an imp by its host name or by its own port, and forwards it to the guest's
+HTTP port ([ingress](./network/ingress.md)). The SSH gateway runs inside impd and turns each login
+into an agent exec. Each of these first asks the imp's lifecycle for a running VM. The lifecycle
+takes the imp's lock, wakes or boots it, and hands back the VM, so two requests that reach a
+sleeping imp at once cause one wake ([the lifecycle](./lifecycle/lifecycle.md)).
 
-- One Firecracker microVM per imp gives a hardware (KVM) boundary per tenant.
-- Firecracker over QEMU: about 5 MB of VMM overhead against 50–150 MB, fast snapshot and restore,
-  and a minimal device model. The cost: no GPU and no virtiofs.
-- Each Firecracker runs under its jailer, as the imp's own uid in a chroot (`IMP_JAILER`, on by
-  default; [the jailer](./daemon.md#the-jailer)). The host container around them is not a security
-  boundary ([privileges](./host-contract.md#privileges)).
-- User code runs in an inner container inside the guest, whose root is the user disk
-  ([the inner container](./agent.md#the-inner-container)). The agent stays outside it, so it
-  survives a user who breaks PID 1 or runs `rm -rf /`.
-- KASLR is off in every guest: Firecracker loads the uncompressed `vmlinux` at its link address, and
-  the guest logs `KASLR disabled`, although the config has `RANDOMIZE_BASE=y`. Every imp has the
-  same kernel layout, so a kernel exploit needs no address leak. Imps restored from one
-  [boot template](./boot-templates.md#accepted-risks) also share the slab freelist seeds.
+impd reaches the guest agent over vsock, never over the guest's network. The agent runs each command
+in an inner container whose root is the user's disk ([the agent](./guest/agent.md)). Traffic for the
+guest's own servers takes the network instead: the proxy connects to the guest's address, and a
+tunnel or an SSH forward dials through the agent from inside the guest.
 
-## Host: one container
+## Topology
 
-- impd, Firecracker and tailscaled run in one container, started without `--privileged`: it gets
-  only the capabilities, devices and sysctls it uses ([privileges](./host-contract.md#privileges)),
-  and its **own** network namespace. That stops accidents, not an escape: root in it can still
-  become root on the host. Taps, routes and iptables never touch the host's network. The same image
-  runs on bare metal.
-- impd builds and exports OCI images through `imp-docker-proxy`, a second container that holds the
-  host's Docker socket and lets through only the calls impd makes
-  ([the Docker socket](./host-contract.md#the-docker-socket)). That closes the Docker socket path
-  only: `SYS_ADMIN` still lets root out of the container.
-- Data lives in `/var/lib/imp`, backed by a host bind mount
-  ([storage](./storage.md#the-data-directory)).
-- The container entrypoint (`host/entrypoint`) sets up storage, the network and Tailscale, then runs
-  impd under a small supervisor that restarts it when it exits on its own.
-
-## Control plane and API
-
-- Bun workspaces: `packages/api` (the oRPC contract and zod schemas), `packages/daemon` (impd),
-  `packages/cli` (the `imp` CLI), `packages/client` (`@zgeoff/imp-client`, the typed client on npm
-  for browsers, Bun and Node), `packages/dashboard`, `packages/mcp` and `packages/local-tar`.
-- Control calls are oRPC procedures over HTTP at `/rpc`. Exec and console use a WebSocket at
-  `/exec`, because they need two-way streams. The dashboard is at `/ui/` and the MCP endpoint at
-  `/mcp`. `/health` answers without auth.
-- Auth: impd makes a bearer token on first start and stores it in `/var/lib/imp/token`. A browser
-  opens `/exec` with a single-use ticket from `exec.ticket` instead of the token. Scoped tokens and
-  tailnet identities give less than full access ([tokens](../guides/tokens.md)). The proxy is open
-  to anything that can reach it; the tailnet ACL is the boundary.
-- State is in SQLite through Kysely on `bun:sqlite`. Migrations live in code.
-
-## Repo layout
-
-```text
-agent/            Go guest agent (PID 1, vsock server)
-packages/api      oRPC contract and shared types
-packages/daemon   impd
-packages/cli      imp CLI
-packages/client   @zgeoff/imp-client, the typed client published to npm
-packages/dashboard web dashboard, served at /ui/
-packages/mcp      MCP server, behind imp mcp and /mcp
-packages/local-tar local files as a tar, with .dockerignore: imp cp, image build contexts
-images/base       thin base image
-images/examples   small example images
-host/             host container Dockerfile (dev and release), entrypoint, storage, network
-                  and tailnet setup
-deploy/           compose file, systemd unit and env file for the release image, the server
-                  bootstrap and the upgrade script
-kernel/           guest kernel config and build
-scripts/          dev helpers and test-e2e.sh, the end-to-end harness's entry point
-test/e2e/         end-to-end suites, their helpers and fixture images
-docs/             this documentation
+```mermaid
+flowchart TB
+  subgraph host["the host"]
+    D["Docker engine"]
+    subgraph ih["imp-host container, own network namespace"]
+      I["impd"]
+      T["tailscaled"]
+      F1["Firecracker, jailed"]
+      F2["Firecracker, jailed"]
+    end
+    X["imp-docker-proxy"]
+  end
+  I -->|"API socket"| F1
+  I -->|"API socket"| F2
+  I -->|"vsock"| A1["guest agent"]
+  F1 --- A1
+  I -->|"Docker calls"| X --> D
+  T --- I
 ```
 
-## Not yet
+The host under imp is thin: it gives KVM, cgroup v2, Docker and a filesystem for the data, and runs
+two containers from one image ([the host](./host.md)). The imp-host container holds impd, every
+Firecracker process and the tailnet node, in a network namespace of its own, so the taps, routes and
+firewall rules for the imps never touch the host's network. A small entrypoint sets up the cgroups,
+the storage, the network and Tailscale, then runs impd under a supervisor that restarts it. The
+second container, imp-docker-proxy, holds the host's Docker socket and lets through only the calls
+impd makes, for image pulls and builds.
 
-The [roadmap](https://github.com/zgeoff/imp/issues/41) tracks what is left, such as memory forks.
+impd is one Bun process. It starts one Firecracker microVM per awake imp, detached from itself, so
+an impd restart leaves every VM running and the next impd adopts them. Each Firecracker runs under
+its jailer as the imp's own uid, in its own chroot and cgroup ([isolation](./isolation.md)). A guest
+boots a kernel imp builds, from a read-only system drive that holds the agent, so any OCI image
+boots with nothing of imp in it.
+
+Reach comes from the tailnet. The host publishes impd's ports on its loopback only, and tailnet
+traffic arrives inside the container's namespace through its own tailscaled. Nothing on the host
+needs an inbound port, and a public imp is the one opt-in exception
+([ingress](./network/ingress.md)).
+
+## The data
+
+All of impd's state lives in one data directory.
+
+- **The database.** One SQLite file, through Kysely on `bun:sqlite`, in WAL mode with a single
+  connection. It holds the imps, checkpoints, images, tokens, grants, networks, leases, moves and
+  the audit rows. Its migrations live in code.
+- **Each imp's directory.** The disk, the memory snapshot of a sleeping imp, the record of what its
+  VM booted with, the Firecracker sockets and the session logs. A disk is a reflink clone on XFS or
+  a dataset on ZFS ([storage](./storage/storage.md)).
+- **Images and templates.** Each OCI image as one ext4 file, the shared parent of every disk made
+  from it ([images](./storage/images.md)), and the snapshots of parked guests that cold boots
+  restore ([boot templates](./lifecycle/boot-templates.md)).
+- **Secrets and keys.** The root token, the credential broker's values and CA, the SSH host key and
+  the TLS certificate, each a file only root reads. No backup holds them
+  ([backups](./storage/backups.md)).
+
+The disk is the truth about an imp, and a memory snapshot only ever wakes on the disk it was made
+with. Anything that changes the disk behind a snapshot, such as a restore, drops the snapshot first,
+and the imp boots cold.
+
+## Cross-cutting rules
+
+- **One lock per imp.** Every lifecycle change of one imp runs under that imp's lock, and every
+  background job only tries it. The locks live in impd's memory, and a restart rebuilds what they
+  guarded from the database and the processes it finds
+  ([the lifecycle](./lifecycle/lifecycle.md#recovery-after-a-restart)).
+- **Two budgets.** The RAM governor admits every boot, wake and memory grow, and sleeps imps to make
+  room ([the RAM governor](./lifecycle/ram-governor.md)). The disk budget holds back a reserve of
+  free space that no write may take ([disk space](./storage/disk-space.md)).
+- **The guest is not trusted.** impd checks everything an agent reports before it uses it, a guest
+  reaches the host container only on the broker's and the resolver's ports, and a jailed VM can
+  touch no files but its own ([isolation](./isolation.md)).
+- **Events.** Every write to an imp or checkpoint row becomes an event on one in-process bus, in
+  write order. The event stream, the proxy, the broker and the telemetry read it
+  ([the API](./control/api.md#events-audit-and-telemetry)).
+- **More than one host.** Each host is its own impd with its own data. A move takes an imp from one
+  to another over the tailnet, with marks on both copies that keep exactly one live
+  ([moves](./storage/moves.md)).
+
+## The docs
+
+- `lifecycle/`: [the lifecycle](./lifecycle/lifecycle.md),
+  [sleep and wake](./lifecycle/sleep-and-wake.md), [the RAM governor](./lifecycle/ram-governor.md),
+  [elastic memory](./lifecycle/elastic-memory.md) and
+  [boot templates](./lifecycle/boot-templates.md).
+- `guest/`: [the guest agent](./guest/agent.md), [the agent protocol](./guest/protocol.md) and
+  [sessions](./guest/sessions.md).
+- `storage/`: [storage](./storage/storage.md), [disk space](./storage/disk-space.md),
+  [images](./storage/images.md), [backups](./storage/backups.md) and [moves](./storage/moves.md).
+- `network/`: [networking](./network/networking.md), [egress](./network/egress.md),
+  [ingress](./network/ingress.md) and [the credential broker](./network/broker.md).
+- `control/`: [the API](./control/api.md) and [auth](./control/auth.md).
+- [Isolation](./isolation.md) and [the host](./host.md) cover the boundaries around every imp.

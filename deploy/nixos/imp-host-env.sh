@@ -81,7 +81,7 @@ if [ -n "${IMP_BACKUP_STAGED:-}" ]; then
 fi
 
 # The host's own global addresses, both families, which impd keeps public
-# imps from (docs/architecture/networking.md#public); read at each start,
+# imps from (docs/architecture/network/egress.md#public); read at each start,
 # as deploy/imp-host.service does, so a new DHCP lease gets in.
 addresses=$(ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,) || {
   echo "imp-host-env: cannot read the host's addresses; public imps can reach them unless IMP_EGRESS_DENY lists them" >&2

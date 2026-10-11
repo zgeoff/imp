@@ -23,14 +23,14 @@ imp set box --http-port 3000       # the port box's URL reaches, from the next r
 A fork copies the source's limit and weight. A change to a sleeping imp applies at its next wake. A
 sleep or a wake lifts the limit while Firecracker writes or loads the memory snapshot, so a low
 limit never slows those steps. Memory has its own flags: `--memory` and `--max-memory`
-([elastic memory](../architecture/memory.md)).
+([elastic memory](../architecture/lifecycle/elastic-memory.md)).
 
 ## The memory limit
 
 Each VM's cgroup also caps its memory a little over the guest's: 256 MiB more than `--memory`, or an
 eighth more above 2 GiB, with no swap. A guest never reaches it on its own; a VM that leaks host
 memory does. The kernel then kills the whole VM, and `imp ls --json` shows the stopped imp with the
-error `its memory limit killed firecracker`. See [cgroups](../architecture/daemon.md#cgroups).
+error `its memory limit killed firecracker`. See [cgroups](../architecture/isolation.md#cgroups).
 
 **NOTE:** impd enforces limits only when the host container runs in a private cgroup v2 namespace
 (`--cgroupns=private`, which `scripts/dev.sh`, `deploy/imp-host.service` and `deploy/compose.yaml`

@@ -203,7 +203,7 @@ type Ping struct {
 const StageTemplate = "template"
 
 // Claim is what a guest restored from a boot template needs to become one
-// imp (docs/architecture/boot-templates.md#claim). The seed is mixed into
+// imp (docs/architecture/lifecycle/boot-templates.md#restore). The seed is mixed into
 // the kernel's entropy pool before the CRNG reseeds.
 type Claim struct {
 	ID            string   `json:"id"`

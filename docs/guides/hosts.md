@@ -5,8 +5,8 @@ saves each host (`imp login`, `imp host ls`, [configuration](./configuration.md#
 at a time: the current host, or the one `--host` names. Two commands reach every saved host:
 `imp new --place` creates an imp on the host with the most free RAM, and `imp ls --all` lists the
 imps on all of them. `imp move` takes an imp from one host to another over the tailnet: a stopped
-one cold, a sleeping one with its memory. [Moves](../architecture/moves.md) covers the stream and
-the tickets.
+one cold, a sleeping one with its memory. [Moves](../architecture/storage/moves.md) covers the
+stream and the tickets.
 
 Placement and the one view run in the CLI, never in impd. Each saved host has its own token, and no
 impd holds another's, so the API of each impd stays one host's. The dashboard shows one host.
@@ -192,9 +192,9 @@ an imp with a live lease.
 A sleeping imp moves with its memory, and wakes on the target where it left off: its processes, its
 tmpfs and its page cache stay. The snapshot holds the host it was taken on, so the target must match
 it. `imp move` checks on the source, the target checks again at the ticket and at the stream, and a
-wake checks the CPU as it does on any host ([moves](../architecture/moves.md#warm-moves)). Otherwise
-the move is refused, and the message names each fact that differs; `imp move --stop` moves the imp
-cold instead.
+wake checks the CPU as it does on any host ([moves](../architecture/storage/moves.md#warm-moves)).
+Otherwise the move is refused, and the message names each fact that differs; `imp move --stop` moves
+the imp cold instead.
 
 | The target must have                                  | Why                                                                                                                                                                                                                                                                                                   |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -209,8 +209,9 @@ cold instead.
 | No IPv6 address in the imp                            | Its address is in the source's /64. `auto` makes a prefix per host; copy `<data>/net/ipv6-ula` to give two hosts the same one.                                                                                                                                                                        |
 
 A warm move trusts the source with the target host, not only with the imp: the target's Firecracker
-opens the paths that the source's snapshot names ([trust](../architecture/moves.md#warm-moves)).
-Move warm only between hosts that trust each other.
+opens the paths that the source's snapshot names
+([trust](../architecture/storage/moves.md#warm-moves)). Move warm only between hosts that trust each
+other.
 
 The target's broker CA goes into the guest at its first wake. A process that loaded the source's CA
 before the move fails TLS to the broker until it restarts. Open connections end, as at any sleep.
@@ -274,7 +275,8 @@ A verified copy waits on the target until the source commits or aborts it.
   belong to the source's domain, so `imp move` refuses it: run `imp unexpose`, move it, then
   `imp expose` on the target. A marked imp refuses `imp expose` and `imp unexpose` with `MOVING`.
 - Between two ZFS hosts the disk goes as `zfs send` streams; any other pair sends files
-  ([ZFS](../architecture/moves.md#zfs)). Either way the checkpoints get new IDs on the target.
+  ([ZFS](../architecture/storage/moves.md#zfs)). Either way the checkpoints get new IDs on the
+  target.
 - Names are unique per host, not across hosts: two hosts can each have a `dev`. A move refuses a
   name the target has, and a per-imp tailnet name on the tailnet is one host's: the second fails
   with `exists and this host does not own it`.

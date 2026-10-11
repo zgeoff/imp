@@ -1,7 +1,7 @@
 // Package inner runs user code in a container inside the guest: its own
 // mount, PID and cgroup namespaces over the user disk. The agent stays
 // outside it, so a user who kills every process, removes / or reboots
-// breaks only the container (docs/architecture/agent.md#the-inner-container).
+// breaks only the container (docs/architecture/guest/agent.md#the-inner-container).
 //
 // The container's PID 1 is `imp-agent inner`. Go cannot join a mount
 // namespace (every thread shares fs_struct), so that process also starts

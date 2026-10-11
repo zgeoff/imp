@@ -1,7 +1,7 @@
 // Command imp-agent is PID 1 inside every imp guest. The kernel starts it
 // from the system drive; it mounts the user disk and runs user code in a
 // container over it, whose PID 1 is "imp-agent inner".
-// See docs/architecture/agent.md#boot.
+// See docs/architecture/guest/agent.md#boot.
 // "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway,
 // "imp-agent dial-unix <path>" connects to a unix socket as the image USER
 // for the agent's dial op, "imp-agent listen-as-user" binds a reverse

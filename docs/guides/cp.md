@@ -37,7 +37,7 @@ error.
 ## How it works
 
 The guest side is `imp-agent tar` on the system drive, so every image has it. impd runs it as root
-(an exec `tool`, [daemon](../architecture/daemon.md#exec-the-exec-bridge)), so a copy reaches paths
+(an exec `tool`, [daemon](../architecture/control/api.md#exec-and-tunnels)), so a copy reaches paths
 the image's USER cannot. For that reason a copy, in either direction, needs a token with `manage`
 scope on the imp ([tokens](./tokens.md#scopes)); an `exec` token gets `FORBIDDEN`. It needs the
 agent from protocol `0.7.0`; an older imp answers with `AGENT_OUTDATED`: stop and start it to update

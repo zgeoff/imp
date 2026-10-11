@@ -1,0 +1,96 @@
+# The guest agent
+
+Every guest runs one program as PID 1, the imp agent, a static Go binary. It comes from a read-only
+system drive, not from the user's image, so any OCI image boots with nothing of imp in it. The agent
+mounts the guest's filesystems, brings up its network, runs the user's processes in an inner
+container, supervises services, reaps orphans, and serves impd over vsock
+([the agent protocol](./protocol.md)). The code is `agent/`.
+
+## Two drives and a kernel
+
+A guest gets two drives. The first is the user's disk, an ext4 clone of an image that the guest
+reads and writes ([storage](../storage/storage.md)). The second is the system drive, a squashfs that
+holds the agent and a static busybox, built to the same bytes for the release image and a dev
+instance alike. The kernel boots with the system drive as its root and the agent as its init, with
+no initramfs, and impd passes the imp's hostname, addresses and DNS on the kernel command line.
+
+imp builds its own guest kernel, a 6.1 LTS kernel from Firecracker's microVM config plus a fragment
+of everything a current Docker needs: nftables, the iptables raw table, IPVS, the overlay network
+drivers, TUN and FUSE. The microVM config lacks those, and has modules off, so nothing missing could
+be loaded later. Everything is built in, and nothing loads modules. AppArmor stays off, because with
+it on dockerd expects profiles inside the guest image. `kernel/README.md` has the build.
+
+## Boot
+
+The agent stays on the system drive, in a world of its own, and runs every user process in the inner
+container over the user disk.
+
+1. It mounts its own `/proc`, `/sys`, `/dev`, cgroup2 and a small `/run`. It sets its own OOM score
+   so that the kernel never picks it, and makes the cgroup for user code, with a memory limit a
+   little under the guest's memory. A [boot template](../lifecycle/boot-templates.md) parks here and
+   takes its claim's values from then on.
+2. It mounts the user disk, and grows its filesystem when the host grew the disk.
+3. It sets the hostname and brings up loopback and the network device.
+4. It starts the inner container, writes the container's hostname, hosts and resolver files, and
+   reads the image's config for the default environment. On the first boot of an imp made from a
+   template image it writes a new machine-id and new SSH host keys.
+5. It starts the services, makes the cgroups for execs and outer execs, and listens on vsock.
+
+The agent never execs itself on the way, because on a restored template a new runtime would fault in
+every page it touches.
+
+## The inner container
+
+User code runs in a container whose root is the user disk, with its own mount, PID and cgroup
+namespaces, and the agent's network and hostname. Its PID 1 is the agent binary again, in an inner
+mode: it pivots into the user disk, mounts fresh `/proc`, `/sys`, `/dev` and `/run` there, binds the
+system drive read-only at `/run/imp/sys`, and then forks every user process for the agent over a
+socket, since a Go process cannot join a mount namespace. Inside, the system drive gives every image
+the helpers impd runs, such as the SFTP server and the tar of `imp cp`.
+
+The container exists so that user processes cannot take the agent down by accident. `rm -rf /`,
+`kill -9 -1`, a reboot inside or a full memory ends the container, not the agent. When the inner
+init dies, every process in the container dies with it, and the agent starts the container again
+with a growing delay. TCP ports and files on the user disk stay. A container that keeps dying soon
+after its start is a bad start, and after several in a short window the agent gives up until the
+next boot, reports the container down in its ping, and fails each spawn with `INNER_DOWN`. After an
+`rm -rf /` the container stays up with nothing to run, and a checkpoint restore brings the files
+back.
+
+The agent reads and writes user files only by resolving each path inside the inner root, so a
+symlink planted in the user's files cannot lead out, and it opens only regular files without
+blocking, so a FIFO at `/etc/hosts` cannot hold the boot.
+
+The container is not a security boundary. Root inside holds every capability in the one user
+namespace: it can open its own disk device, change sysctls and mount what it likes. The guest is the
+user's own, and the VM is the boundary ([isolation](../isolation.md)).
+
+## Execs and services
+
+An exec starts a process in the container with the image's default environment, on pipes or a pty.
+Each non-tty exec starts inside a cgroup leaf of its own, so that no child can fork before it is
+inside, and a stop kills the whole leaf at once. A command runs as root unless the image says
+otherwise, so a process can move itself out of its leaf, and the containers of a `dockerd` it
+started live in cgroups of their own: a stop does not reach those. A tty exec has no leaf, because
+its session leader owns the terminal's process group.
+
+An outer exec runs a command as root in the agent's own world, outside the container, to see why the
+container is down or look at the disk after an `rm -rf /` inside. It runs in a small cgroup with a
+hard memory limit, or not at all, and resets its OOM score, so the kernel can kill it. Only a caller
+with host-wide `manage` scope may start one, and impd audits each. It is no new boundary, since root
+inside the container already holds every capability in the guest.
+
+The service supervisor starts each service file in `/etc/imp/services.d` at boot, logs it, and
+restarts it with backoff when it exits.
+
+## The reaper
+
+The agent is PID 1, so it inherits every orphan in the guest and must reap it. One loop owns every
+wait call, and nothing else in the agent waits on a child, since a per-child wait would race with
+it. Code that spawns a process registers its pid and gets the exit status from the reaper.
+
+## Shutdown
+
+On a shutdown the agent thaws the user disk, stops the services, signals every other process, kills
+the inner init so the container does not start again, syncs, remounts the user disk read-only and
+reboots. The kernel's reboot setting makes that end Firecracker.

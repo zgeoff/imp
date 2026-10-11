@@ -31,7 +31,7 @@ var errNotParked = &proto.Error{
 // parkForClaim serves ping and claim on the agent's vsock port until a
 // claim is applied, then closes the listener, so the server can take the port.
 // It opens no inet socket: the template's snapshot holds no TCP state.
-// docs/architecture/boot-templates.md#claim has the order of the steps.
+// docs/architecture/lifecycle/boot-templates.md#restore has the order of the steps.
 func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) error) (proto.Claim, error) {
 	l, err := listen()
 	if err != nil {

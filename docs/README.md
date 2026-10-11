@@ -5,30 +5,32 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 
 ## Architecture
 
-- [Overview](./architecture/overview.md): the shape of the system, why Firecracker, the host
-  container, the control API and the repo layout.
-- [Daemon](./architecture/daemon.md): impd's modules, start and stop, and how the lifecycle, the
-  governor, the proxy and the agent client fit together.
-- [Guest agent and kernel](./architecture/agent.md): the two drives, the boot, the inner container,
-  the reaper, and why imp builds its own guest kernel.
-- [Agent protocol](./architecture/protocol.md): the host ↔ guest wire format over vsock: frames,
-  errors, unary requests and exec streams.
-- [Storage and images](./architecture/storage.md): XFS reflinks, the data directory, checkpoints,
-  restores and forks, and how an OCI image becomes an ext4 disk.
-- [Backups](./architecture/backups.md): restic, what a backup holds, a run on XFS and ZFS, the
-  schedule, restores, whole-host restore, and the repository's security.
-- [Networking](./architecture/networking.md): addressing, iptables, egress, networks, the wake
-  proxy, the credential broker's port and the URLs.
-- [Host contract](./architecture/host-contract.md): what the host under the container must give, the
-  two installers, the RAM budget, and who owns the host firewall.
-- [Moves](./architecture/moves.md): a move between hosts: the steps, the stream, the tickets, the
-  fence that keeps one host's copy live, and recovery.
-- [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
-  governor, and the prototype findings behind them.
-- [Boot templates](./architecture/boot-templates.md): how a cold boot restores a parked guest per
-  shape instead of booting its kernel, the limits, and the RAM it costs.
-- [Elastic memory](./architecture/memory.md): `--max-memory`, how a guest grows and shrinks with
-  virtio-mem, the governor's part, and what it costs a sleep.
+[The overview](./architecture/overview.md) gives the whole system on one page: the path of a
+request, the topology, the data and the rules that cross every part.
+
+- **Lifecycle.** [The lifecycle](./architecture/lifecycle/lifecycle.md): states, the per-imp lock,
+  leases, the watchdog and recovery after a restart.
+  [Sleep and wake](./architecture/lifecycle/sleep-and-wake.md): snapshots, the wake, snapshot
+  identity and idle detection. [The RAM governor](./architecture/lifecycle/ram-governor.md): the
+  budget, admission, enforcement and KSM.
+  [Elastic memory](./architecture/lifecycle/elastic-memory.md) and
+  [boot templates](./architecture/lifecycle/boot-templates.md).
+- **The guest.** [The agent](./architecture/guest/agent.md): the drives, the boot, the inner
+  container and the kernel. [The agent protocol](./architecture/guest/protocol.md) and
+  [sessions](./architecture/guest/sessions.md), with output offsets and session logs.
+- **Storage.** [Storage](./architecture/storage/storage.md): the backends, checkpoints, restores and
+  forks. [Disk space](./architecture/storage/disk-space.md): sizes, the budget, usage and the sweep.
+  [Images](./architecture/storage/images.md), [backups](./architecture/storage/backups.md) and
+  [moves](./architecture/storage/moves.md).
+- **Network.** [Networking](./architecture/network/networking.md): addressing, the base firewall and
+  IPv6. [Egress](./architecture/network/egress.md): the policies, the resolver and private networks.
+  [Ingress](./architecture/network/ingress.md): the wake proxy, HTTPS, SSH and tunnels.
+  [The credential broker](./architecture/network/broker.md).
+- **Control.** [The API](./architecture/control/api.md): the contract, the streams, the clients,
+  events, audit and telemetry. [Auth](./architecture/control/auth.md): callers, scopes, the
+  dashboard session, tailnet identity and OAuth.
+- [Isolation](./architecture/isolation.md): the VM, the jailer, cgroups and the host container.
+  [The host](./architecture/host.md): what the host gives, the privileges and the Docker socket.
 
 ## Guides
 
@@ -42,6 +44,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   Docker in the guest, and how to make your own.
 - [Services and logs](./guides/services.md): `imp service` to add, restart and remove the processes
   an imp keeps running, and `imp logs` to print and follow their logs.
+- [Backups](./guides/backups.md): `imp backup`, restores, a whole-host restore, and protecting the
+  repository.
 - [Templates](./guides/templates.md): `imp template`, an image made from an imp's disk, how a copy
   gets its own machine-id and ssh host keys, and how templates are stored and backed up.
 - [Credential connectors](./guides/connectors.md): `imp secret` and `imp grant`, the host-side

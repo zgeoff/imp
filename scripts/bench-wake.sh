@@ -1,6 +1,6 @@
 #!/bin/bash
 # Measure wakes of an imp put to sleep right after a cold boot: the case a
-# host kernel before Linux 6.7 makes slow (docs/architecture/sleep-and-wake.md#young-guests).
+# host kernel before Linux 6.7 makes slow (docs/architecture/lifecycle/sleep-and-wake.md#young-guests).
 #
 #   scripts/bench-wake.sh [--cycles N] [--awake S] [--limit-ms MS] [--memory M]
 #

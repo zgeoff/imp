@@ -1,8 +1,8 @@
 # Tailscale
 
 The host container joins the tailnet as one node, tagged `tag:imp`. Every imp is reachable through
-that node on its own port. [Networking](../architecture/networking.md#urls) covers the URLs, and
-[configuration](./configuration.md#host-container) lists the variables.
+that node on its own port. [Networking](../architecture/network/ingress.md#the-wake-proxy) covers
+the URLs, and [configuration](./configuration.md#host-container) lists the variables.
 
 ## How it works
 

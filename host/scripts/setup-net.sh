@@ -1,6 +1,6 @@
 #!/bin/bash
 # Host-side NAT and isolation for imp taps
-# (docs/architecture/networking.md#iptables). Idempotent. Runs inside the host
+# (docs/architecture/network/networking.md#the-base-firewall). Idempotent. Runs inside the host
 # container's own network namespace.
 set -euo pipefail
 
@@ -55,7 +55,7 @@ rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED
 # connections (impd's proxy dials into guests).
 rule filter INPUT -i imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 rule filter INPUT -i imp+ -j DROP
-# IPv6 (docs/architecture/networking.md#ipv6). impd decides at start whether
+# IPv6 (docs/architecture/network/networking.md#ipv6). impd decides at start whether
 # imps get it; these rules hold either way. Guests reach the host container
 # over IPv6 only for neighbour discovery with the gateway fe80::1.
 rule6() {
@@ -149,7 +149,7 @@ if ip6tables -t raw -S PREROUTING >/dev/null 2>&1; then
     || ip6tables -t raw -A PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
 fi
 
-# The egress resolver (docs/architecture/networking.md#the-resolver): box and
+# The egress resolver (docs/architecture/network/egress.md#the-resolver): box and
 # none guests reach it through impd's nat redirect of port 53, over UDP and
 # TCP. The same pattern as the broker: an ACCEPT first in INPUT for the taps,
 # and a raw drop of the port for anything else, both tagged, so a start with

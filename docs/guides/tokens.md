@@ -40,10 +40,10 @@ such as `dev-*`. Such a token:
   it.
 - cannot make host-wide calls, whatever its scope: images, secrets and grants, networks, backups,
   tokens and `imp exec --agent`, which runs as root outside the imp's container
-  ([outer exec](../architecture/agent.md#outer-exec)). A grant hands a host secret to an imp, so a
-  `dev-*` token could otherwise grant itself any secret; a network reaches every imp on it. It
-  cannot pass `--net` to `imp new` either. A token made with a list of secrets may grant those
-  ([granting secrets](#granting-secrets)), and no others.
+  ([outer exec](../architecture/guest/agent.md#execs-and-services)). A grant hands a host secret to
+  an imp, so a `dev-*` token could otherwise grant itself any secret; a network reaches every imp on
+  it. It cannot pass `--net` to `imp new` either. A token made with a list of secrets may grant
+  those ([granting secrets](#granting-secrets)), and no others.
 
 A token with patterns still sees host-wide totals. `system.info` shows the RAM budget, use and
 reserve, the RAM that sleeping imps hold (`ramSleepingMib`), the count of imps, awake and in all,
@@ -165,16 +165,16 @@ An impd older than 0.34.0 has no `tokens.update`. `imp token set` checks that `s
 
 ## Each way in
 
-| Way in                   | Runs as                                                                                |
-| ------------------------ | -------------------------------------------------------------------------------------- |
-| `Authorization: Bearer`  | the token                                                                              |
-| Dashboard session cookie | the token it logged in with; the audit log says `dashboard`                            |
-| Exec ticket              | the caller that asked for it; it opens its one imp only                                |
-| `/exec`, `/tunnel`       | a token or a tailnet identity; each start or tunnel needs `exec`                       |
-| SSH key                  | the key; see below                                                                     |
-| Tailnet peer             | the identity a rule gives it; see below                                                |
-| Move ticket              | nothing but its one move's `/move/*` steps ([moves](../architecture/moves.md#tickets)) |
-| OAuth access token       | its grant, within the token that approved it; on the public `/mcp` only (see below)    |
+| Way in                   | Runs as                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `Authorization: Bearer`  | the token                                                                                            |
+| Dashboard session cookie | the token it logged in with; the audit log says `dashboard`                                          |
+| Exec ticket              | the caller that asked for it; it opens its one imp only                                              |
+| `/exec`, `/tunnel`       | a token or a tailnet identity; each start or tunnel needs `exec`                                     |
+| SSH key                  | the key; see below                                                                                   |
+| Tailnet peer             | the identity a rule gives it; see below                                                              |
+| Move ticket              | nothing but its one move's `/move/*` steps ([moves](../architecture/storage/moves.md#one-live-copy)) |
+| OAuth access token       | its grant, within the token that approved it; on the public `/mcp` only (see below)                  |
 
 A wrong bearer token is refused outright: it never falls through to the cookie or the tailnet. An
 `/exec` or `/tunnel` socket that a token without `exec` opens is accepted, and each start on it

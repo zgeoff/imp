@@ -1,6 +1,6 @@
 # imp-docker-proxy: the only Docker socket imp-host sees. It passes the
 # calls impd makes (pull, build, create, export, rm) and refuses every other
-# (docs/architecture/host-contract.md#the-docker-socket). It closes the
+# (docs/architecture/host.md#the-docker-socket). It closes the
 # Docker socket path only: imp-host keeps SYS_ADMIN, which still lets root
 # out of the container.
 #
@@ -11,7 +11,7 @@
 # and deploy/upgrade.sh install both.
 [Unit]
 Description=imp Docker socket proxy (the Docker API calls impd makes)
-Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host-contract.md
+Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host.md
 Requires=docker.service
 After=docker.service
 
