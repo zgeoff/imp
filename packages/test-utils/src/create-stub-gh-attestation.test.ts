@@ -14,18 +14,23 @@ function setupTest() {
   return { bin };
 }
 
-test('it succeeds auth status and attestation verify when logged in and verifying', () => {
+test('it succeeds auth status when logged in', () => {
   const ctx = setupTest();
 
-  createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
+  createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: false });
 
-  const codes = [
-    Bun.spawnSync([join(ctx.bin, 'gh'), 'auth', 'status']).exitCode,
+  expect(Bun.spawnSync([join(ctx.bin, 'gh'), 'auth', 'status']).exitCode).toBe(0);
+});
+
+test('it succeeds attestation verify when it verifies', () => {
+  const ctx = setupTest();
+
+  createStubGhAttestation({ bin: ctx.bin, loggedIn: false, verifies: true });
+
+  expect(
     Bun.spawnSync([join(ctx.bin, 'gh'), 'attestation', 'verify', 'imp', '-R', 'zgeoff/imp'])
       .exitCode,
-  ];
-
-  expect(codes).toStrictEqual([0, 0]);
+  ).toBe(0);
 });
 
 test('it fails auth status when logged out', () => {
