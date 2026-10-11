@@ -28,13 +28,11 @@ import { createStorageGc } from './storage-gc';
 import { createXfsBackend } from './xfs-backend';
 import { createZfsBackend } from './zfs/zfs-backend';
 
-interface SetupOptions {
-  // copies a disk or checkpoint file; a test holds one to catch storage made
-  // before its row
-  readonly cloneFile?: (source: string, target: string) => Promise<void>;
-}
-
-async function setupTest(options: SetupOptions = {}) {
+// `cloneFile` copies a disk or checkpoint file; a test holds one to catch
+// storage made before its row
+async function setupTest(
+  options: Readonly<{ cloneFile?: (source: string, target: string) => Promise<void> }> = {},
+) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
@@ -698,7 +696,7 @@ test('it lists the secret values kept aside as dropped in a dry run told to remo
 
   invariant(kept.dir);
 
-  expect(dry.dropped).toContainEqual({ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' });
+  expect(dry.dropped).toStrictEqual([{ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' }]);
   expect(existsSync(kept.dir)).toBeTrue();
 });
 
@@ -719,7 +717,7 @@ test('it removes the secret values kept aside when told to with orphans', async 
 
   invariant(kept.dir);
 
-  expect(removed.dropped).toContainEqual({ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' });
+  expect(removed.dropped).toStrictEqual([{ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' }]);
   expect(existsSync(kept.dir)).toBeFalse();
   expect(files.listKept()).toStrictEqual([]);
 });

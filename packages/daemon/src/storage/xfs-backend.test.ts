@@ -16,14 +16,14 @@ import { buildStubFiemap } from '../test-utils/build-stub-fiemap';
 import { readExtents } from './fiemap';
 import { createXfsBackend } from './xfs-backend';
 
-interface SetupOptions {
-  // where the data dir goes; a temp dir by default
-  readonly parentDir?: string;
-  readonly reserveFileBytes?: number;
-  readonly readFileExtents?: typeof readExtents;
-}
-
-async function setupTest(options: SetupOptions = {}) {
+// `parentDir` is where the data dir goes, a temp dir by default
+async function setupTest(
+  options: Readonly<{
+    parentDir?: string;
+    reserveFileBytes?: number;
+    readFileExtents?: typeof readExtents;
+  }> = {},
+) {
   const dataDir = await mkdtemp(join(options.parentDir ?? tmpdir(), 'impd-xfs-test-'));
 
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
