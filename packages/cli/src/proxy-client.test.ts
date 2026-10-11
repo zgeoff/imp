@@ -5,6 +5,7 @@ import { connect, createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import {
   TUNNEL_CLOSE_LOST,
   TUNNEL_CLOSE_PROTOCOL,
@@ -23,15 +24,18 @@ import { createImpd } from '@imp/daemon/src/create-impd';
 import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
 import {
+  buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
+import { startStubDialAgent } from '@imp/daemon/src/test-utils/start-stub-dial-agent';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from './create-imp-client';
@@ -74,11 +78,12 @@ async function setupTest() {
   // an agent new enough to dial and listen, which impd checks before each
   vmm.agent.version = '0.18.0';
 
+  // impd boots with a root bearer; each test reads it back for the proxy
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the CLI sends
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -141,15 +146,13 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the image every imp a test creates boots from
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  // the image every imp a test creates boots from, with a rootfs where its
+  // digest names
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   // the tunnel is a WebSocket, so impd listens as main.ts has it
   const server = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' }).server;
@@ -164,11 +167,12 @@ async function setupTest() {
   return {
     // for what the test starts that must stop before impd does
     stack,
+    rootToken,
     dataDir,
     impd,
     server,
     url,
-    client: createImpClient({ url, token: 'root-token' }),
+    client: createImpClient({ url, token: rootToken }),
   };
 }
 
@@ -176,35 +180,18 @@ test('#startProxy relays a half-closed request and its reply on both loopbacks',
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
 
-  const decoder = new TextDecoder();
-
   // the guest's server behind the agent's dial: it answers once the request
   // is whole, then closes its side
-  const agent = await startStubAgent(
+  const agent = await startStubDialAgent(
     buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, _request, frames) => {
-      if (frames.length === 1) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
-      } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
-        const asked = frames
-          .filter((frame) => frame.type === FRAME_TYPES.stdin)
-          .map((frame) => decoder.decode(frame.payload))
-          .join('');
-
-        socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode(`got ${asked}`)));
-        socket.end(encodeFrame(FRAME_TYPES.stdoutEof));
-      }
-    },
+    (asked) => `got ${asked}`,
+    { stack: ctx.stack },
   );
-
-  ctx.stack.defer(() => {
-    agent.close();
-  });
 
   const writeNotice = mock<(text: string) => void>();
 
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 5432 }],
     { writeNotice },
@@ -254,7 +241,7 @@ test('#startProxy stops reading an upload at the window while the guest takes no
   const onWindowFull = mock<(unackedBytes: number) => void>();
 
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 80 }],
     { writeNotice: () => {}, onWindowFull },
@@ -325,7 +312,7 @@ test('#startProxy sends the rest of an upload once the guest takes it again', as
   const writeNotice = mock<(text: string) => void>();
 
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 80 }],
     { writeNotice, onWindowFull },
@@ -438,7 +425,7 @@ test('#startProxy rejects an imp that impd does not have, and frees its local po
   const port = findFreePorts(1).take();
 
   const started = startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'nope',
     [{ local: port, remote: 80 }],
     { writeNotice: () => {} },
@@ -480,7 +467,7 @@ test('#startProxy reports impd’s refusal of a dial and resets the local connec
   const writeNotice = mock<(text: string) => void>();
 
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 9 }],
     { writeNotice },
@@ -509,36 +496,19 @@ test('#startProxy ends only the tunnel that gets a message that is not JSON, and
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box' });
 
-  const decoder = new TextDecoder();
-
   // the guest's server takes each dial and answers a request once it is whole
-  const agent = await startStubAgent(
+  await startStubDialAgent(
     buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, _request, frames) => {
-      if (frames.length === 1) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
-      } else if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
-        const asked = frames
-          .filter((frame) => frame.type === FRAME_TYPES.stdin)
-          .map((frame) => decoder.decode(frame.payload))
-          .join('');
-
-        socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode(`got ${asked}`)));
-        socket.end(encodeFrame(FRAME_TYPES.stdoutEof));
-      }
-    },
+    (asked) => `got ${asked}`,
+    { stack: ctx.stack },
   );
-
-  ctx.stack.defer(() => {
-    agent.close();
-  });
 
   // a fault on the path to impd: impd itself never sends text that is not JSON
   const faulty = startStubTunnelFaultProxy(ctx.stack, ctx.url);
   const writeNotice = mock<(text: string) => void>();
 
   const proxy = await startProxy(
-    { url: faulty.url, token: 'root-token', host: null },
+    { url: faulty.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 5432 }],
     { writeNotice },
@@ -620,7 +590,7 @@ test('#startProxy says impd restarted when impd closes an open tunnel to restart
   const writeNotice = mock<(text: string) => void>();
 
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 80 }],
     { writeNotice },
@@ -656,7 +626,7 @@ test('#startProxy prints one notice for a burst of connections that cannot reach
 
   // the clock stands still through the burst
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 80 }],
     { writeNotice, now: () => Date.UTC(2026, 0, 1) },
@@ -692,7 +662,7 @@ test('#startProxy prints the notice again once the quiet time passed without a f
   const clock = { nowMs: Date.UTC(2026, 0, 1) };
 
   const proxy = await startProxy(
-    { url: ctx.url, token: 'root-token', host: null },
+    { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     [{ local: 0, remote: 80 }],
     { writeNotice, now: () => clock.nowMs },
