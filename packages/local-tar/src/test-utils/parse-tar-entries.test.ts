@@ -1,30 +1,14 @@
 import { expect, test } from 'bun:test';
-import tar from 'tar-stream';
+import { buildStubTar } from './build-stub-tar';
 import { parseTarEntries } from './parse-tar-entries';
 
 test('it parses each entry in order with its full header and decoded data', async () => {
-  const pack = tar.pack();
+  const bytes = await buildStubTar([
+    { name: 'ünï', mtime: new Date(1_700_000_000_000), content: 'données' },
+    { name: 'link', type: 'symlink', linkname: 'ünï', mtime: new Date(1_700_000_000_000) },
+  ]);
 
-  pack.entry({ name: 'ünï', mtime: new Date(1_700_000_000_000) }, 'données');
-
-  pack.entry({
-    name: 'link',
-    type: 'symlink',
-    linkname: 'ünï',
-    mtime: new Date(1_700_000_000_000),
-  });
-
-  pack.finalize();
-
-  const chunks: Uint8Array[] = [];
-
-  for await (const chunk of pack) {
-    if (chunk instanceof Uint8Array) {
-      chunks.push(chunk);
-    }
-  }
-
-  const entries = await parseTarEntries(new Uint8Array(Bun.concatArrayBuffers(chunks)));
+  const entries = await parseTarEntries(bytes);
 
   expect(entries).toStrictEqual([
     {

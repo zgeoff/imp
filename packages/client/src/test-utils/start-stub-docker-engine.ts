@@ -15,11 +15,12 @@ interface StubDockerEngineOptions {
 }
 
 // Docker's engine API for impd's host build: POST /build answers a trace
-// line, then the image ID or the error; anything else is 404. It keeps each
-// build's context and its caller's signal, and stops at the test's end.
+// line, then the image ID or the error; any other call gets a 500 naming it
+// and lands in `unexpected`. It stops at the test's end.
 export function startStubDockerEngine(options: StubDockerEngineOptions) {
   const contexts: Uint8Array[] = [];
   const signals: AbortSignal[] = [];
+  const unexpected: string[] = [];
 
   // a held build stays open however long it is silent, as docker keeps it;
   // Bun's types leave idleTimeout off unix servers, but it applies there too
@@ -28,8 +29,15 @@ export function startStubDockerEngine(options: StubDockerEngineOptions) {
     unix: options.socketPath,
     idleTimeout: 0,
     fetch: async (request: Request) => {
-      if (request.method !== 'POST' || new URL(request.url).pathname !== '/build') {
-        return new Response('page not found', { status: 404 });
+      const call = `${request.method} ${new URL(request.url).pathname}`;
+
+      if (call !== 'POST /build') {
+        unexpected.push(call);
+
+        return Response.json(
+          { message: `stub docker engine: ${call} is not modelled` },
+          { status: 500 },
+        );
       }
 
       signals.push(request.signal);
@@ -62,5 +70,5 @@ export function startStubDockerEngine(options: StubDockerEngineOptions) {
 
   onTestFinished(() => server.stop(true));
 
-  return { contexts, signals };
+  return { contexts, signals, unexpected };
 }

@@ -100,8 +100,8 @@ the SQLite handle itself, since Kysely closes a driver only after a query starte
 `startInMemoryMetrics` (it unregisters its meter provider, and throws when another is registered),
 `startStubSshAgent`, `startStubSshServer` (it stops listening and leaves each open connection to its
 client's own end), `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
-`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`
-and `startStubGithubReleases`.
+`setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`,
+`startStubGithubReleases` and the client's `createStubUndiciWebSocket` (it closes the socket).
 
 Utils that take a caller's stack and register nothing themselves:
 
@@ -619,6 +619,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Client's exec agent          | `packages/client/src/test-utils/build-stub-exec-agent.ts`                                          | An imp's agent for exec and attach, scripted by argv                               |
 | Client's fwd agent           | `packages/client/src/test-utils/build-stub-forward-agent.ts`                                       | An imp's agent for reverse forwards: listen and accept                             |
 | impd's /exec socket          | `packages/client/src/test-utils/start-stub-impd-socket.ts`                                         | Protocol faults a real impd never sends                                            |
+| Node's WebSocket             | `packages/client/src/test-utils/create-stub-undici-web-socket.ts`                                  | undici's socket on a refused upgrade: an `error` event and no `close`              |
 | Host engine for client       | `packages/client/src/test-utils/start-stub-docker-engine.ts`                                       | Docker's POST /build on a unix socket                                              |
 | Docker CLI for client        | `packages/client/src/test-utils/create-stub-docker-bin.ts`                                         | inspect, create, export and rm of the images a test names                          |
 | impd before the build stream | `packages/client/src/test-utils/build-stub-impd-before-build-stream.ts`                            | Real impd, with no Accept read on POST /images/build                               |
@@ -745,23 +746,25 @@ The client package's tests boot impd through `createImpd` in each file's `setupT
 client stub agents on the imp's vsock socket. Image builds and adds run with
 `IMP_BUILD_ISOLATION=host` against `packages/client/src/test-utils/start-stub-docker-engine.ts` (at
 `DOCKER_HOST`) and `create-stub-docker-bin.ts` (first on `PATH` through `updateEnv`), with the real
-`tar` and `mkfs.ext4`; no builder imp runs. An older or newer impd is a `build-stub-impd-*` stand-in
-in front of the real app, at `http://impd.test/` through MSW. Answers impd never sends (a proxy's
-502, a cut stream, bad frames) go to the pure cores: `read-build-answer.ts` on literal responses,
-and `start-stub-impd-socket.ts` for `/exec`. Over a socket, Bun's fetch replaces the Content-Length
-of a Blob's stream with the Blob's real size, but keeps the one a caller sets on a `ReadableStream`
-it made, so `build-image.test.ts` sends a declared size with a hand-made stream to impd's real
-listener. That listener takes `main.ts`'s `maxRequestBodySize`, since Bun's own 128 MiB default
-answers a bare 413 before the build route can. The keepalive tests there boot impd with a
-`keepaliveMs` of 500 and run the client in a Bun child with `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1`, which
-Bun's coarse timer turns into a deadline of about 8 s (measured 7.99 s from the engine's hold, four
-runs); the engine holds the build silent for 28 keepalives, about 13.5 s. A streamed build outlasts
-the deadline; through `build-stub-impd-before-build-stream.ts` the client gives up at it, and impd
-then stops the build on the engine (the engine's `signals` record it), so no image lands. The stub
-engine serves with `idleTimeout: 0` behind a type assertion, as `docker-proxy/main.ts` does: Bun's
-types leave the option off unix servers, its 10 s default closes a silent build after 10 to 12 s,
-and `server.timeout(request, 0)` does not lift it once the answer has started. The 13.5 s hold fails
-without it. Its image factory is `packages/client/src/test-utils/build-mock-image.ts`
+`tar` and `mkfs.ext4`; no builder imp runs. That engine models only `POST /build`; any other call
+gets a 500 that names it and lands in `unexpected`, which each test that uses it asserts empty. An
+older or newer impd is a `build-stub-impd-*` stand-in in front of the real app, at
+`http://impd.test/` through MSW. Answers impd never sends (a proxy's 502, a cut stream, bad frames)
+go to the pure cores: `read-build-answer.ts` on literal responses, and `start-stub-impd-socket.ts`
+for `/exec`. Over a socket, Bun's fetch replaces the Content-Length of a Blob's stream with the
+Blob's real size, but keeps the one a caller sets on a `ReadableStream` it made, so
+`build-image.test.ts` sends a declared size with a hand-made stream to impd's real listener. That
+listener takes `main.ts`'s `maxRequestBodySize`, since Bun's own 128 MiB default answers a bare 413
+before the build route can. The keepalive tests there boot impd with a `keepaliveMs` of 500 and run
+the client in a Bun child with `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1`, which Bun's coarse timer turns into
+a deadline of about 8 s (measured 7.99 s from the engine's hold, four runs); the engine holds the
+build silent for 28 keepalives, about 13.5 s. A streamed build outlasts the deadline; through
+`build-stub-impd-before-build-stream.ts` the client gives up at it, and impd then stops the build on
+the engine (the engine's `signals` record it), so no image lands. The stub engine serves with
+`idleTimeout: 0` behind a type assertion, as `docker-proxy/main.ts` does: Bun's types leave the
+option off unix servers, its 10 s default closes a silent build after 10 to 12 s, and
+`server.timeout(request, 0)` does not lift it once the answer has started. The 13.5 s hold fails
+without it. Its image factory is the api's, `packages/api/src/test-utils/build-mock-image.ts`
 (`buildMockImage`).
 
 Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs

@@ -240,6 +240,7 @@ test('it uploads a Blob as the build context and answers the image', async () =>
   });
 
   expect(note.stdout.toString()).toBe('as a blob');
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it uploads bytes as the build context', async () => {
@@ -279,6 +280,7 @@ test('it uploads bytes as the build context', async () => {
   });
 
   expect(note.stdout.toString()).toBe('as bytes');
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it uploads a stream as the build context', async () => {
@@ -318,6 +320,7 @@ test('it uploads a stream as the build context', async () => {
   });
 
   expect(note.stdout.toString()).toBe('as a stream');
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it sends the name, the Dockerfile, the token and what it accepts', async () => {
@@ -330,7 +333,8 @@ test('it sends the name, the Dockerfile, the token and what it accepts', async (
   });
 
   updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
-  startStubDockerEngine({ socketPath: ctx.dockerSocket, imageId });
+
+  const engine = startStubDockerEngine({ socketPath: ctx.dockerSocket, imageId });
 
   await mkdir(join(ctx.workDir, 'context', 'sub'), { recursive: true });
   await writeFile(join(ctx.workDir, 'context', 'sub', 'Dockerfile'), 'FROM scratch\n');
@@ -360,6 +364,8 @@ test('it sends the name, the Dockerfile, the token and what it accepts', async (
     ['content-type', 'application/x-tar'],
     ['accept', `${IMAGE_BUILD_STREAM_TYPE}, application/json`],
   ]);
+
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it sends the size of a stream as its Content-Length, which impd builds to', async () => {
@@ -408,6 +414,7 @@ test('it sends the size of a stream as its Content-Length, which impd builds to'
   });
 
   expect(note.stdout.toString()).toBe('with its size');
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test(
@@ -428,7 +435,7 @@ test(
 
     updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
 
-    startStubDockerEngine({
+    const engine = startStubDockerEngine({
       socketPath: ctx.dockerSocket,
       imageId,
       holdUntil: () => release.promise,
@@ -502,6 +509,7 @@ test(
 
     expect(output.join('').trimEnd().split('\n').at(-1)).toBe('{"type":"image","name":"web"}');
     expect(exitCode).toBe(0);
+    expect(engine.unexpected).toStrictEqual([]);
   },
   { timeout: 30_000 },
 );
@@ -597,6 +605,7 @@ test(
     expect(exitCode).toBe(0);
     expect(gaveUpAfterMs).toBeWithin(7000, 9000);
     expect(images).toStrictEqual([]);
+    expect(engine.unexpected).toStrictEqual([]);
   },
   { timeout: 30_000 },
 );
@@ -613,7 +622,7 @@ test('it reports each progress line as it arrives, before the image', async () =
 
   updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
 
-  startStubDockerEngine({
+  const engine = startStubDockerEngine({
     socketPath: ctx.dockerSocket,
     imageId,
     holdUntil: () => release.promise,
@@ -654,6 +663,8 @@ test('it reports each progress line as it arrives, before the image', async () =
     createdAt: expect.toBeDate(),
     sizeBytes: expect.toBeNumber(),
   });
+
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it throws the ORPCError of the error line that ends the stream', async () => {
@@ -663,7 +674,7 @@ test('it throws the ORPCError of the error line that ends the stream', async () 
 
   updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
 
-  startStubDockerEngine({
+  const engine = startStubDockerEngine({
     socketPath: ctx.dockerSocket,
     imageId: `sha256:${'b'.repeat(64)}`,
     failure: 'the Dockerfile: no such file: note',
@@ -683,6 +694,8 @@ test('it throws the ORPCError of the error line that ends the stream', async () 
     status: 400,
     message: expect.toInclude('the Dockerfile: no such file: note'),
   });
+
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it answers the image from an impd that answers JSON, from before the stream', async () => {
@@ -695,7 +708,8 @@ test('it answers the image from an impd that answers JSON, from before the strea
   });
 
   updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
-  startStubDockerEngine({ socketPath: ctx.dockerSocket, imageId });
+
+  const engine = startStubDockerEngine({ socketPath: ctx.dockerSocket, imageId });
 
   await mkdir(join(ctx.workDir, 'context'));
   await writeFile(join(ctx.workDir, 'context', 'Dockerfile'), 'FROM scratch\n');
@@ -721,6 +735,7 @@ test('it answers the image from an impd that answers JSON, from before the strea
   });
 
   expect(progress).not.toHaveBeenCalled();
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it throws the ORPCError that an impd from before the stream answers', async () => {
@@ -730,7 +745,7 @@ test('it throws the ORPCError that an impd from before the stream answers', asyn
 
   updateEnv('PATH', `${docker.binDir}:${process.env['PATH'] ?? ''}`);
 
-  startStubDockerEngine({
+  const engine = startStubDockerEngine({
     socketPath: ctx.dockerSocket,
     imageId: `sha256:${'b'.repeat(64)}`,
     failure: 'the Dockerfile: no such file: note',
@@ -754,4 +769,6 @@ test('it throws the ORPCError that an impd from before the stream answers', asyn
     status: 400,
     message: expect.toInclude('the Dockerfile: no such file: note'),
   });
+
+  expect(engine.unexpected).toStrictEqual([]);
 });

@@ -149,14 +149,53 @@ test('it records that the caller of a held build went', async () => {
   expect(signalBeforeAbort).toBeFalse();
 });
 
-test('it answers any other call 404', async () => {
+test('it answers a call it does not model with a 500 that names the call', async () => {
   const ctx = await setupTest();
 
   startStubDockerEngine({ socketPath: ctx.socketPath, imageId: `sha256:${'b'.repeat(64)}` });
 
   const response = await fetch('http://docker/_ping', { unix: ctx.socketPath });
 
-  expect(response.status).toBe(404);
+  const answer = { status: response.status, body: await response.json() };
+
+  expect(answer).toStrictEqual({
+    status: 500,
+    body: { message: 'stub docker engine: GET /_ping is not modelled' },
+  });
+});
+
+test('it records a call it does not model as unexpected', async () => {
+  const ctx = await setupTest();
+
+  const engine = startStubDockerEngine({
+    socketPath: ctx.socketPath,
+    imageId: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const response = await fetch('http://docker/images/json', { unix: ctx.socketPath });
+
+  await response.body?.cancel();
+
+  expect(engine.unexpected).toStrictEqual(['GET /images/json']);
+});
+
+test('it records no unexpected call for a build', async () => {
+  const ctx = await setupTest();
+
+  const engine = startStubDockerEngine({
+    socketPath: ctx.socketPath,
+    imageId: `sha256:${'b'.repeat(64)}`,
+  });
+
+  const response = await fetch('http://docker/build', {
+    method: 'POST',
+    body: 'tar',
+    unix: ctx.socketPath,
+  });
+
+  await response.text();
+
+  expect(engine.unexpected).toStrictEqual([]);
 });
 
 test('it stops when the test finishes', async () => {

@@ -239,6 +239,10 @@ test('#ImpEventSchema rejects an event of an unknown kind', () => {
     at: new Date('2026-01-02T03:04:05.000Z'),
     ev: 'ImpMoved',
     name: 'dev',
+    actor: 'token',
+    actorName: 'ci',
+    tty: false,
+    command: 'git',
   });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['ev'], code: 'invalid_union' });
