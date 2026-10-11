@@ -280,7 +280,7 @@ Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
 unix socket path holds 107 bytes, which a worktree's `.cache/e2e/ssh-*` dir can pass, so `ssh-agent`
 keeps its ssh control and forward sockets, and `ssh` its forward sockets, in a `mkdtemp` dir under
 `TMPDIR`, and `startLocalSshAgent` (`test/e2e/lib/ssh.ts`) makes its agent's socket in one of its
-own there, which its dispose removes. A journey that checks something keeps an imp awake past the
+own there, which its `stop()` removes. A journey that checks something keeps an imp awake past the
 idle timeout waits with `waitAwakePastIdle` (`test/e2e/lib/awake-past-idle.ts`): the idle loop moves
 an imp's `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
 `lastActiveAt` reaches the idle timeout past the release has stayed awake that long; its wake count

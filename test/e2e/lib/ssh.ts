@@ -1,3 +1,4 @@
+import { onTestFinished } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -203,36 +204,42 @@ export async function listAgentThroughUnixForward(
     `${user}@${SSH_HOST}`,
   ]);
 
-  try {
-    // the client listens once it has logged in, which may wake the imp
-    await waitFor(`the forward to listen on ${local}`, () => {
-      if (!existsSync(local)) {
-        throw new Error(`no ${local} yet`);
-      }
-    });
-
-    const result = await runCommand(['ssh-add', '-l'], { env: { SSH_AUTH_SOCK: local } });
-
-    await forward.stop();
-
-    const forwardLog = await new Response(forward.proc.stderr).text();
-
-    return { listed: result, forwardLog };
-  } finally {
+  // the release if a step below fails; it is safe after the one below
+  onTestFinished(async () => {
     await forward.stop();
 
     rmSync(local, { force: true });
-  }
+  });
+
+  // the client listens once it has logged in, which may wake the imp
+  await waitFor(`the forward to listen on ${local}`, () => {
+    if (!existsSync(local)) {
+      throw new Error(`no ${local} yet`);
+    }
+  });
+
+  const result = await runCommand(['ssh-add', '-l'], { env: { SSH_AUTH_SOCK: local } });
+
+  await forward.stop();
+
+  rmSync(local, { force: true });
+
+  const forwardLog = await new Response(forward.proc.stderr).text();
+
+  return { listed: result, forwardLog };
 }
 
 // The user's ssh-agent on this machine, holding a key made for the run.
-export interface LocalSshAgent extends AsyncDisposable {
+export interface LocalSshAgent {
   // SSH_AUTH_SOCK for `ssh -A`
   readonly socket: string;
   readonly publicKey: string;
 
   // the private key file, to look for its bytes where they must not be
   readonly keyPath: string;
+
+  // ends the agent and removes its socket's dir; safe to call again
+  readonly stop: () => Promise<void>;
 }
 
 // The shell runs the agent until its stdin closes: when the suite's process
@@ -265,7 +272,7 @@ export async function startLocalSshAgent(
     socket,
     publicKey,
     keyPath,
-    [Symbol.asyncDispose]: async () => {
+    stop: async () => {
       await agent.stdin.end();
 
       await agent.exited;

@@ -40,7 +40,7 @@ async function setupTest() {
   // the user's agent on this machine, holding a key made for the test
   const laptop = await startLocalSshAgent(ssh);
 
-  stack.defer(() => laptop[Symbol.asyncDispose]());
+  stack.defer(() => laptop.stop());
 
   return { prefix: readSuitePrefix('reverse'), stack, client, ssh, laptop };
 }
