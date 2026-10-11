@@ -7,6 +7,7 @@ import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
+import { buildStubAfter } from '../../../mcp/src/test-utils/build-stub-after';
 import { buildStubRepeat } from '../../../mcp/src/test-utils/build-stub-repeat';
 import { buildApiListenOptions } from '../api-listen-options';
 import { loadConfig } from '../config';
@@ -163,14 +164,16 @@ async function setupTest() {
 
   const url = `http://127.0.0.1:${String(server.server?.port)}`;
   const repeat = buildStubRepeat();
+  const after = buildStubAfter();
 
-  // a short kill grace, so a stopped command's SIGKILL comes soon; progress
-  // ticks only when the test steps `repeat` by 1000 ms
+  // progress ticks only when the test steps `repeat` by 1000 ms, and a
+  // stopped command's SIGKILL comes only when the test fires its 50 ms grace
   const mcp = createMcpServer({
     version: '1.2.3',
     killGraceMs: 50,
     progressIntervalMs: 1000,
     repeat: repeat.repeat,
+    after: after.after,
   });
 
   // its calls in flight end before impd's app closes
@@ -186,6 +189,7 @@ async function setupTest() {
     rootClient: createImpClient({ url, token: 'root-token' }),
     mcp,
     repeat,
+    after,
     gate,
     sent,
     reply: (message: string) => {
@@ -456,6 +460,12 @@ test('it stops reporting progress for a cancelled call', async () => {
   // a tick after the cancel, while the stubborn command still waits for its
   // SIGKILL
   ctx.repeat.tick(1000);
+
+  await waitFor(() => {
+    expect(ctx.after.countPending(50)).toBe(1);
+  });
+
+  ctx.after.fire(50);
 
   await call;
 
