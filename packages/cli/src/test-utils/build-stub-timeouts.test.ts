@@ -3,7 +3,7 @@ import { buildStubTimeouts } from './build-stub-timeouts';
 
 test('it records each timer’s delay as pending and fires none on its own', () => {
   const stub = buildStubTimeouts();
-  const fire = mock();
+  const fire = mock<() => void>();
 
   stub.startTimer(5000, fire);
   stub.startTimer(50, fire);
@@ -27,8 +27,8 @@ test('it marks a timer cancelled once the unit cancels it', () => {
 
 test('it fires only the pending timers, once, when the test fires them', () => {
   const stub = buildStubTimeouts();
-  const first = mock();
-  const second = mock();
+  const first = mock<() => void>();
+  const second = mock<() => void>();
   const cancel = stub.startTimer(5000, first);
 
   stub.startTimer(5000, second);
