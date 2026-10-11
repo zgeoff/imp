@@ -2,6 +2,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { ApprovalCodeSchema } from '@imp/api';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
@@ -52,9 +53,15 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root bearer; each test reads it back for its client
+  const rootToken = faker.string.alphanumeric(32);
+
+  // impd's clock, which stays where a test sets it
+  const clock = { nowMs: Date.now() };
+
   const impd = await createImpd(config, {
     db,
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
     systemFiles: {
       kernelPath: join(dataDir, 'system', 'vmlinux'),
@@ -69,8 +76,7 @@ async function setupTest() {
     readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
     log: () => {},
 
-    // a frozen clock, so a sign-in's times are known
-    now: () => Date.UTC(2026, 0, 1),
+    now: () => clock.nowMs,
     readIdentity: (files, ipv6Prefix) => ({
       firecrackerVersion: 'v1.17.0',
       snapshotVersion: 'v12.0.0',
@@ -127,6 +133,8 @@ async function setupTest() {
   const calls: { readonly path: string; readonly input: unknown }[] = [];
 
   return {
+    rootToken,
+    clock,
     oauth: impd.oauth,
     calls,
 
@@ -173,7 +181,7 @@ test('it refuses without a terminal or --yes before it calls impd', () => {
 test('it shows the sign-in and approves nothing when the answer at a terminal is no', async () => {
   const ctx = await setupTest();
 
-  const root = ctx.connect('root-token');
+  const root = ctx.connect(ctx.rootToken);
 
   const added = await root.oauth.clients.add({
     name: 'conn',
@@ -181,6 +189,9 @@ test('it shows the sign-in and approves nothing when the answer at a terminal is
   });
 
   const made = await root.tokens.create({ name: 'approver', scope: 'manage' });
+
+  // the sign-in starts at a known time
+  ctx.clock.nowMs = Date.UTC(2026, 0, 1);
 
   const started = await ctx.oauth.authorize({
     responseType: 'code',
@@ -229,7 +240,7 @@ test('it shows the sign-in and approves nothing when the answer at a terminal is
 test('it approves what it showed when the answer at a terminal is yes', async () => {
   const ctx = await setupTest();
 
-  const root = ctx.connect('root-token');
+  const root = ctx.connect(ctx.rootToken);
 
   const added = await root.oauth.clients.add({
     name: 'conn',
@@ -282,7 +293,7 @@ test.each([
 ])('it approves without asking for --yes %s a terminal', async (_case, isTerminal) => {
   const ctx = await setupTest();
 
-  const root = ctx.connect('root-token');
+  const root = ctx.connect(ctx.rootToken);
 
   const added = await root.oauth.clients.add({
     name: 'conn',
@@ -326,7 +337,7 @@ test.each([
 test('it refuses an approval of more than a read token holds', async () => {
   const ctx = await setupTest();
 
-  const root = ctx.connect('root-token');
+  const root = ctx.connect(ctx.rootToken);
 
   const added = await root.oauth.clients.add({
     name: 'conn',
