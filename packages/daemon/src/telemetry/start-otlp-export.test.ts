@@ -18,6 +18,10 @@ async function setupTest() {
     exportPath: JSON.stringify(join(import.meta.dir, 'start-otlp-export.ts')),
     apiPath: JSON.stringify(Bun.resolveSync('@opentelemetry/api', import.meta.dir)),
     updateEnvPath: JSON.stringify(Bun.resolveSync('@imp/test-utils/update-env', import.meta.dir)),
+    invariantPath: JSON.stringify(Bun.resolveSync('@imp/test-utils/invariant', import.meta.dir)),
+
+    // the child runs no preload, so it registers the run's matchers itself
+    matchersPath: JSON.stringify(Bun.resolveSync('@zgeoff/bun-test-extended', import.meta.dir)),
   };
 }
 
@@ -42,6 +46,8 @@ test('it sends metrics and spans to the collector at the endpoint', async () => 
 import { metrics, trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
+import { invariant } from ${ctx.invariantPath};
+import ${ctx.matchersPath};
 
 test('it sends', async () => {
   const received: { path: string; contentType: string | null; bodyBytes: number }[] = [];
@@ -69,7 +75,8 @@ test('it sends', async () => {
 
   metrics.getMeter('impd').createCounter('imp.test').add(1);
   trace.getTracer('impd').startSpan('imp.test').end();
-  await stop?.();
+  invariant(stop);
+  await stop();
   await collector.stop(true);
 
   const sorted = received.toSorted((a, b) => a.path.localeCompare(b.path));
@@ -78,7 +85,7 @@ test('it sends', async () => {
     ['/v1/metrics', 'application/x-protobuf'],
     ['/v1/traces', 'application/x-protobuf'],
   ]);
-  expect(sorted.map((each) => each.bodyBytes > 0)).toStrictEqual([true, true]);
+  expect(sorted).toSatisfyAll((each: { bodyBytes: number }) => each.bodyBytes > 0);
 });
 `,
   );
@@ -96,6 +103,8 @@ test('it names the service and its version in what it sends', async () => {
 import { trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
+import { invariant } from ${ctx.invariantPath};
+import ${ctx.matchersPath};
 
 test('it names', async () => {
   const bodies: string[] = [];
@@ -118,11 +127,12 @@ test('it names', async () => {
   onTestFinished(() => stop?.());
 
   trace.getTracer('impd').startSpan('imp.test').end();
-  await stop?.();
+  invariant(stop);
+  await stop();
   await collector.stop(true);
 
-  expect(bodies.length).toBeGreaterThan(0);
-  expect(bodies.filter((body) => !body.includes('impd-staging') || !body.includes('0.3.0'))).toStrictEqual([]);
+  expect(bodies).not.toBeEmpty();
+  expect(bodies).toSatisfyAll((body: string) => body.includes('impd-staging') && body.includes('0.3.0'));
 });
 `,
   );
@@ -140,6 +150,8 @@ test('it rejects its stop when the collector answers with an error', async () =>
 import { trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
+import { invariant } from ${ctx.invariantPath};
+import ${ctx.matchersPath};
 
 test('it rejects', async () => {
   const paths: string[] = [];
@@ -161,7 +173,9 @@ test('it rejects', async () => {
 
   trace.getTracer('impd').startSpan('imp.test').end();
 
-  const stopping = stop === null ? Promise.resolve('no stop') : stop();
+  invariant(stop);
+
+  const stopping = stop();
 
   expect(stopping).rejects.toThrow();
   await collector.stop(true);
@@ -183,6 +197,8 @@ test('it rejects its stop when nothing listens at the endpoint', async () => {
 import { trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
+import { invariant } from ${ctx.invariantPath};
+import ${ctx.matchersPath};
 
 test('it rejects', async () => {
   const collector = Bun.serve({ port: 0, fetch: () => new Response(null, { status: 200 }) });
@@ -201,7 +217,9 @@ test('it rejects', async () => {
 
   trace.getTracer('impd').startSpan('imp.test').end();
 
-  const stopping = stop === null ? Promise.resolve('no stop') : stop();
+  invariant(stop);
+
+  const stopping = stop();
 
   expect(stopping).rejects.toThrow();
 });
