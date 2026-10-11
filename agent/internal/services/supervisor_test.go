@@ -180,6 +180,8 @@ func TestHeldRunnerHoldsTheReturnOfAStartedProcess(t *testing.T) {
 func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
 	r := newHeldRunner(t)
 	s := New(r, fsroot.Host, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}))
+	// the release first, so a start the runner holds cannot block the stop
+	t.Cleanup(func() { r.release(); s.StopAll() })
 	s.logDir = t.TempDir()
 	s.Start(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"})
 	p := r.nextFork(t)
@@ -232,10 +234,11 @@ func TestAFailedRestartKeepsTheLastExit(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "once")
 	assert.NilError(t, os.WriteFile(bin, []byte("#!/bin/sh\nrm -f \"$0\"\nexit 3\n"), 0o755))
 	s := newSupervisor(t)
+	s.firstBackoff = 100 * time.Millisecond
 
 	s.Start(Def{Name: "once", Argv: []string{bin}, Restart: "always"})
 
-	// The first restart comes after minBackoff and fails.
+	// The first restart comes after the first backoff and fails.
 	var st proto.ServiceStatus
 	poll.WaitOn(t, func(poll.LogT) poll.Result {
 		st = s.List()[0]
@@ -243,8 +246,15 @@ func TestAFailedRestartKeepsTheLastExit(t *testing.T) {
 			return poll.Success()
 		}
 		return poll.Continue("the service restarted %d times, want 2", st.Restarts)
-	}, poll.WithTimeout(minBackoff+3*time.Second), poll.WithDelay(20*time.Millisecond))
+	}, poll.WithTimeout(3*time.Second), poll.WithDelay(20*time.Millisecond))
 	assert.DeepEqual(t, st.LastExit, &proto.Exit{Code: 3})
+}
+
+// A service waits one second before its first restart, doubling up to 60 s.
+func TestNewStartsTheRestartBackoffAtOneSecond(t *testing.T) {
+	s := New(&proc.Direct{Reaper: testReaper}, fsroot.Host, imagecfg.NewLive(imagecfg.Config{}))
+
+	assert.Equal(t, s.firstBackoff, time.Second)
 }
 
 // openLogWithin runs openLog for svc and returns its error, failing the

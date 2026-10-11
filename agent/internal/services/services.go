@@ -49,6 +49,9 @@ type Supervisor struct {
 	image  *imagecfg.Live
 	dir    string
 	logDir string
+	// firstBackoff is a service's first wait before a restart, minBackoff
+	// outside tests
+	firstBackoff time.Duration
 
 	// opMu serializes Add, Remove and Restart, which stop a service and
 	// touch its file outside mu
@@ -89,7 +92,7 @@ type service struct {
 func New(runner proc.Runner, fsys fsroot.FS, image *imagecfg.Live) *Supervisor {
 	return &Supervisor{runner: runner, fsys: fsys, image: image, dir: Dir, logDir: LogDir,
 		services: make(map[string]*service), quit: make(chan struct{}),
-		truncs: make(map[string]uint64)}
+		truncs: make(map[string]uint64), firstBackoff: minBackoff}
 }
 
 // Load reads Dir and starts every service in it, and the log rotator. A bad
@@ -228,7 +231,7 @@ func (s *Supervisor) startAt(def Def, path string) {
 func (s *Supervisor) run(svc *service) {
 	defer s.wg.Done()
 	defer close(svc.done)
-	backoff := minBackoff
+	backoff := s.firstBackoff
 	for {
 		if isClosed(svc.stop) {
 			s.setState(svc, "stopped")
