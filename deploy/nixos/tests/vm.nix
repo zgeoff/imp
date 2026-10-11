@@ -37,40 +37,12 @@ let
     wait
   '';
 
-  # Stands in for the tailscale CLI. The saved state says "valid" (Running),
-  # "starting" (Starting) or anything else (NeedsLogin); `up` reads the key file, logs its
-  # arguments and makes the state valid.
+  # Stands in for the tailscale CLI: the stand-in that
+  # scripts/test-utils/run-stub-vm-tailscale.test.ts tests, on the state dir.
   fakeTailscale = pkgs.writeScriptBin "tailscale" ''
     #!${pkgs.bash}/bin/bash
-    dir=${stateDir}
-    up= key_file= name=
-    for arg in "$@"; do
-      case $arg in
-        up) up=1 ;;
-        --auth-key=file:*) key_file=''${arg#--auth-key=file:} ;;
-        --hostname=*) name=''${arg#--hostname=} ;;
-      esac
-    done
-    if [ -n "$up" ]; then
-      [ -s "$key_file" ] || { echo "fake tailscale: no key in $key_file" >&2; exit 1; }
-      # a single-use key that joined once already
-      if [ "$(cat "$key_file")" = used-key ]; then
-        echo "backend error: invalid key: unable to validate API key" >&2
-        exit 1
-      fi
-      echo "up $*" >>"$dir/fake-up.log"
-      echo valid >"$dir/tailscaled.state"
-      echo "$name" >"$dir/fake-hostname"
-      exit 0
-    fi
-    case $(cat "$dir/tailscaled.state" 2>/dev/null) in
-      valid) state=Running ;;
-      starting) state=Starting ;; # no network yet
-      *) state=NeedsLogin ;;
-    esac
-    name=$(cat "$dir/fake-hostname" 2>/dev/null || echo none)
-    printf '{"BackendState":"%s","Self":{"HostName":"%s","TailscaleIPs":["100.64.0.1"],"DNSName":"%s.example.ts.net."}}\n' \
-      "$state" "$name" "$name"
+    export STUB_TAILSCALE_DIR=${stateDir}
+    exec ${pkgs.bash}/bin/bash ${../../../scripts/test-utils/run-stub-vm-tailscale.sh} "$@"
   '';
 
   stub = pkgs.dockerTools.buildImage {
@@ -271,9 +243,12 @@ pkgs.testers.runNixOSTest {
 
       with subtest("the env file holds the module's settings, readable by root alone"):
           assert host.succeed("stat -c %a /etc/imp/imp-host.env").strip() == "600"
-          for line in ["IMP_HOST_FIREWALL=none", "IMP_STORAGE_BACKEND=zfs", "IMP_ZFS_ROOT=tank/imp",
-                       "IMP_TAILSCALE_HOSTNAME=imp-vm", "IMP_HOST_IMAGE=imp-host-stub:test"]:
-              host.succeed(f"grep -qx {line} /etc/imp/imp-host.env")
+          env = host.succeed("cat /etc/imp/imp-host.env").splitlines()
+          wanted = ["IMP_HOST_FIREWALL=none", "IMP_STORAGE_BACKEND=zfs", "IMP_ZFS_ROOT=tank/imp",
+                    "IMP_TAILSCALE_HOSTNAME=imp-vm", "IMP_HOST_IMAGE=imp-host-stub:test"]
+          # every missing line at once, not only the first
+          missing = [line for line in wanted if line not in env]
+          assert missing == [], missing
           # the formula refused this host (above); ramBudgetMiB is what runs
           host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /etc/imp/imp-host.env")
 
@@ -329,8 +304,9 @@ pkgs.testers.runNixOSTest {
           own.wait_for_unit("sshd.service")
           own.succeed("ip addr add 10.99.0.1/32 dev lo && ip -6 addr add fd99::1/128 dev lo")
           host.succeed(f"ip route add 10.99.0.0/24 via {own4} && ip -6 route add fd99::/64 via {own6}")
-          for addr in [own4, own6, "10.99.0.1", "fd99::1"]:
-              host.succeed(connect("", addr, 22))
+          # the host's own exit code to each address, all reported together
+          direct = {addr: host.execute(connect("", addr, 22))[0] for addr in [own4, own6, "10.99.0.1", "fd99::1"]}
+          assert direct == {own4: 0, own6: 0, "10.99.0.1": 0, "fd99::1": 0}, direct
           host.succeed(connect(container, own4, 22))
           host.succeed(connect(container, own6, 22))
           dropped(host, connect(container, "10.99.0.1", 22), TIMED_OUT_IN_CONTAINER)
@@ -356,10 +332,20 @@ pkgs.testers.runNixOSTest {
           host.succeed("systemd-run --unit=listen9999 socat TCP6-LISTEN:9999,ipv6only=0,fork,reuseaddr SYSTEM:true")
           host.wait_for_open_port(9998)
           host.wait_for_open_port(9999)
-          for family in ["", "-6"]:
-              gateway = host.succeed(f"docker exec imp-host ip {family} route show default | awk '/^default/ {{print $3; exit}}'").strip()
-              host.succeed(connect(container, gateway, 9998))
-              dropped(host, connect(container, gateway, 9999), TIMED_OUT_IN_CONTAINER)
+          gateway4 = host.succeed("docker exec imp-host ip route show default | awk '/^default/ {print $3; exit}'").strip()
+          gateway6 = host.succeed("docker exec imp-host ip -6 route show default | awk '/^default/ {print $3; exit}'").strip()
+          # the exit code of each connect, all reported together: 9998 opens, 9999 drops
+          codes = {
+              (gateway, port): host.execute(connect(container, gateway, port))[0]
+              for gateway in [gateway4, gateway6]
+              for port in [9998, 9999]
+          }
+          assert codes == {
+              (gateway4, 9998): 0,
+              (gateway4, 9999): TIMED_OUT_IN_CONTAINER,
+              (gateway6, 9998): 0,
+              (gateway6, 9999): TIMED_OUT_IN_CONTAINER,
+          }, codes
           host.succeed("systemctl stop listen9998 listen9999")
 
       with subtest("a proxy stop leaves imp-host running"):
