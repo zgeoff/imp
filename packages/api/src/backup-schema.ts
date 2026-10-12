@@ -41,8 +41,8 @@ const SkippedGrantSchema = z.object({ imp: z.string(), secret: z.string(), reaso
 const NotRestorableSchema = z.object({ imp: z.string(), reason: z.string() });
 
 // What a restore of all took from the backup's database copy: the named
-// tokens by name, and the secrets, whose values a backup never holds. A
-// token whose name this host has, or a key bound here, is left out.
+// tokens and the secrets, without values; `skipped` lists each token, key
+// or secret it left out, with why.
 const RestoredDatabaseSchema = z
   .object({
     tokens: z.array(z.string()).readonly(),

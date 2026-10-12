@@ -105,7 +105,7 @@ const restoreCommand = defineCommand({
         }
 
         for (const skipped of database.skipped) {
-          console.error(`imp: token ${skipped.name} left out: ${skipped.reason}`);
+          console.error(`imp: ${skipped.name} left out: ${skipped.reason}`);
         }
       }
 

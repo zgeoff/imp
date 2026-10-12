@@ -73,7 +73,13 @@ test('it keeps this host’s own secret under a name the copy has', async () => 
   const ctx = await setupTest();
   const source = await createTestDatabase();
 
-  await createSecret(source.db, { name: 'gh', kind: 'github', rules: [], valueFile: 'gh.old' });
+  await createSecret(source.db, {
+    name: 'gh',
+    kind: 'github',
+    rules: [],
+    valueFile: 'gh.0123456789abcdef',
+  });
+
   await createSecret(ctx.db, { name: 'gh', kind: 'github', rules: [], valueFile: 'gh.here' });
   await writeConsistentCopy(source.db, ctx.copyPath);
 
@@ -130,4 +136,31 @@ test('it refuses a copy from a newer impd and writes nothing', async () => {
 
   expect(found).toBeUndefined();
   expect(tokens.createRestored).not.toHaveBeenCalled();
+});
+
+test('it leaves out a secret whose value file names a path outside the secrets directory', async () => {
+  const ctx = await setupTest();
+  const source = await createTestDatabase();
+
+  await createSecret(source.db, { name: 'gh', kind: 'github', rules: [], valueFile: '../token' });
+
+  await createSecret(source.db, {
+    name: 'npm',
+    kind: 'npm',
+    rules: [],
+    valueFile: 'npm.0123456789abcdef',
+  });
+
+  await writeConsistentCopy(source.db, ctx.copyPath);
+
+  const result = await createRestoredAccess(ctx.db, ctx.tokens, ctx.copyPath);
+  const found = await findSecret(ctx.db, 'gh');
+
+  expect(result).toStrictEqual({
+    tokens: [],
+    secrets: ['npm'],
+    skipped: [{ name: 'gh', reason: 'secret gh: its value file is not a name impd gives' }],
+  });
+
+  expect(found).toBeUndefined();
 });
