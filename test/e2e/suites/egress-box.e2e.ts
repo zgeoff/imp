@@ -3,13 +3,13 @@ import { config } from '../lib/config';
 import { buildTcpQueryOctal, parseTcpReplyHex } from '../lib/dns-probe';
 import { resolveImageName } from '../lib/fixtures';
 import { tryDialFromImp, tryGetFromImp, tryInImp } from '../lib/guest-probe';
-import { startHeldListener } from '../lib/held-listener';
 import { createInstanceClient, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import { readContainerGateway } from '../lib/instance';
 import { parseWholeNumber } from '../lib/parse-whole-number';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
+import { startStubPrivateService } from '../lib/start-stub-private-service';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
@@ -33,7 +33,7 @@ test('it lets an open imp reach the internet and the private gateway, and no imp
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}open`;
-  const listener = startHeldListener(ctx.gateway);
+  const listener = startStubPrivateService(ctx.gateway);
 
   ctx.stack.defer(() => {
     listener.stop();
@@ -61,7 +61,7 @@ test('it lets a box imp reach its list, and nothing else', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}box`;
-  const listener = startHeldListener(ctx.gateway);
+  const listener = startStubPrivateService(ctx.gateway);
 
   ctx.stack.defer(() => {
     listener.stop();
@@ -141,7 +141,7 @@ test('it drops a guest that sends from another address of its /30', async () => 
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}spoof`;
-  const listener = startHeldListener(ctx.gateway);
+  const listener = startStubPrivateService(ctx.gateway);
 
   ctx.stack.defer(() => {
     listener.stop();
@@ -185,7 +185,7 @@ test('it opens a private address only by an explicit CIDR, and cuts its flow und
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}cidr`;
-  const listener = startHeldListener(ctx.gateway);
+  const listener = startStubPrivateService(ctx.gateway);
 
   ctx.stack.defer(() => {
     listener.stop();

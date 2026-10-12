@@ -1,16 +1,16 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { connect } from 'node:net';
-import { startHeldListener } from './held-listener';
+import { startStubPrivateService } from './start-stub-private-service';
 import { waitFor } from './wait-for';
 
 test('it greets a connection and counts it with the bytes it sent', async () => {
-  const listener = startHeldListener('127.0.0.1');
+  const service = startStubPrivateService('127.0.0.1');
 
   onTestFinished(() => {
-    listener.stop();
+    service.stop();
   });
 
-  const socket = connect(listener.port, '127.0.0.1');
+  const socket = connect(service.port, '127.0.0.1');
 
   onTestFinished(() => {
     socket.destroy();
@@ -25,12 +25,12 @@ test('it greets a connection and counts it with the bytes it sent', async () => 
   socket.write('abcd');
 
   await waitFor('the bytes to arrive', () => {
-    if (listener.readReceived() < 4) {
+    if (service.readReceived() < 4) {
       throw new Error('not yet');
     }
   });
 
   expect(greeting).toBe('hello\n');
-  expect(listener.readAccepted()).toBe(1);
-  expect(listener.readReceived()).toBe(4);
+  expect(service.readAccepted()).toBe(1);
+  expect(service.readReceived()).toBe(4);
 });

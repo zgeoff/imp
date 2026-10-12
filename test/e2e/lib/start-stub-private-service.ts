@@ -1,7 +1,7 @@
-// A TCP server on this machine that greets each connection and counts what
-// it takes: guests reach it on the dev container's gateway, a private
-// address. The caller stops it.
-export interface HeldListener {
+// A TCP service on a private address of this machine, which greets each
+// connection and counts what it takes: guests reach it on the dev
+// container's gateway. The caller stops it.
+export interface StubPrivateService {
   readonly port: number;
 
   // the connections it accepted, and the bytes they sent
@@ -10,7 +10,7 @@ export interface HeldListener {
   readonly stop: () => void;
 }
 
-export function startHeldListener(hostname: string): HeldListener {
+export function startStubPrivateService(hostname: string): StubPrivateService {
   const counts = { accepted: 0, received: 0 };
 
   const listener = Bun.listen({
