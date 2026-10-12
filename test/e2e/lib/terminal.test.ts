@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { openCommandTerminal } from './terminal';
 
-test('#close kills the command on the terminal and resolves once it has exited', async () => {
+test('it kills the command on the terminal on close and resolves once it has exited', async () => {
   const terminal = openCommandTerminal(['cat']);
 
   onTestFinished(() => terminal.close());
@@ -17,7 +17,7 @@ test('#close kills the command on the terminal and resolves once it has exited',
   expect(code).toBe(143);
 });
 
-test('#close is safe once the command has exited', async () => {
+test('it closes without an error once the command has exited', async () => {
   const terminal = openCommandTerminal(['true']);
 
   onTestFinished(() => terminal.close());

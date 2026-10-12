@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { updateEnv } from '@imp/test-utils/update-env';
 import { GIT_REPO_ENV_VARS, createGitFreeEnv, runGitChecked, runGitCommand } from './git-env';
 
 async function setupTest() {
@@ -41,17 +42,7 @@ test('#runGitCommand runs git in its own repo when this process names another', 
   await runGitChecked(['git', 'init', '-q', '-b', 'main', other]);
 
   // as a pre-push hook exports it
-  const before = process.env['GIT_DIR'];
-
-  process.env['GIT_DIR'] = join(other, '.git');
-
-  onTestFinished(() => {
-    if (before === undefined) {
-      delete process.env['GIT_DIR'];
-    } else {
-      process.env['GIT_DIR'] = before;
-    }
-  });
+  updateEnv('GIT_DIR', join(other, '.git'));
 
   const result = await runGitCommand(['git', '-C', repo, 'rev-parse', '--absolute-git-dir']);
 

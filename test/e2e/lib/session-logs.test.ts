@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { parseSessionLogs } from './session-logs';
 
-test('#parseSessionLogs reads a live log and an ended one', () => {
+test('it reads a live log and an ended one', () => {
   const stdout = JSON.stringify([
     {
       session: 'out',
@@ -49,7 +49,7 @@ test('#parseSessionLogs reads a live log and an ended one', () => {
   ]);
 });
 
-test('#parseSessionLogs rejects a state it does not know', () => {
+test('it rejects a state it does not know', () => {
   const stdout = JSON.stringify([
     {
       session: 'out',

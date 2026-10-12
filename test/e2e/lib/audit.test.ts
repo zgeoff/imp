@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { parseAuditCalls } from './audit';
 
-test('#parseAuditCalls reads a call by a token and a login over ssh', () => {
+test('it reads a call by a token and a login over ssh', () => {
   const stdout = JSON.stringify([
     {
       procedure: 'imps.stop',
@@ -24,8 +24,12 @@ test('#parseAuditCalls reads a call by a token and a login over ssh', () => {
   ]);
 });
 
-test('#parseAuditCalls rejects a call without an outcome', () => {
+test('it rejects a call without an outcome', () => {
   expect(() =>
     parseAuditCalls(JSON.stringify([{ procedure: 'imps.stop', actor: 'token' }])),
-  ).toThrow();
+  ).toThrow(
+    expect.objectContaining({
+      issues: expect.toPartiallyContain({ path: [0, 'outcome'], code: 'invalid_type' }),
+    }),
+  );
 });

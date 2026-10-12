@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { faker } from '@faker-js/faker';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { createImpClient } from '../../../packages/client/src/index';
 import { loadConfig } from '../../../packages/daemon/src/config';
@@ -69,11 +70,12 @@ async function setupTest() {
 
   const vmm = buildStubVmm();
 
+  // impd boots with a root token, the bearer the host's token file holds
+  const rootToken = faker.string.alphanumeric(32);
+
   const impd = await createImpd(config, {
     db,
-
-    // the bearer the host's token file holds
-    rootToken: 'root-token',
+    rootToken,
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
 
     // what system.info reports; the drive's hash names the drive file above
@@ -151,7 +153,7 @@ async function setupTest() {
 
   const client = createImpClient({
     url: 'http://impd.test',
-    token: 'root-token',
+    token: rootToken,
     fetch: (request) => impd.api.app.handle(request),
   });
 
@@ -169,7 +171,7 @@ async function setupTest() {
     sizeBytes: 6,
   });
 
-  return { dir, client, apiUrl: `http://127.0.0.1:${String(server.port)}` };
+  return { dir, client, rootToken, apiUrl: `http://127.0.0.1:${String(server.port)}` };
 }
 
 test('#buildUpstreamsPath names the upstreams file in the host’s data dir', () => {
@@ -191,7 +193,11 @@ test('#parseRpcAnswer reads the json of an answer', () => {
 });
 
 test('#parseRpcAnswer rejects an answer without json', () => {
-  expect(() => parseRpcAnswer(true, { result: 1 })).toThrow();
+  expect(() => parseRpcAnswer(true, { result: 1 })).toThrow(
+    expect.objectContaining({
+      issues: expect.toPartiallyContain({ path: ['json'], code: 'invalid_type' }),
+    }),
+  );
 });
 
 test('#parseHostListing keeps the rows and imps that name the imp on each host', () => {
@@ -243,7 +249,7 @@ test('#startMoveSend marks the imp sending on the source host', async () => {
   const ctx = await setupTest();
 
   // scripts/dev.sh token reads the host's token through docker exec
-  const docker = createStubBin(ctx.dir, 'docker', 'echo root-token');
+  const docker = createStubBin(ctx.dir, 'docker', `echo ${ctx.rootToken}`);
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
@@ -266,7 +272,7 @@ test('#startMoveSend rejects with the host’s error when the source refuses the
   const ctx = await setupTest();
 
   // scripts/dev.sh token reads the host's token through docker exec
-  const docker = createStubBin(ctx.dir, 'docker', 'echo root-token');
+  const docker = createStubBin(ctx.dir, 'docker', `echo ${ctx.rootToken}`);
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 

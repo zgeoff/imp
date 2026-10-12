@@ -13,7 +13,7 @@ async function setupTest() {
   return { dir };
 }
 
-test('#buildPathGoneCheck reports a unix socket that is still there', async () => {
+test('it reports a unix socket that is still there', async () => {
   const ctx = await setupTest();
 
   const socket = join(ctx.dir, 'agent.sock');
@@ -32,7 +32,7 @@ test('#buildPathGoneCheck reports a unix socket that is still there', async () =
   expect(result.stdout.toString()).toBe('there\n');
 });
 
-test('#buildPathGoneCheck reports a path with nothing at it as gone', async () => {
+test('it reports a path with nothing at it as gone', async () => {
   const ctx = await setupTest();
 
   const result = Bun.spawnSync(['sh', '-c', buildPathGoneCheck(join(ctx.dir, 'agent.sock'))]);

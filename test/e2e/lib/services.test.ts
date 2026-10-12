@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { parseServices } from './services';
 
-test('#parseServices reads a running service and a stopped one', () => {
+test('it reads a running service and a stopped one', () => {
   const stdout = JSON.stringify([
     {
       name: 'web',
@@ -46,7 +46,7 @@ test('#parseServices reads a running service and a stopped one', () => {
   ]);
 });
 
-test('#parseServices rejects a pid that is not a whole number', () => {
+test('it rejects a pid that is not a whole number', () => {
   const stdout = JSON.stringify([
     { name: 'web', state: 'running', pid: 2.5, argv: [], envKeys: [], source: 'api', root: true },
   ]);

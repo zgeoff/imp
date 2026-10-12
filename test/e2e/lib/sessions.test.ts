@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { parseSessions } from './sessions';
 
-test('#parseSessions reads each session the CLI lists, without the fields the suites ignore', () => {
+test('it reads each session the CLI lists, without the fields the suites ignore', () => {
   const stdout = JSON.stringify([
     {
       name: 'main',
@@ -19,7 +19,7 @@ test('#parseSessions reads each session the CLI lists, without the fields the su
   ]);
 });
 
-test('#parseSessions rejects a row without a pid', () => {
+test('it rejects a row without a pid', () => {
   const stdout = JSON.stringify([
     { name: 'main', state: 'running', attached: false, cols: 80, rows: 24 },
   ]);

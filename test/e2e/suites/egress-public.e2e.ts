@@ -3,7 +3,6 @@ import { invariant } from '@imp/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { tryGetFromImp } from '../lib/guest-probe';
-import { startHeldListener } from '../lib/held-listener';
 import { createInstanceClient, readInfo, runImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import { readContainerGateway } from '../lib/instance';
@@ -16,6 +15,7 @@ import {
 } from '../lib/lan-netns';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
+import { startStubPrivateService } from '../lib/start-stub-private-service';
 import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
@@ -44,7 +44,7 @@ test('it lets an open imp reach each private listener, before and after a public
 
   const open = `${ctx.prefix}open`;
   const pub = `${ctx.prefix}pub`;
-  const listener = startHeldListener(ctx.gateway);
+  const listener = startStubPrivateService(ctx.gateway);
 
   ctx.stack.defer(() => {
     listener.stop();

@@ -63,6 +63,10 @@ test('#stopSuiteGroup stops a running suite and the processes it started', async
 
   const pid = await started.promise;
 
+  onTestFinished(() => {
+    stopSuiteGroup(pid, 'SIGKILL');
+  });
+
   const grandchild = await waitFor(
     async () => {
       const text = await readFile(marker, 'utf8');

@@ -49,13 +49,17 @@ test('it runs the proxy binary under host isolation with the privileges of the p
 test('it rejects args without a proxy section', () => {
   expect(() =>
     buildHostModeProxyArgv({
-      argsJson: JSON.stringify({ privileges: [] }),
-      name: 'n',
-      dockerGid: '1',
-      hostImage: 'i',
-      socketVolume: 'v',
-      socket: '/s',
-      binary: '/b',
+      argsJson: JSON.stringify({ privileges: [['--cap-add', 'SYS_ADMIN']] }),
+      name: 'imp-x-docker-proxy-host-mode-1',
+      dockerGid: '998',
+      hostImage: 'imp-host:dev-x',
+      socketVolume: 'imp-x-docker',
+      socket: '/run/imp-docker/host-mode-1.sock',
+      binary: '/data/imp-docker-proxy',
     }),
-  ).toThrow();
+  ).toThrow(
+    expect.objectContaining({
+      issues: expect.toPartiallyContain({ path: ['proxy'], code: 'invalid_type' }),
+    }),
+  );
 });

@@ -18,11 +18,6 @@ async function setupTest() {
   return { root, repoRoot };
 }
 
-// a zpool status that answers with stdout
-function createZfsRunner(stdout: string) {
-  return () => Promise.resolve({ exitCode: 0, stdout, stderr: '' });
-}
-
 test('it gives nothing to wipe for a data dir that does not exist', async () => {
   const ctx = await setupTest();
 
@@ -31,7 +26,7 @@ test('it gives nothing to wipe for a data dir that does not exist', async () => 
     repoRoot: ctx.repoRoot,
     storageBackend: undefined,
     zfsRoot: undefined,
-    run: createZfsRunner(''),
+    run: () => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
   });
 
   expect(target).toBeNull();
@@ -49,7 +44,7 @@ test('it wipes a data dir under the repo’s .data', async () => {
     repoRoot: ctx.repoRoot,
     storageBackend: undefined,
     zfsRoot: undefined,
-    run: createZfsRunner(''),
+    run: () => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
   });
 
   expect(target).toStrictEqual({ dir, zfs: null });
@@ -68,7 +63,7 @@ test('it wipes a data dir elsewhere that holds an imp.xfs', async () => {
     repoRoot: ctx.repoRoot,
     storageBackend: undefined,
     zfsRoot: undefined,
-    run: createZfsRunner(''),
+    run: () => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
   });
 
   expect(target).toStrictEqual({ dir, zfs: null });
@@ -86,7 +81,7 @@ test('it refuses a data dir elsewhere with no imp.xfs and no ZFS proof', async (
     repoRoot: ctx.repoRoot,
     storageBackend: 'zfs',
     zfsRoot: 'impbench7/imp',
-    run: createZfsRunner(''),
+    run: () => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
   });
 
   await Promise.allSettled([attempt]);
@@ -112,7 +107,7 @@ test('it empties the proven ZFS root of a data dir outside the repo', async () =
     repoRoot: ctx.repoRoot,
     storageBackend: 'zfs',
     zfsRoot: 'impbench7/imp',
-    run: createZfsRunner(`\t${vdev}  ONLINE  0 0 0\n`),
+    run: () => Promise.resolve({ exitCode: 0, stdout: `\t${vdev}  ONLINE  0 0 0\n`, stderr: '' }),
   });
 
   expect(target).toStrictEqual({
@@ -139,7 +134,7 @@ test('it empties the proven ZFS root of a data dir under the repo’s .data too'
     repoRoot: ctx.repoRoot,
     storageBackend: 'zfs',
     zfsRoot: 'impbench7/imp',
-    run: createZfsRunner(`\t${vdev}  ONLINE  0 0 0\n`),
+    run: () => Promise.resolve({ exitCode: 0, stdout: `\t${vdev}  ONLINE  0 0 0\n`, stderr: '' }),
   });
 
   expect(target).toStrictEqual({
