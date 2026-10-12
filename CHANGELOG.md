@@ -2,10 +2,11 @@
 
 ## [0.42.0](https://github.com/zgeoff/imp/compare/v0.41.0...v0.42.0) (2026-10-12)
 
-
 ### Features
 
-* **geo-630:** back up impd's database to restore tokens and secrets ([#328](https://github.com/zgeoff/imp/issues/328)) ([2a11f22](https://github.com/zgeoff/imp/commit/2a11f228bbc03a9c28738e4d28fd6423a75af0c5))
+- **geo-630:** back up impd's database to restore tokens and secrets
+  ([#328](https://github.com/zgeoff/imp/issues/328))
+  ([2a11f22](https://github.com/zgeoff/imp/commit/2a11f228bbc03a9c28738e4d28fd6423a75af0c5))
 
 ## [0.41.0](https://github.com/zgeoff/imp/compare/v0.40.4...v0.41.0) (2026-10-12)
 
