@@ -241,7 +241,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     copies: ReadonlyMap<string, DiskCopy>,
     tree: BackupTree,
     excluded: BackupManifest['excluded'],
-    database: string | null,
+    database: BackupManifest['database'],
   ): BackupManifest => {
     const digests = new Map(copy.images.map((image) => [image.id, image.digest]));
 
@@ -372,7 +372,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       imageDigests: copy.images.map((image) => image.digest),
     });
 
-    const database = deps.backup.database ? BACKUP_TREE.database : null;
+    const database = deps.backup.database
+      ? { file: BACKUP_TREE.database, sizeBytes: statSync(copyPath).size }
+      : null;
+
     const manifest = buildManifest(runId, copy, copies, tree, excluded, database);
 
     try {
@@ -417,16 +420,19 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   // The copy goes in with the setting on, holding its size from the disk
   // budget while it writes. With it off, the copy a run with it on left in
   // the tree goes, so no later snapshot holds the database.
-  const writeTreeDatabase = async (copyPath: string, database: string | null): Promise<void> => {
+  const writeTreeDatabase = async (
+    copyPath: string,
+    database: BackupManifest['database'],
+  ): Promise<void> => {
     rmSync(join(paths.tree, dirname(BACKUP_TREE.database)), { recursive: true, force: true });
 
     if (database === null) {
       return;
     }
 
-    const target = join(paths.tree, database);
+    const target = join(paths.tree, database.file);
 
-    await diskBudget.withRoom(statSync(copyPath).size, () => {
+    await diskBudget.withRoom(database.sizeBytes, () => {
       mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
       copyFileSync(copyPath, target);
       chmodSync(target, 0o600);
@@ -714,18 +720,22 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   };
 
   // the tokens and secrets of the backup's database copy, which stay when
-  // the imps' restore fails after them: a second restore of all skips them
+  // the imps' restore fails after them: a second restore of all skips them.
+  // It holds the copy's size while restic writes and impd reads it.
   const createRestoredDatabase = async (
     point: ResticSnapshot,
     base: string,
-    database: string,
+    database: NonNullable<BackupManifest['database']>,
     workDir: string,
   ) => {
-    const dir = join(workDir, dirname(database));
+    const file = requireTreeDatabase(database.file);
+    const dir = join(workDir, dirname(file));
 
-    await restic.restore(point.id, join(base, dirname(database)), dir, []);
+    const access = await diskBudget.withRoom(database.sizeBytes, async () => {
+      await restic.restore(point.id, join(base, dirname(file)), dir, []);
 
-    const access = await createRestoredAccess(deps.db, deps.tokens, join(workDir, database));
+      return createRestoredAccess(deps.db, deps.tokens, join(workDir, file));
+    });
 
     log(
       `impd: backup: restored ${String(access.tokens.length)} tokens and ${String(access.secrets.length)} secrets from ${point.id}`,
@@ -919,6 +929,18 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         }
       }),
   };
+}
+
+// The one path a run writes the copy at: a manifest that names another, as
+// one altered could, would restore a file outside the restore's directory
+function requireTreeDatabase(database: string): string {
+  if (database !== BACKUP_TREE.database) {
+    throw new Error(
+      `the backup names its database copy at ${database}, not ${BACKUP_TREE.database}`,
+    );
+  }
+
+  return database;
 }
 
 // Eight characters that tell images apart: a docker ID's first, a template's

@@ -1063,6 +1063,41 @@ test('#createRestored leaves out a token named root', async () => {
   });
 });
 
+test('#createRestored binds a key once when the backup lists it twice for one token', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+
+  const [type = '', base64 = ''] = createEd25519Key().public.split(' ');
+  const blob = Buffer.from(base64, 'base64');
+  const record = buildMockTokenRecord({ name: 'dev' });
+
+  const first = buildMockTokenSshKeyRecord({
+    tokenId: record.id,
+    fingerprint: formatKeyFingerprint(blob),
+    publicKey: `${type} ${base64}`,
+  });
+
+  const second = buildMockTokenSshKeyRecord({
+    tokenId: record.id,
+    fingerprint: formatKeyFingerprint(blob),
+    publicKey: `${type} ${base64}`,
+  });
+
+  const result = await tokens.createRestored([record], [first, second]);
+
+  expect(result).toStrictEqual({
+    restored: ['dev'],
+    skipped: [
+      {
+        name: 'dev',
+        reason: `key ${formatKeyFingerprint(blob)} is bound here already or in authorized_keys`,
+      },
+    ],
+  });
+
+  expect(tokens.list()[0]?.sshKeys).toHaveLength(1);
+});
+
 test('#createRestored restores a token without a key that authorized_keys lists', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret');

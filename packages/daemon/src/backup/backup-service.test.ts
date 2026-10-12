@@ -1899,9 +1899,10 @@ test('#runBackup puts the database copy, with the named tokens, in the snapshot 
 
   expect(copy.query('SELECT name FROM tokens').all()).toStrictEqual([{ name: 'agent' }]);
 
-  expect(BackupManifestSchema.parse(JSON.parse(manifestText)).database).toBe(
-    'database/impd.sqlite',
-  );
+  expect(BackupManifestSchema.parse(JSON.parse(manifestText)).database).toStrictEqual({
+    file: 'database/impd.sqlite',
+    sizeBytes: statSync(join(snapshotDir, 'database', 'impd.sqlite')).size,
+  });
 });
 
 test('#runBackup puts no secret value, key, password or root token in a backup with the database copy', async () => {
@@ -2064,6 +2065,88 @@ test('#restoreBackup brings back the named tokens, the secrets and the grants on
   });
 
   expect(grants).toStrictEqual(['gh']);
+});
+
+test('#restoreBackup holds the database copy’s size from the disk budget while it restores the copy', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshRestic = buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() });
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    tokens: fresh.tokens,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: freshRestic.restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  // the bytes the budget holds as each restore of a dir starts
+  const seen: { dir: string; pendingBytes: number }[] = [];
+
+  freshRestic.state.onRestore = async (dir) => {
+    const status = await fresh.diskBudget.readStatus();
+
+    seen.push({ dir, pendingBytes: status.pendingBytes });
+  };
+
+  await freshBackups.restoreBackup({ all: true });
+
+  const copyBytes = statSync(join(ctx.repoDir, run.snapshotId, 'database', 'impd.sqlite')).size;
+
+  expect(seen).toPartiallyContain({ dir: 'database', pendingBytes: copyBytes });
+});
+
+test('#restoreBackup refuses a backup whose manifest names its database copy at another path', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+
+  const manifestPath = join(ctx.repoDir, run.snapshotId, 'manifest.json');
+  const manifest = BackupManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
+
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({ ...manifest, database: { file: '../../x/impd.sqlite', sizeBytes: 1 } }),
+  );
+
+  await ctx.imps.destroyImp('dev');
+
+  expect(backups.restoreBackup({ all: true })).rejects.toThrow(
+    'the backup names its database copy at ../../x/impd.sqlite, not database/impd.sqlite',
+  );
 });
 
 test('#restoreBackup restores a token’s grantable list on a fresh host, so the token still grants its secret', async () => {

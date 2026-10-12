@@ -399,7 +399,11 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 
           if (typeof key === 'string') {
             skipped.push({ name: record.name, reason: `key ${keyRecord.fingerprint}: ${key}` });
-          } else if (keysByFingerprint.has(keyRecord.fingerprint) || deps.isFileKey(key.blob)) {
+          } else if (
+            keysByFingerprint.has(keyRecord.fingerprint) ||
+            entries.some((entry) => entry.record.fingerprint === keyRecord.fingerprint) ||
+            deps.isFileKey(key.blob)
+          ) {
             skipped.push({
               name: record.name,
               reason: `key ${keyRecord.fingerprint} is bound here already or in authorized_keys`,
