@@ -2,15 +2,17 @@
 
 ## [0.41.0](https://github.com/zgeoff/imp/compare/v0.40.4...v0.41.0) (2026-10-12)
 
-
 ### Features
 
-* **geo-534:** leave an imp created with backup off out of every backup ([#327](https://github.com/zgeoff/imp/issues/327)) ([416a8cc](https://github.com/zgeoff/imp/commit/416a8ccaae89f660031acdbfb0e174d3890adbca))
-
+- **geo-534:** leave an imp created with backup off out of every backup
+  ([#327](https://github.com/zgeoff/imp/issues/327))
+  ([416a8cc](https://github.com/zgeoff/imp/commit/416a8ccaae89f660031acdbfb0e174d3890adbca))
 
 ### Bug Fixes
 
-* **geo-477:** bind the snapshot's own drive into a jailed wake ([#325](https://github.com/zgeoff/imp/issues/325)) ([dc76759](https://github.com/zgeoff/imp/commit/dc76759a64f90c05f279f8b616142f08196a71df))
+- **geo-477:** bind the snapshot's own drive into a jailed wake
+  ([#325](https://github.com/zgeoff/imp/issues/325))
+  ([dc76759](https://github.com/zgeoff/imp/commit/dc76759a64f90c05f279f8b616142f08196a71df))
 
 ## [0.40.4](https://github.com/zgeoff/imp/compare/v0.40.3...v0.40.4) (2026-10-08)
 
