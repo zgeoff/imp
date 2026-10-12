@@ -592,6 +592,17 @@ export const MIGRATIONS: Record<string, Migration> = {
       await db.schema.alterTable('secrets').addColumn('oauth', 'text').execute();
     },
   },
+
+  // an imp left out of every backup run (GEO-534): 0 keeps its disk and
+  // checkpoints out of the backup tree, so no restic snapshot holds them
+  '027_add_imp_backup': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('backup', 'integer', (c) => c.notNull().defaultTo(1))
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

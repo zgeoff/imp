@@ -59,6 +59,10 @@ export interface ImpRecord {
   // host keys (docs/guides/templates.md#identity)
   readonly isIdentityResetPending: boolean;
 
+  // false for an imp left out of every backup run, set at create
+  // (docs/architecture/storage/backups.md#imps-left-out)
+  readonly isBackedUp: boolean;
+
   // a warm move's imp until its first wake here (docs/architecture/moves.md#warm-moves)
   readonly isTrustPending: boolean;
 
@@ -94,6 +98,9 @@ export interface NewImp {
   readonly egress?: EgressPolicy;
   readonly cpu?: CpuSettings;
   readonly isIdentityResetPending?: boolean;
+
+  // true when left out: every backup run holds the imp
+  readonly isBackedUp?: boolean;
 
   // the networks it joins, in the insert's transaction: its first firewall
   // has them
@@ -248,6 +255,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
       ...(imp.diskBytes !== undefined && { disk_bytes: imp.diskBytes }),
       ...(imp.isIdentityResetPending === true && { identity_reset_pending: 1 }),
+      ...(imp.isBackedUp === false && { backup: 0 }),
       ...(imp.egress !== undefined && {
         egress_policy: imp.egress.mode,
         egress_allow: JSON.stringify(imp.egress.allow),
@@ -705,6 +713,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     awakeSince: toDate(row.awake_since),
     isIdentityResetPending: row.identity_reset_pending === 1,
     isTrustPending: row.trust_pending === 1,
+    isBackedUp: row.backup !== 0,
     publicAuth: readPublicAuth(row),
     moveState: row.move_state,
     jailUid: row.jail_uid,

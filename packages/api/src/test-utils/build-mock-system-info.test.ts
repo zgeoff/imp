@@ -59,6 +59,7 @@ test('it builds a default system info', () => {
       publicEgress: true,
       oauthSecrets: true,
       secretUpstream: true,
+      backupOptOut: true,
     },
   });
 
@@ -125,6 +126,7 @@ test('it applies overrides on top of the defaults', () => {
       publicEgress: false,
       oauthSecrets: true,
       secretUpstream: true,
+      backupOptOut: true,
     },
   });
 });

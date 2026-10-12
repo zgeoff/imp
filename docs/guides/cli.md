@@ -40,9 +40,11 @@
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
 `imp new` and `imp set` take `--cpu-limit` and `--cpu-weight` ([CPU limits](./cpu-limits.md)).
 `--max-memory` (up to 4 × `--memory`) lets the guest grow under memory pressure and shrink when idle
-([elastic memory](../architecture/lifecycle/elastic-memory.md)). [Connectors](./connectors.md)
-covers secrets and grants; [tokens](./tokens.md) covers scopes and tailnet identity. Commands that
-print imps, images, checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
+([elastic memory](../architecture/lifecycle/elastic-memory.md)). `imp new --no-backup` keeps the
+imp's disk and checkpoints out of every backup ([backups](./backups.md)).
+[Connectors](./connectors.md) covers secrets and grants; [tokens](./tokens.md) covers scopes and
+tailnet identity. Commands that print imps, images, checkpoints or `info` take `--json`.
+`scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build --on-host` path, an `IMP_URL` that is not an http URL, an unknown

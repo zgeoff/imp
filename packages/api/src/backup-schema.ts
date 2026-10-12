@@ -29,11 +29,16 @@ export const BackupRunSchema = z.object({
 
   // left out of this run: being created, removed or failing to copy
   skipped: z.array(BackupSkipSchema).readonly(),
+
+  // left out of every run: created with backup off; an impd from before
+  // the setting leaves it out
+  excluded: z.array(BackupSkipSchema).readonly().optional(),
   dataAddedBytes: z.int().nonnegative(),
   durationMs: z.int().nonnegative(),
 });
 
 const SkippedGrantSchema = z.object({ imp: z.string(), secret: z.string(), reason: z.string() });
+const NotRestorableSchema = z.object({ imp: z.string(), reason: z.string() });
 
 // The restored imps, stopped. A grant names a secret on this host: one with
 // no such secret, or that clashes, is left off and listed here.
@@ -41,6 +46,10 @@ export const BackupRestoreSchema = z
   .object({
     imps: z.array(ImpSchema).readonly(),
     skippedGrants: z.array(SkippedGrantSchema).readonly(),
+
+    // imps created with backup off, which the backup holds no file of; an
+    // impd from before the setting leaves it out
+    notRestorable: z.array(NotRestorableSchema).readonly().optional(),
   })
   .readonly();
 

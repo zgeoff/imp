@@ -76,6 +76,9 @@ const ManifestImageSchema = z
   })
   .readonly();
 
+// an imp created with backup off: its name and why, and none of its files
+const ManifestExcludedSchema = z.object({ name: z.string(), reason: z.string() }).readonly();
+
 // What a restore needs to rebuild each imp, and nothing more: no tokens, no
 // secrets, no slots or addresses (docs/architecture/backups.md#the-manifest).
 // Paths are relative to the backup tree.
@@ -85,6 +88,10 @@ export const BackupManifestSchema = z
     runId: z.string(),
     createdAt: z.coerce.date(),
     imps: z.array(ManifestImpSchema).readonly(),
+
+    // so a restore can say why an imp is not there; older manifests leave
+    // it out (docs/architecture/storage/backups.md#imps-left-out)
+    excluded: z.array(ManifestExcludedSchema).readonly().default([]),
     images: z.array(ManifestImageSchema).readonly(),
   })
   .readonly();

@@ -284,7 +284,12 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
 
         const api = await deps.imps.toApi(imp);
 
-        return { imp: api, policy, isIdentityResetPending: imp.isIdentityResetPending };
+        return {
+          imp: api,
+          policy,
+          isIdentityResetPending: imp.isIdentityResetPending,
+          isBackedUp: imp.isBackedUp,
+        };
       });
 
       // the fork's id once it has one, and whether its source changed
@@ -345,6 +350,9 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
             cpuWeight: source.imp.cpu.weight,
           }),
           isIdentityResetPending: source.isIdentityResetPending,
+
+          // a fork holds its source's disk: one left out of backups stays out
+          isBackedUp: source.isBackedUp,
           prepareDisk: createForkDisk,
         });
 

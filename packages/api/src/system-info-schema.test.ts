@@ -75,6 +75,7 @@ test('it accepts the system info of a host with every part turned on', () => {
       publicEgress: true,
       oauthSecrets: true,
       secretUpstream: true,
+      backupOptOut: true,
     },
   } as const;
 

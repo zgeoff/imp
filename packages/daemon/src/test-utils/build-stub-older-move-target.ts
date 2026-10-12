@@ -3,7 +3,7 @@ import type { FetchHook } from '../moves/test-moves';
 
 // the offer reply fields a target added over time; an older target leaves
 // each out, and the source reads it as false
-type OfferField = 'keepsMaxMemory' | 'keepsLeases' | 'keepsPublicEgress';
+type OfferField = 'keepsMaxMemory' | 'keepsLeases' | 'keepsPublicEgress' | 'keepsBackupOff';
 
 // A target from before `field`: its offer reply leaves the field out, as
 // that release's impd answered it. Every other request reaches the target.

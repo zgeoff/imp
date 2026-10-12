@@ -194,6 +194,10 @@ export const SystemInfoSchema = z.object({
       // a custom secret's rule takes `upstream`; an older impd drops it
       // unread and would send the credential to https://<host>
       secretUpstream: z.boolean().optional(),
+
+      // imps.create takes `backup`; an older impd drops it unread and would
+      // back the imp up
+      backupOptOut: z.boolean().optional(),
     })
     .optional(),
 });

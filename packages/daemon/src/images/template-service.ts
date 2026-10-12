@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildConflictError, buildInvalidStateError } from '../api-errors';
+import { buildConflictError, buildInvalidStateError, buildNotBackedUpError } from '../api-errors';
 import type { DiskFreezer } from '../checkpoints/consistent-disk';
 import { createConsistentDisk } from '../checkpoints/consistent-disk';
 import type { Config } from '../config';
@@ -117,6 +117,15 @@ export function createTemplateService(deps: TemplateServiceDeps): TemplateServic
               imp.state,
               ['running', 'sleeping', 'stopped', 'error'],
               'template',
+            );
+          }
+
+          // every backup run holds every image, so a template would carry
+          // the disk into a backup after all
+          if (!imp.isBackedUp) {
+            throw buildNotBackedUpError(
+              imp.name,
+              'a template of it would put its disk in every backup',
             );
           }
 

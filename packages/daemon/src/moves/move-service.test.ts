@@ -833,6 +833,39 @@ test('it keeps the owed identity reset of a template copy, and its template stay
   expect(moved?.isIdentityResetPending).toBe(true);
 });
 
+test('it keeps an imp created with backup off out of the target’s backups', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu', backup: false });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+  expect(moved?.isBackedUp).toBe(false);
+});
+
+test('it refuses an imp created with backup off a target that predates the setting, before any byte goes', async () => {
+  const ctx = await setupTest({ hook: buildStubOlderMoveTarget('keepsBackupOff') });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu', backup: false });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const status = await ctx.runMove('dev');
+  const landed = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('predates imps left out of backups');
+  expect(status.sentBytes).toBe(0);
+  expect(landed).toBeUndefined();
+});
+
 test('it keeps the max memory of an elastic imp', async () => {
   const ctx = await setupTest();
 

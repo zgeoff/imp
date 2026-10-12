@@ -608,6 +608,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
           moveState: 'receiving',
           isIdentityResetPending: header.imp.isIdentityResetPending,
           isDiskGrowPending: header.imp.isDiskGrowPending,
+          isBackedUp: header.imp.isBackedUp,
           ...(header.warm !== null && { slot: header.warm.move.slot }),
           prepareDisk: writeDisk,
         });
@@ -807,6 +808,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       keepsMaxMemory: true,
       keepsLeases: true,
       keepsPublicEgress: true,
+      keepsBackupOff: true,
     });
   };
 

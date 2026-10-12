@@ -84,6 +84,12 @@ const restoreCommand = defineCommand({
         console.error(`imp: ${skipped.imp}: grant ${skipped.secret} left off: ${skipped.reason}`);
       }
 
+      for (const left of result.notRestorable ?? []) {
+        console.error(
+          `imp: ${left.imp}: not restorable, the backup holds none of its files: ${left.reason}`,
+        );
+      }
+
       console.log(formatOutput(result, args.json, (restored) => formatImps(restored.imps)));
     }),
 });

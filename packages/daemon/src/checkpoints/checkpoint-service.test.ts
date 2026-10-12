@@ -453,6 +453,22 @@ test('it forks the live disk, frozen, into a new imp with no checkpoints', async
   expect(forkCheckpoints).toStrictEqual([]);
 });
 
+test('it keeps a fork of an imp created with backup off out of backups too', async () => {
+  const ctx = await setupTest({ storage: 'xfs' });
+
+  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+
+  await createImage(ctx.db, buildMockNewImage({ name: 'base', digest: 'sha256:base' }));
+
+  await ctx.impd.imps.createImp({ name: 'chat', image: 'base', isBackedUp: false });
+
+  const forked = await ctx.impd.checkpoints.forkImp({ source: 'chat', name: 'copy' });
+  const fork = await findImpByName(ctx.db, 'copy');
+
+  expect(forked.imp.backup).toBe(false);
+  expect(fork?.isBackedUp).toBe(false);
+});
+
 test('it creates no imp when the fork’s checkpoint is unknown', async () => {
   const ctx = await setupTest({ storage: 'xfs' });
 

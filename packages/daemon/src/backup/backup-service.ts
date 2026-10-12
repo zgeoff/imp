@@ -13,7 +13,12 @@ import type { BackupRestore, BackupRun, BackupStatus, EgressPolicy, Imp, ImpStat
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
-import { buildConflictError, buildNotFoundError } from '../api-errors';
+import {
+  NOT_BACKED_UP_REASON,
+  buildConflictError,
+  buildNotBackedUpError,
+  buildNotFoundError,
+} from '../api-errors';
 import type { Broker } from '../broker/broker-service';
 import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { FREEZE_TIMEOUT_MS } from '../checkpoints/consistent-disk';
@@ -229,6 +234,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     copy: DatabaseCopy,
     copies: ReadonlyMap<string, DiskCopy>,
     tree: BackupTree,
+    excluded: BackupManifest['excluded'],
   ): BackupManifest => {
     const digests = new Map(copy.images.map((image) => [image.id, image.digest]));
 
@@ -274,6 +280,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
               usedBytes: readTreeUsedBytes(BACKUP_TREE.buildCheckpointDisk(imp.id, checkpoint.id)),
             })),
         })),
+      excluded,
       images: copy.images
         .filter((image) => tree.imageDigests.has(image.digest))
         .map((image) => ({
@@ -311,7 +318,16 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     const skipped: { name: string; reason: string }[] = [];
 
+    // never locked or copied, so no file of theirs reaches the tree
+    const excluded = copy.imps
+      .filter((imp) => imp.backup === 0)
+      .map((imp) => ({ name: imp.name, reason: NOT_BACKED_UP_REASON }));
+
     for (const imp of copy.imps) {
+      if (imp.backup === 0) {
+        continue;
+      }
+
       if (imp.state === 'creating') {
         skipped.push({ name: imp.name, reason: 'being created' });
         continue;
@@ -345,7 +361,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       imageDigests: copy.images.map((image) => image.digest),
     });
 
-    const manifest = buildManifest(runId, copy, copies, tree);
+    const manifest = buildManifest(runId, copy, copies, tree, excluded);
 
     try {
       mkdirSync(paths.tree, { recursive: true });
@@ -353,9 +369,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
       const names = manifest.imps.map((imp) => imp.name);
 
+      // excluded=<name> lets a restore of the name find the point that
+      // says why it holds nothing of it
       const summary = await restic.backup(paths.tree, [
         `run=${runId}`,
         ...names.map((name) => `imp=${name}`),
+        ...excluded.map((imp) => `excluded=${imp.name}`),
       ]);
 
       writeState({ lastRunAt: now() });
@@ -371,6 +390,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         snapshotId: summary.snapshotId,
         imps: names,
         skipped,
+        excluded,
         dataAddedBytes: summary.dataAddedBytes,
         durationMs: Math.round(performance.now() - started),
       };
@@ -428,14 +448,17 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     }
   };
 
-  // the newest point at or before `at` that holds `name`, when one is given
+  // the newest point at or before `at` that holds `name`, or that names it
+  // as left out, when one is given
   const findPoint = async (at: Date, name: string | undefined): Promise<ResticSnapshot> => {
     const points = await restic.listSnapshots();
 
     const point = points.findLast(
       (candidate) =>
         candidate.time.getTime() <= at.getTime() &&
-        (name === undefined || candidate.tags.includes(`imp=${name}`)),
+        (name === undefined ||
+          candidate.tags.includes(`imp=${name}`) ||
+          candidate.tags.includes(`excluded=${name}`)),
     );
 
     if (point === undefined) {
@@ -688,6 +711,18 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
     const chosen = manifest.imps.filter((imp) => input.all === true || imp.name === input.name);
 
+    // the backup names these imps but holds none of their files
+    const notRestorable = manifest.excluded
+      .filter((imp) => input.all === true || imp.name === input.name)
+      .map((imp) => ({ imp: imp.name, reason: imp.reason }));
+
+    if (input.name !== undefined && chosen.length === 0 && notRestorable.length > 0) {
+      throw buildNotBackedUpError(
+        input.name,
+        `backup ${point.id} (${point.time.toISOString()}) holds none of its files`,
+      );
+    }
+
     const present = await listImps(deps.db);
 
     const presentNames = new Set(present.map((imp) => imp.name));
@@ -751,7 +786,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         log(`impd: backup: restored ${target.name} from ${point.id} (${point.time.toISOString()})`);
       }
 
-      return { imps: restored, skippedGrants };
+      return { imps: restored, skippedGrants, notRestorable };
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

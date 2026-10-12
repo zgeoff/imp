@@ -1,6 +1,6 @@
 # Backups
 
-impd backs up every imp's disk, its checkpoints and the images they come from to a
+impd backs up each imp's disk, its checkpoints and the images they come from to a
 [restic](https://restic.net) repository off the host: an S3 bucket, a REST server, or anything else
 restic speaks. Backups are off until the owner names a repository, and the
 [backups guide](../../guides/backups.md) covers running, restoring and protecting them.
@@ -26,14 +26,29 @@ table added later never reaches a backup by accident. The root token, the connec
 broker's CA, the TLS account and the restic password never reach a backup, and a test lists a
 snapshot to check it.
 
+## Imps left out
+
+An imp created with backup off never reaches a backup, so a cache that holds personal text, such as
+an agent's transcripts, can be deleted for good on the host alone. The setting is fixed at create,
+because an imp that a backup already holds would leave copies that turning backups off cannot reach.
+A run never locks or copies such an imp. The manifest lists it by name with the reason, and the
+snapshot carries an `excluded=<name>` tag, so a restore of the name finds that point and refuses
+with the reason instead of a bare not-found. A whole-host restore reports each such imp as not
+restorable.
+
+The copies an imp's disk can make keep the setting. A fork is created with backup off too, and a
+move carries the setting, so a target too old to keep it refuses the move before any byte goes. A
+template of such an imp is refused, because every run backs up every image.
+
 ## A run
 
 1. impd drops stale restic locks and copies the database.
 2. For each imp, under its lock and only for this step: a running imp's guest is frozen around a
    copy of its disk; a stopped, sleeping or failed imp is copied as it is; a creating imp is left
-   out. A sleeping imp is not woken to sync, because its disk is as after a power cut, which ext4's
-   journal handles, and the guest's writes are already in the host's page cache, which a clone sees.
-   The manifest marks which copies were synced.
+   out, and an imp created with backup off is never locked or copied. A sleeping imp is not woken to
+   sync, because its disk is as after a power cut, which ext4's journal handles, and the guest's
+   writes are already in the host's page cache, which a clone sees. The manifest marks which copies
+   were synced.
 3. The storage backend lays out the tree. On XFS it is reflink clones, and a disk that did not
    change keeps last run's clone, so restic skips it unread. On ZFS it is read-only clones of
    snapshots, mounted at the tree's paths, whose files keep their inodes and times from run to run

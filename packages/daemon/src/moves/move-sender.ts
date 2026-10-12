@@ -505,6 +505,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         grants,
         isIdentityResetPending: imp.isIdentityResetPending,
         isDiskGrowPending: imp.isDiskGrowPending,
+        isBackedUp: imp.isBackedUp,
         coldBoots: await listColdBoots(deps.db, imp.id),
         leases,
       },
@@ -613,6 +614,13 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
 
     await requireLeasesKept(imp, reply.keepsLeases);
+
+    // a target from before the setting would put the imp's disk in its backups
+    if (!imp.isBackedUp && !reply.keepsBackupOff) {
+      throw new OfferRefusalError(
+        "the target's impd predates imps left out of backups and would back this one up; upgrade it first",
+      );
+    }
 
     // a move never changes the policy, either way
     const policy = await deps.egress.readPolicy(imp.name);

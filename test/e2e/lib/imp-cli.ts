@@ -27,6 +27,7 @@ const ImpRowSchema = z.object({
   memoryMib: z.number(),
   maxMemoryMib: z.number().optional(),
   pluggedMib: z.number().optional(),
+  backup: z.boolean().optional(),
   slot: z.number(),
   ip: z.string(),
   port: z.number(),

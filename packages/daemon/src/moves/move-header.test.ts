@@ -43,6 +43,7 @@ test('it fills the defaults of a cold header from a source before boots, leases 
       grants: [],
       isIdentityResetPending: false,
       isDiskGrowPending: false,
+      isBackedUp: true,
       coldBoots: [],
     },
     image: {
@@ -76,6 +77,7 @@ test('it reads the dates of a ZFS warm header with boots, leases and checkpoints
       grants: ['gh-token'],
       isIdentityResetPending: true,
       isDiskGrowPending: true,
+      isBackedUp: false,
       coldBoots: [
         {
           bootId: '00000000-0000-4000-8000-000000000001',
@@ -158,6 +160,7 @@ test('it reads the dates of a ZFS warm header with boots, leases and checkpoints
       grants: ['gh-token'],
       isIdentityResetPending: true,
       isDiskGrowPending: true,
+      isBackedUp: false,
       coldBoots: [
         {
           bootId: '00000000-0000-4000-8000-000000000001',

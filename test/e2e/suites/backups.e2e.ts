@@ -1,5 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
+import * as z from 'zod';
 import {
   buildBackupEnv,
   findPackKey,
@@ -20,6 +21,7 @@ import {
   listCheckpoints,
   listImps,
   readState,
+  requireImp,
   runImp,
   runShellInImp,
   tryImp,
@@ -205,6 +207,73 @@ test('it backs up a running imp mid-write, a stopped imp and a checkpoint, adds 
   const sourceFile = await readGuestFile(source, '/root/f');
 
   expect(sourceFile).toBe('v2');
+});
+
+test('it lists no file of an imp created with backup off in the snapshot, and refuses its restore with why', async () => {
+  const ctx = await setupTest();
+
+  const kept = `${ctx.prefix}off-kept`;
+  const chat = `${ctx.prefix}off-chat`;
+
+  // in-test, not suite settings: impd sets up its repository at start, and
+  // each test brings its own
+  await runDevScript('reboot', instance, buildBackupEnv(ctx.secrets, 60));
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  await startMinio(ctx.secrets);
+
+  ctx.stack.defer(() => stopMinio());
+
+  await runImp('new', kept, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, kept));
+
+  await runImp(
+    'new',
+    chat,
+    '--image',
+    resolveImageName('e2e-tiny'),
+    '--memory',
+    '256',
+    '--no-backup',
+  );
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, chat));
+
+  await waitForExec(chat);
+  await writeGuestFile(chat, '/root/transcript', 'transcript-in-plain-text');
+  await runImp('checkpoint', chat, 'cp1');
+  await runImp('stop', chat);
+
+  const keptRow = await requireImp(kept);
+  const chatRow = await requireImp(chat);
+  const run = await runBackup();
+  const listing = await runRestic(ctx.secrets, 'ls', '--json', run.snapshotId);
+
+  const paths = listing.stdout
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => z.object({ path: z.string().optional() }).parse(JSON.parse(line)).path ?? '')
+    .filter((path) => path !== '');
+
+  await runImp('rm', chat);
+
+  const restore = await tryImp(['backup', 'restore', chat]);
+
+  expect(chatRow.backup).toBe(false);
+  expect(run.imps).toContain(kept);
+  expect(run.excluded).toStrictEqual([{ name: chat, reason: 'created with backup off' }]);
+  expect(paths).toSatisfyAny((path: string) => path.includes(keptRow.id));
+  expect(paths).not.toSatisfyAny((path: string) => path.includes(chatRow.id));
+
+  expect(restore).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: expect.toInclude(
+      `imp ${chat} is left out of backups (created with backup off): backup ${run.snapshotId}`,
+    ),
+  });
 });
 
 test('it restores a point that survived the scheduled forget and prune, and finds none before it', async () => {

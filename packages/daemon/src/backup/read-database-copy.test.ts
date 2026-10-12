@@ -38,6 +38,7 @@ test('it copies the user imps and leaves out image builders', async () => {
     diskBytes: 4096,
     egress: { mode: 'box', allow: ['github.com'] },
     isIdentityResetPending: true,
+    isBackedUp: false,
   });
 
   const dev = await createImp(ctx.db, newDev);
@@ -63,6 +64,7 @@ test('it copies the user imps and leaves out image builders', async () => {
       diskBytes: 4096,
       egressAllow: '["github.com"]',
       identityResetPending: 1,
+      backup: 0,
     },
   ]);
 });

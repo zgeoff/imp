@@ -36,6 +36,18 @@ export function buildConflictError(kind: ResourceKind, name: string, message?: s
   });
 }
 
+// an imp created with backup off: no backup holds it, and nothing may copy
+// its disk into one (docs/architecture/storage/backups.md#imps-left-out)
+export const NOT_BACKED_UP_REASON = 'created with backup off';
+
+// PRECONDITION_FAILED for a call that would put a left-out imp's disk in a
+// backup, or bring one back from it
+export function buildNotBackedUpError(name: string, refusal: string) {
+  return new ORPCError('PRECONDITION_FAILED', {
+    message: `imp ${name} is left out of backups (${NOT_BACKED_UP_REASON}): ${refusal}`,
+  });
+}
+
 // the caller's scope or imp patterns do not cover the call; a reason when
 // the client can act on it
 export function buildForbiddenError(message: string, reason: ForbiddenReason | null = null) {

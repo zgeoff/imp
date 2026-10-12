@@ -322,6 +322,7 @@ export function formatBackupRun(run: Readonly<BackupRun>): string {
   const lines = [
     `backup ${run.snapshotId.slice(0, 8)}: ${String(run.imps.length)} imps, ${String(Math.round(run.dataAddedBytes / 1_048_576))} MiB added in ${String(Math.round(run.durationMs / 1000))}s`,
     ...run.skipped.map((skip) => `left out ${skip.name}: ${skip.reason}`),
+    ...(run.excluded ?? []).map((imp) => `not backed up ${imp.name}: ${imp.reason}`),
   ];
 
   return lines.join('\n');

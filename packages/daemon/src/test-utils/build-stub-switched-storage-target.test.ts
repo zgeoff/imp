@@ -36,6 +36,7 @@ test('it names the given storage in the real target offer reply', async () => {
     keepsMaxMemory: true,
     keepsLeases: true,
     keepsPublicEgress: true,
+    keepsBackupOff: true,
   });
 });
 

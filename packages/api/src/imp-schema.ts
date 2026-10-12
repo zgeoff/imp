@@ -66,6 +66,10 @@ export const ImpSchema = z.object({
   // memory plugged into the awake guest beyond memoryMib, as last seen
   pluggedMib: z.int().nonnegative().optional(),
 
+  // false for an imp left out of every backup run, set at create; left out
+  // for an imp that backups hold, and by an impd from before the setting
+  backup: z.boolean().optional(),
+
   // the disk's size; the guest's filesystem fills it
   diskMib: z.int().positive(),
 

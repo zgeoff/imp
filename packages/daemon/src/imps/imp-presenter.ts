@@ -76,6 +76,10 @@ export function createImpPresenter(
       api.sleptAt = imp.sleptAt;
     }
 
+    if (!imp.isBackedUp) {
+      api.backup = false;
+    }
+
     if (imp.publicAuth !== null) {
       api.public = { auth: imp.publicAuth };
     }
