@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
+import { readLoadingMeta } from '../sleep/snapshot-meta';
 import type { ImpPaths } from '../storage/data-layout';
 import type { InstanceState } from '../vmm/firecracker-client';
 import type { FirecrackerPaths, VmOwner } from '../vmm/firecracker-process';
@@ -284,6 +285,15 @@ export function buildStubVmm() {
           const files = [plan.paths.disk, plan.paths.vmstate, plan.paths.memFile];
 
           wakeJails.push({ jail: plan.jail, files: files.filter((file) => existsSync(file)) });
+
+          // A jailed Firecracker sees only what its jail binds, and the load
+          // reopens the drive the snapshot names: without it the load fails
+          // before the guest runs.
+          const drive = readLoadingMeta(plan.paths)?.systemDrivePath;
+
+          if (plan.jail !== null && drive !== undefined && !plan.readOnlyFiles.includes(drive)) {
+            throw new StubVmError(`wake failed: the jail has no ${drive}`);
+          }
 
           try {
             const vm = await startFakeVm('wake', plan.paths);
