@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { requireSessionError } from './exec-socket';
 
-test('#requireSessionError returns the code and data of a refused open', () => {
+test('it returns the code and data of a refused open', () => {
   const refusal = requireSessionError({
     first: {
       type: 'error',
@@ -26,7 +26,7 @@ test('#requireSessionError returns the code and data of a refused open', () => {
   });
 });
 
-test('#requireSessionError rejects an open that started', () => {
+test('it rejects an open that started', () => {
   expect(() =>
     requireSessionError({
       first: { type: 'exit', offset: 0 },
@@ -37,7 +37,7 @@ test('#requireSessionError rejects an open that started', () => {
   ).toThrowWithMessage(Error, 'expected an error, got {"type":"exit","offset":0}');
 });
 
-test('#requireSessionError rejects error data without the cold boots', () => {
+test('it rejects error data without the cold boots', () => {
   expect(() =>
     requireSessionError({
       first: { type: 'error', code: 'NO_SESSION', message: 'no session out', data: {} },

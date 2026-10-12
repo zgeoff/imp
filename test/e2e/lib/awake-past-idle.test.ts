@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { checkAwakePastIdle } from './awake-past-idle';
 
-test('#checkAwakePastIdle holds for a running imp found active a full idle timeout later', () => {
+test('it holds for a running imp found active a full idle timeout later', () => {
   const since = Date.parse('2026-10-10T04:00:00.000Z');
 
   expect(
@@ -24,7 +24,7 @@ test('#checkAwakePastIdle holds for a running imp found active a full idle timeo
   ).toBeTrue();
 });
 
-test('#checkAwakePastIdle fails for a running imp last found active within the idle timeout', () => {
+test('it fails for a running imp last found active within the idle timeout', () => {
   const since = Date.parse('2026-10-10T04:00:00.000Z');
 
   expect(
@@ -47,7 +47,7 @@ test('#checkAwakePastIdle fails for a running imp last found active within the i
   ).toBeFalse();
 });
 
-test('#checkAwakePastIdle fails for an imp that slept, whenever it was last active', () => {
+test('it fails for an imp that slept, whenever it was last active', () => {
   const since = Date.parse('2026-10-10T04:00:00.000Z');
 
   expect(
@@ -70,7 +70,7 @@ test('#checkAwakePastIdle fails for an imp that slept, whenever it was last acti
   ).toBeFalse();
 });
 
-test('#checkAwakePastIdle fails for a running imp that woke again since the wait began', () => {
+test('it fails for a running imp that woke again since the wait began', () => {
   const since = Date.parse('2026-10-10T04:00:00.000Z');
 
   expect(
@@ -93,7 +93,7 @@ test('#checkAwakePastIdle fails for a running imp that woke again since the wait
   ).toBeFalse();
 });
 
-test('#checkAwakePastIdle fails for a running imp that slept since the wait began', () => {
+test('it fails for a running imp that slept since the wait began', () => {
   const since = Date.parse('2026-10-10T04:00:00.000Z');
 
   expect(

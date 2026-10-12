@@ -37,5 +37,9 @@ test('#parseProxyAnswer rejects output with no status', () => {
 });
 
 test('#parseProxyAnswer rejects a body that is not a refusal', () => {
-  expect(() => parseProxyAnswer('{"stream":"Step 1/1"} 200')).toThrow();
+  expect(() => parseProxyAnswer('{"stream":"Step 1/1"} 200')).toThrow(
+    expect.objectContaining({
+      issues: expect.toPartiallyContain({ path: ['message'], code: 'invalid_type' }),
+    }),
+  );
 });

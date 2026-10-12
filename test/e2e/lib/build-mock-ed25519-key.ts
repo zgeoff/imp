@@ -1,4 +1,5 @@
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { faker } from '@faker-js/faker';
 
 export interface MockEd25519Key {
   // the private key as an unencrypted OpenSSH key file holds it
@@ -39,7 +40,7 @@ export function buildMockEd25519Key(
     encodeString('ssh-ed25519'),
     encodeString(publicKey),
     encodeString(Buffer.concat([seed, publicKey])),
-    encodeString(overrides.comment ?? 'imp-e2e-key'),
+    encodeString(overrides.comment ?? faker.internet.username()),
   ]);
 
   // padded with 1, 2, 3, … to the 8-byte block of the "none" cipher

@@ -95,6 +95,7 @@
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",
+    "@faker-js/faker": "catalog:",
     "@imp/test-utils": "workspace:*",
     "@stylistic/eslint-plugin": "catalog:",
     "@tsconfig/strictest": "catalog:",

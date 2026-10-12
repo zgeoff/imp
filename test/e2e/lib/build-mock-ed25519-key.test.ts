@@ -36,7 +36,7 @@ test('it applies overrides on top of the defaults', () => {
 test('it writes a key file that ssh-keygen reads, with the public key node made', async () => {
   const ctx = await setupTest();
 
-  const key = buildMockEd25519Key();
+  const key = buildMockEd25519Key({ comment: 'imp-e2e-key' });
   const path = join(ctx.dir, 'id');
 
   await writeFile(path, key.privateKey, { mode: 0o600 });

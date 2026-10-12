@@ -1651,16 +1651,16 @@ test('#runSuites starts and stops a suite’s fixture with --keep, and resets no
 });
 
 test.each([
-  ['every section passed', [true, true], null, false, true],
-  ['a section failed', [true, false], null, false, false],
+  ['passes a run whose every section passed', [true, true], null, false, true],
+  ['fails a run with a failed section', [true, false], null, false, false],
   [
-    'the run stopped',
+    'fails a run that stopped',
     [true],
     'the instance could not be made anew after sleep: down',
     false,
     false,
   ],
-  ['a signal came after every section passed', [true, true], null, true, false],
-])('#checkRunPassed: %s', (_, passed, stoppedBecause, interrupted, expected) => {
+  ['fails a run that a signal reached after every section passed', [true, true], null, true, false],
+])('#checkRunPassed %s', (_, passed, stoppedBecause, interrupted, expected) => {
   expect(checkRunPassed({ passed, stoppedBecause, interrupted })).toBe(expected);
 });

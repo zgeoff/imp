@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readToolData } from './mcp-result';
 
-test('#readToolData reads the structured answer of a call', () => {
+test('it reads the structured answer of a call', () => {
   expect(
     readToolData({
       content: [{ type: 'text', text: '{"destroyed":"e2e-mcp-a"}' }],
@@ -11,11 +11,11 @@ test('#readToolData reads the structured answer of a call', () => {
   ).toStrictEqual({ destroyed: 'e2e-mcp-a' });
 });
 
-test('#readToolData reads a call without a structured answer as empty', () => {
+test('it reads a call without a structured answer as empty', () => {
   expect(readToolData({ content: [], isError: false })).toStrictEqual({});
 });
 
-test('#readToolData throws with the text of a failed call', () => {
+test('it throws with the text of a failed call', () => {
   expect(() =>
     readToolData({
       content: [{ type: 'text', text: 'NOT_FOUND: imp e2e-mcp-a not found' }],
