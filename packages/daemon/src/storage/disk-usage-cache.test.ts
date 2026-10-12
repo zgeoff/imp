@@ -4,6 +4,7 @@ import { createCheckpoint } from '../db/checkpoints';
 import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
 import { buildMockImpDiskUsage } from '../test-utils/build-mock-imp-disk-usage';
+import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createDiskUsageCache } from './disk-usage-cache';
 import type { DiskUsageReport, StorageBackend } from './storage-backend';
@@ -33,7 +34,7 @@ test('it measures every imp with its checkpoints', async () => {
     ip: '10.66.0.2',
   });
 
-  await createCheckpoint(ctx.db, { id: 'cp-1', impId: imp.id, label: null, sizeBytes: null });
+  const checkpoint = await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id }));
 
   const measureUsage = mock<StorageBackend['measureUsage']>(() =>
     Promise.resolve({ imps: new Map(), isPartial: false }),
@@ -52,7 +53,7 @@ test('it measures every imp with its checkpoints', async () => {
   await cache.runPass();
 
   expect(measureUsage).toHaveBeenCalledExactlyOnceWith([
-    { impId: imp.id, checkpointIds: ['cp-1'] },
+    { impId: imp.id, checkpointIds: [checkpoint.id] },
   ]);
 });
 

@@ -8,6 +8,7 @@ import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
 import { writeMember, writeNetwork } from '../db/networks';
 import { createCheckedGrant, createSecret } from '../db/secrets';
+import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
@@ -71,36 +72,34 @@ test('it copies the checkpoints oldest first', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-newer',
+  const newer = buildMockNewCheckpoint({
     impId: imp.id,
     label: null,
-    sizeBytes: 10,
     diskBytes: 8192,
     createdAt: new Date('2026-10-02T00:00:00Z'),
   });
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-older',
+  const older = buildMockNewCheckpoint({
     impId: imp.id,
-    label: 'clean',
-    sizeBytes: 10,
     diskBytes: 4096,
     createdAt: new Date('2026-10-01T00:00:00Z'),
   });
+
+  await createCheckpoint(ctx.db, newer);
+  await createCheckpoint(ctx.db, older);
 
   const copy = await readDatabaseCopy(ctx.db, join(ctx.dir, 'copy.sqlite'));
 
   expect(copy.checkpoints).toStrictEqual([
     {
-      id: 'cp-older',
+      id: older.id,
       impId: imp.id,
-      label: 'clean',
+      label: older.label,
       createdAt: Date.parse('2026-10-01T00:00:00Z'),
       diskBytes: 4096,
     },
     {
-      id: 'cp-newer',
+      id: newer.id,
       impId: imp.id,
       label: null,
       createdAt: Date.parse('2026-10-02T00:00:00Z'),

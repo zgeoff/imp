@@ -12,6 +12,7 @@ import { createImpTest } from '../imps/test-imps';
 import { createNetworkService } from '../networks/network-service';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockBackupConfig } from '../test-utils/build-mock-backup-config';
+import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
 import { buildStubRestic } from '../test-utils/build-stub-restic';
 import { BackupManifestSchema } from './backup-manifest';
 import { buildBackupsOffError, buildDigestTag, createBackupService } from './backup-service';
@@ -140,25 +141,29 @@ test('#runBackup records each imp’s settings, checkpoints and image in the man
   const dev = await ctx.imps.createImp({ name: 'dev', httpPort: 3000, memoryMib: 256 });
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({
+      id: 'cp-one',
+      impId: dev.id,
+      label: 'one',
+      sizeBytes: oneBytes,
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+    }),
+  );
 
   const twoBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-two');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-two',
-    impId: dev.id,
-    label: 'two',
-    sizeBytes: twoBytes,
-    createdAt: new Date('2026-09-02T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({
+      id: 'cp-two',
+      impId: dev.id,
+      label: 'two',
+      sizeBytes: twoBytes,
+      createdAt: new Date('2026-09-02T00:00:00Z'),
+    }),
+  );
 
   const run = await backups.runBackup();
 
@@ -213,27 +218,33 @@ test('#restoreBackup restores an imp stopped, with its disk and its checkpoints 
 
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({
+      id: 'cp-one',
+      impId: dev.id,
+      label: 'one',
+      sizeBytes: oneBytes,
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      diskBytes: 1003,
+    }),
+  );
 
   writeFileSync(devDisk, 'two');
 
   const twoBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-two');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-two',
-    impId: dev.id,
-    label: 'two',
-    sizeBytes: twoBytes,
-    createdAt: new Date('2026-09-02T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({
+      id: 'cp-two',
+      impId: dev.id,
+      label: 'two',
+      sizeBytes: twoBytes,
+      createdAt: new Date('2026-09-02T00:00:00Z'),
+      diskBytes: 1003,
+    }),
+  );
 
   writeFileSync(devDisk, 'now');
 
@@ -696,14 +707,10 @@ test('#restoreBackup leaves no imp behind when a restore fails part way', async 
   const dev = await ctx.imps.createImp({ name: 'dev' });
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-one', impId: dev.id, sizeBytes: oneBytes }),
+  );
 
   const run = await backups.runBackup();
 
@@ -1354,14 +1361,10 @@ test('#restoreBackup restores one file at a time and leaves none behind', async 
   const dev = await ctx.imps.createImp({ name: 'dev' });
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-one', impId: dev.id, sizeBytes: oneBytes }),
+  );
 
   await backups.runBackup();
 
@@ -1483,14 +1486,10 @@ test('#runBackup records the blocks each disk file holds in the manifest, not it
 
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-one', impId: dev.id, sizeBytes: oneBytes }),
+  );
 
   writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'now');
 
@@ -1519,14 +1518,10 @@ test('#restoreBackup holds the storage gate for a restored image and disk room f
 
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-one', impId: dev.id, sizeBytes: oneBytes }),
+  );
 
   writeFileSync(buildImpPaths(ctx.dataDir, dev.id).disk, 'now');
 
@@ -1696,14 +1691,10 @@ test('#restoreBackup leaves the host’s imps, secrets and grants as they were w
   const dev = await ctx.imps.createImp({ name: 'dev' });
   const oneBytes = await ctx.storage.createCheckpoint(dev.id, 'cp-one');
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-one',
-    impId: dev.id,
-    label: 'one',
-    sizeBytes: oneBytes,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    diskBytes: 1003,
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-one', impId: dev.id, sizeBytes: oneBytes }),
+  );
 
   await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
   await ctx.broker.addGrant('dev', 'gh');

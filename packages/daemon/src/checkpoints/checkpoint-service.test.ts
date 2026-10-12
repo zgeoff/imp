@@ -22,6 +22,7 @@ import {
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { createZfsBackend } from '../storage/zfs/zfs-backend';
+import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { buildQueryGate } from '../test-utils/build-query-gate';
@@ -538,7 +539,7 @@ test('it rejects a restore of an imp still being created', async () => {
   // a row a create left in `creating`, with a checkpoint to restore
   const imp = await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
 
-  await createCheckpoint(ctx.db, { id: 'cp-aaaaaa', impId: imp.id, label: 'v1', sizeBytes: 0 });
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id, label: 'v1' }));
 
   expect(ctx.impd.checkpoints.restoreCheckpoint('dev', 'v1')).rejects.toMatchObject({
     code: 'INVALID_STATE',

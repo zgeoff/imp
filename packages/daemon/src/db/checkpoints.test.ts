@@ -1,5 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { buildMockCheckpointRecord } from '../test-utils/build-mock-checkpoint-record';
+import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
@@ -22,19 +23,16 @@ test('#createCheckpoint returns the stored checkpoint, made now on a 32 GiB disk
 
   const before = new Date();
 
-  const checkpoint = await createCheckpoint(ctx.db, {
-    id: 'cp-1',
-    impId: imp.id,
-    label: 'clean',
-    sizeBytes: 10,
-  });
+  const row = buildMockNewCheckpoint({ impId: imp.id });
+
+  const checkpoint = await createCheckpoint(ctx.db, row);
 
   expect(checkpoint).toStrictEqual({
-    id: 'cp-1',
+    id: row.id,
     impId: imp.id,
-    label: 'clean',
+    label: row.label,
     createdAt: expect.toBeBetween(before, new Date()),
-    sizeBytes: 10,
+    sizeBytes: row.sizeBytes,
     diskBytes: 32 * 1024 ** 3,
   });
 });
@@ -44,21 +42,20 @@ test('#createCheckpoint keeps the time and disk size it is given', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  const checkpoint = await createCheckpoint(ctx.db, {
-    id: 'cp-1',
+  const row = buildMockNewCheckpoint({
     impId: imp.id,
-    label: null,
-    sizeBytes: null,
     diskBytes: 1024 ** 3,
     createdAt: new Date(1_800_000_000_000),
   });
 
+  const checkpoint = await createCheckpoint(ctx.db, row);
+
   expect(checkpoint).toStrictEqual({
-    id: 'cp-1',
+    id: row.id,
     impId: imp.id,
-    label: null,
+    label: row.label,
     createdAt: new Date(1_800_000_000_000),
-    sizeBytes: null,
+    sizeBytes: row.sizeBytes,
     diskBytes: 1024 ** 3,
   });
 });
@@ -76,12 +73,7 @@ test('#createCheckpoint emits one checkpointAdded', async () => {
 
   onTestFinished(unsubscribe);
 
-  const checkpoint = await createCheckpoint(ctx.db, {
-    id: 'cp-1',
-    impId: imp.id,
-    label: null,
-    sizeBytes: null,
-  });
+  const checkpoint = await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id }));
 
   expect(writes).toStrictEqual([{ kind: 'checkpointAdded', checkpoint }]);
 });
@@ -91,10 +83,10 @@ test('#createCheckpoint rejects a duplicate label on one imp', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, { id: 'cp-1', impId: imp.id, label: 'clean', sizeBytes: 1 });
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id, label: 'clean' }));
 
   expect(
-    createCheckpoint(ctx.db, { id: 'cp-2', impId: imp.id, label: 'clean', sizeBytes: 1 }),
+    createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id, label: 'clean' })),
   ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed/u);
 });
 
@@ -102,7 +94,7 @@ test('#createCheckpoint rejects a checkpoint for an imp that does not exist', as
   const ctx = await createTestDatabase();
 
   expect(
-    createCheckpoint(ctx.db, { id: 'cp-x', impId: 'missing', label: null, sizeBytes: null }),
+    createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: 'missing' })),
   ).rejects.toThrowWithMessage(Error, /FOREIGN KEY constraint failed/u);
 });
 
@@ -111,21 +103,15 @@ test('#listCheckpoints lists newest first', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-b',
-    impId: imp.id,
-    label: null,
-    sizeBytes: null,
-    createdAt: new Date(1_800_000_000_000),
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-b', impId: imp.id, createdAt: new Date(1_800_000_000_000) }),
+  );
 
-  await createCheckpoint(ctx.db, {
-    id: 'cp-a',
-    impId: imp.id,
-    label: null,
-    sizeBytes: null,
-    createdAt: new Date(1_800_000_060_000),
-  });
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-a', impId: imp.id, createdAt: new Date(1_800_000_060_000) }),
+  );
 
   const checkpoints = await listCheckpoints(ctx.db, imp.id);
 
@@ -138,13 +124,10 @@ test('#listCheckpoints puts the larger id first when two were made at once', asy
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   for (const id of ['cp-1', 'cp-2']) {
-    await createCheckpoint(ctx.db, {
-      id,
-      impId: imp.id,
-      label: null,
-      sizeBytes: null,
-      createdAt: new Date(1_800_000_000_000),
-    });
+    await createCheckpoint(
+      ctx.db,
+      buildMockNewCheckpoint({ id, impId: imp.id, createdAt: new Date(1_800_000_000_000) }),
+    );
   }
 
   const checkpoints = await listCheckpoints(ctx.db, imp.id);
@@ -162,7 +145,7 @@ test('#listCheckpoints leaves out another imp’s checkpoints', async () => {
     buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' }),
   );
 
-  await createCheckpoint(ctx.db, { id: 'cp-1', impId: other.id, label: null, sizeBytes: null });
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: other.id }));
 
   const checkpoints = await listCheckpoints(ctx.db, dev.id);
 
@@ -174,12 +157,10 @@ test('#findCheckpoint finds a checkpoint by id', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  const checkpoint = await createCheckpoint(ctx.db, {
-    id: 'cp-3',
-    impId: imp.id,
-    label: 'clean',
-    sizeBytes: 1,
-  });
+  const checkpoint = await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-3', impId: imp.id }),
+  );
 
   const found = await findCheckpoint(ctx.db, imp.id, 'cp-3');
 
@@ -191,12 +172,10 @@ test('#findCheckpoint finds a checkpoint by label', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  const checkpoint = await createCheckpoint(ctx.db, {
-    id: 'cp-3',
-    impId: imp.id,
-    label: 'clean',
-    sizeBytes: 1,
-  });
+  const checkpoint = await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ impId: imp.id, label: 'clean' }),
+  );
 
   const found = await findCheckpoint(ctx.db, imp.id, 'clean');
 
@@ -208,7 +187,7 @@ test('#findCheckpoint finds nothing for a label no checkpoint has', async () => 
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, { id: 'cp-3', impId: imp.id, label: 'clean', sizeBytes: 1 });
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id, label: 'clean' }));
 
   const found = await findCheckpoint(ctx.db, imp.id, 'dirty');
 
@@ -220,8 +199,8 @@ test('#removeCheckpoint removes only that checkpoint', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, { id: 'cp-4', impId: imp.id, label: 'a', sizeBytes: 1 });
-  await createCheckpoint(ctx.db, { id: 'cp-5', impId: imp.id, label: 'b', sizeBytes: 1 });
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ id: 'cp-4', impId: imp.id }));
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ id: 'cp-5', impId: imp.id }));
 
   const removed = await removeCheckpoint(ctx.db, 'cp-4');
   const remaining = await listCheckpoints(ctx.db, imp.id);
@@ -234,13 +213,7 @@ test('#removeCheckpoint emits one checkpointRemoved', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
-
-  const checkpoint = await createCheckpoint(ctx.db, {
-    id: 'cp-4',
-    impId: imp.id,
-    label: null,
-    sizeBytes: null,
-  });
+  const checkpoint = await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id }));
 
   const writes: ImpWrite[] = [];
 
@@ -283,7 +256,7 @@ test('#removeImp removes the imp’s checkpoints with it', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, { id: 'cp-5', impId: imp.id, label: 'b', sizeBytes: 1 });
+  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ impId: imp.id }));
   await removeImp(ctx.db, imp.id);
 
   const checkpoints = await listCheckpoints(ctx.db, imp.id);
