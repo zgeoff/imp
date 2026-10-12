@@ -14,8 +14,10 @@ import { createImpd } from './create-impd';
 import { createImage } from './db/images';
 import { listLeases, writeLease } from './db/leases';
 import { openDatabase } from './db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockLeaseRecord } from './test-utils/build-mock-lease-record';
+import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildQueryGate } from './test-utils/build-query-gate';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
@@ -147,15 +149,12 @@ async function setupTest() {
 
   stack.defer(unsubscribe);
 
-  // the image every imps.create boots when it names none
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  // the image every imps.create boots when it names none
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const sendToImpd = (request: Request) => impd.api.app.handle(request);
 
@@ -629,14 +628,12 @@ test('it releases the caller’s hold and a legacy one on hold 0, and keeps the 
   // a hold from before holds had owners
   await writeLease(
     ctx.db,
-    {
+    buildMockLeaseRecord({
       impId: created.id,
       principal: 'legacy',
       label: 'hold',
-      display: 'legacy',
       until: new Date(ctx.clock.nowMs + 300_000),
-      createdAt: new Date(ctx.clock.nowMs),
-    },
+    }),
     { at: ctx.clock.nowMs, reason: null },
   );
 
@@ -974,14 +971,12 @@ test('it answers a stop of a stopped imp another owner leases and keeps the leas
   // a lease another owner holds on the stopped imp
   await writeLease(
     ctx.db,
-    {
+    buildMockLeaseRecord({
       impId: created.id,
       principal: 'token:other',
       label: 'job',
-      display: 'other',
       until: new Date(ctx.clock.nowMs + 600_000),
-      createdAt: new Date(ctx.clock.nowMs),
-    },
+    }),
     { at: ctx.clock.nowMs, reason: null },
   );
 

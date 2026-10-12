@@ -4,18 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runChildTests } from '@imp/test-utils/run-child-tests';
 import { createImage } from '../db/images';
+import { buildMockNewImage } from './build-mock-new-image';
 import { buildQueryGate } from './build-query-gate';
 import { createTestDatabase } from './create-test-database';
 
 test('it holds nothing before it is armed', async () => {
   const testDatabase = await createTestDatabase();
 
-  await createImage(testDatabase.db, {
-    name: 'ubuntu',
-    ref: 'imp/ubuntu:24.04',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  await createImage(
+    testDatabase.db,
+    buildMockNewImage({ name: 'ubuntu', ref: 'imp/ubuntu:24.04' }),
+  );
 
   const gate = buildQueryGate('images');
 
@@ -52,12 +51,10 @@ test('it holds the first select naming it once armed', async () => {
 test('it lets the held select finish with its rows after release', async () => {
   const testDatabase = await createTestDatabase();
 
-  await createImage(testDatabase.db, {
-    name: 'ubuntu',
-    ref: 'imp/ubuntu:24.04',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  await createImage(
+    testDatabase.db,
+    buildMockNewImage({ name: 'ubuntu', ref: 'imp/ubuntu:24.04' }),
+  );
 
   const gate = buildQueryGate('images');
 
@@ -80,12 +77,10 @@ test('it lets the held select finish with its rows after release', async () => {
 test('it holds only the first matching select', async () => {
   const testDatabase = await createTestDatabase();
 
-  await createImage(testDatabase.db, {
-    name: 'ubuntu',
-    ref: 'imp/ubuntu:24.04',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  await createImage(
+    testDatabase.db,
+    buildMockNewImage({ name: 'ubuntu', ref: 'imp/ubuntu:24.04' }),
+  );
 
   const gate = buildQueryGate('images');
   const gated = testDatabase.db.withPlugin(gate.plugin);
@@ -109,12 +104,10 @@ test('it holds only the first matching select', async () => {
 test('it ignores a select that does not name it', async () => {
   const testDatabase = await createTestDatabase();
 
-  await createImage(testDatabase.db, {
-    name: 'ubuntu',
-    ref: 'imp/ubuntu:24.04',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  await createImage(
+    testDatabase.db,
+    buildMockNewImage({ name: 'ubuntu', ref: 'imp/ubuntu:24.04' }),
+  );
 
   const gate = buildQueryGate('imps');
 

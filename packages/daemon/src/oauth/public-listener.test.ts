@@ -17,8 +17,14 @@ import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
-import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
 import { buildStubMcpTransport } from '../test-utils/build-stub-mcp-transport';
@@ -867,15 +873,11 @@ test('it ends a grant’s running command when the grant is revoked', async () =
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -1153,15 +1155,11 @@ test('it ends the grant a removed token approved, and its running command', asyn
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -1460,15 +1458,11 @@ test.each([
     const ctx = await setupTest();
 
     const guest = buildStubExecGuest();
+    const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-    await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+    await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-    await createImage(ctx.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(ctx.db, image);
 
     await ctx.client.imps.create({ name: 'box' });
 
@@ -1637,15 +1631,11 @@ test('it audits a grant’s change under its client and grant id', async () => {
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'dev-a' });
 
@@ -1792,15 +1782,11 @@ test('it audits a grant’s change refused past its patterns as FORBIDDEN', asyn
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -2229,15 +2215,11 @@ test('it lets a cancel through with every slot held, which stops its tool and fr
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -2490,15 +2472,11 @@ test('it refuses a signed-in notification too large for the allowance with every
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 
@@ -2670,15 +2648,11 @@ test('it ends a signed-in session with its DELETE with every slot held', async (
   const ctx = await setupTest();
 
   const guest = buildStubExecGuest();
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 

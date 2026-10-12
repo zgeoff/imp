@@ -12,6 +12,7 @@ import {
   buildSystemDrivesDir,
 } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
@@ -140,12 +141,10 @@ async function setupTest() {
     // the image a test's imps boot from
     await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-    await createImage(db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     // the image's config, which a move sends with it
     await Bun.write(buildImagePaths(dataDir, 'sha256:ubuntu').config, '{}');

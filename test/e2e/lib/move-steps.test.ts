@@ -10,10 +10,12 @@ import { createImpd } from '../../../packages/daemon/src/create-impd';
 import { createImage } from '../../../packages/daemon/src/db/images';
 import { openDatabase } from '../../../packages/daemon/src/db/open-database';
 import {
+  buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '../../../packages/daemon/src/storage/data-layout';
 import { createXfsBackend } from '../../../packages/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '../../../packages/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../../../packages/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../../../packages/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '../../../packages/daemon/src/test-utils/find-free-ports';
@@ -159,17 +161,14 @@ async function setupTest() {
 
   // the image an imp boots from when it names none, as impd's image
   // service leaves it: its rootfs under its digest
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
 
   // a move's plan counts the image's config beside its rootfs
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'config.json'), '{}');
+  await Bun.write(buildImagePaths(dataDir, image.digest).config, '{}');
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(db, image);
 
   return { dir, client, rootToken, apiUrl: `http://127.0.0.1:${String(server.port)}` };
 }

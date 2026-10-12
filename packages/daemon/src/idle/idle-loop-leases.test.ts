@@ -9,8 +9,14 @@ import { createImage } from '../db/images';
 import { findImpByName, updateImpActivity } from '../db/imps';
 import { writeLease } from '../db/leases';
 import { openDatabase } from '../db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -145,29 +151,26 @@ async function setupTest() {
 test('it holds the imp until the end of its earlier lease once the later lease is released', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev' });
 
   const at = ctx.now();
-  const lease = { impId: imp.id, principal: 'token:a', display: 'a', createdAt: new Date(at) };
+  const lease = { impId: imp.id, principal: 'token:a', display: 'a' };
 
   await writeLease(
     ctx.db,
-    { ...lease, label: 'early', until: new Date(at + 60_000) },
+    buildMockLeaseRecord({ ...lease, label: 'early', until: new Date(at + 60_000) }),
     { at, reason: 'held' },
   );
 
   await writeLease(
     ctx.db,
-    { ...lease, label: 'late', until: new Date(at + 600_000) },
+    buildMockLeaseRecord({ ...lease, label: 'late', until: new Date(at + 600_000) }),
     { at, reason: 'held' },
   );
 
@@ -181,14 +184,11 @@ test('it holds the imp until the end of its earlier lease once the later lease i
 test('it reports that it released a lease the caller held', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev' });
 
@@ -196,14 +196,13 @@ test('it reports that it released a lease the caller held', async () => {
 
   await writeLease(
     ctx.db,
-    {
+    buildMockLeaseRecord({
       impId: imp.id,
       principal: 'token:a',
       display: 'a',
-      createdAt: new Date(at),
       label: 'late',
       until: new Date(at + 600_000),
-    },
+    }),
     { at, reason: 'held' },
   );
 
@@ -219,29 +218,26 @@ test('it reports that it released a lease the caller held', async () => {
 test('it keeps an idle imp awake while the earlier of its leases runs', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev' });
 
   const at = ctx.now();
-  const lease = { impId: imp.id, principal: 'token:a', display: 'a', createdAt: new Date(at) };
+  const lease = { impId: imp.id, principal: 'token:a', display: 'a' };
 
   await writeLease(
     ctx.db,
-    { ...lease, label: 'early', until: new Date(at + 60_000) },
+    buildMockLeaseRecord({ ...lease, label: 'early', until: new Date(at + 60_000) }),
     { at, reason: 'held' },
   );
 
   await writeLease(
     ctx.db,
-    { ...lease, label: 'late', until: new Date(at + 600_000) },
+    buildMockLeaseRecord({ ...lease, label: 'late', until: new Date(at + 600_000) }),
     { at, reason: 'held' },
   );
 
@@ -269,29 +265,26 @@ test('it keeps an idle imp awake while the earlier of its leases runs', async ()
 test('it sleeps an idle imp once the earlier of its leases has ended', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const imp = await ctx.impd.imps.createImp({ name: 'dev' });
 
   const at = ctx.now();
-  const lease = { impId: imp.id, principal: 'token:a', display: 'a', createdAt: new Date(at) };
+  const lease = { impId: imp.id, principal: 'token:a', display: 'a' };
 
   await writeLease(
     ctx.db,
-    { ...lease, label: 'early', until: new Date(at + 60_000) },
+    buildMockLeaseRecord({ ...lease, label: 'early', until: new Date(at + 60_000) }),
     { at, reason: 'held' },
   );
 
   await writeLease(
     ctx.db,
-    { ...lease, label: 'late', until: new Date(at + 600_000) },
+    buildMockLeaseRecord({ ...lease, label: 'late', until: new Date(at + 600_000) }),
     { at, reason: 'held' },
   );
 

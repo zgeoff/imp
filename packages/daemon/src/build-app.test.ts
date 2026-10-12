@@ -19,7 +19,7 @@ import { listApiCalls } from './db/api-audit';
 import { createImage } from './db/images';
 import { findImpByName } from './db/imps';
 import { openDatabase } from './db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
 import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
@@ -799,14 +799,11 @@ test('it boots the configured default image, and names an imp made without a nam
     buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
   );
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const created = await ctx.client.imps.create({});
 

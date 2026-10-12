@@ -18,8 +18,13 @@ import { listAuditEntries } from '../db/broker-audit';
 import { createImage } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { findSecret, listGrantNames, removeCheckedGrant } from '../db/secrets';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubBrokerGuest } from '../test-utils/build-stub-broker-guest';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
@@ -206,10 +211,12 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the image every imp boots from
-  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  // the image every imp boots from
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const proxyPort = await impd.broker.listen(0);
 

@@ -17,8 +17,13 @@ import { createImage } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { runChecked } from '../process/run-command';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
@@ -286,14 +291,11 @@ test("it keeps the reference a streamed add's pull resolved in its audit row", a
 test('it streams the copy of a template and audits it with its imp', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'source', image: 'base' });
 

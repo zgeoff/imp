@@ -35,14 +35,17 @@ test('#createImp returns a creating imp with the defaults for what it leaves out
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
 
-  const imp = await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 2,
-    memoryMib: 2048,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+  const imp = await createImp(
+    ctx.db,
+    buildMockNewImp({
+      name: 'dev',
+      imageId: image.id,
+      vcpus: 2,
+      memoryMib: 2048,
+      slot: 0,
+      ip: '10.66.0.2',
+    }),
+  );
 
   expect(imp).toStrictEqual({
     id: expect.toBeString(),

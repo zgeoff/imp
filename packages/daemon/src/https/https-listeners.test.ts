@@ -13,9 +13,14 @@ import { findImpByName, updateImpExposure } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockCertificate } from '../test-utils/build-mock-certificate';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -150,15 +155,12 @@ async function setupTest() {
 
   stack.defer(() => proxy.stop());
 
-  // the image every imp here boots: a create needs one
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  // the image every imp here boots: a create needs one
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   return { db, impd, stack, echo, proxy };
 }
