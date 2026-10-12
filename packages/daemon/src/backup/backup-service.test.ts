@@ -1,6 +1,14 @@
 import { Database } from 'bun:sqlite';
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
@@ -1942,6 +1950,38 @@ test('#runBackup puts no secret value, key, password or root token in a backup w
   );
 
   expect(texts).not.toInclude(tokenSecret);
+});
+
+test('#runBackup holds the database copy’s size from the disk budget while it writes the copy', async () => {
+  const ctx = await setupTest();
+
+  // the sizes each hold asks for, on the host's real budget
+  const held: number[] = [];
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+    diskBudget: {
+      requireRoom: (bytes) => ctx.diskBudget.requireRoom(bytes),
+      withRoom: (bytes, task) => {
+        held.push(bytes);
+
+        return ctx.diskBudget.withRoom(bytes, task);
+      },
+    },
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+
+  const copyBytes = statSync(join(ctx.repoDir, run.snapshotId, 'database', 'impd.sqlite')).size;
+
+  expect(held).toStrictEqual([copyBytes]);
 });
 
 test('#runBackup takes the database copy out of the next snapshot once the setting is off', async () => {

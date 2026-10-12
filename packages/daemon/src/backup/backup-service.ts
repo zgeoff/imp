@@ -377,7 +377,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     try {
       mkdirSync(paths.tree, { recursive: true });
-      writeTreeDatabase(copyPath, database);
+
+      await writeTreeDatabase(copyPath, database);
+
       writeFileSync(join(paths.tree, BACKUP_TREE.manifest), JSON.stringify(manifest, null, 2));
 
       const names = manifest.imps.map((imp) => imp.name);
@@ -412,10 +414,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     }
   };
 
-  // The copy goes in with the setting on. With it off, the copy a run with
-  // it on left in the tree goes, so turning the setting off takes the
-  // database out of every snapshot after.
-  const writeTreeDatabase = (copyPath: string, database: string | null): void => {
+  // The copy goes in with the setting on, holding its size from the disk
+  // budget while it writes. With it off, the copy a run with it on left in
+  // the tree goes, so no later snapshot holds the database.
+  const writeTreeDatabase = async (copyPath: string, database: string | null): Promise<void> => {
     rmSync(join(paths.tree, dirname(BACKUP_TREE.database)), { recursive: true, force: true });
 
     if (database === null) {
@@ -424,9 +426,13 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     const target = join(paths.tree, database);
 
-    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-    copyFileSync(copyPath, target);
-    chmodSync(target, 0o600);
+    await diskBudget.withRoom(statSync(copyPath).size, () => {
+      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      copyFileSync(copyPath, target);
+      chmodSync(target, 0o600);
+
+      return Promise.resolve();
+    });
   };
 
   // after an unlock, which drops only stale locks: a crashed run's would

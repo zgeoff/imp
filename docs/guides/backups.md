@@ -63,6 +63,10 @@ imp backup restore --all --merge               # add every imp to a host that ha
    copy, it also brings back each named token with its SSH keys, and each secret without its value,
    and prints their names. A token's own secret works again; a token whose name the host has stays
    as it is, and the restore lists it.
+
+   **CAUTION:** a token deleted after the backup point comes back with it, and its secret works
+   again. Delete each such token once more with `imp token rm`.
+
 6. With the database copy, give each restored secret its value with
    `imp secret add <name> ... --replace`, with the kind and rules it had. A replace with the same
    rules is a rotation ([rotate or rebind](./connectors.md#rotate-or-rebind)), so its grants and the
