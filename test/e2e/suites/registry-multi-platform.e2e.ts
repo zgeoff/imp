@@ -77,15 +77,21 @@ test.skipIf(registryMissing)(
     const host = `${ctx.registry.address}/${repository}:${hostArch}`;
     const other = `${ctx.registry.address}/${repository}:${otherArch}`;
 
+    // registered before each build, whose image stays local if its push
+    // fails; an rmi of an image that is not there, or that the explicit rmi
+    // below removed, only exits nonzero
+    ctx.stack.defer(async () => {
+      await runCommand(['docker', 'rmi', host]);
+    });
+
     await buildPushedImage(
       writeContext(ctx.dir, 'host', `FROM ${busybox}\nCOPY v /v\n`, hostArch),
       host,
       `linux/${hostArch}`,
     );
 
-    // gone already once the explicit rmi below ran
     ctx.stack.defer(async () => {
-      await runCommand(['docker', 'rmi', host]);
+      await runCommand(['docker', 'rmi', other]);
     });
 
     // a trigger impd would refuse, and that fails the build if it ran
@@ -94,10 +100,6 @@ test.skipIf(registryMissing)(
       other,
       `linux/${otherArch}`,
     );
-
-    ctx.stack.defer(async () => {
-      await runCommand(['docker', 'rmi', other]);
-    });
 
     await writeRegistryIndex({
       registry: ctx.registry.address,
