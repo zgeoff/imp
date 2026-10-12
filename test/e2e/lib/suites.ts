@@ -66,7 +66,7 @@ export const SUITES: readonly Suite[] = [
     name: 'sleep',
     prefix: 'e2e-slp-',
     images: ['e2e-bare', 'e2e-ws'],
-    journeys: ['sleep-memory', 'sleep-websocket'],
+    journeys: ['sleep-memory', 'sleep-proxy-answers', 'sleep-websocket'],
   },
   {
     name: 'scale',
@@ -133,7 +133,14 @@ export const SUITES: readonly Suite[] = [
     name: 'ipv6',
     prefix: 'e2e-v6-',
     images: ['e2e-tiny', 'e2e-ra'],
-    journeys: ['ipv6-nat66', 'ipv6-policy', 'ipv6-routed'],
+    journeys: [
+      'ipv6-nat66',
+      'ipv6-policy',
+      'ipv6-isolation',
+      'ipv6-spoof',
+      'ipv6-router-advert',
+      'ipv6-routed',
+    ],
   },
   { name: 'networks', prefix: 'e2e-net-', images: ['e2e-tiny'] },
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
@@ -184,7 +191,12 @@ export const SUITES: readonly Suite[] = [
   },
 
   // kills impd, Firecracker and the container; reboots the instance
-  { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
+  {
+    name: 'chaos',
+    prefix: 'e2e-chaos-',
+    images: ['e2e-bare'],
+    journeys: ['chaos', 'chaos-watchdog', 'chaos-disk-full'],
+  },
 
   // reboots the instance with the jailer off, then on again
   {

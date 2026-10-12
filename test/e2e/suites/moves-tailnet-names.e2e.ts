@@ -37,22 +37,17 @@ async function setupTest() {
   return { prefix: readSuitePrefix('moves-tailnet'), stack, client };
 }
 
-const NAMES_BLOCKED =
-  'the tailnet name handover waits for the Tailscale Services OAuth client of #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it exists';
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
+const tailscaleStatus = await readLocalTailscaleStatus();
 
-const localStatus = await readLocalTailscaleStatus();
+// the tailnet name handover waits for the Tailscale Services OAuth client of
+// #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it
+// exists
+const tailnetNamesMissing =
+  !isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) ||
+  process.env['IMP_E2E_TAILNET_NAMES'] !== '1';
 
-const hasKey = hasTailscaleE2EKey();
-
-const namesReady =
-  isTailnetReady(localStatus?.BackendState ?? null, hasKey) &&
-  process.env['IMP_E2E_TAILNET_NAMES'] === '1';
-
-if (!namesReady) {
-  console.log(`    ${NAMES_BLOCKED}; skipped`);
-}
-
-test.skipIf(!namesReady)(
+test.skipIf(tailnetNamesMissing)(
   'it hands a per-imp tailnet name over with its imp: the source lets it go, the target takes it',
   async () => {
     const ctx = await setupTest();

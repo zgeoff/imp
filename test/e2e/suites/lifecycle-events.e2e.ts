@@ -38,16 +38,16 @@ test('it streams a create, sleep, wake and rm as events with no reconnect, and l
 
   const events = await startImp(['events']);
 
+  ctx.stack.defer(async () => {
+    events.kill();
+
+    await events.exited;
+  });
+
   const seen: string[] = [];
 
   const collecting = collectEventLines(events.stdout, (line) => {
     seen.push(line);
-  });
-
-  ctx.stack.defer(async () => {
-    events.kill();
-
-    await collecting;
   });
 
   await waitFor('the snapshot from imp events', () => {

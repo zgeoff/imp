@@ -16,7 +16,6 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import {
-  TAILNET_NOT_READY,
   findTailnetNode,
   isTailnetReady,
   readLocalTailscaleStatus,
@@ -41,30 +40,26 @@ async function setupTest() {
   return { prefix: readSuitePrefix('tailscale'), stack, client };
 }
 
-const localStatus = await readLocalTailscaleStatus();
-
-const hasKey = hasTailscaleE2EKey();
-const ready = isTailnetReady(localStatus?.BackendState ?? null, hasKey);
-
-if (!ready && !config.acceptance) {
-  console.log(`    ${TAILNET_NOT_READY}; skipped`);
-}
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
+const tailscaleStatus = await readLocalTailscaleStatus();
 
 // the definition of done needs the tailnet; any other run skips without it
-test.skipIf(!ready && !config.acceptance)(
+// (requireTailnetReady says what it needs)
+const tailnetMissing = !isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) && !config.acceptance;
+
+test.skipIf(tailnetMissing)(
   'it answers tailnet members by IP and by name, and wakes on a tailnet request',
   async () => {
     const ctx = await setupTest();
+    const status = await readLocalTailscaleStatus();
 
-    requireTailnetReady(localStatus?.BackendState ?? null, hasKey);
+    requireTailnetReady(status, hasTailscaleE2EKey());
+    invariant(status);
 
     const name = `${ctx.prefix}a`;
 
     const ip = await waitForTailnetIp();
     const info = await readInfo();
-    const status = await readLocalTailscaleStatus();
-
-    invariant(status);
 
     const node = findTailnetNode(Object.values(status.Peer), ip);
 

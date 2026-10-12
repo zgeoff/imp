@@ -44,8 +44,8 @@ test('it makes the template of a shape on its second boot and restores it as imp
 
   const started = new Date();
 
-  // 304 MiB, a shape only this test boots; its template goes after the imps,
-  // and one a killed earlier run left goes before the first boot
+  // the 304 MiB shape starts with no template: the reset removes one a
+  // killed earlier run left, and this test's own goes after its imps
   registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(304));
 
   await removeShapeTemplates(304);

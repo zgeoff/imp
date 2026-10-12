@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { createStubBin } from '../../../scripts/test-utils/create-stub-bin';
-import { listAgentThroughUnixForward } from './ssh';
+import { runCommand } from './instance';
+import { listAgentThroughUnixForward, startLocalSshAgent } from './ssh';
 
 async function setupTest() {
   const dir = await mkdtemp(join(tmpdir(), 'ssh-'));
@@ -50,4 +51,38 @@ test('#listAgentThroughUnixForward lists the agent at the far end of the forward
   });
 
   expect(existsSync(local)).toBeFalse();
+});
+
+test('#startLocalSshAgent serves the key it made until stop, which removes its socket', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startLocalSshAgent(
+    { configArgs: [], dir: ctx.dir, cleanup: () => Promise.resolve() },
+    'unit',
+  );
+
+  onTestFinished(() => agent.stop());
+
+  const listed = await runCommand(['ssh-add', '-L'], { env: { SSH_AUTH_SOCK: agent.socket } });
+
+  await agent.stop();
+
+  expect(listed).toStrictEqual({ exitCode: 0, stdout: agent.publicKey, stderr: '' });
+  expect(agent.publicKey).toEndWith(' imp-e2e-unit\n');
+  expect(existsSync(agent.socket)).toBeFalse();
+});
+
+test('#startLocalSshAgent stops again without an error once it has stopped', async () => {
+  const ctx = await setupTest();
+
+  const agent = await startLocalSshAgent(
+    { configArgs: [], dir: ctx.dir, cleanup: () => Promise.resolve() },
+    'unit',
+  );
+
+  onTestFinished(() => agent.stop());
+
+  await agent.stop();
+
+  await expect(agent.stop()).toResolve();
 });

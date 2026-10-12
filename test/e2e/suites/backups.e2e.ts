@@ -336,8 +336,17 @@ test('it restores past a stale lock in the repository, and fails the check loudl
 
   const key = findPackKey(listing.stdout) ?? '';
 
-  // kept, so the repository is whole again after the check
-  const saved = await runS3(ctx.secrets, 'GET', `/${key}`, '-o', '/tmp/e2e-pack');
+  // kept in a dir of this test's own, so the repository is whole again
+  // after the check
+  const made = await runInContainer(['mktemp', '-d']);
+
+  const packDir = made.stdout.trim();
+
+  ctx.stack.defer(async () => {
+    await runInContainer(['rm', '-rf', packDir]);
+  });
+
+  const saved = await runS3(ctx.secrets, 'GET', `/${key}`, '-o', `${packDir}/pack`);
 
   const put = await runS3(
     ctx.secrets,
@@ -353,7 +362,7 @@ test('it restores past a stale lock in the repository, and fails the check loudl
 
   const check = await tryImp(['backup', 'check', '--subset', '100%']);
   const status = await readBackupStatus();
-  const restored = await runS3(ctx.secrets, 'PUT', `/${key}`, '--data-binary', '@/tmp/e2e-pack');
+  const restored = await runS3(ctx.secrets, 'PUT', `/${key}`, '--data-binary', `@${packDir}/pack`);
 
   expect(check).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toStartWith('imp: ') });
   expect(status.lastCheck?.error).toBeString();

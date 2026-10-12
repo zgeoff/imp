@@ -41,4 +41,8 @@ export const config = {
 
   // where suites append metrics; the runner merges them into results.json
   metricsFile: process.env['E2E_METRICS_FILE'] ?? null,
+
+  // the name the registry suite's registry answers to, which must resolve to
+  // 127.0.0.1 on this machine
+  registryName: process.env['E2E_REGISTRY_NAME'] ?? 'imp-e2e-registry.test',
 } as const;

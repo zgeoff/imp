@@ -36,13 +36,13 @@ test('it runs exec --agent as root outside the container and reports it as an Ag
 
   const events = await startImp(['events', name]);
 
-  const seen = startTextCapture(events.stdout);
-
   ctx.stack.defer(async () => {
     events.kill();
 
-    await seen.done;
+    await events.exited;
   });
+
+  const seen = startTextCapture(events.stdout);
 
   // the shell computes the line, so the terminal's echo of the input does
   // not match it

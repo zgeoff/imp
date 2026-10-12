@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { invariant } from '@imp/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { tryGetFromImp } from '../lib/guest-probe';
@@ -21,9 +22,11 @@ import { writeMetric } from '../lib/write-metric';
 // The public policy (docs/architecture/networking.md#egress): the internet,
 // and no private address. The private listeners are this machine, at the
 // container's gateway, and a netns of 10/8 and link-local in the container.
-const info = await readInfo();
 
-const tailnetIp = info.tailscale.ip;
+// collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
+const startInfo = await readInfo();
+
+const hostTailnetMissing = startInfo.tailscale.ip === null;
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -115,8 +118,11 @@ test('it lets an open imp reach each private listener, before and after a public
   expect(againGateway.isConnected).toBeTrue();
 });
 
-test.skipIf(tailnetIp === null)('it refuses a public imp the host’s tailnet address', async () => {
+test.skipIf(hostTailnetMissing)('it refuses a public imp the host’s tailnet address', async () => {
   const ctx = await setupTest();
+  const info = await readInfo();
+
+  invariant(info.tailscale.ip);
 
   const pub = `${ctx.prefix}tail-pub`;
 
@@ -135,7 +141,7 @@ test.skipIf(tailnetIp === null)('it refuses a public imp the host’s tailnet ad
 
   await waitForExec(pub);
 
-  const dial = await runTimedDial(pub, tailnetIp ?? '', 7070);
+  const dial = await runTimedDial(pub, info.tailscale.ip, 7070);
 
   expect(dial.isConnected).toBeFalse();
 });

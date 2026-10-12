@@ -48,7 +48,7 @@ async function setupTest() {
   // the user's agent on this machine, holding a key made for the test
   const laptop = await startLocalSshAgent(ssh);
 
-  stack.defer(() => laptop[Symbol.asyncDispose]());
+  stack.defer(() => laptop.stop());
 
   // ssh's control and forward sockets: a unix socket path holds 107 bytes,
   // which a worktree's .cache can pass
@@ -245,7 +245,7 @@ test('it fails ssh-add in the imp at once when the agent on this machine is gone
 
   const gone = await startLocalSshAgent(ctx.ssh, 'gone');
 
-  ctx.stack.defer(() => gone[Symbol.asyncDispose]());
+  ctx.stack.defer(() => gone.stop());
 
   const env = { SSH_AUTH_SOCK: gone.socket };
 
@@ -260,7 +260,7 @@ test('it fails ssh-add in the imp at once when the agent on this machine is gone
 
   await waitFor('the control socket', () => runChecked(['test', '-S', control]));
 
-  await gone[Symbol.asyncDispose]();
+  await gone.stop();
 
   const result = await runCommand(
     [

@@ -41,6 +41,7 @@ test('it takes the acceptance sizes when no variable is set', () => {
     keep: false,
     acceptance: false,
     metricsFile: null,
+    registryName: 'imp-e2e-registry.test',
   });
 });
 
@@ -69,6 +70,7 @@ test('it reads every knob from its variable', () => {
         E2E_KEEP: '1',
         E2E_ACCEPTANCE: '1',
         E2E_METRICS_FILE: '/run/e2e/metrics.jsonl',
+        E2E_REGISTRY_NAME: 'registry.e2e.test',
       },
     },
   );
@@ -86,6 +88,7 @@ test('it reads every knob from its variable', () => {
     keep: true,
     acceptance: true,
     metricsFile: '/run/e2e/metrics.jsonl',
+    registryName: 'registry.e2e.test',
   });
 });
 

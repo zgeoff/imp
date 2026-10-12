@@ -129,14 +129,14 @@ test('it keeps forwards, reverse forwards and the service port working through a
     `:${pagePort}`,
   ]);
 
-  const stdout = startTextCapture(proxy.stdout);
-  const stderr = startTextCapture(proxy.stderr);
-
   ctx.stack.defer(async () => {
     proxy.kill('SIGINT');
 
     await proxy.exited;
   });
+
+  const stdout = startTextCapture(proxy.stdout);
+  const stderr = startTextCapture(proxy.stderr);
 
   const forwards = await waitFor('imp proxy to listen', () => {
     const parsed = parseProxyForwards(stdout.read());

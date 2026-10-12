@@ -202,7 +202,7 @@ test('it pushes a git pack over 1 MB through the broker with Basic auth', async 
   expect(landed.trim()).toBe(pushed.split('\n').at(-1) ?? '');
 
   // git probes with a small POST before it sends a large pack
-  expect(pushes.length).toBeGreaterThan(0);
+  expect(pushes).not.toBeEmpty();
 
   expect(pushes).toSatisfyAll(
     (entry: (typeof pushes)[number]) => entry.host === 'github.com' && entry.status === 200,

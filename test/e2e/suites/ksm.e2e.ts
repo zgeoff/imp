@@ -27,7 +27,6 @@ import { writeMetric } from '../lib/write-metric';
 // IMP_KSM with real merges (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
 // KSM is global to the kernel: CI turns it on, and on any other host the
 // suite skips. Its settings put the instance on KSM and a 512 MiB budget.
-const isKsmReady = checkHostRunsKsm();
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -39,7 +38,7 @@ async function setupTest() {
   return { prefix: readSuitePrefix('ksm'), stack, client };
 }
 
-test.skipIf(!isKsmReady)(
+test.skipIf(!checkHostRunsKsm())(
   'it merges the pages two guests hold alike, and the governor keeps the budget once their own writes split them',
   async () => {
     const ctx = await setupTest();
@@ -163,7 +162,7 @@ test.skipIf(!isKsmReady)(
 
 // Plugged memory is guest memory KSM may merge, as its boot memory is
 // (docs/architecture/memory.md#how-the-guest-grows).
-test.skipIf(!isKsmReady)(
+test.skipIf(!checkHostRunsKsm())(
   'it makes the memory an elastic guest grows into private and mergeable, as its boot memory is',
   async () => {
     const ctx = await setupTest();

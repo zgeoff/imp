@@ -21,7 +21,6 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
-import { openProxySocket } from '../lib/websocket';
 import { writeMetric } from '../lib/write-metric';
 
 // Sleep and wake of an e2e-bare imp (docs/architecture/sleep-and-wake.md):
@@ -235,26 +234,6 @@ test('it gives memory the guest frees back to the host', async () => {
 
   expect(grown).toBeGreaterThan(baseline + 250);
   expect(shrunk).toBeLessThan(baseline + 100);
-});
-
-test('it answers 404 for an unknown imp, and 502 when nothing in the imp listens', async () => {
-  const ctx = await setupTest();
-
-  // e2e-bare serves nothing on the imp's http port
-  const name = `${ctx.prefix}quiet`;
-
-  await runImp('new', name, '--image', resolveImageName('e2e-bare'), '--memory', '256');
-
-  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
-
-  await waitForExec(name);
-
-  const unknown = await sendProxyRequest(`${ctx.prefix}nope`);
-  const refused = await sendProxyRequest(name);
-
-  expect(unknown.status).toBe(404);
-  expect(refused.status).toBe(502);
-  expect(openProxySocket(name)).rejects.toThrow(/closed/);
 });
 
 test('it loses what only memory held on a cold boot', async () => {

@@ -194,7 +194,7 @@ test('it moves a sleeping box imp with its allow list, and the target’s broker
   );
 
   expect(before).not.toBeEmpty();
-  expect(before.filter((address) => !held.includes(address))).toStrictEqual([]);
+  expect(held).toIncludeAllMembers(before);
   expect(JSON.parse(body)).toStrictEqual({ authorized: true });
   expect(upstream.seen.at(-1)?.authorization).toBe(`Bearer ${tokenB}`);
   expect(mark).toBe('warm-ok\n');
