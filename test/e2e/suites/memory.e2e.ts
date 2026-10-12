@@ -99,12 +99,31 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
 
   expect(totalShrunk).toBeLessThan(256 + 256);
 
-  // 300 MiB in use at 30 MiB a second, then freed: too soon for the
-  // minute-long idle shrink
+  // 300 MiB in use at 30 MiB a second, too soon for the minute-long idle
+  // shrink. It crosses the grow mark only near its end, so the memory stays
+  // in use until the grow lands, then goes
   await runShellInImp(
     name,
-    'i=0; while [ $i -lt 10 ]; do dd if=/dev/zero of=/mnt/fill/$i bs=1M count=30 2>/dev/null; i=$((i+1)); sleep 1; done; rm -f /mnt/fill/*',
+    'i=0; while [ $i -lt 10 ]; do dd if=/dev/zero of=/mnt/fill/$i bs=1M count=30 2>/dev/null; i=$((i+1)); sleep 1; done',
   );
+
+  const growStarted = performance.now();
+
+  await waitFor(
+    `${name} to grow under the second fill`,
+    async () => {
+      const pluggedMib = await readPluggedMib(name);
+
+      if (pluggedMib < 256) {
+        throw new Error(`${String(pluggedMib)} MiB plugged`);
+      }
+    },
+    { timeoutMs: 30_000, intervalMs: 200 },
+  );
+
+  writeMetric('memory_grow_after_fill_ms', Math.round(performance.now() - growStarted));
+
+  await runShellInImp(name, 'rm -f /mnt/fill/*');
 
   const pluggedBeforeSleep = await readPluggedMib(name);
   const availableInGuest = await readMemAvailableMib(name);
