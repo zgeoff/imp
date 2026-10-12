@@ -2,10 +2,10 @@
 
 ## [1.0.0](https://github.com/zgeoff/imp/compare/v0.42.0...v1.0.0) (2026-10-12)
 
-
 ### Miscellaneous Chores
 
-* release 1.0.0 ([#331](https://github.com/zgeoff/imp/issues/331)) ([a7f7cb2](https://github.com/zgeoff/imp/commit/a7f7cb2b4a53b9f393a879dfbfe597c471ca3cdb))
+- release 1.0.0 ([#331](https://github.com/zgeoff/imp/issues/331))
+  ([a7f7cb2](https://github.com/zgeoff/imp/commit/a7f7cb2b4a53b9f393a879dfbfe597c471ca3cdb))
 
 ## [0.42.0](https://github.com/zgeoff/imp/compare/v0.41.0...v0.42.0) (2026-10-12)
 
