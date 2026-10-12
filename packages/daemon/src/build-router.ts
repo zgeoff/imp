@@ -317,7 +317,7 @@ export function buildRouter(deps: RouterDeps) {
       // a network reaches past a caller's imp patterns, as a join does
       create: os.imps.create.handler(async (context) => {
         const caller = context.context.caller;
-        const { networks, ...input } = context.input;
+        const { networks, backup, ...input } = context.input;
 
         if (networks !== undefined && caller.imps !== null) {
           throw buildForbiddenError(
@@ -339,7 +339,10 @@ export function buildRouter(deps: RouterDeps) {
 
         const networkIds = await deps.networks.resolveNetworkIds(networks ?? []);
 
-        return toCallerImp(caller, deps.imps.createImp({ ...input, networkIds }));
+        return toCallerImp(
+          caller,
+          deps.imps.createImp({ ...input, networkIds, isBackedUp: backup }),
+        );
       }),
       list: os.imps.list.handler(async (context) => {
         const caller = context.context.caller;

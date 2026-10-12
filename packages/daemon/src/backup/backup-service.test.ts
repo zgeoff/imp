@@ -10,7 +10,7 @@ import { findSecret } from '../db/secrets';
 import { createTemplateService } from '../images/template-service';
 import { createImpTest } from '../imps/test-imps';
 import { createNetworkService } from '../networks/network-service';
-import { buildImpPaths } from '../storage/data-layout';
+import { BACKUP_TREE, buildImpPaths } from '../storage/data-layout';
 import { buildMockBackupConfig } from '../test-utils/build-mock-backup-config';
 import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
 import { buildStubRestic } from '../test-utils/build-stub-restic';
@@ -1734,4 +1734,117 @@ test('#restoreBackup leaves the host’s imps, secrets and grants as they were w
   expect(secretsAfter).toStrictEqual(secretsBefore);
   expect(grantsAfter).toStrictEqual(grantsBefore);
   expect(checkpointsAfter).toStrictEqual(checkpointsBefore);
+});
+
+test('#runBackup puts no file of an imp created with backup off in the snapshot', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  const dev = await ctx.imps.createImp({ name: 'dev' });
+  const chat = await ctx.imps.createImp({ name: 'chat', isBackedUp: false });
+
+  writeFileSync(buildImpPaths(ctx.dataDir, chat.id).disk, 'transcript-in-plain-text');
+
+  const chatBytes = await ctx.storage.createCheckpoint(chat.id, 'cp-chat');
+
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-chat', impId: chat.id, sizeBytes: chatBytes }),
+  );
+
+  const run = await backups.runBackup();
+
+  const snapshotDir = join(ctx.repoDir, run.snapshotId);
+
+  const files = readdirSync(snapshotDir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name).slice(snapshotDir.length));
+
+  const texts = files.map((file) => readFileSync(join(snapshotDir, file), 'latin1')).join('\n');
+
+  expect(files).toContain(`/${BACKUP_TREE.buildDisk(dev.id)}`);
+  expect(files).not.toSatisfyAny((file: string) => file.includes(chat.id));
+  expect(texts).not.toInclude('transcript-in-plain-text');
+});
+
+test('#runBackup names an imp created with backup off in the run, the tags and the manifest, with why', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.createImp({ name: 'chat', isBackedUp: false });
+
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+  const [snapshot] = ctx.restic.readSnapshots();
+
+  expect(run.imps).toStrictEqual(['dev']);
+  expect(run.skipped).toStrictEqual([]);
+  expect(run.excluded).toStrictEqual([{ name: 'chat', reason: 'created with backup off' }]);
+  expect(manifest.imps.map((imp) => imp.name)).toStrictEqual(['dev']);
+  expect(manifest.excluded).toStrictEqual([{ name: 'chat', reason: 'created with backup off' }]);
+
+  expect(snapshot?.tags).toStrictEqual([
+    'imp-backup',
+    expect.stringMatching(/^run=/v),
+    'imp=dev',
+    'excluded=chat',
+  ]);
+});
+
+test('#restoreBackup rejects a restore of an imp created with backup off as PRECONDITION_FAILED, with why', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'chat', isBackedUp: false });
+
+  const run = await backups.runBackup();
+
+  await ctx.imps.destroyImp('chat');
+
+  expect(backups.restoreBackup({ name: 'chat' })).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message: `imp chat is left out of backups (created with backup off): backup ${run.snapshotId} (2026-10-02T00:00:00.000Z) holds none of its files`,
+  });
+});
+
+test('#restoreBackup lists an imp created with backup off as not restorable, with why, in a restore of all imps', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.createImp({ name: 'chat', isBackedUp: false });
+  await backups.runBackup();
+  await ctx.imps.destroyImp('dev');
+  await ctx.imps.destroyImp('chat');
+
+  const restored = await backups.restoreBackup({ all: true });
+
+  expect(restored.imps.map((imp) => imp.name)).toStrictEqual(['dev']);
+
+  expect(restored.notRestorable).toStrictEqual([
+    { imp: 'chat', reason: 'created with backup off' },
+  ]);
 });

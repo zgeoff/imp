@@ -75,9 +75,18 @@ test('#createImp returns a creating imp with the defaults for what it leaves out
     awakeMs: 0,
     awakeSince: null,
     isIdentityResetPending: false,
+    isBackedUp: true,
     isTrustPending: false,
     moveState: null,
   });
+});
+
+test('#createImp keeps an imp created with backup off out of backups', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id, isBackedUp: false }));
+
+  expect(imp.isBackedUp).toBe(false);
 });
 
 test('#createImp keeps the memory a guest may grow to', async () => {

@@ -22,6 +22,7 @@ interface NewImpInput {
   readonly cpuLimit?: number | null | undefined;
   readonly cpuWeight?: number | undefined;
   readonly isIdentityResetPending?: boolean;
+  readonly isBackedUp?: boolean | undefined;
   readonly networkIds?: readonly string[] | undefined;
   readonly moveState?: 'receiving' | undefined;
   readonly kind?: ImpKind | undefined;
@@ -60,6 +61,7 @@ export async function createImpRecord(
         ...(input.kind !== undefined && { kind: input.kind }),
         cpu,
         ...(input.isIdentityResetPending === true && { isIdentityResetPending: true }),
+        ...(input.isBackedUp === false && { isBackedUp: false }),
       },
       {
         count: countSlots(context.config.subnet),

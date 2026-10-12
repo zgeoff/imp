@@ -37,6 +37,7 @@ export function buildMockImpRecord(overrides: ImpRecordOverrides = {}): ImpRecor
     awakeMs: faker.number.int({ min: 0, max: 86_400_000 }),
     awakeSince: faker.date.recent(),
     isIdentityResetPending: false,
+    isBackedUp: true,
     isTrustPending: false,
     moveState: null,
     ...rest,

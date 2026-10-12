@@ -35,6 +35,7 @@ test('it leaves the named field out of the real target offer reply', async () =>
     storage: 'xfs',
     keepsLeases: true,
     keepsPublicEgress: true,
+    keepsBackupOff: true,
   });
 });
 

@@ -31,6 +31,7 @@ test('it builds a default imp record', () => {
     awakeMs: expect.toBeWithin(0, 86_400_001),
     awakeSince: expect.toBeValidDate(),
     isIdentityResetPending: false,
+    isBackedUp: true,
     isTrustPending: false,
     moveState: null,
   });

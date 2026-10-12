@@ -126,6 +126,28 @@ test('#new refuses --public for a token limited to some imps, and creates nothin
   expect(dev).toBeUndefined();
 });
 
+test('#new creates an imp left out of every backup for --no-backup', async () => {
+  const ctx = await setupTest();
+  const box = await startImpdHost(ctx.stack, { env: {} });
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(box.db, image);
+
+  const result = await runCli({
+    args: ['new', 'chat', '--image', 'base', '--no-backup', '--json'],
+    env: { ...ctx.home, IMP_URL: box.url, IMP_TOKEN: box.rootToken },
+  });
+
+  const chat = await findImpByName(box.db, 'chat');
+
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({ name: 'chat', backup: false });
+  expect(chat?.isBackedUp).toBe(false);
+});
+
 test('#console refuses a detach key that is not ctrl-<key>', async () => {
   const result = await runCli({
     args: ['console', 'box', '--detach-key', 'esc'],

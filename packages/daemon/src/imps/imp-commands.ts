@@ -48,6 +48,10 @@ interface CreateImpInput {
   // a fork of a template copy that has not booted yet owes the reset too
   readonly isIdentityResetPending?: boolean;
 
+  // false leaves the imp's disk and checkpoints out of every backup run
+  // (docs/architecture/storage/backups.md#imps-left-out); true by default
+  readonly isBackedUp?: boolean | undefined;
+
   // a move keeps the imp's id, and stages it marked `receiving`; a warm
   // move keeps its slot too, and a grow its guest still owes
   readonly id?: string;

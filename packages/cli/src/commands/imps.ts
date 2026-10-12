@@ -62,6 +62,12 @@ export const newCommand = defineCommand({
     public: { type: 'boolean', description: 'serve it to the internet too, as imp expose does' },
     ...authArgs,
     net: { type: 'string', description: 'networks to join, comma-separated (see imp net)' },
+    backup: {
+      type: 'boolean',
+      default: true,
+      description: 'hold the imp in the host’s backups (the default)',
+      negativeDescription: 'leave its disk and checkpoints out of every backup, for its life',
+    },
     place: {
       type: 'boolean',
       description: 'create it on the saved host with the most free RAM (see imp host ls)',
@@ -181,6 +187,7 @@ interface NewArgs extends Readonly<Record<string, unknown>> {
   readonly auth?: string | undefined;
   readonly user?: string | undefined;
   readonly net?: string | undefined;
+  readonly backup?: boolean | undefined;
   readonly json?: boolean | undefined;
 }
 
@@ -207,6 +214,7 @@ function readNewRequest(args: NewArgs): NewRequest {
     ...(policy !== undefined && { policy }),
     ...readCpuArgs(args),
     ...(networks !== undefined && { networks }),
+    ...(args.backup === false && { backup: false }),
   };
 
   return {

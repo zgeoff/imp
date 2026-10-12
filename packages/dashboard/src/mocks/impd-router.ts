@@ -129,6 +129,7 @@ export const impdRouter = {
         ...(input.maxMemoryMib !== undefined && { maxMemoryMib: input.maxMemoryMib }),
         ...(input.diskMib !== undefined && { diskMib: input.diskMib }),
         ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
+        ...(input.backup === false && { backup: false }),
         cpu,
       });
 

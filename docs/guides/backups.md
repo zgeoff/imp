@@ -1,6 +1,6 @@
 # Backups
 
-impd backs up every imp's disk, its checkpoints and the images they come from to a
+impd backs up each imp's disk, its checkpoints and the images they come from to a
 [restic](https://restic.net) repository off the host: an S3 bucket, a REST server, or anything else
 restic speaks. Backups are off until `IMP_BACKUP_REPOSITORY` is set
 ([configuration](./configuration.md#backups)). [Backups](../architecture/storage/backups.md) in the
@@ -9,8 +9,14 @@ architecture docs covers what a run does.
 - `imp backup run` backs up now; the schedule does the same every `IMP_BACKUP_INTERVAL_S`.
 - `imp backup ls` lists the restore points, oldest first, with the last prune and check.
 - `imp backup restore <name> [--as <new>] [--at <time>]` brings one imp back, stopped.
-- `imp backup restore --all [--merge]` brings back every imp: a whole host.
+- `imp backup restore --all [--merge]` brings back every imp the backup holds: a whole host.
 - `imp backup check [--subset 5%]` reads part of the repository back and verifies it.
+
+`imp new --no-backup` creates an imp that no backup ever holds: neither its disk nor its checkpoints
+reach the repository, for the imp's life. Use it for an imp whose disk holds text you must be able
+to delete for good, such as an agent's transcripts. A fork of it is left out too, and a template of
+it is refused. `imp backup run` lists it as not backed up, and a restore of it fails with the reason
+([imps left out](../architecture/storage/backups.md#imps-left-out)).
 
 **Create the bucket first.** restic does not exit when the bucket is missing: it retries for
 minutes, and the first run then fails.

@@ -288,6 +288,26 @@ test('it refuses a template of an imp that is still being created', async () => 
   });
 });
 
+test('it refuses a template of an imp created with backup off, since every backup holds every image', async () => {
+  const ctx = await setupTest();
+
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
+
+  await ctx.impd.imps.createImp({ name: 'chat', image: 'base', isBackedUp: false });
+
+  const creating = ctx.impd.templates.createTemplate('chat', 'tools');
+
+  expect(creating).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    message:
+      'imp chat is left out of backups (created with backup off): a template of it would put its disk in every backup',
+  });
+});
+
 test('it refuses the builders image name for a template', async () => {
   const ctx = await setupTest();
 

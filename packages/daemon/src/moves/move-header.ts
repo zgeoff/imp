@@ -78,6 +78,10 @@ const ImpSchema = z
     // left out by an older source
     isDiskGrowPending: z.boolean().default(false),
 
+    // false for an imp left out of every backup run; an older source leaves
+    // it out, and had no such imps
+    isBackedUp: z.boolean().default(true),
+
     // Its last cold boots, newest first, cold move or warm: a client from
     // before the move finds its own boot among them. A warm move's wake on
     // the target finds the boot it slept in. Left out by an older source.
@@ -183,6 +187,10 @@ export const MoveOfferReplySchema = z.object({
   // the target knows the public egress policy; a target from before it
   // leaves it out, and would receive a public imp as none
   keepsPublicEgress: z.boolean().default(false),
+
+  // the target keeps an imp out of its backups; a target from before the
+  // setting leaves it out, and would back the imp up
+  keepsBackupOff: z.boolean().default(false),
 });
 
 // `/move/commit` and `/move/abort`: whether the target's copy is live

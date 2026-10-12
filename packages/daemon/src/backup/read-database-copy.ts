@@ -19,6 +19,9 @@ const CopyImpSchema = z.object({
   diskBytes: z.int(),
   egressAllow: z.string(),
   identityResetPending: z.int(),
+
+  // 0 for an imp left out of every run
+  backup: z.int(),
 });
 
 const CopyGrantSchema = z.object({ impId: z.string(), secretName: z.string() });
@@ -83,7 +86,7 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
         `SELECT id, name, image_id AS imageId, state, vcpus, memory_mib AS memoryMib,
            max_memory_mib AS maxMemoryMib, http_port AS httpPort, egress_policy AS egressPolicy,
            egress_allow AS egressAllow, disk_bytes AS diskBytes,
-           identity_reset_pending AS identityResetPending
+           identity_reset_pending AS identityResetPending, backup
            FROM imps WHERE kind = 'user' ORDER BY name`,
       )
       .all();
