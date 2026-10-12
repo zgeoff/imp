@@ -642,7 +642,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     const mismatch =
       meta === null ? 'no snapshot it can load' : findColdBootReason(meta, context.identity);
 
-    if (meta === null || mismatch !== null) {
+    // a snapshot with no drive path has a mismatch too: the check narrows it
+    if (meta === null || mismatch !== null || meta.systemDrivePath === undefined) {
       context.log(
         `impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot it can load'}`,
       );
@@ -673,7 +674,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     setSnapshotLoading(paths);
 
-    const woken = await loadSnapshot(imp, paths, cgroup);
+    const woken = await loadSnapshot(imp, paths, cgroup, meta.systemDrivePath);
 
     if (woken instanceof Error) {
       return startAfterFailedWake(imp, paths, woken);
@@ -770,8 +771,15 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return imp.isDiskGrowPending ? setGrowPending(imp, false) : imp;
   };
 
-  // the woken VM, or why the load or the agent failed; the VM is gone then
-  const loadSnapshot = async (imp: LockedImp, paths: ImpPaths, cgroup: ImpCgroup | null) => {
+  // The woken VM, or why the load or the agent failed; the VM is gone then.
+  // The jail binds the drive the snapshot reopens, which after an agent
+  // upgrade is an older one than the host boots.
+  const loadSnapshot = async (
+    imp: LockedImp,
+    paths: ImpPaths,
+    cgroup: ImpCgroup | null,
+    systemDrivePath: string,
+  ) => {
     const hasOomKill = startOomWatch(context.cgroups, imp.id);
 
     try {
@@ -784,7 +792,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         paths,
         cgroup,
         jail: context.findJailUser(imp),
-        readOnlyFiles: [context.identity.systemDrivePath],
+        readOnlyFiles: [systemDrivePath],
       });
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(readErrorMessage(error));

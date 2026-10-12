@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { AgentError } from '../agent-client/agent-connection';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
+import { setSnapshotLoading, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths, buildSnapshotPaths } from '../storage/data-layout';
 import { TemplateRestoreError } from '../vmm/template-vm';
+import { buildMockHostIdentity } from './build-mock-host-identity';
 import { STUB_AGENT_VERSION, StubVmError, buildStubBootId, buildStubVmm } from './build-stub-vmm';
 
 async function setupTest() {
@@ -418,6 +420,84 @@ test('#buildStubVmm records the jail user and the snapshot files present when a 
   expect(ctx.fake.wakeJails).toStrictEqual([
     { jail: { uid: 30_001, gid: 30_001 }, files: [ctx.paths.disk, ctx.paths.vmstate] },
   ]);
+});
+
+test('#buildStubVmm fails a jailed wake whose jail lacks the drive the snapshot names', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(ctx.paths.snapshotDir, { recursive: true });
+
+  writeSnapshotMeta(ctx.paths, {
+    ...buildMockHostIdentity({ systemDrivePath: '/images/old.squashfs' }),
+    createdAt: Date.now(),
+    memoryMib: 512,
+    ramMib: 512,
+  });
+
+  setSnapshotLoading(ctx.paths);
+
+  const waking = ctx.runner.wakeVm({
+    firecrackerBin: '/usr/bin/firecracker',
+    paths: ctx.paths,
+    cgroup: null,
+    jail: { uid: 30_001, gid: 30_001 },
+    readOnlyFiles: ['/images/new.squashfs'],
+  });
+
+  expect(waking).rejects.toThrowWithMessage(
+    StubVmError,
+    'wake failed: the jail has no /images/old.squashfs',
+  );
+});
+
+test('#buildStubVmm wakes a jailed VM whose jail binds the drive the snapshot names', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(ctx.paths.snapshotDir, { recursive: true });
+
+  writeSnapshotMeta(ctx.paths, {
+    ...buildMockHostIdentity({ systemDrivePath: '/images/old.squashfs' }),
+    createdAt: Date.now(),
+    memoryMib: 512,
+    ramMib: 512,
+  });
+
+  setSnapshotLoading(ctx.paths);
+
+  const vm = await ctx.runner.wakeVm({
+    firecrackerBin: '/usr/bin/firecracker',
+    paths: ctx.paths,
+    cgroup: null,
+    jail: { uid: 30_001, gid: 30_001 },
+    readOnlyFiles: ['/images/old.squashfs'],
+  });
+
+  expect(ctx.runner.isVmAlive(vm.pid, ctx.paths)).toBeTrue();
+});
+
+test('#buildStubVmm wakes an unjailed VM whatever drive the snapshot names', async () => {
+  const ctx = await setupTest();
+
+  mkdirSync(ctx.paths.snapshotDir, { recursive: true });
+
+  writeSnapshotMeta(ctx.paths, {
+    ...buildMockHostIdentity({ systemDrivePath: '/images/old.squashfs' }),
+    createdAt: Date.now(),
+    memoryMib: 512,
+    ramMib: 512,
+  });
+
+  setSnapshotLoading(ctx.paths);
+
+  const vm = await ctx.runner.wakeVm({
+    firecrackerBin: '/usr/bin/firecracker',
+    paths: ctx.paths,
+    cgroup: null,
+    jail: null,
+    readOnlyFiles: ['/images/new.squashfs'],
+  });
+
+  expect(ctx.runner.isVmAlive(vm.pid, ctx.paths)).toBeTrue();
 });
 
 test('#buildStubVmm pauses the VM while its snapshot is taken', async () => {

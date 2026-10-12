@@ -36,8 +36,9 @@ Before each boot or wake, impd prepares the jail as if the last VM had been host
    the jail again from nothing, since the last VM owned it and may have left symlinks in it.
 3. It binds the imp's files in, without setuid or device nodes anywhere below, and the kernel and
    the system drive read-only, with mount events between the jail and the imp's real directory cut
-   off both ways. Every directory stays root's, so the VM can write into its own files but never
-   swap one for a symlink.
+   off both ways. A wake binds no kernel, and the drive it binds is the one its snapshot names,
+   which after an agent upgrade is older than the one a boot gets. Every directory stays root's, so
+   the VM can write into its own files but never swap one for a symlink.
 
 The VM owns its run directory while Firecracker binds its sockets and loads its snapshot. impd then
 seals the directory, giving it back to root, before the guest runs a single instruction, and checks

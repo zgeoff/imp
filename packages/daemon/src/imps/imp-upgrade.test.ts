@@ -8,20 +8,22 @@ import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath } from '../storage/data-layout';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { STUB_AGENT_VERSION } from '../test-utils/build-stub-vmm';
 import { removeUnusedDrives } from './remove-unused-drives';
 import { buildTestApp, createImpTest, findBrokenInvariants, waitForOutcome } from './test-imps';
+import type { ImpTestOptions } from './test-imps';
 
 // An upgrade as imp-host does it: SIGTERM sleeps every awake imp, and a new
 // impd starts on a new system drive (an agent change), over the same data,
 // reconciles, then runs main's drive sweep.
 
-async function setupTest() {
+async function setupTest(options: Pick<ImpTestOptions, 'env' | 'cgroups'> = {}) {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const harness = await createImpTest(stack);
+  const harness = await createImpTest(stack, options);
 
   // every create boots this image
   await harness.createTestImage('ubuntu');
@@ -232,6 +234,37 @@ test('it boots cold a sleeping imp whose drive is gone, and keeps its disk', asy
   expect(woken.coldBootReason).toBe(`its agent drive ${ctx.oldDrive.slice(0, 12)} is gone`);
   expect(woken.outdated).toBeUndefined();
   expect(readFileSync(paths.disk, 'utf8')).toBe('disk of dev');
+});
+
+test('it wakes a jailed imp with its memory on the old drive after an agent upgrade', async () => {
+  // a jailed VM starts only in its own cgroup
+  const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups({ isMemoryEnforced: true }).cgroups,
+    env: { IMP_JAILER: 'true' },
+  });
+
+  const created = await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const impd = ctx.restartImpd(ctx.createSystemDrive('d2'.repeat(32)));
+
+  await impd.imps.reconcileImps();
+
+  await removeUnusedDrives(
+    ctx.db,
+    ctx.dataDir,
+    ctx.storage.resolveImpPaths,
+    ctx.readIdentity().systemDrivePath,
+  );
+
+  const woken = await buildTestApp(ctx, impd).client.imps.wake({ name: 'dev' });
+
+  const wokenDrive = readVmIdentity(buildImpPaths(ctx.dataDir, created.id))?.systemDrive;
+
+  expect(woken.coldBootReason).toBeUndefined();
+  expect(ctx.fake.wakes).toHaveLength(1);
+  expect(wokenDrive).toBe(ctx.oldDrive);
 });
 
 test('it marks a VM re-adopted after a drive change as on the old agent', async () => {

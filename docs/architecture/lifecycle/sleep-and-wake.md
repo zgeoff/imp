@@ -79,11 +79,11 @@ changes at a reboot, and a move to another machine.
 
 A new guest kernel does not force a cold boot, because the snapshot holds the kernel in memory. The
 snapshot reopens the system drive by path, so impd keeps every drive file a snapshot names
-([storage](../storage/storage.md#system-files)). An unjailed wake reopens an older drive in place. A
-jailed wake binds only the current drive into the jail, so a snapshot that names an older drive
-fails its load there and boots cold. After the load the agent must answer with the protocol version
-the snapshot recorded, or the VM is not the one that slept, and impd boots cold. So a woken imp runs
-its old agent and kernel until its next cold boot.
+([storage](../storage/storage.md#system-files)). A jailed wake binds the drive the snapshot names
+into the jail, not the drive the host boots now, so after an agent upgrade the load reopens the
+older drive, as an unjailed wake does in place. After the load the agent must answer with the
+protocol version the snapshot recorded, or the VM is not the one that slept, and impd boots cold. So
+a woken imp runs its old agent and kernel until its next cold boot.
 
 ## What survives a sleep
 
