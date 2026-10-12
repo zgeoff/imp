@@ -1,6 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { createImage, listImages } from '../db/images';
 import { listImps } from '../db/imps';
+import { buildMockNewImage } from './build-mock-new-image';
 import { createTestDatabase } from './create-test-database';
 
 test('it opens a migrated database that holds no images', async () => {
@@ -19,12 +20,7 @@ test('it opens a fresh database on each call', async () => {
   const first = await createTestDatabase();
   const second = await createTestDatabase();
 
-  await createImage(first.db, {
-    name: 'dev',
-    ref: 'imp/dev:latest',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  await createImage(first.db, buildMockNewImage({ name: 'dev' }));
 
   const images = await listImages(second.db);
 

@@ -8,6 +8,7 @@ import { findImpByName } from '../../db/imps';
 import { createMoveHosts } from '../../moves/test-moves';
 import { runChecked } from '../../process/run-command';
 import { readSnapshotMeta } from '../../sleep/snapshot-meta';
+import { buildMockNewImage } from '../../test-utils/build-mock-new-image';
 import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
 import { readZfsTestPool } from '../../test-utils/read-zfs-test-pool';
 import { writeSyncedFile } from '../../test-utils/write-synced-file';
@@ -92,12 +93,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.source.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.source.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
       writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
@@ -106,12 +105,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.target.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.target.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -182,12 +179,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.source.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.source.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
       writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
@@ -196,12 +191,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.target.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.target.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
@@ -233,12 +226,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.source.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.source.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
       writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
@@ -247,12 +238,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.target.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.target.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     // slot 0 goes to another imp, so the target's lowest free slot is not dev's
     await ctx.sourceApp.client.imps.create({ name: 'first', image: 'ubuntu' });
@@ -318,12 +307,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.source.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.source.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     await ctx.target.storage.createImage('sha256:ubuntu', (dir) => {
       writeSyncedFile(join(dir, 'rootfs.ext4'), 'rootfs');
@@ -332,12 +319,10 @@ test.skipIf(readZfsTestPool() === null)(
       return Promise.resolve();
     });
 
-    await createImage(ctx.target.db, {
-      name: 'ubuntu',
-      ref: 'ubuntu:latest',
-      digest: 'sha256:ubuntu',
-      sizeBytes: 6,
-    });
+    await createImage(
+      ctx.target.db,
+      buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+    );
 
     const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 

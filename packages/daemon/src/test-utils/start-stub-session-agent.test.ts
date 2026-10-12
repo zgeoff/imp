@@ -213,8 +213,12 @@ test('it starts a new run for an exited session opened without a resume, naming 
     second.close();
   });
 
+  const run = agent.readRun('main');
+
+  invariant(run);
+
   expect(second.created).toBeTrue();
-  expect(agent.readRun('main')?.generation).not.toBe(exited.generation);
+  expect(run.generation).not.toBe(exited.generation);
 
   expect(second.output).toMatchObject({
     previous: { executionGeneration: exited.generation, end: 3, exitCode: 2 },

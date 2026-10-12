@@ -17,12 +17,15 @@ import { createImp } from './imps';
 test('#createImage returns the stored image, a docker image by default', async () => {
   const ctx = await createTestDatabase();
 
-  const image = await createImage(ctx.db, {
-    name: 'dev',
-    ref: 'imp/hello:latest',
-    digest: 'sha256:1111',
-    sizeBytes: 2048,
-  });
+  const image = await createImage(
+    ctx.db,
+    buildMockNewImage({
+      name: 'dev',
+      ref: 'imp/hello:latest',
+      digest: 'sha256:1111',
+      sizeBytes: 2048,
+    }),
+  );
 
   expect(image).toStrictEqual({
     id: expect.toBeString(),

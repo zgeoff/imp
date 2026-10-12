@@ -16,8 +16,13 @@ import { createImage } from '../db/images';
 import { findImpByName, updateImpMove } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import { deriveSlotAddress } from '../net/addressing';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubTailscaleApi } from '../test-utils/build-stub-tailscale-api';
 import { buildStubTailscaleServe } from '../test-utils/build-stub-tailscale-serve';
@@ -160,10 +165,12 @@ async function setupTest(options: SetupOptions = {}) {
     impd.diskUsage.stop();
   });
 
-  // the image every imp here boots
-  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  // the image every imp here boots
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({

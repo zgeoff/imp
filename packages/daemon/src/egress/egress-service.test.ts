@@ -20,8 +20,13 @@ import { removeMember, removeNetwork, writeNetwork } from '../db/networks';
 import { openDatabase } from '../db/open-database';
 import { parsePrefix64 } from '../net/addressing6';
 import { resolveIpv6Plan } from '../net/ipv6-plan';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubHostRoutes } from '../test-utils/build-stub-host-routes';
 import { buildStubNft } from '../test-utils/build-stub-nft';
@@ -60,10 +65,12 @@ async function setupTest(options: Readonly<SetupOptions> = {}) {
   await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
   await writeFile(systemDrivePath, drive);
 
-  // IMP_DEFAULT_IMAGE, which every create here boots from
-  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  // IMP_DEFAULT_IMAGE, which every create here boots from
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const vmm = buildStubVmm();
   const nft = options.nft ?? buildStubNft();

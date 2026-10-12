@@ -16,8 +16,14 @@ import { createImage } from '../db/images';
 import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -52,10 +58,12 @@ async function setupTest() {
   await mkdir(buildSystemDrivesDir(dataDir), { recursive: true });
   await writeFile(systemDrivePath, drive);
 
-  // the default image, which every create without an image boots
-  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  // the default image, which every create without an image boots
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const vmm = buildStubVmm();
 

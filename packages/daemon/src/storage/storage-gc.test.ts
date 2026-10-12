@@ -16,12 +16,18 @@ import type { ImpdDeps } from '../create-impd';
 import { createImage } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { runChecked } from '../process/run-command';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { buildStubZfs } from '../test-utils/build-stub-zfs';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { findFreePorts } from '../test-utils/find-free-ports';
-import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from './data-layout';
+import {
+  buildImagePaths,
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from './data-layout';
 import { readLiveStorage } from './read-live-storage';
 import { createStorageGate } from './storage-gate';
 import { createStorageGc } from './storage-gc';
@@ -171,14 +177,11 @@ async function setupTest(
 test('it lists what a sweep would drop and keep in a dry run, and removes nothing', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -208,14 +211,11 @@ test('it lists what a sweep would drop and keep in a dry run, and removes nothin
 test('it removes what a destroy left and keeps an imp no row names', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
@@ -253,14 +253,11 @@ test('it lists an imp no row names as dropped in a dry run with orphans, and kee
 test('it removes an imp no row names when asked for orphans, and keeps a live imp', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const dev = await ctx.client.imps.create({ name: 'dev' });
 
@@ -422,14 +419,11 @@ test('it waits for a checkpoint whose clone exists before its row', async () => 
     },
   });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'dev' });
 
@@ -478,14 +472,11 @@ test('it waits with orphans for an imp whose disk exists before its row', async 
     },
   });
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const created = ctx.client.imps.create({ name: 'dev' });
 
@@ -512,14 +503,11 @@ test('it waits with orphans for an imp whose disk exists before its row', async 
 test('it waits with orphans for a destroy that holds the gate', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   const dev = await ctx.client.imps.create({ name: 'dev' });
 

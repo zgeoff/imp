@@ -21,8 +21,9 @@ import { openDatabase } from './db/open-database';
 import { createForkGrants } from './db/secrets';
 import { listTokenRecords } from './db/tokens';
 import { createEd25519Key } from './ssh/host-key';
-import { buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
@@ -158,10 +159,12 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the default image, which every imps.create boots when it names none
-  await Bun.write(join(dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  // the default image, which every imps.create boots when it names none
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const sendToImpd = (request: Request) => impd.api.app.handle(request);
 

@@ -16,6 +16,8 @@ import {
   buildSystemDrivesDir,
 } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -150,14 +152,11 @@ async function setupTest() {
 test('it freezes a running imp around the clone of its disk', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -175,14 +174,11 @@ test('it freezes a running imp around the clone of its disk', async () => {
 test('it adds a template image named for its imp', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -201,14 +197,11 @@ test('it adds a template image named for its imp', async () => {
 test('it writes the imp disk as the template rootfs', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -224,15 +217,12 @@ test('it writes the imp disk as the template rootfs', async () => {
 test('it copies the source image config into the template', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'config.json'), '{"User":"dev"}');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).config, '{"User":"dev"}');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -246,14 +236,11 @@ test('it copies the source image config into the template', async () => {
 test('it wakes a sleeping imp and freezes it before the clone', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.imps.sleepImp('dev');
@@ -269,14 +256,11 @@ test('it wakes a sleeping imp and freezes it before the clone', async () => {
 test('it clones a stopped imp without a freeze', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -291,23 +275,10 @@ test('it clones a stopped imp without a freeze', async () => {
 
 test('it refuses a template of an imp that is still being created', async () => {
   const ctx = await setupTest();
-
-  const base = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  const base = await createImage(ctx.db, buildMockNewImage({ name: 'base' }));
 
   // a row as a create writes it first, before its disk and its boot
-  await createImp(ctx.db, {
-    name: 'dev',
-    imageId: base.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 7,
-    ip: '10.66.0.9',
-  });
+  await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: base.id }));
 
   const creating = ctx.impd.templates.createTemplate('dev', 'tools');
 
@@ -331,14 +302,11 @@ test('it refuses the builders image name for a template', async () => {
 test('it gives an imp from a template the template disk', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -354,14 +322,11 @@ test('it gives an imp from a template the template disk', async () => {
 test('it boots an imp from a template with an identity reset', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -376,14 +341,11 @@ test('it boots an imp from a template with an identity reset', async () => {
 test('it clears the pending reset once the first boot reports it done', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -397,14 +359,11 @@ test('it clears the pending reset once the first boot reports it done', async ()
 test('it boots a template copy without a reset after its first boot', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -421,14 +380,11 @@ test('it boots a template copy without a reset after its first boot', async () =
 test('it boots an imp from a docker image without a reset', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'plain', image: 'base' });
 
@@ -438,14 +394,11 @@ test('it boots an imp from a docker image without a reset', async () => {
 test('it marks a template copy made stopped as owing the reset', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -459,14 +412,11 @@ test('it marks a template copy made stopped as owing the reset', async () => {
 test('it resets a template copy made stopped on its first boot', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -482,14 +432,11 @@ test('it resets a template copy made stopped on its first boot', async () => {
 test('it moves a template made again to a new disk under the same image and drops the old disk', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -504,14 +451,11 @@ test('it moves a template made again to a new disk under the same image and drop
 test('it gives imps made after a template is made again its new disk, and older imps keep theirs', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -536,14 +480,11 @@ test('it gives imps made after a template is made again its new disk, and older 
 test('it refuses a template over the name of a docker image', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -559,14 +500,11 @@ test('it refuses a template over the name of a docker image', async () => {
 test('it refuses a docker image add over the name of a template', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -582,14 +520,11 @@ test('it refuses a docker image add over the name of a template', async () => {
 test('it refuses an imp disk smaller than its template disk', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base', diskMib: 64 });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -604,14 +539,11 @@ test('it refuses an imp disk smaller than its template disk', async () => {
 test('it gives an imp from a template at least the template disk size', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base', diskMib: 64 });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -624,14 +556,11 @@ test('it gives an imp from a template at least the template disk size', async ()
 test('it refuses to remove a template an imp uses', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -648,14 +577,11 @@ test('it refuses to remove a template an imp uses', async () => {
 test('it removes a template no imp uses, and its disk', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -669,14 +595,11 @@ test('it removes a template no imp uses, and its disk', async () => {
 test('it resets a fork of a template copy that never booted', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -693,14 +616,11 @@ test('it resets a fork of a template copy that never booted', async () => {
 test('it boots a fork of a booted template copy without a reset', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -718,14 +638,11 @@ test('it boots a fork of a booted template copy without a reset', async () => {
 test('it keeps the reset pending when the boot reports it failed', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -742,14 +659,11 @@ test('it keeps the reset pending when the boot reports it failed', async () => {
 test('it keeps the reset pending when a boot reports nothing of it', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -771,14 +685,11 @@ test('it keeps the reset pending when a boot reports nothing of it', async () =>
 test('it clears a pending reset once a later boot reports it done', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
   await ctx.impd.templates.createTemplate('dev', 'tools');
@@ -800,14 +711,11 @@ test('it clears a pending reset once a later boot reports it done', async () => 
 test('it thaws an imp whose clone fails while it is frozen', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -828,12 +736,10 @@ test('it leaves no template image when the clone fails', async () => {
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -854,14 +760,11 @@ test('it leaves no template image when the clone fails', async () => {
 test('it fails with the clone error when the clone fails', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
+  const baseImage = buildMockNewImage({ name: 'base', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, baseImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, baseImage);
 
   const dev = await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
@@ -878,12 +781,10 @@ test('it removes the cloned disk and rethrows when the image row fails to write'
 
   await Bun.write(join(ctx.dataDir, 'images', 'base', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(ctx.db, {
-    name: 'base',
-    ref: 'base:latest',
-    digest: 'sha256:base',
-    sizeBytes: 6,
-  });
+  await createImage(
+    ctx.db,
+    buildMockNewImage({ name: 'base', digest: 'sha256:base', sizeBytes: 6 }),
+  );
 
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 

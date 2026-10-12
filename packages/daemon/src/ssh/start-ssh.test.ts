@@ -12,6 +12,8 @@ import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
 import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { buildStubSshBackend } from '../test-utils/build-stub-ssh-backend';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { openSshChannel } from '../test-utils/open-ssh-channel';
@@ -129,21 +131,9 @@ test('it logs a key from authorized_keys in to an imp in the database', async ()
   const key = createEd25519Key();
 
   // the image the imp row refers to
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'imp/base:latest',
-    digest: 'sha256:0000',
-    sizeBytes: 1024,
-  });
+  const image = await createImage(ctx.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 2,
-    memoryMib: 2048,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+  await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
 
   writeFileSync(join(ctx.sshDir, 'authorized_keys'), `${key.public}\n`, { mode: 0o600 });
 
@@ -173,21 +163,9 @@ test('it audits a command an ssh login opens as the key that logged in', async (
   const key = createEd25519Key();
 
   // the image the imp row refers to
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'imp/base:latest',
-    digest: 'sha256:0000',
-    sizeBytes: 1024,
-  });
+  const image = await createImage(ctx.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 2,
-    memoryMib: 2048,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+  await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
 
   // the running imp the stub agent answers for
   ctx.ssh.putImp(buildMockImpRecord({ name: 'dev' }));
@@ -248,21 +226,9 @@ test('it refuses a key from authorized_keys when IMP_SSH_AUTHORIZED_KEYS is fals
   const key = createEd25519Key();
 
   // the image the imp row refers to
-  const image = await createImage(ctx.db, {
-    name: 'base',
-    ref: 'imp/base:latest',
-    digest: 'sha256:0000',
-    sizeBytes: 1024,
-  });
+  const image = await createImage(ctx.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(ctx.db, {
-    name: 'dev',
-    imageId: image.id,
-    vcpus: 2,
-    memoryMib: 2048,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+  await createImp(ctx.db, buildMockNewImp({ name: 'dev', imageId: image.id }));
 
   writeFileSync(join(ctx.sshDir, 'authorized_keys'), `${key.public}\n`, { mode: 0o600 });
 

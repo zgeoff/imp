@@ -6,6 +6,7 @@ import { createImage } from '@imp/daemon/src/db/images';
 import { createImp, findImpByName, updateImpMove } from '@imp/daemon/src/db/imps';
 import { buildImagePaths } from '@imp/daemon/src/storage/data-layout';
 import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
+import { buildMockNewImp } from '@imp/daemon/src/test-utils/build-mock-new-imp';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { writeHostConfig } from '../host-store';
@@ -483,27 +484,17 @@ test('#ls lists every host’s builders under --all --builders', async () => {
   // a builder imp on each host, as a host build leaves one
   const boxImage = await createImage(box.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(box.db, {
-    name: 'box-builder',
-    imageId: boxImage.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 9,
-    ip: '10.66.0.9',
-    kind: 'builder',
-  });
+  await createImp(
+    box.db,
+    buildMockNewImp({ name: 'box-builder', imageId: boxImage.id, kind: 'builder' }),
+  );
 
   const laptopImage = await createImage(laptop.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(laptop.db, {
-    name: 'laptop-builder',
-    imageId: laptopImage.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 9,
-    ip: '10.66.0.9',
-    kind: 'builder',
-  });
+  await createImp(
+    laptop.db,
+    buildMockNewImp({ name: 'laptop-builder', imageId: laptopImage.id, kind: 'builder' }),
+  );
 
   writeHostConfig(ctx.home, {
     current: 'box',
@@ -540,27 +531,17 @@ test('#ls lists no builder under plain --all', async () => {
   // a builder imp on each host, as a host build leaves one
   const boxImage = await createImage(box.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(box.db, {
-    name: 'box-builder',
-    imageId: boxImage.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 9,
-    ip: '10.66.0.9',
-    kind: 'builder',
-  });
+  await createImp(
+    box.db,
+    buildMockNewImp({ name: 'box-builder', imageId: boxImage.id, kind: 'builder' }),
+  );
 
   const laptopImage = await createImage(laptop.db, buildMockNewImage({ name: 'base' }));
 
-  await createImp(laptop.db, {
-    name: 'laptop-builder',
-    imageId: laptopImage.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 9,
-    ip: '10.66.0.9',
-    kind: 'builder',
-  });
+  await createImp(
+    laptop.db,
+    buildMockNewImp({ name: 'laptop-builder', imageId: laptopImage.id, kind: 'builder' }),
+  );
 
   writeHostConfig(ctx.home, {
     current: 'box',

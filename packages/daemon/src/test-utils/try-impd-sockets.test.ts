@@ -11,8 +11,14 @@ import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
-import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import {
+  buildImagePaths,
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from './build-mock-new-image';
 import { buildQueryGate } from './build-query-gate';
 import { buildStubCpuCgroups } from './build-stub-cpu-cgroups';
 import { buildStubExecGuest } from './build-stub-exec-guest';
@@ -138,15 +144,12 @@ async function setupTest() {
     await server.stop(true);
   });
 
-  // the image every imps.create boots when it names none
-  await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  // the image every imps.create boots when it names none
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const port = String(server.server?.port);
   const client = createImpClient({ url: `http://127.0.0.1:${port}`, token: 'root-token' });

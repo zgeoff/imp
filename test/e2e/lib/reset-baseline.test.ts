@@ -9,10 +9,12 @@ import { createImpd } from '../../../packages/daemon/src/create-impd';
 import { createImage } from '../../../packages/daemon/src/db/images';
 import { openDatabase } from '../../../packages/daemon/src/db/open-database';
 import {
+  buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
 } from '../../../packages/daemon/src/storage/data-layout';
 import { createXfsBackend } from '../../../packages/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '../../../packages/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../../../packages/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../../../packages/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '../../../packages/daemon/src/test-utils/find-free-ports';
@@ -147,12 +149,10 @@ async function setupTest() {
   // service leaves it: its rootfs under its digest
   await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(db, {
-    name: 'ubuntu',
-    ref: 'ubuntu:latest',
-    digest: 'sha256:ubuntu',
-    sizeBytes: 6,
-  });
+  await createImage(
+    db,
+    buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
+  );
 
   return { client, db, dataDir, vmm, impd };
 }
@@ -280,14 +280,11 @@ test('#resetBaseline removes the OAuth clients a journey named with its prefix',
 test('#resetBaseline removes the images a journey named with its prefix, after the imps that boot them', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'e2e-x-img', 'rootfs.ext4'), 'rootfs');
+  const prefixedImage = buildMockNewImage({ name: 'e2e-x-img', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'e2e-x-img',
-    ref: 'x:1',
-    digest: 'sha256:e2e-x-img',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, prefixedImage.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, prefixedImage);
 
   await ctx.client.imps.create({ name: 'e2e-x-dev', image: 'e2e-x-img' });
 
@@ -356,9 +353,11 @@ test('#resetBaseline never removes what another owner named, a near-miss prefix 
   const ctx = await setupTest();
 
   for (const name of ['e2e-tiny-0123abcd', 'e2e-xy-img']) {
-    await Bun.write(join(ctx.dataDir, 'images', name, 'rootfs.ext4'), 'rootfs');
+    const image = buildMockNewImage({ name, sizeBytes: 6 });
 
-    await createImage(ctx.db, { name, ref: `${name}:1`, digest: `sha256:${name}`, sizeBytes: 6 });
+    await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+    await createImage(ctx.db, image);
   }
 
   await ctx.client.imps.create({ name: 'e2e-y-dev', image: 'e2e-tiny-0123abcd' });
@@ -417,14 +416,11 @@ test('#resetBaseline never removes what another owner named, a near-miss prefix 
 test('#resetBaseline fails when impd refuses to remove what the prefix names', async () => {
   const ctx = await setupTest();
 
-  await Bun.write(join(ctx.dataDir, 'images', 'e2e-x-img', 'rootfs.ext4'), 'rootfs');
+  const image = buildMockNewImage({ name: 'e2e-x-img', sizeBytes: 6 });
 
-  await createImage(ctx.db, {
-    name: 'e2e-x-img',
-    ref: 'x:1',
-    digest: 'sha256:e2e-x-img',
-    sizeBytes: 6,
-  });
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'dev', image: 'e2e-x-img' });
 
