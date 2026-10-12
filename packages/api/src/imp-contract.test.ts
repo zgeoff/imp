@@ -10,17 +10,13 @@ test('it gives every procedure the imp errors', () => {
   // walks the nested routers; the queue grows as each router is opened
   for (const [path, node] of pending) {
     if (isContractProcedure(node)) {
-      const errorMap = node['~orpc'].errorMap;
-
       procedures.push({
         procedure: path,
-        missingErrors: Object.keys(IMP_ERRORS).filter((code) => !Object.hasOwn(errorMap, code)),
+        missingErrors: Object.keys(IMP_ERRORS).filter((code) => !(code in node['~orpc'].errorMap)),
       });
-    } else {
+    } else if (typeof node === 'object' && node !== null) {
       pending.push(
-        ...Object.entries(node as Record<string, unknown>).map(
-          ([key, child]): [string, unknown] => [`${path}.${key}`, child],
-        ),
+        ...Object.entries(node).map(([key, child]): [string, unknown] => [`${path}.${key}`, child]),
       );
     }
   }

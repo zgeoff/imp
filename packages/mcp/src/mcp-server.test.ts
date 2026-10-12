@@ -480,7 +480,7 @@ test('it refuses a call whose id a running call holds with an invalid-params err
 test('it answers a request whose reply fails with an internal error', async () => {
   const ctx = await setupTest();
 
-  const printError = mock();
+  const printError = mock<(message: string, error: unknown) => void>();
   const server = createMcpServer({ version: '1.2.3', printError });
 
   const failure = new Error('write EPIPE');
@@ -507,7 +507,7 @@ test('it answers a request whose reply fails with an internal error', async () =
 test('it answers a tool call whose result reply fails with an internal error', async () => {
   const ctx = await setupTest();
 
-  const printError = mock();
+  const printError = mock<(message: string, error: unknown) => void>();
   const server = createMcpServer({ version: '1.2.3', printError });
 
   const failure = new Error('write EPIPE');
