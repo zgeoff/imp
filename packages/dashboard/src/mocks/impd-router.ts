@@ -68,6 +68,7 @@ const SYSTEM_FEATURES = {
   publicEgress: true,
   oauthSecrets: true,
   secretUpstream: true,
+  backupOptOut: true,
 } as const;
 
 // Every call passes impd's own access check (packages/daemon

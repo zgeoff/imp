@@ -83,6 +83,7 @@ export function buildMockSystemInfo(overrides: SystemInfoOverrides = {}): System
     publicEgress: true,
     oauthSecrets: true,
     secretUpstream: true,
+    backupOptOut: true,
   };
 
   const defaultsInfo: SystemInfo = {

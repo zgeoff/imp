@@ -148,6 +148,37 @@ test('#new creates an imp left out of every backup for --no-backup', async () =>
   expect(chat?.isBackedUp).toBe(false);
 });
 
+test('#new refuses --no-backup on an impd from before the setting, and creates nothing', async () => {
+  const ctx = await setupTest();
+  const box = await startImpdHost(ctx.stack, { env: {} });
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(box.db, image);
+
+  const older = startStubOlderImpd(ctx.stack, box.sendRequest, {
+    withoutFeatures: ['backupOptOut'],
+  });
+
+  const result = await runCli({
+    args: ['new', 'chat', '--image', 'base', '--no-backup'],
+    env: { ...ctx.home, IMP_URL: older.url, IMP_TOKEN: box.rootToken },
+  });
+
+  const chat = await findImpByName(box.db, 'chat');
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      'imp: this impd has no backup opt-out and would back the imp up anyway; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+    code: 1,
+  });
+
+  expect(chat).toBeUndefined();
+});
+
 test('#console refuses a detach key that is not ctrl-<key>', async () => {
   const result = await runCli({
     args: ['console', 'box', '--detach-key', 'esc'],

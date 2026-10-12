@@ -960,6 +960,7 @@ const SYSTEM_FEATURES = {
   publicEgress: true,
   oauthSecrets: true,
   secretUpstream: true,
+  backupOptOut: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second

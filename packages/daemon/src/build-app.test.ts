@@ -238,6 +238,7 @@ test('it serves system.info from config and the database', async () => {
       publicEgress: true,
       oauthSecrets: true,
       secretUpstream: true,
+      backupOptOut: true,
     },
     ksm: null,
   });

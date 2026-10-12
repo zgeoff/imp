@@ -247,6 +247,10 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
     await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
   }
 
+  if (input.backup === false) {
+    await requireFeature(client, 'backupOptOut', 'back the imp up anyway');
+  }
+
   const { networks, ...fields } = input;
 
   const imp = await client.imps.create({

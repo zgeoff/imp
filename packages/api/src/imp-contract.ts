@@ -144,8 +144,8 @@ export const impContract = {
           networks: z.array(NameSchema).max(MAX_CREATE_NETWORKS).optional(),
 
           // false leaves the imp's disk and checkpoints out of every backup
-          // run, for its life (default true); an impd from before the
-          // setting ignores it, so check `backup` on the answer
+          // run, for its life (default true); an impd without
+          // features.backupOptOut ignores it, so check that first
           backup: z.boolean().optional(),
         }),
       )
