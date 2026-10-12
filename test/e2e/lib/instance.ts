@@ -214,8 +214,16 @@ export async function readContainerGateway(): Promise<string> {
   return gateway;
 }
 
+// timestamped, so a failure's log orders impd's lines against the suite's
 export async function readImpdLogTail(lines: number): Promise<string> {
-  const result = await runCommand(['docker', 'logs', '--tail', String(lines), instance.container]);
+  const result = await runCommand([
+    'docker',
+    'logs',
+    '--timestamps',
+    '--tail',
+    String(lines),
+    instance.container,
+  ]);
 
   return `${result.stdout}${result.stderr}`;
 }
