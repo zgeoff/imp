@@ -516,12 +516,16 @@ test('it moves the imp once the fault that failed its forced prepare is gone', a
   // one count after the halt cannot open the disk; the next can
   ctx.sourceFaults.failOnce('openMoveSource', new Error('the disk is unreadable'));
 
-  const failed = ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true });
-
-  expect(failed).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  const failed = await ctx.sourceApp.client.moves
+    .prepare({ name: 'dev', stop: true, force: true })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
   const status = await ctx.runMove('dev', true);
 
+  expect(failed).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
   expect(status).toMatchObject({ isDone: true, error: null });
 });
 

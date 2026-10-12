@@ -402,9 +402,12 @@ test.skipIf(readZfsTestPool() === null)(
       imageDigests: new Set(['sha256:real']),
     });
 
-    expect(
-      dying.restoreCheckpoint('a', 'cp-one', () => Promise.resolve()),
-    ).rejects.toThrowWithMessage(Error, 'impd died');
+    const restoring = dying.restoreCheckpoint('a', 'cp-one', () => Promise.resolve());
+
+    const failure = await restoring.then(
+      () => null,
+      (error: unknown) => error,
+    );
 
     // a container restart drops every mount but the root
     await runChecked(['umount', join(ctx.dataDir, 'mem')]);
@@ -420,6 +423,7 @@ test.skipIf(readZfsTestPool() === null)(
       imageDigests: new Set(['sha256:real']),
     });
 
+    expect(failure).toMatchObject({ message: 'impd died' });
     expect(readFileSync(restarted.resolveImpPaths('a').disk, 'utf8')).toBe('one');
   },
   120_000,

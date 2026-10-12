@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@imp/test-utils/invariant';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubMounts } from '../test-utils/build-stub-mounts';
 import { buildStubUidProcesses } from '../test-utils/build-stub-uid-processes';
@@ -921,7 +922,7 @@ test('#prepare keeps only regular files in run/ after it sweeps what the last VM
 
   const mkfifo = Bun.spawnSync(['mkfifo', join(imp.paths.runDir, 'fifo')]);
 
-  expect(mkfifo.exitCode).toBe(0);
+  invariant(mkfifo.exitCode === 0);
 
   await ctx.jails.release('i1');
   await ctx.jails.prepare(plan);

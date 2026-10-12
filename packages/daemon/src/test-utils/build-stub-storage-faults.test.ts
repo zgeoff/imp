@@ -54,10 +54,14 @@ test('it fails only one move source open for each fault', async () => {
 
   faults.failOnce('openMoveSource', new Error('the disk is unreadable'));
 
-  expect(storage.openMoveSource('imp-1', [], 'files')).rejects.toThrow('the disk is unreadable');
+  const failure = await storage.openMoveSource('imp-1', [], 'files').then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   const source = await storage.openMoveSource('imp-1', [], 'files');
 
+  expect(failure).toMatchObject({ message: 'the disk is unreadable' });
   expect(source.kind).toBe('files');
 });
 
