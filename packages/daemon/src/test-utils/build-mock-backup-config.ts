@@ -6,8 +6,8 @@ type BackupConfigOverrides = Partial<Omit<BackupConfig, 'keep'>> & {
 };
 
 // impd's backup settings, as loadBackupConfig reads them: arbitrary paths,
-// interval and limits, retention in every bucket, and forget on. A keep
-// override merges into the default retention.
+// interval and limits, retention in every bucket, forget on and the
+// database copy left out. A keep override merges into the default retention.
 export function buildMockBackupConfig(
   overrides: Readonly<BackupConfigOverrides> = {},
 ): BackupConfig {
@@ -18,6 +18,7 @@ export function buildMockBackupConfig(
     passwordFile: `/etc/imp/${faker.string.alphanumeric(8)}`,
     intervalS: faker.number.int({ min: 60, max: 86_400 }),
     forget: true,
+    database: false,
     cpus: faker.number.int({ min: 1, max: 8 }),
     memoryMib: faker.number.int({ min: 64, max: 4096 }),
     ...rest,

@@ -92,6 +92,7 @@ passes restic those, never the rest of its environment.
 | `IMP_BACKUP_INTERVAL_S`    | `21600`                      | Seconds between scheduled runs.                                                                                |
 | `IMP_BACKUP_KEEP`          | `hourly=24,daily=7,weekly=4` | What `forget` keeps; a bucket left out keeps none.                                                             |
 | `IMP_BACKUP_FORGET`        | `true`                       | `false` leaves `forget` and `prune` to one other machine, for a bucket that denies impd's key deletes.         |
+| `IMP_BACKUP_DATABASE`      | `false`                      | `true` puts impd's database in each backup, for a whole-host restore of tokens, grants and secret names.       |
 | `IMP_BACKUP_CPUS`          | `2`                          | restic's `GOMAXPROCS`.                                                                                         |
 | `IMP_BACKUP_MEMORY_MIB`    | `512`                        | restic's `GOMEMLIMIT`, a soft limit.                                                                           |
 

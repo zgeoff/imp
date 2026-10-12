@@ -777,6 +777,7 @@ test('#loadTokenStore offers no change to a token’s scope or imps in place', a
     'findSshKey',
     'authenticate',
     'findById',
+    'createRestored',
   ]);
 });
 
@@ -1000,4 +1001,130 @@ test('#updateGrantable refuses a list for a host-wide token', async () => {
     code: 'BAD_REQUEST',
     message: 'a token that may grant secrets needs scope manage and imp patterns',
   });
+});
+
+test('#createRestored brings a token back with its key, which logs in as the token', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+
+  const [type = '', base64 = ''] = createEd25519Key().public.split(' ');
+  const blob = Buffer.from(base64, 'base64');
+  const record = buildMockTokenRecord({ name: 'dev', scope: 'exec', imps: ['dev-*'] });
+
+  const key = buildMockTokenSshKeyRecord({
+    tokenId: record.id,
+    fingerprint: formatKeyFingerprint(blob),
+    publicKey: `${type} ${base64}`,
+    comment: 'me@laptop',
+  });
+
+  const result = await tokens.createRestored([record], [key]);
+
+  expect(result).toStrictEqual({ restored: ['dev'], skipped: [] });
+  expect(tokens.findSshKey(blob)?.caller).toMatchObject({ name: 'dev', tokenId: record.id });
+});
+
+test('#createRestored writes a restored token through, so it is there after a restart', async () => {
+  const ctx = await setupTest();
+  const before = await ctx.load('root-secret');
+
+  await before.createRestored([buildMockTokenRecord({ name: 'dev' })], []);
+
+  const restarted = await ctx.load('root-secret');
+
+  expect(restarted.list().map((token) => token.name)).toStrictEqual(['dev']);
+});
+
+test('#createRestored leaves out a token whose name the store has, and keeps the store’s own', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+  const made = await tokens.create({ name: 'dev', scope: 'exec', imps: null });
+
+  const [madeId = ''] = made.secret.slice('imp_'.length).split('.');
+
+  const result = await tokens.createRestored([buildMockTokenRecord({ name: 'dev' })], []);
+
+  expect(result).toStrictEqual({
+    restored: [],
+    skipped: [{ name: 'dev', reason: 'a token named dev exists' }],
+  });
+
+  expect(tokens.authenticate(made.secret)?.tokenId).toBe(madeId);
+});
+
+test('#createRestored leaves out a token named root', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+  const result = await tokens.createRestored([buildMockTokenRecord({ name: 'root' })], []);
+
+  expect(result).toStrictEqual({
+    restored: [],
+    skipped: [{ name: 'root', reason: 'a token named root exists' }],
+  });
+});
+
+test('#createRestored binds a key once when the backup lists it twice for one token', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+
+  const [type = '', base64 = ''] = createEd25519Key().public.split(' ');
+  const blob = Buffer.from(base64, 'base64');
+  const record = buildMockTokenRecord({ name: 'dev' });
+
+  const first = buildMockTokenSshKeyRecord({
+    tokenId: record.id,
+    fingerprint: formatKeyFingerprint(blob),
+    publicKey: `${type} ${base64}`,
+  });
+
+  const second = buildMockTokenSshKeyRecord({
+    tokenId: record.id,
+    fingerprint: formatKeyFingerprint(blob),
+    publicKey: `${type} ${base64}`,
+  });
+
+  const result = await tokens.createRestored([record], [first, second]);
+
+  expect(result).toStrictEqual({
+    restored: ['dev'],
+    skipped: [
+      {
+        name: 'dev',
+        reason: `key ${formatKeyFingerprint(blob)} is bound here already or in authorized_keys`,
+      },
+    ],
+  });
+
+  expect(tokens.list()[0]?.sshKeys).toHaveLength(1);
+});
+
+test('#createRestored restores a token without a key that authorized_keys lists', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+
+  const [type = '', base64 = ''] = createEd25519Key().public.split(' ');
+  const blob = Buffer.from(base64, 'base64');
+  const record = buildMockTokenRecord({ name: 'dev' });
+
+  ctx.fileKeys.add(base64);
+
+  const key = buildMockTokenSshKeyRecord({
+    tokenId: record.id,
+    fingerprint: formatKeyFingerprint(blob),
+    publicKey: `${type} ${base64}`,
+  });
+
+  const result = await tokens.createRestored([record], [key]);
+
+  expect(result).toStrictEqual({
+    restored: ['dev'],
+    skipped: [
+      {
+        name: 'dev',
+        reason: `key ${formatKeyFingerprint(blob)} is bound here already or in authorized_keys`,
+      },
+    ],
+  });
+
+  expect(tokens.findSshKey(blob)).toBeNull();
 });

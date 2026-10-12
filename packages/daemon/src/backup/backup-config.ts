@@ -21,6 +21,11 @@ export interface BackupConfig {
   // for a bucket that denies impd's key deletes
   readonly forget: boolean;
 
+  // true puts the run's database copy in each snapshot, so a whole-host
+  // restore brings back the named tokens and the secrets' names
+  // (docs/architecture/storage/backups.md#the-database-copy)
+  readonly database: boolean;
+
   // restic runs with GOMAXPROCS and GOMEMLIMIT set from these
   readonly cpus: number;
   readonly memoryMib: number;
@@ -35,6 +40,7 @@ const BackupEnvSchema = z.object({
   IMP_BACKUP_INTERVAL_S: CountSchema.default(21_600),
   IMP_BACKUP_KEEP: z.string().default('hourly=24,daily=7,weekly=4'),
   IMP_BACKUP_FORGET: z.enum(['true', 'false']).default('true'),
+  IMP_BACKUP_DATABASE: z.enum(['true', 'false']).default('false'),
   IMP_BACKUP_CPUS: CountSchema.default(2),
   IMP_BACKUP_MEMORY_MIB: CountSchema.default(512),
 });
@@ -59,6 +65,7 @@ export function loadBackupConfig(
     intervalS: parsed.IMP_BACKUP_INTERVAL_S,
     keep: parseBackupKeep(parsed.IMP_BACKUP_KEEP),
     forget: parsed.IMP_BACKUP_FORGET === 'true',
+    database: parsed.IMP_BACKUP_DATABASE === 'true',
     cpus: parsed.IMP_BACKUP_CPUS,
     memoryMib: parsed.IMP_BACKUP_MEMORY_MIB,
   };

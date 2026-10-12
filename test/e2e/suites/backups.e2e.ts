@@ -23,13 +23,18 @@ import {
   readState,
   requireImp,
   runImp,
+  runImpWith,
   runShellInImp,
   tryImp,
 } from '../lib/imp-cli';
 import { holdImp, readGuestFile, waitForExec, writeGuestFile } from '../lib/imps';
 import { instance, runDevScript, runInContainer } from '../lib/instance';
 import { registerRemoval } from '../lib/register-removal';
-import { removeImpIfPresent } from '../lib/reset-baseline';
+import {
+  removeImpIfPresent,
+  removeSecretIfPresent,
+  removeTokenIfPresent,
+} from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
@@ -436,4 +441,81 @@ test('it restores past a stale lock in the repository, and fails the check loudl
   expect(check).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toStartWith('imp: ') });
   expect(status.lastCheck?.error).toBeString();
   expect(restored.exitCode).toBe(0);
+});
+
+test('it brings back a named token, its secret’s name and the grant from a backup with the database copy, after the host lost them', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}db`;
+  const secret = `${ctx.prefix}gh`;
+  const token = `${ctx.prefix}agent`;
+
+  // in-test, not suite settings: impd sets up its repository at start, and
+  // each test brings its own
+  await runDevScript('reboot', instance, {
+    ...buildBackupEnv(ctx.secrets, 3600),
+    IMP_BACKUP_DATABASE: 'true',
+  });
+
+  ctx.stack.defer(() => runDevScript('reboot'));
+
+  await startMinio(ctx.secrets);
+
+  ctx.stack.defer(() => stopMinio());
+
+  await runImp('new', name, '--image', resolveImageName('e2e-tiny'), '--memory', '256');
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await runImpWith(
+    { stdin: 'ghp_e2e_never_backed_up\n' },
+    'secret',
+    'add',
+    secret,
+    '--kind',
+    'github',
+  );
+
+  registerRemoval(ctx.stack, config.keep, () => removeSecretIfPresent(ctx.client, secret));
+
+  await runImp('grant', name, secret);
+
+  const made = await runImp('token', 'new', token, '--scope', 'exec', '--imps', `${name}*`);
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, token));
+
+  const tokenSecret = made.trim();
+
+  const run = await runBackup();
+  const listing = await runRestic(ctx.secrets, 'ls', '--json', run.snapshotId);
+
+  const paths = listing.stdout
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => z.object({ path: z.string().optional() }).parse(JSON.parse(line)).path ?? '')
+    .filter((path) => path !== '');
+
+  // the host loses every row the restore brings back
+  await runImp('rm', name);
+  await runImp('token', 'rm', token);
+  await runImp('secret', 'rm', secret);
+
+  const lost = await tryImp(['ls'], { token: tokenSecret });
+  const result = await tryImp(['backup', 'restore', '--all']);
+  const listed = await tryImp(['ls', '--json'], { token: tokenSecret });
+  const grants = await runImp('grants', name, '--json');
+  const secrets = await runImp('secret', 'ls', '--json');
+
+  expect(paths).toSatisfyAny((path: string) => path.endsWith('/database/impd.sqlite'));
+  expect(lost.exitCode).not.toBe(0);
+
+  expect(result).toStrictEqual({
+    exitCode: 0,
+    stdout: expect.toBeString(),
+    stderr: expect.toInclude(`imp: tokens restored: ${token}`),
+  });
+
+  expect(listed).toStrictEqual({ exitCode: 0, stdout: expect.toInclude(name), stderr: '' });
+  expect(z.array(z.string()).parse(JSON.parse(grants))).toStrictEqual([secret]);
+  expect(secrets).toInclude(secret);
 });

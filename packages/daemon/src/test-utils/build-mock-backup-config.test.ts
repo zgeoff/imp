@@ -7,6 +7,7 @@ test('it builds a default backup config', () => {
     passwordFile: expect.toSatisfy((path: string) => /^\/etc\/imp\/\w{8}$/v.test(path)),
     intervalS: expect.toBeWithin(60, 86_401),
     forget: true,
+    database: false,
     cpus: expect.toBeWithin(1, 9),
     memoryMib: expect.toBeWithin(64, 4097),
     keep: {
@@ -24,6 +25,7 @@ test('it applies overrides on top of the defaults', () => {
       passwordFile: '/run/secrets/restic',
       intervalS: 3600,
       forget: false,
+      database: true,
       cpus: 2,
       memoryMib: 512,
       keep: { hourly: 24, daily: 7, weekly: 4 },
@@ -33,6 +35,7 @@ test('it applies overrides on top of the defaults', () => {
     passwordFile: '/run/secrets/restic',
     intervalS: 3600,
     forget: false,
+    database: true,
     cpus: 2,
     memoryMib: 512,
     keep: { hourly: 24, daily: 7, weekly: 4 },

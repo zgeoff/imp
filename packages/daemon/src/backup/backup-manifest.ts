@@ -93,6 +93,14 @@ export const BackupManifestSchema = z
     // it out (docs/architecture/storage/backups.md#imps-left-out)
     excluded: z.array(ManifestExcludedSchema).readonly().default([]),
     images: z.array(ManifestImageSchema).readonly(),
+
+    // impd's database copy and its size, with IMP_BACKUP_DATABASE; null
+    // without it (docs/architecture/storage/backups.md#the-database-copy)
+    database: z
+      .object({ file: z.string(), sizeBytes: z.int().nonnegative() })
+      .readonly()
+      .nullable()
+      .default(null),
   })
   .readonly();
 

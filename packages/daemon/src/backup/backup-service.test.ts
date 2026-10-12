@@ -1,5 +1,14 @@
+import { Database } from 'bun:sqlite';
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
@@ -47,6 +56,7 @@ async function setupTest() {
     db: host.db,
     imps: host.imps,
     grants: host.broker,
+    tokens: host.tokens,
     networks: createNetworkService({ db: host.db, egress: host.egress, imps: host.imps }),
     storage: host.storage,
     storageGate: host.storageGate,
@@ -491,6 +501,7 @@ test('#restoreBackup restores every imp and its image on a fresh host, renaming 
     db: fresh.db,
     imps: fresh.imps,
     grants: fresh.broker,
+    tokens: fresh.tokens,
     networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
     storage: fresh.storage,
     storageGate: fresh.storageGate,
@@ -537,6 +548,7 @@ test('#restoreBackup rejects a restored image as CONFLICT when its name and its 
     db: fresh.db,
     imps: fresh.imps,
     grants: fresh.broker,
+    tokens: fresh.tokens,
     networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
     storage: fresh.storage,
     storageGate: fresh.storageGate,
@@ -653,6 +665,7 @@ test('#restoreBackup restores unused templates with all imps, tagging one whose 
     db: fresh.db,
     imps: fresh.imps,
     grants: fresh.broker,
+    tokens: fresh.tokens,
     networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
     storage: fresh.storage,
     storageGate: fresh.storageGate,
@@ -1550,6 +1563,7 @@ test('#restoreBackup holds the storage gate for a restored image and disk room f
     db: fresh.db,
     imps: fresh.imps,
     grants: fresh.broker,
+    tokens: fresh.tokens,
     networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
     storage: fresh.storage,
     storageGate: fresh.storageGate,
@@ -1847,4 +1861,395 @@ test('#restoreBackup lists an imp created with backup off as not restorable, wit
   expect(restored.notRestorable).toStrictEqual([
     { imp: 'chat', reason: 'created with backup off' },
   ]);
+});
+
+test('#runBackup puts the database copy, with the named tokens, in the snapshot with the database setting on', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.tokens.create({ name: 'agent', scope: 'exec', imps: ['dev'] });
+
+  const run = await backups.runBackup();
+
+  const snapshotDir = join(ctx.repoDir, run.snapshotId);
+
+  const copy = new Database(join(snapshotDir, 'database', 'impd.sqlite'), { readonly: true });
+
+  onTestFinished(() => {
+    copy.close();
+  });
+
+  const manifestText = readFileSync(join(snapshotDir, 'manifest.json'), 'utf8');
+
+  expect(readdirSync(snapshotDir)).toIncludeSameMembers([
+    'database',
+    'images',
+    'imps',
+    'manifest.json',
+  ]);
+
+  expect(copy.query('SELECT name FROM tokens').all()).toStrictEqual([{ name: 'agent' }]);
+
+  expect(BackupManifestSchema.parse(JSON.parse(manifestText)).database).toStrictEqual({
+    file: 'database/impd.sqlite',
+    sizeBytes: statSync(join(snapshotDir, 'database', 'impd.sqlite')).size,
+  });
+});
+
+test('#runBackup puts no secret value, key, password or root token in a backup with the database copy', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_never_backed_up' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const made = await ctx.tokens.create({ name: 'agent', scope: 'exec', imps: ['dev'] });
+
+  mkdirSync(join(ctx.dataDir, 'tls'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'tls', 'account.json'), 'acme-account-key-text');
+  writeFileSync(join(ctx.dataDir, 'restic-password'), 'restic-password-text');
+  writeFileSync(join(ctx.dataDir, 'token'), 'api-token-text');
+
+  const run = await backups.runBackup();
+
+  const snapshotDir = join(ctx.repoDir, run.snapshotId);
+
+  const files = readdirSync(snapshotDir, { recursive: true, withFileTypes: true }).filter((entry) =>
+    entry.isFile(),
+  );
+
+  const texts = files
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), 'latin1'))
+    .join('\n');
+
+  const [, tokenSecret = ''] = made.secret.split('.');
+
+  expect(files.map((entry) => join(entry.parentPath, entry.name))).not.toSatisfyAny(
+    (path: string) => /secrets|broker|tls|password|token/v.test(path.slice(snapshotDir.length)),
+  );
+
+  expect(texts).not.toMatch(
+    /ghp_never_backed_up|acme-account-key-text|restic-password-text|api-token-text|PRIVATE KEY/v,
+  );
+
+  expect(texts).not.toInclude(tokenSecret);
+});
+
+test('#runBackup holds the database copy’s size from the disk budget while it writes the copy', async () => {
+  const ctx = await setupTest();
+
+  // the sizes each hold asks for, on the host's real budget
+  const held: number[] = [];
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+    diskBudget: {
+      requireRoom: (bytes) => ctx.diskBudget.requireRoom(bytes),
+      withRoom: (bytes, task) => {
+        held.push(bytes);
+
+        return ctx.diskBudget.withRoom(bytes, task);
+      },
+    },
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+
+  const copyBytes = statSync(join(ctx.repoDir, run.snapshotId, 'database', 'impd.sqlite')).size;
+
+  expect(held).toStrictEqual([copyBytes]);
+});
+
+test('#runBackup takes the database copy out of the next snapshot once the setting is off', async () => {
+  const ctx = await setupTest();
+
+  const withCopy = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  const withoutCopy = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: false }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await withCopy.runBackup();
+
+  const run = await withoutCopy.runBackup();
+
+  const snapshotDir = join(ctx.repoDir, run.snapshotId);
+  const manifestText = readFileSync(join(snapshotDir, 'manifest.json'), 'utf8');
+
+  expect(readdirSync(snapshotDir)).toIncludeSameMembers(['images', 'imps', 'manifest.json']);
+  expect(BackupManifestSchema.parse(JSON.parse(manifestText)).database).toBeNull();
+});
+
+test('#restoreBackup brings back the named tokens, the secrets and the grants on a fresh host from the database copy', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const made = await ctx.tokens.create({ name: 'agent', scope: 'exec', imps: ['dev'] });
+
+  await backups.runBackup();
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    tokens: fresh.tokens,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() }).restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  const restored = await freshBackups.restoreBackup({ all: true });
+  const grants = await fresh.broker.listGrants('dev');
+
+  expect(restored.database).toStrictEqual({ tokens: ['agent'], secrets: ['gh'], skipped: [] });
+  expect(restored.skippedGrants).toStrictEqual([]);
+
+  expect(fresh.tokens.authenticate(made.secret)).toMatchObject({
+    name: 'agent',
+    scope: 'exec',
+    imps: ['dev'],
+  });
+
+  expect(grants).toStrictEqual(['gh']);
+});
+
+test('#restoreBackup holds the database copy’s size from the disk budget while it restores the copy', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshRestic = buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() });
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    tokens: fresh.tokens,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: freshRestic.restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  // the bytes the budget holds as each restore of a dir starts
+  const seen: { dir: string; pendingBytes: number }[] = [];
+
+  freshRestic.state.onRestore = async (dir) => {
+    const status = await fresh.diskBudget.readStatus();
+
+    seen.push({ dir, pendingBytes: status.pendingBytes });
+  };
+
+  await freshBackups.restoreBackup({ all: true });
+
+  const copyBytes = statSync(join(ctx.repoDir, run.snapshotId, 'database', 'impd.sqlite')).size;
+
+  expect(seen).toPartiallyContain({ dir: 'database', pendingBytes: copyBytes });
+});
+
+test('#restoreBackup refuses a backup whose manifest names its database copy at another path', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const run = await backups.runBackup();
+
+  const manifestPath = join(ctx.repoDir, run.snapshotId, 'manifest.json');
+  const manifest = BackupManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
+
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({ ...manifest, database: { file: '../../x/impd.sqlite', sizeBytes: 1 } }),
+  );
+
+  await ctx.imps.destroyImp('dev');
+
+  expect(backups.restoreBackup({ all: true })).rejects.toThrow(
+    'the backup names its database copy at ../../x/impd.sqlite, not database/impd.sqlite',
+  );
+});
+
+test('#restoreBackup restores a token’s grantable list on a fresh host, so the token still grants its secret', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+
+  const made = await ctx.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev'],
+    grantable: ['gh'],
+  });
+
+  await backups.runBackup();
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    tokens: fresh.tokens,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() }).restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  await freshBackups.restoreBackup({ all: true });
+
+  const caller = fresh.tokens.authenticate(made.secret);
+
+  invariant(caller);
+
+  const tokenId = caller.tokenId;
+  const [entry] = caller.grantable;
+  const generation = entry?.generation;
+
+  invariant(tokenId);
+  invariant(generation);
+
+  await fresh.broker.addGrant('dev', 'gh', { tokenId, generation });
+
+  const grants = await fresh.broker.listGrants('dev');
+
+  expect(grants).toStrictEqual(['gh']);
+});
+
+test('#restoreBackup brings back no token or secret in a restore of one imp from a backup with the database copy', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({
+    ...ctx.deps,
+    backup: buildMockBackupConfig({ database: true }),
+  });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.tokens.create({ name: 'agent', scope: 'exec', imps: ['dev'] });
+  await backups.runBackup();
+
+  const fresh = await createImpTest(ctx.stack);
+
+  const freshBackups = createBackupService({
+    dataDir: fresh.dataDir,
+    backup: buildMockBackupConfig(),
+    db: fresh.db,
+    imps: fresh.imps,
+    grants: fresh.broker,
+    tokens: fresh.tokens,
+    networks: createNetworkService({ db: fresh.db, egress: fresh.egress, imps: fresh.imps }),
+    storage: fresh.storage,
+    storageGate: fresh.storageGate,
+    diskBudget: fresh.diskBudget,
+    restic: buildStubRestic({ repoDir: ctx.repoDir, now: () => new Date() }).restic,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  const restored = await freshBackups.restoreBackup({ name: 'dev' });
+  const secrets = await fresh.broker.listSecrets();
+
+  expect(restored.database).toBeUndefined();
+  expect(fresh.tokens.list()).toStrictEqual([]);
+  expect(secrets).toStrictEqual([]);
 });

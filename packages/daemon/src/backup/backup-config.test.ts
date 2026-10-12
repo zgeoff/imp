@@ -24,6 +24,7 @@ test('#loadBackupConfig takes the defaults for a repository with a password file
     intervalS: 21_600,
     keep: { hourly: 24, daily: 7, weekly: 4 },
     forget: true,
+    database: false,
     cpus: 2,
     memoryMib: 512,
   });
@@ -37,6 +38,7 @@ test('#loadBackupConfig reads every setting from the environment', () => {
       IMP_BACKUP_INTERVAL_S: '3600',
       IMP_BACKUP_KEEP: 'weekly=2',
       IMP_BACKUP_FORGET: 'false',
+      IMP_BACKUP_DATABASE: 'true',
       IMP_BACKUP_CPUS: '4',
       IMP_BACKUP_MEMORY_MIB: '1024',
     }),
@@ -46,6 +48,7 @@ test('#loadBackupConfig reads every setting from the environment', () => {
     intervalS: 3600,
     keep: { hourly: 0, daily: 0, weekly: 2 },
     forget: false,
+    database: true,
     cpus: 4,
     memoryMib: 1024,
   });
@@ -57,6 +60,7 @@ test.each([
   ['IMP_BACKUP_MEMORY_MIB', '1.5'],
   ['IMP_BACKUP_CPUS', 'two'],
   ['IMP_BACKUP_FORGET', 'no'],
+  ['IMP_BACKUP_DATABASE', 'yes'],
 ])('#loadBackupConfig rejects %s=%s', (name, value) => {
   expect(() =>
     loadBackupConfig({
