@@ -49,6 +49,7 @@ const BackupRunSchema = z.object({
   snapshotId: z.string(),
   imps: z.array(z.string()),
   skipped: z.array(SkipSchema),
+  excluded: z.array(SkipSchema),
   dataAddedBytes: z.number(),
   durationMs: z.number(),
 });
