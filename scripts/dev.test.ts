@@ -408,6 +408,47 @@ test('it refuses up with IMP_TAILNET_NAMES=1 when 1Password has no OAuth client'
   expect(readFileSync(docker.calls, 'utf8')).not.toInclude('docker run -d --name imp-dev ');
 });
 
+test('it passes the Tailscale key to docker by name only in up, and never traces it', () => {
+  const ctx = setupTest();
+
+  // the proxy's compile writes its binary into the data dir, and its run
+  // passes; every other run and inspect fails, so up stops right at the
+  // container start, after building its argv
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    [
+      'case "$*" in *imp-docker-proxy.new) : > "$IMP_DEV_DATA/imp-docker-proxy.new"; exit 0 ;; esac',
+      'case "$*" in *bin/imp-docker-proxy) exit 0 ;; esac',
+      'case "$1" in run|inspect) exit 1 ;; esac',
+      'exit 0',
+    ].join('\n'),
+  );
+
+  const result = Bun.spawnSync(['bash', '-x', new URL('dev.sh', import.meta.url).pathname, 'up'], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      HOME: ctx.dir,
+      TAILSCALE_AUTHKEY: 'fake-tskey-for-the-trace-check',
+      IMP_TAILSCALE_TAGS: 'tag:imp-e2e',
+      IMP_DEV_NAME: 'imp-dev-trace-check',
+      IMP_DEV_DATA: join(ctx.dir, 'data'),
+      IMP_HOST_IMAGE_READY: '1',
+
+      // a file under the repo stands in for the kernel and the system drive
+      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
+      IMP_SYSTEM_DRIVE: new URL('../package.json', import.meta.url).pathname,
+    },
+  });
+
+  const trace = result.stderr.toString();
+
+  expect(result.exitCode).not.toBe(0);
+  expect(trace).toContain('-e TAILSCALE_AUTHKEY ');
+  expect(trace).toContain('-e IMP_TAILSCALE_TAGS=tag:imp-e2e');
+  expect(trace).not.toContain('fake-tskey-for-the-trace-check');
+});
+
 test('it refuses up with an IMP_ACME_CA_FILE outside the repo', () => {
   const ctx = setupTest();
 
