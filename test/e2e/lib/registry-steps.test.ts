@@ -17,15 +17,21 @@ import {
   startRegistry,
 } from './registry-steps';
 
-// the caller's stack goes before the temp dir that holds the stub docker
+// the caller's stack goes before the temp dir that holds the stub docker,
+// and the dir goes even when that stack's release throws; a test may
+// release the caller's stack itself and still read the dir after
 async function setupTest() {
-  const stack = new AsyncDisposableStack();
+  const cleanup = new AsyncDisposableStack();
 
-  onTestFinished(() => stack.disposeAsync());
+  onTestFinished(() => cleanup.disposeAsync());
 
   const dir = await mkdtemp(join(tmpdir(), 'registry-steps-'));
 
-  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  cleanup.defer(() => rm(dir, { recursive: true, force: true }));
+
+  const stack = new AsyncDisposableStack();
+
+  cleanup.defer(() => stack.disposeAsync());
 
   return { stack, dir };
 }
