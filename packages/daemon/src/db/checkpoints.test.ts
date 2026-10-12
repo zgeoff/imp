@@ -105,12 +105,22 @@ test('#listCheckpoints lists newest first', async () => {
 
   await createCheckpoint(
     ctx.db,
-    buildMockNewCheckpoint({ id: 'cp-b', impId: imp.id, createdAt: new Date(1_800_000_000_000) }),
+    buildMockNewCheckpoint({
+      id: 'cp-b',
+      impId: imp.id,
+      label: 'b',
+      createdAt: new Date(1_800_000_000_000),
+    }),
   );
 
   await createCheckpoint(
     ctx.db,
-    buildMockNewCheckpoint({ id: 'cp-a', impId: imp.id, createdAt: new Date(1_800_000_060_000) }),
+    buildMockNewCheckpoint({
+      id: 'cp-a',
+      impId: imp.id,
+      label: 'a',
+      createdAt: new Date(1_800_000_060_000),
+    }),
   );
 
   const checkpoints = await listCheckpoints(ctx.db, imp.id);
@@ -126,7 +136,12 @@ test('#listCheckpoints puts the larger id first when two were made at once', asy
   for (const id of ['cp-1', 'cp-2']) {
     await createCheckpoint(
       ctx.db,
-      buildMockNewCheckpoint({ id, impId: imp.id, createdAt: new Date(1_800_000_000_000) }),
+      buildMockNewCheckpoint({
+        id,
+        impId: imp.id,
+        label: id,
+        createdAt: new Date(1_800_000_000_000),
+      }),
     );
   }
 
@@ -199,8 +214,15 @@ test('#removeCheckpoint removes only that checkpoint', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ id: 'cp-4', impId: imp.id }));
-  await createCheckpoint(ctx.db, buildMockNewCheckpoint({ id: 'cp-5', impId: imp.id }));
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-4', impId: imp.id, label: 'four' }),
+  );
+
+  await createCheckpoint(
+    ctx.db,
+    buildMockNewCheckpoint({ id: 'cp-5', impId: imp.id, label: 'five' }),
+  );
 
   const removed = await removeCheckpoint(ctx.db, 'cp-4');
   const remaining = await listCheckpoints(ctx.db, imp.id);
