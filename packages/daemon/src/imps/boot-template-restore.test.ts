@@ -187,23 +187,27 @@ test('it keeps the template through more failed clones than turn a key off', asy
 
   ctx.disk.setCloneFailing(true);
 
-  // more than the restore failures that would turn the key off, one at a time;
-  // the API hides a host failure behind a 500
-  expect(
-    ctx.client.imps.create({ name: 'second', vcpus: 1, memoryMib: 256 }),
-  ).rejects.toStrictEqual(
-    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
-  );
+  // more than the restore failures that would turn the key off, one at a time
+  const secondFailure = await ctx.client.imps
+    .create({ name: 'second', vcpus: 1, memoryMib: 256 })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
-  expect(ctx.client.imps.create({ name: 'third', vcpus: 1, memoryMib: 256 })).rejects.toStrictEqual(
-    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
-  );
+  const thirdFailure = await ctx.client.imps
+    .create({ name: 'third', vcpus: 1, memoryMib: 256 })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
-  expect(
-    ctx.client.imps.create({ name: 'fourth', vcpus: 1, memoryMib: 256 }),
-  ).rejects.toStrictEqual(
-    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
-  );
+  const fourthFailure = await ctx.client.imps
+    .create({ name: 'fourth', vcpus: 1, memoryMib: 256 })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
   const second = await findImpByName(ctx.db, 'second');
   const third = await findImpByName(ctx.db, 'third');
@@ -216,6 +220,19 @@ test('it keeps the template through more failed clones than turn a key off', asy
   await ctx.client.imps.create({ name: 'fifth', vcpus: 1, memoryMib: 256 });
 
   const key = buildTemplateKey(ctx.readIdentity(), { vcpus: 1, memoryMib: 256 });
+
+  // the API hides a host failure behind a 500
+  expect(secondFailure).toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
+  );
+
+  expect(thirdFailure).toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
+  );
+
+  expect(fourthFailure).toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
+  );
 
   expect(second?.error).toBe('clone failed: no space');
   expect(third?.error).toBe('clone failed: no space');
@@ -242,23 +259,27 @@ test('it ends the restored VM when the grow after the clone fails, and keeps the
   ctx.disk.setCloneEmpty(true);
 
   // more than the restore failures that would turn the key off, one at a
-  // time, as each takes the template's claim; the API hides a host failure
-  // behind a 500
-  expect(
-    ctx.client.imps.create({ name: 'second', vcpus: 1, memoryMib: 256 }),
-  ).rejects.toStrictEqual(
-    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
-  );
+  // time, as each takes the template's claim
+  const secondFailure = await ctx.client.imps
+    .create({ name: 'second', vcpus: 1, memoryMib: 256 })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
-  expect(ctx.client.imps.create({ name: 'third', vcpus: 1, memoryMib: 256 })).rejects.toStrictEqual(
-    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
-  );
+  const thirdFailure = await ctx.client.imps
+    .create({ name: 'third', vcpus: 1, memoryMib: 256 })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
-  expect(
-    ctx.client.imps.create({ name: 'fourth', vcpus: 1, memoryMib: 256 }),
-  ).rejects.toStrictEqual(
-    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
-  );
+  const fourthFailure = await ctx.client.imps
+    .create({ name: 'fourth', vcpus: 1, memoryMib: 256 })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
 
   const second = await findImpByName(ctx.db, 'second');
   const third = await findImpByName(ctx.db, 'third');
@@ -269,6 +290,19 @@ test('it ends the restored VM when the grow after the clone fails, and keeps the
   await ctx.client.imps.create({ name: 'fifth', vcpus: 1, memoryMib: 256 });
 
   const key = buildTemplateKey(ctx.readIdentity(), { vcpus: 1, memoryMib: 256 });
+
+  // the API hides a host failure behind a 500
+  expect(secondFailure).toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
+  );
+
+  expect(thirdFailure).toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
+  );
+
+  expect(fourthFailure).toStrictEqual(
+    new ORPCError('INTERNAL_SERVER_ERROR', { status: 500, message: 'Internal server error' }),
+  );
 
   invariant(second);
   invariant(third);

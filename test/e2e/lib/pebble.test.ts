@@ -30,14 +30,18 @@ test('#startPebbleStack refuses a Pebble container name that is taken, before it
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(startPebbleStack(ctx.stack, 'imp-acme-it-x')).rejects.toThrowWithMessage(
-    Error,
-    'a container named imp-acme-it-x-pebble is already there',
+  const failure = await startPebbleStack(ctx.stack, 'imp-acme-it-x').then(
+    () => null,
+    (error: unknown) => error,
   );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toMatchObject({
+    message: 'a container named imp-acme-it-x-pebble is already there',
+  });
 
   expect(calls.split('\n')).toStrictEqual([
     'docker container inspect imp-acme-it-x-pebble',
@@ -58,14 +62,18 @@ test('#startPebbleStack refuses a challtestsrv container name that is taken, bef
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(startPebbleStack(ctx.stack, 'imp-acme-it-x')).rejects.toThrowWithMessage(
-    Error,
-    'a container named imp-acme-it-x-challtestsrv is already there',
+  const failure = await startPebbleStack(ctx.stack, 'imp-acme-it-x').then(
+    () => null,
+    (error: unknown) => error,
   );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toMatchObject({
+    message: 'a container named imp-acme-it-x-challtestsrv is already there',
+  });
 
   expect(calls.split('\n')).toStrictEqual([
     'docker container inspect imp-acme-it-x-pebble',
@@ -86,14 +94,16 @@ test('#startPebbleStack refuses a network name that is taken, before it makes an
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(startPebbleStack(ctx.stack, 'imp-acme-it-x')).rejects.toThrowWithMessage(
-    Error,
-    'a network named imp-acme-it-x-acme is already there',
+  const failure = await startPebbleStack(ctx.stack, 'imp-acme-it-x').then(
+    () => null,
+    (error: unknown) => error,
   );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toMatchObject({ message: 'a network named imp-acme-it-x-acme is already there' });
 
   expect(calls.split('\n')).toStrictEqual([
     'docker container inspect imp-acme-it-x-pebble',
@@ -119,11 +129,16 @@ test('#startPebbleStack removes only what it made when the Pebble container is n
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(startPebbleStack(ctx.stack, 'imp-acme-it-x')).rejects.toThrow();
+  const failure = await startPebbleStack(ctx.stack, 'imp-acme-it-x').then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toBeInstanceOf(Error);
 
   expect(calls.split('\n').filter((line) => line.includes(' rm '))).toStrictEqual([
     'docker rm --force imp-acme-it-x-challtestsrv',
@@ -147,14 +162,16 @@ test('#startPebbleStack removes the Pebble container it created when that contai
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(startPebbleStack(ctx.stack, 'imp-acme-it-x')).rejects.toThrowWithMessage(
-    Error,
-    'docker start imp-acme-it-x-pebble exited 1: ',
+  const failure = await startPebbleStack(ctx.stack, 'imp-acme-it-x').then(
+    () => null,
+    (error: unknown) => error,
   );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toMatchObject({ message: 'docker start imp-acme-it-x-pebble exited 1: ' });
 
   expect(calls.split('\n').filter((line) => line.includes(' rm '))).toStrictEqual([
     'docker rm --force imp-acme-it-x-pebble',
@@ -174,13 +191,18 @@ test('#startPebbleStack copies the minica PEM into the directory the caller name
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(
-    startPebbleStack(ctx.stack, 'imp-acme-it-x', { minicaDir: join(ctx.dir, 'ca') }),
-  ).rejects.toThrow();
+  const failure = await startPebbleStack(ctx.stack, 'imp-acme-it-x', {
+    minicaDir: join(ctx.dir, 'ca'),
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toBeInstanceOf(Error);
 
   expect(calls.split('\n')).toContain(
     `docker cp imp-acme-it-x-pebble:/test/certs/pebble.minica.pem ${join(ctx.dir, 'ca', 'imp-acme-it-x-pebble-minica.pem')}`,

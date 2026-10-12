@@ -436,9 +436,14 @@ test('#start drops the clone a restore whose halt failed could not drop', async 
 
   ctx.fake.failOnce((command) => command === 'zfs destroy tank/imp/staging/restore-a');
 
-  expect(
-    ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.reject(new Error('stop failed'))),
-  ).rejects.toThrowWithMessage(Error, 'stop failed');
+  const restoring = ctx.backend.restoreCheckpoint('a', 'cp-one', () =>
+    Promise.reject(new Error('stop failed')),
+  );
+
+  const failure = await restoring.then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   ctx.fake.restart(true);
 
@@ -450,6 +455,7 @@ test('#start drops the clone a restore whose halt failed could not drop', async 
     imageDigests: new Set(['sha256:9f2c']),
   });
 
+  expect(failure).toMatchObject({ message: 'stop failed' });
   expect(ctx.fake.listDatasets()).not.toContain('tank/imp/staging/restore-a');
 });
 

@@ -476,7 +476,10 @@ test('#resetBaseline removes an imp that a failed boot left in error', async () 
 
   ctx.vmm.queue('boot', 'fail');
 
-  await expect(ctx.client.imps.create({ name: 'e2e-x-dev' })).toReject();
+  const failure = await ctx.client.imps.create({ name: 'e2e-x-dev' }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   const before = await ctx.client.imps.list();
 
@@ -484,6 +487,7 @@ test('#resetBaseline removes an imp that a failed boot left in error', async () 
 
   const after = await ctx.client.imps.list();
 
+  expect(failure).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
   expect(before.map((imp) => [imp.name, imp.state])).toStrictEqual([['e2e-x-dev', 'error']]);
   expect(after).toBeEmpty();
 });

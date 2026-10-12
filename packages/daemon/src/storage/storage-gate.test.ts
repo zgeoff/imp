@@ -209,11 +209,15 @@ test('it runs a second task alone only after the first one ends', async () => {
 
 test('it lets operations through again after a task alone throws', async () => {
   const gate = createStorageGate();
-  const failed = gate.runAlone(() => Promise.reject(new Error('the sweep failed')), 5000);
+  const sweeping = gate.runAlone(() => Promise.reject(new Error('the sweep failed')), 5000);
 
-  expect(failed).rejects.toThrowWithMessage(Error, 'the sweep failed');
+  const failed = await sweeping.then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   const after = await gate.join(() => Promise.resolve('ran'));
 
+  expect(failed).toMatchObject({ message: 'the sweep failed' });
   expect(after).toBe('ran');
 });

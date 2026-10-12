@@ -181,14 +181,17 @@ test('it retries a failed guest grow at the next wake', async () => {
 
   ctx.fake.queue('grow', 'fail');
 
-  expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4096 })).rejects.toMatchObject({
-    code: 'INTERNAL_SERVER_ERROR',
-  });
+  const failure = await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4096 }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.wake({ name: 'dev' });
 
   const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(failure).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
 
   expect(ctx.fake.grows.at(-1)).toStrictEqual({
     disk: buildImpPaths(ctx.dataDir, created.id).disk,

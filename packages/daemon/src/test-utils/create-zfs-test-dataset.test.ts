@@ -121,15 +121,24 @@ test('it refuses a dataset name zfs already shows and never touches that dataset
     return ctx.fake.run(argv);
   };
 
-  expect(
-    createZfsTestDataset(ctx.stack, { parent: 'tank/imp', parentDir: ctx.parentDir, run }),
-  ).rejects.toThrow(/^zfs: tank\/imp\/dataset-\w+ exists already, and this run did not make it$/);
+  const failure = await createZfsTestDataset(ctx.stack, {
+    parent: 'tank/imp',
+    parentDir: ctx.parentDir,
+    run,
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   const taken = ctx.fake.listDatasets().find((name) => name !== 'tank/imp');
 
   invariant(taken);
 
   await ctx.stack.disposeAsync();
+
+  expect(failure).toMatchObject({
+    message: `zfs: ${taken} exists already, and this run did not make it`,
+  });
 
   expect(taken).toStartWith('tank/imp/dataset-');
   expect(ctx.fake.listDatasets()).toStrictEqual(['tank/imp', taken]);
@@ -146,15 +155,22 @@ test('it removes only its dir when the dataset cannot be made', async () => {
 
   ctx.fake.failOnce((command) => command.startsWith('zfs create'));
 
-  expect(
-    createZfsTestDataset(ctx.stack, {
-      parent: 'tank/imp',
-      parentDir: ctx.parentDir,
-      run: ctx.fake.run,
-    }),
-  ).rejects.toThrow(/^zfs create -o mountpoint=legacy tank\/imp\/dataset-\w+ exited 1: /);
+  const failure = await createZfsTestDataset(ctx.stack, {
+    parent: 'tank/imp',
+    parentDir: ctx.parentDir,
+    run: ctx.fake.run,
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.stack.disposeAsync();
+
+  expect(failure).toMatchObject({
+    message: expect.stringMatching(
+      /^zfs create -o mountpoint=legacy tank\/imp\/dataset-\w+ exited 1: /,
+    ) as unknown,
+  });
 
   expect(ctx.fake.commands.filter((command) => !command.startsWith('zfs list'))).toStrictEqual([]);
   expect(ctx.fake.listDatasets()).toStrictEqual(['tank/imp']);
@@ -166,17 +182,24 @@ test('it destroys its dataset and removes its dir when the mount fails', async (
 
   ctx.fake.failOnce((command) => command.startsWith('mount'));
 
-  expect(
-    createZfsTestDataset(ctx.stack, {
-      parent: 'tank/imp',
-      parentDir: ctx.parentDir,
-      run: ctx.fake.run,
-    }),
-  ).rejects.toThrow(/^mount -t zfs tank\/imp\/dataset-\w+ \S+ exited 1: /);
+  const failure = await createZfsTestDataset(ctx.stack, {
+    parent: 'tank/imp',
+    parentDir: ctx.parentDir,
+    run: ctx.fake.run,
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   const made = ctx.fake.listDatasets();
 
   await ctx.stack.disposeAsync();
+
+  expect(failure).toMatchObject({
+    message: expect.stringMatching(
+      /^mount -t zfs tank\/imp\/dataset-\w+ \S+ exited 1: /,
+    ) as unknown,
+  });
 
   expect(made).toHaveLength(2);
   expect(ctx.fake.listDatasets()).toStrictEqual(['tank/imp']);

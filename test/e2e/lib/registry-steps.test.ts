@@ -144,13 +144,23 @@ test('#startRegistry refuses a container name that is taken, before it makes any
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(
-    startRegistry(ctx.stack, 'imp-e2e-registry.test', 'e2e-reg-registry-1', ctx.dir),
-  ).rejects.toThrowWithMessage(Error, 'a container named e2e-reg-registry-1 is already there');
+  const failure = await startRegistry(
+    ctx.stack,
+    'imp-e2e-registry.test',
+    'e2e-reg-registry-1',
+    ctx.dir,
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toMatchObject({
+    message: 'a container named e2e-reg-registry-1 is already there',
+  });
 
   expect(calls).toBe('docker container inspect e2e-reg-registry-1\n');
   expect(existsSync(join(ctx.dir, 'certs'))).toBeFalse();
@@ -167,14 +177,21 @@ test('#startRegistry removes nothing when the registry does not start', async ()
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
 
-  expect(
-    startRegistry(ctx.stack, 'imp-e2e-registry.test', 'e2e-reg-registry-1', ctx.dir),
-  ).rejects.toThrow();
+  const failure = await startRegistry(
+    ctx.stack,
+    'imp-e2e-registry.test',
+    'e2e-reg-registry-1',
+    ctx.dir,
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
 
+  expect(failure).toBeInstanceOf(Error);
   expect(calls.split('\n')).toSatisfyAll((line: string) => !line.startsWith('docker rm '));
 });
 
@@ -282,11 +299,16 @@ test('#createMovedTag removes the tag it made when a later step fails', async ()
     certPath: join(ctx.dir, 'cert.pem'),
   };
 
-  expect(createMovedTag(ctx.stack, registry, ctx.dir, 'e2e/mutable')).rejects.toThrow();
+  const failure = await createMovedTag(ctx.stack, registry, ctx.dir, 'e2e/mutable').then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await ctx.stack.disposeAsync();
 
   const calls = await readFile(docker.calls, 'utf8');
+
+  expect(failure).toBeInstanceOf(Error);
 
   expect(calls.split('\n').filter((line) => line.startsWith('docker rmi '))).toStrictEqual([
     'docker rmi imp-e2e-registry.test:49153/e2e/mutable:1',

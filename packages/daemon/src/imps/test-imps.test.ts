@@ -106,17 +106,19 @@ test('#createImpTest has its data dir removed by the stack after a setup step th
 
   const seen: string[] = [];
 
-  const setup = createImpTest(stack, {
+  const failure = await createImpTest(stack, {
     createStorage: (dataDir) => {
       seen.push(dataDir);
       throw new Error('no storage');
     },
-  });
-
-  expect(setup).rejects.toThrowWithMessage(Error, 'no storage');
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   await stack.disposeAsync();
 
+  expect(failure).toMatchObject({ message: 'no storage' });
   expect(seen.map((dataDir) => existsSync(dataDir))).toStrictEqual([false]);
 });
 

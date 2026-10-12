@@ -930,7 +930,10 @@ test('it keeps the leases and emits no release when a forced sleep fails', async
 
   ctx.vmm.queue('sleep', 'fail');
 
-  expect(ctx.client.imps.sleep({ name: 'dev', force: true })).rejects.toThrow();
+  const failure = await ctx.client.imps.sleep({ name: 'dev', force: true }).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   // a later write's event: every event of the failed sleep came before it
   await ctx.client.imps.hold({ name: 'dev', seconds: 0 });
@@ -942,6 +945,7 @@ test('it keeps the leases and emits no release when a forced sleep fails', async
   const leases = await ctx.client.leases.list({ name: 'dev' });
   const imp = await ctx.client.imps.get({ name: 'dev' });
 
+  expect(failure).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
   expect(leases.map((lease) => lease.owner.label)).toStrictEqual(['job']);
   expect(imp.holdUntil).toStrictEqual(new Date(ctx.clock.nowMs + 60_000));
   expect(ctx.events).not.toPartiallyContain({ ev: 'ImpChanged', reason: 'released' });

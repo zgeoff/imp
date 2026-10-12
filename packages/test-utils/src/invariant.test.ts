@@ -13,6 +13,18 @@ test('it throws for an undefined value', () => {
   }).toThrowWithMessage(Error, 'expected a value');
 });
 
+test('it throws for a false condition', () => {
+  expect(() => {
+    invariant(1 + 1 === 3);
+  }).toThrowWithMessage(Error, 'expected a value');
+});
+
+test('it returns for a true condition', () => {
+  expect(() => {
+    invariant(1 + 1 === 2);
+  }).not.toThrow();
+});
+
 test('it throws for a null value with the given message', () => {
   expect(() => {
     invariant(null, 'expected a token');
