@@ -149,12 +149,12 @@ async function setupTest() {
   // service leaves it: its rootfs under its digest
   await Bun.write(join(dataDir, 'images', 'ubuntu', 'rootfs.ext4'), 'rootfs');
 
-  await createImage(
+  const image = await createImage(
     db,
     buildMockNewImage({ name: 'ubuntu', digest: 'sha256:ubuntu', sizeBytes: 6 }),
   );
 
-  return { client, db, dataDir, vmm, impd };
+  return { client, db, dataDir, vmm, impd, image };
 }
 
 test('#resetBaseline removes the imps a journey named with its prefix, with their checkpoints and leases', async () => {
@@ -294,8 +294,8 @@ test('#resetBaseline removes the images a journey named with its prefix, after t
 
   const after = await ctx.client.images.list();
 
-  expect(before.map((image) => image.name)).toIncludeSameMembers(['ubuntu', 'e2e-x-img']);
-  expect(after.map((image) => image.name)).toStrictEqual(['ubuntu']);
+  expect(before.map((image) => image.name)).toIncludeSameMembers([ctx.image.name, 'e2e-x-img']);
+  expect(after.map((image) => image.name)).toStrictEqual([ctx.image.name]);
 });
 
 test('#resetBaseline removes the templates a journey made from its imps', async () => {
@@ -310,8 +310,8 @@ test('#resetBaseline removes the templates a journey made from its imps', async 
 
   const after = await ctx.client.images.list();
 
-  expect(before.map((image) => image.name)).toIncludeSameMembers(['ubuntu', 'e2e-x-golden']);
-  expect(after.map((image) => image.name)).toStrictEqual(['ubuntu']);
+  expect(before.map((image) => image.name)).toIncludeSameMembers([ctx.image.name, 'e2e-x-golden']);
+  expect(after.map((image) => image.name)).toStrictEqual([ctx.image.name]);
 });
 
 test('#resetBaseline removes the broker test upstreams file a journey wrote', async () => {
@@ -376,41 +376,27 @@ test('#resetBaseline never removes what another owner named, a near-miss prefix 
     });
   }
 
-  // every kind, read the same way before and after
-  const readNames = async () => {
-    const imps = await ctx.client.imps.list();
-    const images = await ctx.client.images.list();
-    const networks = await ctx.client.networks.list();
-    const secrets = await ctx.client.secrets.list();
-    const tokens = await ctx.client.tokens.list();
-    const clients = await ctx.client.oauth.clients.list();
-
-    return {
-      imps: imps.map((imp) => imp.name).toSorted(),
-      images: images.map((image) => image.name).toSorted(),
-      networks: networks.map((network) => network.name).toSorted(),
-      secrets: secrets.map((secret) => secret.name).toSorted(),
-      tokens: tokens.map((token) => token.name).toSorted(),
-      clients: clients.map((client) => client.name).toSorted(),
-    };
-  };
-
-  const before = await readNames();
-
   await resetBaseline({ client: ctx.client, prefixes: ['e2e-x-'], dataDir: ctx.dataDir });
 
-  const after = await readNames();
+  const imps = await ctx.client.imps.list();
+  const images = await ctx.client.images.list();
+  const networks = await ctx.client.networks.list();
+  const secrets = await ctx.client.secrets.list();
+  const tokens = await ctx.client.tokens.list();
+  const clients = await ctx.client.oauth.clients.list();
 
-  expect(before).toStrictEqual({
-    imps: ['e2e-xy-dev', 'e2e-y-dev'],
-    images: ['e2e-tiny-0123abcd', 'e2e-xy-img', 'ubuntu'],
-    networks: ['e2e-xy-lab', 'lab'],
-    secrets: ['e2e-xy-gh', 'gh'],
-    tokens: ['e2e-xy-reader', 'reader'],
-    clients: ['conn', 'e2e-xy-conn'],
-  });
+  expect(imps.map((imp) => imp.name)).toIncludeSameMembers(['e2e-xy-dev', 'e2e-y-dev']);
 
-  expect(after).toStrictEqual(before);
+  expect(images.map((image) => image.name)).toIncludeSameMembers([
+    'e2e-tiny-0123abcd',
+    'e2e-xy-img',
+    ctx.image.name,
+  ]);
+
+  expect(networks.map((network) => network.name)).toIncludeSameMembers(['e2e-xy-lab', 'lab']);
+  expect(secrets.map((secret) => secret.name)).toIncludeSameMembers(['e2e-xy-gh', 'gh']);
+  expect(tokens.map((token) => token.name)).toIncludeSameMembers(['e2e-xy-reader', 'reader']);
+  expect(clients.map((client) => client.name)).toIncludeSameMembers(['conn', 'e2e-xy-conn']);
 });
 
 test('#resetBaseline fails when impd refuses to remove what the prefix names', async () => {
@@ -433,7 +419,7 @@ test('#resetBaseline ends the move of an imp a failed move left marked, then rem
   const ctx = await setupTest();
 
   // a move's first step counts the image's files too
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'config.json'), '{}');
+  await Bun.write(join(ctx.dataDir, 'images', ctx.image.name, 'config.json'), '{}');
   await ctx.client.imps.create({ name: 'e2e-x-dev' });
   await ctx.client.imps.stop({ name: 'e2e-x-dev' });
   await ctx.client.moves.prepare({ name: 'e2e-x-dev', targetStorage: 'xfs' });
@@ -452,7 +438,7 @@ test('#resetBaseline fails when the move of a marked imp cannot be ended', async
   const ctx = await setupTest();
 
   // a move's first step counts the image's files too
-  await Bun.write(join(ctx.dataDir, 'images', 'ubuntu', 'config.json'), '{}');
+  await Bun.write(join(ctx.dataDir, 'images', ctx.image.name, 'config.json'), '{}');
 
   const imp = await ctx.client.imps.create({ name: 'e2e-x-dev' });
 
@@ -536,7 +522,7 @@ test('#removeImageIfPresent removes the template it names', async () => {
 
   const images = await ctx.client.images.list();
 
-  expect(images.map((image) => image.name)).toStrictEqual(['ubuntu']);
+  expect(images.map((image) => image.name)).toStrictEqual([ctx.image.name]);
 });
 
 test('#removeImageIfPresent passes over an image that is already gone', async () => {

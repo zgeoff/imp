@@ -154,13 +154,14 @@ test('it removes its filler when the test ends', async () => {
 
   await sampler.fill(1024 ** 2, stats.bavail * stats.bsize - 8 * 1024 ** 2);
 
-  // registered after fill's own removal, so it runs once that has
+  // registered after fill's own removal, so it runs once that has; one hook
+  // reads, removes the directory, then checks, because on Bun 1.4.2 a hook
+  // that throws skips the hooks after it and would leak the directory
   onTestFinished(async () => {
     const left = await readdir(fillers);
 
+    await rm(fillers, { recursive: true, force: true });
+
     expect(left).toStrictEqual([]);
   });
-
-  // the directory goes last, so the check above sees only the sampler's removal
-  onTestFinished(() => rm(fillers, { recursive: true, force: true }));
 });

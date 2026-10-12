@@ -642,15 +642,21 @@ test('#buildRanking leaves a generated name to impd though a host has an imp of 
 });
 
 test('#createPlaced moves on to the next host after a RAM refusal, with one create per host', async () => {
-  const create = mock((host: string) =>
-    host === 'a'
-      ? Promise.reject(
-          new ORPCError('RAM_BUDGET_EXCEEDED', {
-            status: 503,
-            message: 'Not enough RAM budget, even after sleeping idle imps',
-          }),
-        )
-      : Promise.resolve(`imp on ${host}`),
+  // each host's answer to a create
+  const answers: Record<string, () => Promise<string>> = {
+    a: () =>
+      Promise.reject(
+        new ORPCError('RAM_BUDGET_EXCEEDED', {
+          status: 503,
+          message: 'Not enough RAM budget, even after sleeping idle imps',
+        }),
+      ),
+    b: () => Promise.resolve('imp on b'),
+    c: () => Promise.resolve('imp on c'),
+  };
+
+  const create = mock(
+    (host: string) => answers[host]?.() ?? Promise.reject(new Error(`no answer for ${host}`)),
   );
 
   const placed = await createPlaced(

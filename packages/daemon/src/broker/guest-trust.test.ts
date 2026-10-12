@@ -11,6 +11,7 @@ import {
   encodeFrame,
   encodeJsonFrame,
 } from '../agent-client/frame-codec';
+import { buildStubExecReplies } from '../test-utils/build-stub-exec-replies';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import {
   buildBrokerEnv,
@@ -256,15 +257,10 @@ test('it runs the install as root through the agent with the input on stdin', as
 
   const agent = await startStubAgent(
     join(ctx.dir, 'v.sock'),
-    (socket, _request, frames) => {
-      if (frames.length === 1) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
-      }
-
-      if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
-      }
-    },
+    buildStubExecReplies({
+      started: [encodeJsonFrame(FRAME_TYPES.started, { pid: 9 })],
+      exited: [encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 })],
+    }),
     { stack: ctx.stack },
   );
 

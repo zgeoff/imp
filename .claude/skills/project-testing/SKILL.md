@@ -84,7 +84,8 @@ WebSockets stay native. While it listens, the global `fetch` sends a request to 
 over a unix socket to the native fetch (`route-fetch.ts`), and every other request to MSW. The
 end-to-end suites run with `test/e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env
 overrides and seeds faker, with no MSW server. `updateEnv`, `invariant` and `waitFor` live in
-`packages/test-utils/src`.
+`packages/test-utils/src`, with `buildStubAnswerQueue`, which hands out a dependency's scripted
+answers in order and throws on a call past the last one.
 
 ### Cleanup order
 
@@ -102,6 +103,10 @@ the SQLite handle itself, since Kysely closes a driver only after a query starte
 client's own end), `openSshClient` (it ends the client), `startStubSilentTcpProxy`,
 `setupMoveHosts`, `startStubFirecrackerApi`, `startStubFirecrackerProcess`, `startStubFirecracker`,
 `startStubGithubReleases` and the client's `createStubUndiciWebSocket` (it closes the socket).
+
+`start-disk-sampler.test.ts` registers the removal of its filler directory after it starts the
+sampler, so the sampler's own release and the hook that proves it run first. Its one late hook reads
+the directory, removes it, and only then asserts, so a failed check still removes the directory.
 
 Utils that take a caller's stack and register nothing themselves:
 
@@ -123,6 +128,18 @@ Utils that take a caller's stack and register nothing themselves:
   test's own dataset (see ZFS below).
 - `startStubHeaderEcho(stack)` in `test-utils/start-stub-header-echo.ts`: an imp or impd's API
   behind the HTTPS listeners, which answers with the headers it got and echoes WebSocket messages.
+
+### What a setupTest returns
+
+A daemon test file's `setupTest()` seeds the image that every imp create boots, with a one-line
+comment that says so. That image is boot data, so a test may name it in a create. A test that
+asserts on the image takes it from `setupTest()` as `ctx.image`, as `reset-baseline.test.ts` and
+`mcp/imp-tools.test.ts` do.
+
+The `setupTest()` of `vmm/jail.test.ts` and of `vmm/vm-runner.test.ts` returns `createImpDir`, a
+closure that makes a per-test imp directory under the test's temp root from a name the test passes.
+The closure only composes the production path helpers with `mkdirSync`, so it holds no logic that
+could fail without a test of its own.
 
 `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
 `packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source, timeoutMs = 4000)`) runs
@@ -599,6 +616,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | Guest virtio-mem             | `test-utils/build-stub-guest-memory.ts`; `test-utils/build-stub-elastic-guest.ts` (13)             | `readGuestMemory` and `requestPluggedMib` of running guests                        |
 | Governor's host              | `test-utils/build-stub-governed-host.ts` (`buildStubGovernedHost`) (14)                            | The awake imps, their RSS, sleeps and reclaims, as the RAM governor's deps         |
 | Timers and sleeps            | `test-utils/build-stub-clock.ts` (`buildStubClock`)                                                | A clock that moves only when the test runs it, for injected timers and sleeps      |
+| Slow usage measure           | `test-utils/build-stub-slow-measure.ts` (`buildStubSlowMeasure`)                                   | A backend's `measureUsage` that moves `buildStubClock` on during each call         |
+| Disk room check              | `test-utils/build-stub-room-check.ts` (`buildStubRoomCheck`)                                       | The disk budget's `requireRoom`: room for a set number of checks, then a refusal   |
+| Exec replies                 | `test-utils/build-stub-exec-replies.ts` (`buildStubExecReplies`)                                   | A `startStubAgent` handler for an exec that reads all its stdin, then exits        |
 | restic                       | `test-utils/build-stub-restic.ts` (`buildStubRestic`)                                              | `Restic` over a directory: snapshots in `snapshots.json`, which two hosts share    |
 | restic's process             | `test-utils/build-stub-restic-runner.ts`, `build-stub-restic-lock-runner.ts`                       | `createRestic`'s runner: queued results; restic's lock rule, held until stopped    |
 | ZFS for moves                | `test-utils/build-stub-zfs-storage.ts` (`buildStubZfsStorage`)                                     | An impd's ZFS backend on `buildStubZfs`, as a harness's `createStorage`            |
@@ -756,6 +776,9 @@ transport:
   state and fires only when the test calls `firePending()`.
 - `build-stub-terminal.ts` and `build-stub-wait.ts`: the exec client's terminal modes and the
   reverse forward's retry wait, which ends only when the test releases it or its signal aborts.
+- `build-stub-backoff-clock.ts`: the clock and wait of `imp events`' reconnect backoff. Each wait
+  ends at once and moves the clock on by its delay, and a hook runs during one chosen wait, as an
+  impd that comes back while the client waits.
 
 The cli's services tests put the daemon's `startStubServiceAgent` on the imp's vsock path.
 

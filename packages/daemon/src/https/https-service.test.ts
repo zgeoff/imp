@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildStubAnswerQueue } from '@imp/test-utils/build-stub-answer-queue';
 import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
 import { waitFor } from '@imp/test-utils/wait-for';
@@ -1339,7 +1340,9 @@ test('it keeps the tailnet listener and its connections when a tailscale status 
   const ctx = await setupTest();
 
   const api = buildStubCloudflareApi({ tokens: ['cf-token'] });
-  const answers: (string | null)[] = ['127.0.0.2', null, null, '127.0.0.2'];
+
+  // the tailnet IP, then two failed reads, then the IP again
+  const answers = buildStubAnswerQueue(['127.0.0.2', null, null, '127.0.0.2']);
 
   server.use(...api.handlers);
 
@@ -1365,9 +1368,8 @@ test('it keeps the tailnet listener and its connections when a tailscale status 
     dns: createCloudflareProvider({ readToken: () => Promise.resolve('cf-token') }),
     proxy: ctx.proxy,
 
-    // the tailnet IP, then two failed reads, then the IP again
     readTailscale: () => {
-      const ip = answers.shift() ?? null;
+      const ip = answers.next();
 
       return Promise.resolve({
         state: 'Running',
@@ -1397,7 +1399,7 @@ test('it keeps the tailnet listener and its connections when a tailscale status 
   await ctx.timer.fire('https addresses');
   await ctx.timer.fire('https addresses');
 
-  expect(answers).toStrictEqual([]);
+  expect(answers.left).toBe(0);
 
   expect(ctx.proxy.events.filter((event) => event.endsWith('127.0.0.2'))).toStrictEqual([
     'start 127.0.0.2',

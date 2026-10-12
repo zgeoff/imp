@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
+import { buildStubRoomCheck } from '../test-utils/build-stub-room-check';
 import { buildStubTimers } from '../test-utils/build-stub-timers';
 import {
   createGenerationLog,
@@ -295,18 +296,14 @@ test('it rejects an append whose new segment would reach the disk reserve', asyn
   const full = new ORPCError('DISK_FULL', { message: 'full' });
 
   // room for the first segment only
-  const room = { left: 1 };
+  const room = buildStubRoomCheck({ passes: 1, error: full });
 
   const log = await createGenerationLog(
     {
       dir: ctx.dir,
       segmentBytes: 10,
       maxBytes: 20,
-      requireRoom: () => {
-        room.left -= 1;
-
-        return room.left < 0 ? Promise.reject(full) : Promise.resolve();
-      },
+      requireRoom: room.requireRoom,
       now: () => 1000,
       log: () => {},
     },

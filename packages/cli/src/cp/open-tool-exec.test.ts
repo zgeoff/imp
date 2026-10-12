@@ -24,6 +24,7 @@ import {
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecReplies } from '@imp/daemon/src/test-utils/build-stub-exec-replies';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
@@ -185,18 +186,19 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
     }
   })();
 
-  const agent = await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {
-    const frame = frames.at(-1);
-
-    if (frames.length === 1) {
-      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
-    } else if (frame?.type === FRAME_TYPES.stdin) {
-      archive.write(frame.payload);
-    } else {
-      archive.end(null);
-      socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 }));
-    }
-  });
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    buildStubExecReplies({
+      started: [encodeJsonFrame(FRAME_TYPES.started, { pid: 9 })],
+      exited: [encodeJsonFrame(FRAME_TYPES.exit, { code: 0, signal: 0 })],
+      onStdin: (payload) => {
+        archive.write(payload);
+      },
+      onStdinEnd: () => {
+        archive.end(null);
+      },
+    }),
+  );
 
   const dir = await mkdtemp(join(tmpdir(), 'open-tool-exec-'));
 
