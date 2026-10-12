@@ -40,6 +40,17 @@ export const BackupRunSchema = z.object({
 const SkippedGrantSchema = z.object({ imp: z.string(), secret: z.string(), reason: z.string() });
 const NotRestorableSchema = z.object({ imp: z.string(), reason: z.string() });
 
+// What a restore of all took from the backup's database copy: the named
+// tokens by name, and the secrets, whose values a backup never holds. A
+// token whose name this host has, or a key bound here, is left out.
+const RestoredDatabaseSchema = z
+  .object({
+    tokens: z.array(z.string()).readonly(),
+    secrets: z.array(z.string()).readonly(),
+    skipped: z.array(BackupSkipSchema).readonly(),
+  })
+  .readonly();
+
 // The restored imps, stopped. A grant names a secret on this host: one with
 // no such secret, or that clashes, is left off and listed here.
 export const BackupRestoreSchema = z
@@ -50,6 +61,9 @@ export const BackupRestoreSchema = z
     // imps created with backup off, which the backup holds no file of; an
     // impd from before the setting leaves it out
     notRestorable: z.array(NotRestorableSchema).readonly().optional(),
+
+    // a restore of all from a backup that holds impd's database copy
+    database: RestoredDatabaseSchema.optional(),
   })
   .readonly();
 

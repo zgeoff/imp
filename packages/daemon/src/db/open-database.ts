@@ -23,7 +23,14 @@ export async function openDatabase(path: string): Promise<ImpDatabase> {
     },
   });
 
-  await runMigrations(db);
+  // a database from a newer impd, or a migration that fails, leaves no
+  // handle open
+  try {
+    await runMigrations(db);
+  } catch (error) {
+    sqlite.close();
+    throw error;
+  }
 
   return db;
 }

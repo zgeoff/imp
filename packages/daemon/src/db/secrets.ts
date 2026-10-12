@@ -12,7 +12,7 @@ import type { GrantableSecret } from './tokens';
 // Secrets and grants: what the credential broker may add, and for which
 // imps. Values are not here; broker/secret-files.ts keeps them.
 
-type SecretRow = Selectable<DatabaseSchema['secrets']>;
+export type SecretRow = Selectable<DatabaseSchema['secrets']>;
 
 export interface SecretRecord {
   readonly name: string;
@@ -121,6 +121,39 @@ export async function createSecret(
     .executeTakeFirst();
 
   return row === undefined ? null : toSecretRecord(row);
+}
+
+// Every secret's row as stored, for a backup's database copy to hand to
+// createRestoredSecrets on another host.
+export function listSecretRows(db: ImpDatabase): Promise<SecretRow[]> {
+  return db.selectFrom('secrets').selectAll().orderBy('name').execute();
+}
+
+// A backup's secret rows with their generation and value file, so grantable
+// lists still name them and a replace keeps both. A name this host has keeps
+// its own row. Returns the names written.
+export function createRestoredSecrets(
+  db: ImpDatabase,
+  rows: readonly SecretRow[],
+): Promise<string[]> {
+  return db.transaction().execute(async (trx) => {
+    const written: string[] = [];
+
+    for (const row of rows) {
+      const inserted = await trx
+        .insertInto('secrets')
+        .values(row)
+        .onConflict((conflict) => conflict.column('name').doNothing())
+        .returning('name')
+        .executeTakeFirst();
+
+      if (inserted !== undefined) {
+        written.push(inserted.name);
+      }
+    }
+
+    return written;
+  });
 }
 
 // The value file, and with rebind the kind and rules, in one write: a

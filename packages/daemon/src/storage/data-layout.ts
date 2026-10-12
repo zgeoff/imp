@@ -99,7 +99,8 @@ export function buildBackupPaths(dataDir: string) {
     dir,
 
     // what restic reads: the manifest, and the disks, checkpoints and images
-    // at the same paths every run; the database copy stays outside it
+    // at the same paths every run; the run's database copy sits outside it,
+    // and a copy of that goes in only with IMP_BACKUP_DATABASE
     tree: join(dir, 'tree'),
     cache: join(dir, 'cache'),
 
@@ -116,6 +117,10 @@ export function buildBackupPaths(dataDir: string) {
 // each directory is a read-only clone of the dataset.
 export const BACKUP_TREE = {
   manifest: 'manifest.json',
+
+  // impd's database copy, alone in its directory, since restic restores a
+  // directory at a time
+  database: join('database', 'impd.sqlite'),
   buildImpDir: (impId: string) => join('imps', impId),
   buildDisk: (impId: string) => join('imps', impId, 'disk', 'rootfs.ext4'),
   buildCheckpointDisk: (impId: string, checkpointId: string) =>

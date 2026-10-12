@@ -757,21 +757,6 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
     secretFiles,
   });
 
-  const backups =
-    config.backup === null
-      ? null
-      : createBackupService({
-          dataDir: config.dataDir,
-          backup: config.backup,
-          db,
-          imps,
-          storage,
-          grants: broker,
-          networks: services.networks,
-          storageGate: stored.storageGate,
-          diskBudget: stored.diskBudget,
-        });
-
   const state = { ready: false };
 
   // a key in this file cannot be bound to a token, so the gateway and the
@@ -782,6 +767,22 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
   );
 
   const access = await loadImpdAccess(config, deps, authorizedKeys.isListed);
+
+  const backups =
+    config.backup === null
+      ? null
+      : createBackupService({
+          dataDir: config.dataDir,
+          backup: config.backup,
+          db,
+          imps,
+          storage,
+          grants: broker,
+          tokens: access.tokens,
+          networks: services.networks,
+          storageGate: stored.storageGate,
+          diskBudget: stored.diskBudget,
+        });
 
   const peers = createForwardedPeers(now);
 

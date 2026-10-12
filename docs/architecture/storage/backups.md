@@ -20,11 +20,34 @@ the run before and uploads only the chunks that changed.
 The manifest is everything a restore reads: each imp's settings, its egress policy, the names of the
 secrets granted to it and of the networks it is on, its checkpoints in order, and each image with
 its source. It holds no tokens or secret values, and no slots or addresses, since a restore takes
-new ones. The database itself stays on the host: each run copies it with `VACUUM INTO`, one
-consistent read, and backs up only what that copy names. The copy stays out of the snapshot, so a
-table added later never reaches a backup by accident. The root token, the connector secrets, the
-broker's CA, the TLS account and the restic password never reach a backup, and a test lists a
-snapshot to check it.
+new ones. Each run copies the database with `VACUUM INTO`, one consistent read, and backs up only
+what that copy names. The copy stays out of the snapshot unless the owner turns on the
+[database copy](#the-database-copy), so a table added later never reaches a backup by accident. The
+root token, the connector secrets' values, the broker's CA, the TLS account and the restic password
+never reach a backup, and a test lists a snapshot to check it.
+
+## The database copy
+
+With the database copy on ([configuration](../../guides/configuration.md#backups)), each run puts
+its copy of the database in the snapshot beside the manifest, so a host that loses its storage pool
+keeps its named tokens, its grants and the names of its secrets. restic encrypts the copy with the
+rest of the snapshot. The copy holds every table: each named token's hash, scope and imp patterns,
+the keys bound to tokens, each secret's name, kind, rules and generation, and the audit logs. It
+holds no secret value and no root token, because impd keeps both in files outside the database. A
+run with the setting off removes the copy that a run with it on left in the tree, so its snapshot
+holds no database. The copies in earlier snapshots stay until restic's retention forgets them.
+
+A restore of every imp reads the copy before any imp, when its snapshot holds one. The copy migrates
+forward to this impd's schema, and a copy from a newer impd stops the restore. impd writes each
+secret's row as it was, with its generation and the name of its value file, and each named token as
+it was, with its id, hash and keys, so each token's own secret works again. A secret or a token
+whose name the host has keeps the host's own, and a key that is bound here or listed in
+`authorized_keys` is left out. The grants in the manifest then find the secrets by name. A token's
+grantable list names each secret with its generation, which the restored row keeps, and a replace of
+the value with the same rules keeps it too, so the token grants again once the secret has a value.
+OAuth clients and the grants people approved through them are not restored, so each client signs in
+again. A restore of one imp reads no copy. The tokens and secrets stay when the imps' restore fails
+after them, and a second restore of every imp skips them by name.
 
 ## Imps left out
 
@@ -78,7 +101,7 @@ restic fetches one file at a time, so a restore needs room for one disk, not one
 
 An image with the same digest is reused, and otherwise restored first. The egress policy comes back
 as it was, or as `none` when this impd cannot read it, never more open. Grants come back only for
-secrets this host has by name. A restore that fails while impd runs removes the imp it was making;
-one cut short by a crash leaves that imp in `error` after the next start, as any create a crash cut
-short, and a destroy removes it. Memory snapshots are not backed up, so a sleeping imp comes back
-stopped.
+secrets this host has by name, its own or those the database copy brought back. A restore that fails
+while impd runs removes the imp it was making; one cut short by a crash leaves that imp in `error`
+after the next start, as any create a crash cut short, and a destroy removes it. Memory snapshots
+are not backed up, so a sleeping imp comes back stopped.

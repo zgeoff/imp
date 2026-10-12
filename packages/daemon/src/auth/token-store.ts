@@ -56,6 +56,12 @@ interface KeyEntry {
   readonly key: AuthorizedKey;
 }
 
+// the names of the tokens a restore wrote, and each one or key it left out
+interface RestoredTokens {
+  readonly restored: readonly string[];
+  readonly skipped: readonly { name: string; reason: string }[];
+}
+
 export interface TokenStore {
   readonly list: () => Token[];
 
@@ -91,6 +97,14 @@ export interface TokenStore {
   // the caller behind a token id, such as a dashboard session's; null once
   // the token is gone
   readonly findById: (id: string) => Caller | null;
+
+  // A backup's tokens and keys as they were, so each secret works again. A
+  // token whose name or id this store has is left out, as is a key bound
+  // here or in authorized_keys; each is listed with why.
+  readonly createRestored: (
+    tokens: readonly TokenRecord[],
+    keys: readonly TokenSshKeyRecord[],
+  ) => Promise<RestoredTokens>;
 }
 
 interface TokenStoreDeps {
@@ -362,6 +376,55 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
       const record = byId.get(id);
 
       return record === undefined ? null : toCaller(record);
+    },
+    createRestored: async (tokens, keys) => {
+      const restored: string[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+
+      for (const record of tokens) {
+        if (record.name === ROOT_NAME || findByName(record.name) !== null) {
+          skipped.push({ name: record.name, reason: `a token named ${record.name} exists` });
+          continue;
+        }
+
+        if (byId.has(record.id)) {
+          skipped.push({ name: record.name, reason: `a token with id ${record.id} exists` });
+          continue;
+        }
+
+        const entries: KeyEntry[] = [];
+
+        for (const keyRecord of keys.filter((key) => key.tokenId === record.id)) {
+          const key = parsePublicKey(keyRecord.publicKey);
+
+          if (typeof key === 'string') {
+            skipped.push({ name: record.name, reason: `key ${keyRecord.fingerprint}: ${key}` });
+          } else if (keysByFingerprint.has(keyRecord.fingerprint) || deps.isFileKey(key.blob)) {
+            skipped.push({
+              name: record.name,
+              reason: `key ${keyRecord.fingerprint} is bound here already or in authorized_keys`,
+            });
+          } else {
+            entries.push({ record: keyRecord, key: { ...key, comment: keyRecord.comment } });
+          }
+        }
+
+        await writeTokenRecord(
+          deps.db,
+          record,
+          entries.map((entry) => entry.record),
+        );
+
+        byId.set(record.id, record);
+
+        for (const entry of entries) {
+          keysByFingerprint.set(entry.record.fingerprint, entry);
+        }
+
+        restored.push(record.name);
+      }
+
+      return { restored, skipped };
     },
   };
 }

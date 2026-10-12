@@ -18,6 +18,11 @@ to delete for good, such as an agent's transcripts. A fork of it is left out too
 it is refused. `imp backup run` lists it as not backed up, and a restore of it fails with the reason
 ([imps left out](../architecture/storage/backups.md#imps-left-out)).
 
+`IMP_BACKUP_DATABASE=true` puts impd's database in each backup too, so a whole-host restore brings
+back the named tokens, the SSH keys bound to them, the grants and the names of the secrets. It is
+off by default. restic encrypts the copy, which holds each token's hash but no token's secret and no
+secret's value ([the database copy](../architecture/storage/backups.md#the-database-copy)).
+
 **Create the bucket first.** restic does not exit when the bucket is missing: it retries for
 minutes, and the first run then fails.
 
@@ -39,7 +44,8 @@ imp backup restore --all --merge               # add every imp to a host that ha
   first, and a clash names the imp; nothing is restored then.
 - Each grant comes back when a secret of that name exists on this host. The rest are listed, and
   `imp backup restore` prints them. Secret values are never in a backup: add the secrets first, with
-  `imp secret add`.
+  `imp secret add`, or restore every imp from a backup with the database copy, which brings the
+  secrets back without their values.
 
 ## Whole-host restore
 
@@ -48,10 +54,23 @@ imp backup restore --all --merge               # add every imp to a host that ha
    and drop them. `imp backup restore --all` prints this warning too.
 2. Install impz on the new host as usual ([install](./install.md)), with the same `IMP_BACKUP_*`
    settings, the repository's keys and the same password file.
-3. Add the connector secrets the imps need (`imp secret add`); their grants come back by name.
-4. Start it. It makes a new API token, as any new host does; the old token is not in the backup.
-5. Run `imp backup restore --all`, with `--at` for an older point.
-6. Start the imps you need. Sleeping imps come back stopped: memory snapshots are not backed up.
+3. Start it. It makes a new root token, as any new host does; the old root token is not in the
+   backup.
+4. Without `IMP_BACKUP_DATABASE` on the old host, add the connector secrets the imps need
+   (`imp secret add`); their grants come back by name. With it, skip this step: a secret you add
+   first gets a new generation, which the restored tokens' grantable lists do not name.
+5. Run `imp backup restore --all`, with `--at` for an older point. From a backup with the database
+   copy, it also brings back each named token with its SSH keys, and each secret without its value,
+   and prints their names. A token's own secret works again; a token whose name the host has stays
+   as it is, and the restore lists it.
+6. With the database copy, give each restored secret its value with
+   `imp secret add <name> ... --replace`, with the kind and rules it had. A replace with the same
+   rules is a rotation ([rotate or rebind](./connectors.md#rotate-or-rebind)), so its grants and the
+   tokens that may grant it keep working.
+7. Start the imps you need. Sleeping imps come back stopped: memory snapshots are not backed up.
+
+A restore of every imp leaves out the OAuth clients that sign in to impd's MCP endpoint: each one
+signs in again.
 
 ## Security
 
@@ -59,6 +78,9 @@ imp backup restore --all --merge               # add every imp to a host that ha
 repository can read every imp's disk. Keep the password file mode 0600, owned by root, and keep a
 copy elsewhere: without it, no backup can be restored.
 
+- **The database copy holds every token's hash.** With `IMP_BACKUP_DATABASE=true`, the repository
+  holds the audit logs and each token's hash, scope and imps. A hash cannot sign in, but treat the
+  repository as you treat the host's data directory.
 - **Prune from one place.** Either impd forgets and prunes (`IMP_BACKUP_FORGET=true`, the default),
   or one other machine does, with impd's set to `false`. Never point two impds at one repository.
 - **Protect the bucket from the host.** A host that is taken over can delete its backups with the

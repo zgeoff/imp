@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   copyFileSync,
   mkdirSync,
   readFileSync,
@@ -19,6 +20,7 @@ import {
   buildNotBackedUpError,
   buildNotFoundError,
 } from '../api-errors';
+import type { TokenStore } from '../auth/token-store';
 import type { Broker } from '../broker/broker-service';
 import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { FREEZE_TIMEOUT_MS } from '../checkpoints/consistent-disk';
@@ -42,6 +44,7 @@ import type { StorageGate } from '../storage/storage-gate';
 import type { BackupConfig } from './backup-config';
 import { BackupManifestSchema } from './backup-manifest';
 import type { BackupManifest, ManifestImage, ManifestImp } from './backup-manifest';
+import { createRestoredAccess } from './create-restored-access';
 import { readDatabaseCopy } from './read-database-copy';
 import type { DatabaseCopy } from './read-database-copy';
 import { createRestic, isResticLocked } from './restic';
@@ -117,6 +120,9 @@ export interface BackupServiceDeps {
 
   // the broker's grant, checked as `imp grant` checks one
   readonly grants: Pick<Broker, 'addGrant'>;
+
+  // the named tokens a restore of all brings back from the database copy
+  readonly tokens: Pick<TokenStore, 'createRestored'>;
 
   // a restored imp's networks, made when missing
   readonly networks: Pick<NetworkService, 'writeMissingNetworks' | 'removeEmptyNetworks'>;
@@ -235,6 +241,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     copies: ReadonlyMap<string, DiskCopy>,
     tree: BackupTree,
     excluded: BackupManifest['excluded'],
+    database: string | null,
   ): BackupManifest => {
     const digests = new Map(copy.images.map((image) => [image.id, image.digest]));
 
@@ -292,6 +299,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           sizeBytes: image.sizeBytes,
           dir: BACKUP_TREE.buildImageDir(image.digest),
         })),
+      database,
     };
   };
 
@@ -311,8 +319,11 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     await restic.unlock();
 
     // outside the tree: the manifest is what a restore reads, and the
-    // database copy would carry whatever later tables hold
-    const copy = await readDatabaseCopy(deps.db, join(paths.dir, 'db.sqlite'));
+    // database copy would carry whatever later tables hold, so only
+    // IMP_BACKUP_DATABASE puts it in
+    const copyPath = join(paths.dir, 'db.sqlite');
+
+    const copy = await readDatabaseCopy(deps.db, copyPath);
 
     const copies = new Map<string, DiskCopy>();
 
@@ -361,10 +372,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       imageDigests: copy.images.map((image) => image.digest),
     });
 
-    const manifest = buildManifest(runId, copy, copies, tree, excluded);
+    const database = deps.backup.database ? BACKUP_TREE.database : null;
+    const manifest = buildManifest(runId, copy, copies, tree, excluded, database);
 
     try {
       mkdirSync(paths.tree, { recursive: true });
+      writeTreeDatabase(copyPath, database);
       writeFileSync(join(paths.tree, BACKUP_TREE.manifest), JSON.stringify(manifest, null, 2));
 
       const names = manifest.imps.map((imp) => imp.name);
@@ -397,6 +410,23 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     } finally {
       await tree.close();
     }
+  };
+
+  // The copy goes in with the setting on. With it off, the copy a run with
+  // it on left in the tree goes, so turning the setting off takes the
+  // database out of every snapshot after.
+  const writeTreeDatabase = (copyPath: string, database: string | null): void => {
+    rmSync(join(paths.tree, dirname(BACKUP_TREE.database)), { recursive: true, force: true });
+
+    if (database === null) {
+      return;
+    }
+
+    const target = join(paths.tree, database);
+
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    copyFileSync(copyPath, target);
+    chmodSync(target, 0o600);
   };
 
   // after an unlock, which drops only stale locks: a crashed run's would
@@ -677,6 +707,27 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     return { mode: 'none', allow: [] };
   };
 
+  // the tokens and secrets of the backup's database copy, which stay when
+  // the imps' restore fails after them: a second restore of all skips them
+  const createRestoredDatabase = async (
+    point: ResticSnapshot,
+    base: string,
+    database: string,
+    workDir: string,
+  ) => {
+    const dir = join(workDir, dirname(database));
+
+    await restic.restore(point.id, join(base, dirname(database)), dir, []);
+
+    const access = await createRestoredAccess(deps.db, deps.tokens, join(workDir, database));
+
+    log(
+      `impd: backup: restored ${String(access.tokens.length)} tokens and ${String(access.secrets.length)} secrets from ${point.id}`,
+    );
+
+    return access;
+  };
+
   // only the imp this restore made: a name clash fails before any disk
   const removeFailedImp = async (name: string, impId: string | null): Promise<void> => {
     const found = await findImpByName(deps.db, name);
@@ -750,6 +801,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const skippedGrants: SkippedGrant[] = [];
 
     try {
+      // before the imps, so their grants find the secrets by name
+      const database =
+        input.all === true && manifest.database !== null
+          ? await createRestoredDatabase(point, base, manifest.database, workDir)
+          : undefined;
+
       const imageNames = new Map<string, string>();
 
       // images before the imps on them; with all, every template too
@@ -786,7 +843,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         log(`impd: backup: restored ${target.name} from ${point.id} (${point.time.toISOString()})`);
       }
 
-      return { imps: restored, skippedGrants, notRestorable };
+      return {
+        imps: restored,
+        skippedGrants,
+        notRestorable,
+        ...(database !== undefined && { database }),
+      };
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

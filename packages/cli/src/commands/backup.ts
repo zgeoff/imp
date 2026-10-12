@@ -90,6 +90,25 @@ const restoreCommand = defineCommand({
         );
       }
 
+      // a backup holds no secret's value (docs/guides/backups.md#whole-host-restore)
+      if (result.database !== undefined) {
+        const database = result.database;
+
+        if (database.tokens.length > 0) {
+          console.error(`imp: tokens restored: ${database.tokens.join(', ')}`);
+        }
+
+        if (database.secrets.length > 0) {
+          console.error(
+            `imp: secrets restored without values: ${database.secrets.join(', ')}; add each with imp secret add <name> --replace`,
+          );
+        }
+
+        for (const skipped of database.skipped) {
+          console.error(`imp: token ${skipped.name} left out: ${skipped.reason}`);
+        }
+      }
+
       console.log(formatOutput(result, args.json, (restored) => formatImps(restored.imps)));
     }),
 });
