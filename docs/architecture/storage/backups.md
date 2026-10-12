@@ -41,14 +41,17 @@ A restore of every imp reads the copy before any imp, when its snapshot holds on
 forward to this impd's schema, and a copy from a newer impd stops the restore. impd writes each
 secret's row as it was, with its generation and the name of its value file, and each named token as
 it was, with its id, hash and keys, so each token's own secret works again. A token deleted after
-the backup point comes back too, because the copy is the database as it was at that point. A secret
-or a token whose name the host has keeps the host's own, and a key that is bound here or listed in
-`authorized_keys` is left out. The grants in the manifest then find the secrets by name. A token's
-grantable list names each secret with its generation, which the restored row keeps, and a replace of
-the value with the same rules keeps it too, so the token grants again once the secret has a value.
-OAuth clients and the grants people approved through them are not restored, so each client signs in
-again. A restore of one imp reads no copy. The tokens and secrets stay when the imps' restore fails
-after them, and a second restore of every imp skips them by name.
+the backup point comes back too, because the copy is the database as it was at that point.
+
+A secret or a token whose name the host has keeps the host's own, and a key that is bound here or
+listed in `authorized_keys` is left out. A secret whose value file is not a name impd gives is left
+out too, because the broker reads and removes a value file by its name in the secrets directory, and
+an altered copy must not point it anywhere else. The grants in the manifest then find the secrets by
+name. A token's grantable list names each secret with its generation, which the restored row keeps,
+and a replace of the value with the same rules keeps it too, so the token grants again once the
+secret has a value. OAuth clients and the grants people approved through them are not restored, so
+each client signs in again. A restore of one imp reads no copy. The tokens and secrets stay when the
+imps' restore fails after them, and a second restore of every imp skips them by name.
 
 ## Imps left out
 
