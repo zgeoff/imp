@@ -24,6 +24,7 @@ import {
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecReplies } from '@imp/daemon/src/test-utils/build-stub-exec-replies';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
@@ -200,20 +201,16 @@ test('it streams output and stdin and exits with the command’s code', async ()
   const ctx = await setupTest();
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const agent = await startStubAgent(
-    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
-    (socket, _request, frames) => {
-      if (frames.length === 1) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
-        socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('out')));
-        socket.write(encodeFrame(FRAME_TYPES.stderr, new TextEncoder().encode('err')));
-      }
+  const exec = buildStubExecReplies({
+    started: [
+      encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }),
+      encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('out')),
+      encodeFrame(FRAME_TYPES.stderr, new TextEncoder().encode('err')),
+    ],
+    exited: [encodeJsonFrame(FRAME_TYPES.exit, { code: 3, signal: 0 })],
+  });
 
-      if (frames.at(-1)?.type === FRAME_TYPES.stdinEof) {
-        socket.write(encodeJsonFrame(FRAME_TYPES.exit, { code: 3, signal: 0 }));
-      }
-    },
-  );
+  const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, exec);
 
   ctx.stdin.end('typed');
 

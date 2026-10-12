@@ -20,6 +20,7 @@ import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from '@zgeoff/imp-client';
+import { buildStubBackoffClock } from '../test-utils/build-stub-backoff-clock';
 import { printEvents } from './events';
 
 // impd's real app, listening on a loopback port for the spawned CLI, and an
@@ -179,13 +180,12 @@ test('it prints only the named imp’s events, and reconnects after impd’s con
   const live = createImpClient({ url: ctx.url, token: ctx.rootToken });
   const warn = mock<(line: string) => void>();
 
-  const wait = mock((ms: number) => {
-    // impd comes back for the first reconnect only
-    if (ms === 1000) {
+  // impd comes back for the first reconnect only
+  const backoff = buildStubBackoffClock({
+    at: 1,
+    onWait: () => {
       ctx.startListener();
-    }
-
-    return Promise.resolve();
+    },
   });
 
   // each line drops impd's connection, as a restart does
@@ -198,7 +198,7 @@ test('it prints only the named imp’s events, and reconnects after impd’s con
       openStream: () => live.events.stream(),
       checkServer: () => live.checkServer(),
       now: Date.now,
-      wait,
+      wait: backoff.wait,
       warn,
     },
     'dev',
@@ -223,7 +223,7 @@ test('it prints only the named imp’s events, and reconnects after impd’s con
     }),
   ]);
 
-  expect(wait.mock.calls).toStrictEqual([[1000], [2000], [4000], [8000]]);
+  expect(backoff.delays).toStrictEqual([1000, 2000, 4000, 8000]);
 
   expect(warn.mock.calls).toStrictEqual([
     [
@@ -295,17 +295,13 @@ test('it starts the count and the backoff again after a stream that lasted', asy
   await ctx.stopListener();
 
   const live = createImpClient({ url: ctx.url, token: ctx.rootToken });
-  const clock = { now: 0 };
 
-  const wait = mock((ms: number) => {
-    clock.now += ms;
-
-    // impd is back for the third try
-    if (wait.mock.calls.length === 2) {
+  // impd is back for the third try
+  const backoff = buildStubBackoffClock({
+    at: 2,
+    onWait: () => {
       ctx.startListener();
-    }
-
-    return Promise.resolve();
+    },
   });
 
   const printing = printEvents(
@@ -314,14 +310,14 @@ test('it starts the count and the backoff again after a stream that lasted', asy
         const stream = await live.events.stream();
 
         // the stream that opens lasts 20 s, then impd's connection drops
-        clock.now += 20_000;
+        backoff.advance(20_000);
         void ctx.stopListener();
 
         return stream;
       },
       checkServer: () => live.checkServer(),
-      now: () => clock.now,
-      wait,
+      now: backoff.now,
+      wait: backoff.wait,
       warn: () => {},
     },
     null,
@@ -333,7 +329,7 @@ test('it starts the count and the backoff again after a stream that lasted', asy
     'the event stream ended 5 times in a row: Unable to connect. Is the computer able to access the url?',
   );
 
-  expect(wait.mock.calls).toStrictEqual([[1000], [2000], [1000], [2000], [4000], [8000]]);
+  expect(backoff.delays).toStrictEqual([1000, 2000, 1000, 2000, 4000, 8000]);
 });
 
 test('it reconnects after impd fails the stream with a server error', async () => {

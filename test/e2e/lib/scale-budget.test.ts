@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { buildStubAnswerQueue } from '@imp/test-utils/build-stub-answer-queue';
 import { buildStubClock } from '../../../packages/daemon/src/test-utils/build-stub-clock';
 import type { BudgetSample } from './scale-budget';
 import {
@@ -129,7 +129,7 @@ test('#startBudgetMonitor keeps each sample it reads and passes over one impd wa
   const gate = Promise.withResolvers<BudgetSample | null>();
 
   // the reads in turn; the last holds until the test lets it go
-  const reads = [
+  const reads = buildStubAnswerQueue<() => Promise<BudgetSample | null>>([
     () => Promise.resolve(first),
     () => Promise.resolve(null),
     () => Promise.resolve(second),
@@ -138,18 +138,12 @@ test('#startBudgetMonitor keeps each sample it reads and passes over one impd wa
 
       return gate.promise;
     },
-  ];
+  ]);
 
   const watch = { sleeps: [], stop: mock(() => Promise.resolve()) };
 
   const monitor = await startBudgetMonitor({
-    readSample: () => {
-      const read = reads.shift();
-
-      invariant(read);
-
-      return read();
-    },
+    readSample: () => reads.next()(),
     startWatch: () => Promise.resolve(watch),
     wait: () => Promise.resolve(),
   });

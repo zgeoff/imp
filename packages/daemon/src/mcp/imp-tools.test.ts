@@ -152,12 +152,12 @@ async function setupTest() {
     await server.stop(true);
   });
 
-  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+  const newImage = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
 
   // the image every imps.create boots when it names none
-  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+  await Bun.write(buildImagePaths(dataDir, newImage.digest).rootfs, 'rootfs');
 
-  await createImage(db, image);
+  const image = await createImage(db, newImage);
 
   const url = `http://127.0.0.1:${String(server.server?.port)}`;
   const mcp = createMcpServer({ version: '1.2.3' });
@@ -172,6 +172,7 @@ async function setupTest() {
     dataDir,
     stack,
     url,
+    image,
     rootClient: createImpClient({ url, token: 'root-token' }),
     mcp,
     sent,
@@ -775,7 +776,7 @@ test('it lists the images', async () => {
   // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
   const stored: unknown = JSON.parse(JSON.stringify(images));
 
-  expect(images).toPartiallyContain({ name: 'ubuntu' });
+  expect(images).toPartiallyContain({ name: ctx.image.name });
 
   expect(ctx.sent).toStrictEqual([
     {

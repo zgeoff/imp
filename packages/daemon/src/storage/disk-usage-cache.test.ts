@@ -5,6 +5,8 @@ import { createImage } from '../db/images';
 import { createImp } from '../db/imps';
 import { buildMockImpDiskUsage } from '../test-utils/build-mock-imp-disk-usage';
 import { buildMockNewCheckpoint } from '../test-utils/build-mock-new-checkpoint';
+import { buildStubClock } from '../test-utils/build-stub-clock';
+import { buildStubSlowMeasure } from '../test-utils/build-stub-slow-measure';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createDiskUsageCache } from './disk-usage-cache';
 import type { DiskUsageReport, StorageBackend } from './storage-backend';
@@ -77,21 +79,19 @@ test('it keeps each count with the time its pass started', async () => {
   });
 
   const usage = buildMockImpDiskUsage();
+  const clock = buildStubClock({ startMs: 5000 });
 
   // the measure takes four seconds of the clock
-  const clock = { now: new Date(5000) };
+  const measureUsage = buildStubSlowMeasure(clock, 4000, {
+    imps: new Map([[imp.id, usage]]),
+    isPartial: true,
+  });
 
   const cache = createDiskUsageCache({
     db: ctx.db,
-    storage: {
-      measureUsage: () => {
-        clock.now = new Date(9000);
-
-        return Promise.resolve({ imps: new Map([[imp.id, usage]]), isPartial: true });
-      },
-    },
+    storage: { measureUsage },
     log: mock<(message: string) => void>(),
-    now: () => clock.now,
+    now: () => new Date(clock.now()),
   });
 
   onTestFinished(() => {

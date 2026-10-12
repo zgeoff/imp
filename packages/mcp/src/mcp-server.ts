@@ -39,6 +39,10 @@ export interface McpServerOptions {
   // the timer behind a command's deadline and its kill grace; setTimeout
   // when left out
   readonly after?: After;
+
+  // where a request that failed with a bug is reported; console.error when
+  // left out, since stdout carries a stdio transport's messages
+  readonly printError?: (message: string, error: unknown) => void;
 }
 
 // Who one message comes from, and where its answers go. Over stdio every
@@ -81,6 +85,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const repeat = options.repeat ?? runOnInterval;
   const after = options.after ?? runAfter;
+  const printError = options.printError ?? console.error;
 
   // never rejects: a failed tool call is an isError result and a bug an
   // internal error
@@ -124,7 +129,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
       }
     } catch (error) {
       if (isAnswered()) {
-        sendInternalError(message.reply, id, error);
+        sendInternalError(message.reply, id, error, printError);
       }
     } finally {
       stopProgress();
@@ -206,7 +211,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
         try {
           await handleRequest(message.id, message.method, message.params, context);
         } catch (error) {
-          sendInternalError(context.reply, message.id, error);
+          sendInternalError(context.reply, message.id, error, printError);
         }
       }
 
@@ -307,8 +312,12 @@ function startProgress(
 }
 
 // a bug, not a failed tool call: those come back as isError results
-function sendInternalError(reply: MessageContext['reply'], id: RequestId, error: unknown): void {
-  console.error('imp mcp: request failed:', error);
-
+function sendInternalError(
+  reply: MessageContext['reply'],
+  id: RequestId,
+  error: unknown,
+  printError: NonNullable<McpServerOptions['printError']>,
+): void {
+  printError('imp mcp: request failed:', error);
   reply(formatError(id, INTERNAL_ERROR, 'internal error'));
 }

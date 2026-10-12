@@ -1,4 +1,4 @@
-import { expect, mock, onTestFinished, spyOn, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -480,12 +480,8 @@ test('it refuses a call whose id a running call holds with an invalid-params err
 test('it answers a request whose reply fails with an internal error', async () => {
   const ctx = await setupTest();
 
-  const server = createMcpServer({ version: '1.2.3' });
-  const logged = spyOn(console, 'error').mockImplementation(() => {});
-
-  onTestFinished(() => {
-    logged.mockRestore();
-  });
+  const printError = mock();
+  const server = createMcpServer({ version: '1.2.3', printError });
 
   const failure = new Error('write EPIPE');
 
@@ -505,18 +501,14 @@ test('it answers a request whose reply fails with an internal error', async () =
     { jsonrpc: '2.0', id: 1, error: { code: INTERNAL_ERROR, message: 'internal error' } },
   ]);
 
-  expect(logged).toHaveBeenCalledExactlyOnceWith('imp mcp: request failed:', failure);
+  expect(printError).toHaveBeenCalledExactlyOnceWith('imp mcp: request failed:', failure);
 });
 
 test('it answers a tool call whose result reply fails with an internal error', async () => {
   const ctx = await setupTest();
 
-  const server = createMcpServer({ version: '1.2.3' });
-  const logged = spyOn(console, 'error').mockImplementation(() => {});
-
-  onTestFinished(() => {
-    logged.mockRestore();
-  });
+  const printError = mock();
+  const server = createMcpServer({ version: '1.2.3', printError });
 
   const failure = new Error('write EPIPE');
 
@@ -539,7 +531,7 @@ test('it answers a tool call whose result reply fails with an internal error', a
     { jsonrpc: '2.0', id: 2, error: { code: INTERNAL_ERROR, message: 'internal error' } },
   ]);
 
-  expect(logged).toHaveBeenCalledExactlyOnceWith('imp mcp: request failed:', failure);
+  expect(printError).toHaveBeenCalledExactlyOnceWith('imp mcp: request failed:', failure);
 });
 
 test('it answers a line that is not JSON with a parse error and a null id', async () => {
