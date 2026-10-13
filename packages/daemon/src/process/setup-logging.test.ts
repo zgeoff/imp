@@ -63,6 +63,15 @@ test('it writes an error value with its message', () => {
   expect(ctx.lines.join('')).toInclude('boom');
 });
 
+test('it escapes the line breaks inside a message, so each record is one line', () => {
+  const ctx = setupTest();
+
+  getImpdLogger('api').error('first\r\nsecond {failure}', { failure: new Error('boom') });
+
+  expect(ctx.lines).toSatisfyAll((line: string) => line.indexOf('\n') === line.length - 1);
+  expect(ctx.lines.join('')).toStartWith(String.raw`ERROR impd.api first\r\nsecond `);
+});
+
 test('it writes no line for a logger outside impd', () => {
   const ctx = setupTest();
 

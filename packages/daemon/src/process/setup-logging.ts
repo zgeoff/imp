@@ -32,14 +32,17 @@ interface RenderedRecord {
 }
 
 // "<LEVEL> <category> [imp=<name> ]<message>\n": the level, the category
-// joined with dots, and the imp the line is about, if any.
+// joined with dots, the imp the line is about, if any, and one line break.
 function renderLogLine(record: RenderedRecord): string {
   const imp = record.properties['imp'];
   const about = typeof imp === 'string' ? `imp=${imp} ` : '';
 
+  // escaped, so a stack trace or a multiline value stays on its one line
   const message = record.message
     .map((part) => (typeof part === 'string' ? part : Bun.inspect(part)))
-    .join('');
+    .join('')
+    .replaceAll('\r', String.raw`\r`)
+    .replaceAll('\n', String.raw`\n`);
 
   return `${record.level.toUpperCase()} ${record.category.join('.')} ${about}${message}\n`;
 }
