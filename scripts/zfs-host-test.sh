@@ -125,11 +125,13 @@ cleanup() {
     wait "$child" 2>/dev/null || true
   fi
   if [ -n "$started_instance" ]; then
-    # the moves suites' B, which a stopped run leaves up with its dataset
-    # busy in the pool, then A and the network both were on
+    # the moves suites' B with its docker proxy and volumes, which a stopped
+    # run leaves up with B's dataset busy in the pool, then A and the network
+    # both were on
     if docker container inspect "$IMP_DEV_NAME-mv-b" >/dev/null 2>&1; then
       docker logs "$IMP_DEV_NAME-mv-b" >"$work/impd-mv-b.log" 2>&1 || true
-      docker rm -f "$IMP_DEV_NAME-mv-b" >/dev/null 2>&1 || true
+      IMP_DEV_NAME=$IMP_DEV_NAME-mv-b IMP_DEV_DATA=$work/data-mv-b \
+        "$IMP_ROOT/scripts/dev/dev.sh" down || true
     fi
     docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
     "$IMP_ROOT/scripts/dev/dev.sh" down || true

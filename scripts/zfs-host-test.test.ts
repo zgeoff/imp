@@ -517,8 +517,16 @@ test('it stops the suites, the moves suites’ B, the instance and the pool when
   mkdirSync(work);
   createStubZpool(ctx.stubs);
 
-  // a run that holds the instance until something stops it
+  // a run that holds the instance until something stops it, and a dev.sh
+  // that logs which instance each call is for
   createStubRepoScript(ctx.tests, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
+
+  createStubRepoScript(
+    join(ctx.dir, 'root', 'scripts', 'dev'),
+    'dev.sh',
+    ctx.calls,
+    `printf '%s\\n' "  for $IMP_DEV_NAME on $IMP_DEV_DATA" >>'${ctx.calls}'`,
+  );
 
   const proc = Bun.spawn([ctx.script], {
     stdout: 'ignore',
@@ -546,13 +554,15 @@ test('it stops the suites, the moves suites’ B, the instance and the pool when
 
   expect(exitCode).toBe(143);
 
-  expect(calls.split('\n').slice(-19)).toStrictEqual([
+  expect(calls.split('\n').slice(-21)).toStrictEqual([
     'test-e2e.sh --only checkpoints,sleep',
     'docker container inspect imp-zfs-mv-b',
     'docker logs imp-zfs-mv-b',
-    'docker rm -f imp-zfs-mv-b',
+    'dev.sh down',
+    `  for imp-zfs-mv-b on ${work}/data-mv-b`,
     'docker logs imp-zfs',
     'dev.sh down',
+    `  for imp-zfs on ${work}/data`,
     'docker network rm imp-zfs-mv',
     'sudo zpool list -H -o name',
     'zpool list -H -o name',
