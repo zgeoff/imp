@@ -31,7 +31,7 @@ import { findColdBootReason, readSnapshotMeta, writeSnapshotMeta } from '../slee
 import type { SnapshotMeta } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { writeVmIdentity } from '../sleep/vm-identity';
-import { buildSystemDrivePath } from '../storage/data-layout';
+import { buildSystemDrivePath, toDigestHex } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -392,7 +392,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
       const taken = await findImageByName(deps.db, header.image.name);
 
-      const hex = digest.replace(/^sha256:/, '').slice(0, 8);
+      const hex = toDigestHex(digest).slice(0, 8);
 
       const name =
         taken === undefined ? header.image.name : `${header.image.name.slice(0, 22)}-${hex}`;

@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FirecrackerPaths } from '../vmm/firecracker-process';
 
@@ -30,8 +31,32 @@ export interface ImagePaths {
   readonly config: string;
 }
 
+// The directories directly under the data dir that impd keeps its state in.
+export const DATA_DIRS = ['db', 'system', 'images', 'imps'] as const;
+
+// impd makes its own top-level directories at start, on whatever the data dir
+// is mounted from, so nothing that sets up the mount needs to know them.
+export function createDataDirs(dataDir: string): void {
+  for (const name of DATA_DIRS) {
+    mkdirSync(join(dataDir, name), { recursive: true });
+  }
+}
+
+export function buildImpsDir(dataDir: string): string {
+  return join(dataDir, 'imps');
+}
+
+export function buildImagesDir(dataDir: string): string {
+  return join(dataDir, 'images');
+}
+
+// `digest` is the docker image ID; its `sha256:` prefix stays out of paths
+export function toDigestHex(digest: string): string {
+  return digest.replace(/^sha256:/, '');
+}
+
 export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
-  const dir = join(dataDir, 'imps', impId);
+  const dir = join(buildImpsDir(dataDir), impId);
   const runDir = join(dir, 'run');
 
   return {
@@ -69,9 +94,8 @@ export function buildSnapshotPaths(snapshotDir: string) {
   };
 }
 
-// `digest` is the docker image ID; its `sha256:` prefix stays out of the path
 export function buildImagePaths(dataDir: string, digest: string): ImagePaths {
-  const dir = join(dataDir, 'images', digest.replace(/^sha256:/, ''));
+  const dir = join(buildImagesDir(dataDir), toDigestHex(digest));
 
   return { dir, rootfs: join(dir, 'rootfs.ext4'), config: join(dir, 'config.json') };
 }
@@ -125,5 +149,5 @@ export const BACKUP_TREE = {
   buildDisk: (impId: string) => join('imps', impId, 'disk', 'rootfs.ext4'),
   buildCheckpointDisk: (impId: string, checkpointId: string) =>
     join('imps', impId, 'checkpoints', checkpointId, 'rootfs.ext4'),
-  buildImageDir: (digest: string) => join('images', digest.replace(/^sha256:/, '')),
+  buildImageDir: (digest: string) => join('images', toDigestHex(digest)),
 };

@@ -36,7 +36,7 @@ import { createKeyedMutex } from '../imps/keyed-mutex';
 import type { NetworkService } from '../networks/network-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
-import { BACKUP_TREE, buildBackupPaths } from '../storage/data-layout';
+import { BACKUP_TREE, buildBackupPaths, toDigestHex } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { BackupTree, StorageBackend } from '../storage/storage-backend';
@@ -950,5 +950,5 @@ export function buildDigestTag(digest: string): string {
     return digest.replaceAll('-', '').slice(-8);
   }
 
-  return digest.replace(/^sha256:/, '').slice(0, 8);
+  return toDigestHex(digest).slice(0, 8);
 }

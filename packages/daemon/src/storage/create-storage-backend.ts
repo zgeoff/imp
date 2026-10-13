@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from '../config';
+import { buildImpsDir } from './data-layout';
 import type { StorageBackend, StorageBackendKind } from './storage-backend';
 import { createXfsBackend } from './xfs-backend';
 import { createZfsBackend } from './zfs/zfs-backend';
@@ -78,7 +79,7 @@ export function writeStorageMarker(dataDir: string, kind: StorageBackendKind): v
 
 // every data dir from before the marker is XFS; an empty one is new
 function readUnmarked(dataDir: string): StorageBackendKind | null {
-  const imps = join(dataDir, 'imps');
+  const imps = buildImpsDir(dataDir);
   const hasImps = existsSync(imps) && readdirSync(imps).length > 0;
 
   return hasImps ? 'xfs' : null;
