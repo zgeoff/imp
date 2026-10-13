@@ -180,13 +180,13 @@ test('it lets a nixie-* token add nixie-x from a pinned ref under its prefix', a
   const image = await ctx.buildClient(made.secret).images.add({ ref, name: 'nixie-x' });
 
   expect(image).toStrictEqual({
-    id: expect.any(String),
+    id: expect.any(String) as unknown,
     name: 'nixie-x',
     ref,
     digest: expect.toStartWith('sha256:'),
     source: 'oci',
     createdAt: expect.toBeValidDate(),
-    sizeBytes: expect.any(Number),
+    sizeBytes: expect.any(Number) as unknown,
   });
 });
 
@@ -339,7 +339,7 @@ test('it refuses a nixie-* token a template input that also holds a ref under it
     imp: 'victim',
     ref: `ghcr.io/zgeoff/nixie-@@sha256:${'e'.repeat(64)}`,
     name: 'nixie-x',
-  } as never);
+  });
 
   expect(added).rejects.toMatchObject({
     code: 'FORBIDDEN',

@@ -489,11 +489,13 @@ test('it creates a token with an image ref prefix and shows it in token ls', asy
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
-  expect(listed.stdout.split('\n').map((line) => line.trimEnd())).toStrictEqual([
+  const lines: unknown = listed.stdout.split('\n').map((line) => line.trimEnd());
+
+  expect(lines).toStrictEqual([
     'NAME   SCOPE   IMPS     GRANTABLE  IMAGE REF PREFIX       SSH KEYS  CREATED',
     expect.stringMatching(
       /^nixie {2}manage {2}nixie-\* {2}- {10}ghcr\.io\/zgeoff\/nixie- {2}0 {9}\S+$/u,
-    ),
+    ) as unknown,
     '',
   ]);
 });
