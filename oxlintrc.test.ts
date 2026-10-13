@@ -15,7 +15,9 @@ const DiagnosticsSchema = z.object({ diagnostics: z.array(DiagnosticSchema) });
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-import-rules-'));
 
-  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   // the rules under test: the real config, applied to the temp tree
   writeFileSync(
