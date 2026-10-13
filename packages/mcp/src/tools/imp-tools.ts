@@ -1,4 +1,4 @@
-import { NameSchema } from '@imp/api';
+import { ImpCreateInputSchema, NameSchema } from '@imp/api';
 import * as z from 'zod';
 import { defineTool } from './define-tool';
 import type { Tool } from './define-tool';
@@ -28,30 +28,22 @@ export const IMP_TOOLS: readonly Tool[] = [
     cancellable: false,
     description:
       'Create an imp, a persistent Linux microVM, and boot it. Its disk survives sleeps and restarts until imp_destroy. Without a name, the server picks one inside its guard. Returns the imp. A cancel does not stop the create, and its result still comes back.',
+
+    // imps.create's own fields, so the tool keeps the contract's limits
     input: z.strictObject({
-      name: NameSchema.optional().describe(
+      name: ImpCreateInputSchema.shape.name.describe(
         "The new imp's name: a lowercase letter, then up to 30 lowercase letters, digits or hyphens. Omit to have one picked.",
       ),
-      image: NameSchema.optional().describe(
+      image: ImpCreateInputSchema.shape.image.describe(
         "The image to boot, from imp_image_list; impd's default when omitted",
       ),
-      vcpus: z
-        .int()
-        .min(1)
-        .max(32)
-        .optional()
-        .describe("Virtual CPUs; impd's default when omitted"),
-      memoryMib: z
-        .int()
-        .min(128)
-        .optional()
-        .describe("Guest memory in MiB; impd's default when omitted"),
-      httpPort: z
-        .int()
-        .min(1)
-        .max(65_535)
-        .optional()
-        .describe("The guest port the imp's URL forwards HTTP to (default 8080)"),
+      vcpus: ImpCreateInputSchema.shape.vcpus.describe("Virtual CPUs; impd's default when omitted"),
+      memoryMib: ImpCreateInputSchema.shape.memoryMib.describe(
+        "Guest memory in MiB; impd's default when omitted",
+      ),
+      httpPort: ImpCreateInputSchema.shape.httpPort.describe(
+        "The guest port the imp's URL forwards HTTP to (default 8080)",
+      ),
     }),
     annotations: {
       title: 'Create an imp',

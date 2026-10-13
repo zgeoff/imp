@@ -138,7 +138,7 @@ test('#BrokerRuleSchema rejects a rule whose user holds a colon', () => {
 
   expect(result.error?.issues).toPartiallyContain({
     path: ['user'],
-    message: 'must be printable ASCII without a colon',
+    message: 'must be 1 to 64 printable characters, without a colon',
   });
 });
 

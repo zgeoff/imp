@@ -135,7 +135,13 @@ export type {
 export { ImageRefSchema } from './schemas/image-ref-schema';
 export { ImageSchema, ImageSourceSchema } from './schemas/image-schema';
 export type { Image, ImageSource } from './schemas/image-schema';
-export { impContract } from './contract/imp-contract';
+
+export {
+  CheckpointCreateInputSchema,
+  ImpCreateInputSchema,
+  impContract,
+} from './contract/imp-contract';
+
 export type { ImpContract } from './contract/imp-contract';
 export { IMP_ERRORS } from './contract/imp-errors';
 export type { ForbiddenReason } from './contract/imp-errors';

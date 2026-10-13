@@ -96,6 +96,12 @@ const LeaseInputSchema = z.object({
 // refuses more than the host has.
 const CpuLimitSchema = z.number().min(0.1);
 
+// the guest's cores, which the host's limit then shares out
+const VcpusSchema = z.int().min(1).max(32);
+
+// a TCP port in the guest
+const PortSchema = z.int().min(1).max(65_535);
+
 // cgroup v2 cpu.weight; 100 is the default share
 const CpuWeightSchema = z.int().min(1).max(10_000);
 
@@ -114,43 +120,48 @@ const ImageBuildInputSchema = z.object({
   dockerfile: DockerfilePathSchema.optional(),
 });
 
+// imps.create's input, which the MCP tool imp_create picks its fields from
+export const ImpCreateInputSchema = z.object({
+  name: NameSchema.optional(),
+  image: NameSchema.optional(),
+  vcpus: VcpusSchema.optional(),
+  memoryMib: z.int().min(128).optional(),
+
+  // what the guest may grow to under memory pressure, at most 4 ×
+  // memoryMib; memoryMib by default, which never grows
+  maxMemoryMib: z.int().min(128).optional(),
+
+  // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
+  diskMib: z.int().min(1024).optional(),
+
+  // the guest port the wake proxy forwards HTTP to (default 8080)
+  httpPort: PortSchema.optional(),
+
+  // what the imp may reach directly (default open)
+  policy: EgressPolicySchema.optional(),
+
+  // null, the default, is no limit
+  cpuLimit: CpuLimitSchema.nullable().optional(),
+  cpuWeight: CpuWeightSchema.optional(),
+
+  // networks it joins, which must exist; host-wide callers only
+  networks: z.array(NameSchema).max(MAX_CREATE_NETWORKS).optional(),
+
+  // false leaves the imp's disk and checkpoints out of every backup
+  // run, for its life (default true); an impd without
+  // features.backupOptOut ignores it, so check that first
+  backup: z.boolean().optional(),
+});
+
+// checkpoints.create's input, which the MCP tool imp_checkpoint builds on
+export const CheckpointCreateInputSchema = z.object({
+  name: NameSchema,
+  label: z.string().min(1).max(64).optional(),
+});
+
 export const impContract = {
   imps: {
-    create: base
-      .input(
-        z.object({
-          name: NameSchema.optional(),
-          image: NameSchema.optional(),
-          vcpus: z.int().min(1).max(32).optional(),
-          memoryMib: z.int().min(128).optional(),
-
-          // what the guest may grow to under memory pressure, at most 4 ×
-          // memoryMib; memoryMib by default, which never grows
-          maxMemoryMib: z.int().min(128).optional(),
-
-          // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
-          diskMib: z.int().min(1024).optional(),
-
-          // the guest port the wake proxy forwards HTTP to (default 8080)
-          httpPort: z.int().min(1).max(65_535).optional(),
-
-          // what the imp may reach directly (default open)
-          policy: EgressPolicySchema.optional(),
-
-          // null, the default, is no limit
-          cpuLimit: CpuLimitSchema.nullable().optional(),
-          cpuWeight: CpuWeightSchema.optional(),
-
-          // networks it joins, which must exist; host-wide callers only
-          networks: z.array(NameSchema).max(MAX_CREATE_NETWORKS).optional(),
-
-          // false leaves the imp's disk and checkpoints out of every backup
-          // run, for its life (default true); an impd without
-          // features.backupOptOut ignores it, so check that first
-          backup: z.boolean().optional(),
-        }),
-      )
-      .output(ImpSchema),
+    create: base.input(ImpCreateInputSchema).output(ImpSchema),
 
     // image builders only with `builders`; an impd from before them
     // ignores it
@@ -241,8 +252,8 @@ export const impContract = {
           name: NameSchema,
           cpuLimit: CpuLimitSchema.nullable().optional(),
           cpuWeight: CpuWeightSchema.optional(),
-          vcpus: z.int().min(1).max(32).optional(),
-          httpPort: z.int().min(1).max(65_535).optional(),
+          vcpus: VcpusSchema.optional(),
+          httpPort: PortSchema.optional(),
         }),
       )
       .output(ImpSchema),
@@ -327,14 +338,7 @@ export const impContract = {
   },
 
   checkpoints: {
-    create: base
-      .input(
-        z.object({
-          name: NameSchema,
-          label: z.string().min(1).max(64).optional(),
-        }),
-      )
-      .output(CheckpointSchema),
+    create: base.input(CheckpointCreateInputSchema).output(CheckpointSchema),
 
     list: base.input(NameInputSchema).output(z.array(CheckpointSchema)),
 

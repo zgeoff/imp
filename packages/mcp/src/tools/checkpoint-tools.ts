@@ -1,3 +1,4 @@
+import { CheckpointCreateInputSchema } from '@imp/api';
 import * as z from 'zod';
 import { defineTool } from './define-tool';
 import type { Tool } from './define-tool';
@@ -16,12 +17,9 @@ export const CHECKPOINT_TOOLS: readonly Tool[] = [
       "Save the imp's disk as a checkpoint, in about 100 ms, without stopping it. Take one before a risky change; imp_restore goes back to it and imp_fork starts a new imp from it.",
     input: z.strictObject({
       name: ImpNameInput,
-      label: z
-        .string()
-        .min(1)
-        .max(64)
-        .optional()
-        .describe('A label to find the checkpoint by, such as before-migration'),
+      label: CheckpointCreateInputSchema.shape.label.describe(
+        'A label to find the checkpoint by, such as before-migration',
+      ),
     }),
     annotations: {
       title: 'Checkpoint an imp',
