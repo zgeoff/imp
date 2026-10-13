@@ -145,6 +145,22 @@ test('#checkAccess refuses a ref with a digest of another kind than sha256', asy
   });
 });
 
+test('#checkAccess refuses a ref under the prefix that is no image ref', async () => {
+  const caller = buildMockCaller({ imps: ['nixie-*'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' });
+
+  const refusal = await checkAccess(
+    findAccess('images.add'),
+    caller,
+    { ref: `ghcr.io/zgeoff/nixie-@@sha256:${'e'.repeat(64)}`, name: 'nixie-x' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may add only an image from a valid ref`,
+    reason: null,
+  });
+});
+
 test('#checkAccess refuses a caller with an image ref prefix a build', async () => {
   const caller = buildMockCaller({ imps: ['nixie-*'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' });
 

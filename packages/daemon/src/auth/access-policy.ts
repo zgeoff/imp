@@ -1,4 +1,4 @@
-import { SecretNameSchema, hasScope, isImpAllowed } from '@imp/api';
+import { ImageRefSchema, SecretNameSchema, hasScope, isImpAllowed } from '@imp/api';
 import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
 import type { ForkAuthority, GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
@@ -388,8 +388,14 @@ function checkImageAdd(
 
   const ref = readField(input, 'ref');
 
-  if (ref === null) {
+  if (ref === null || (typeof input === 'object' && input !== null && 'imp' in input)) {
     return { message: `${who} may add only an image from a ref, not a template`, reason: null };
+  }
+
+  // the input is parsed after this check, and an `imp` beside a ref that
+  // fails its schema would parse as a template copy of that imp
+  if (!ImageRefSchema.safeParse(ref).success) {
+    return { message: `${who} may add only an image from a valid ref`, reason: null };
   }
 
   const name = readField(input, 'name');

@@ -323,6 +323,30 @@ test('it refuses a nixie-* token a template of its own imp', async () => {
   });
 });
 
+test('it refuses a nixie-* token a template input that also holds a ref under its prefix', async () => {
+  const ctx = await setupTest();
+
+  const made = await ctx.client.tokens.create({
+    name: 'nixie',
+    scope: 'manage',
+    imps: ['nixie-*'],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+  });
+
+  // the ref fails its schema, so without the check the input would parse as
+  // a template copy of the imp it names
+  const added = ctx.buildClient(made.secret).images.add({
+    imp: 'victim',
+    ref: `ghcr.io/zgeoff/nixie-@@sha256:${'e'.repeat(64)}`,
+    name: 'nixie-x',
+  } as never);
+
+  expect(added).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'token nixie may add only an image from a ref, not a template',
+  });
+});
+
 test('it refuses a nixie-* token without an image ref prefix any add', async () => {
   const ctx = await setupTest();
 
