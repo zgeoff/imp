@@ -104,8 +104,11 @@ networks, moves, moves-tailnet, chaos and backups; at its defaults the scale sui
 
 The moves suites start a second instance, `<IMP_DEV_NAME>-mv-b`, with its data in
 `<IMP_DEV_DATA>-mv-b`, and reboot the run's instance onto a network of their own and back. Each
-instance gets a 2 GiB RAM budget there, so a run stays inside one ordinary run's memory.
-`moves-tailnet` needs a Tailscale key, as the tailscale suite does.
+instance gets a 2 GiB RAM budget there, so a run stays inside one ordinary run's memory. On ZFS the
+second instance runs on the root dataset `<IMP_ZFS_ROOT>-mv-b`, so two impds never share one
+dataset; `scripts/zfs-host-test.sh` makes it, and a manual run makes it the same way
+(`zfs create -o mountpoint=legacy`). `moves-tailnet` needs a Tailscale key, as the tailscale suite
+does.
 
 The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
 Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
@@ -247,7 +250,7 @@ Lefthook installs the hooks with `bun install`.
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                                                                         |
 | `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                                                                  |
 | `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                                                                              |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                                                                 |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the suites the job's `IMP_ZFS_E2E_SUITES` names.                                                                             |
 
 The `checks` job also runs the docs-writing skill's scripts. `bun run lint:docs` runs
 `check-links.sh`, which fails on a broken relative link or anchor in a README or a page under
@@ -293,8 +296,9 @@ first, so a runner without KVM fails in seconds with the reason. The job then:
    timing limit only warns. The host networking tests run in group 2 only (`HOST_TESTS_GROUP`).
 
 The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
-the lifecycle, checkpoints, disks, sleep and backups suites on a pool in a sparse file. The job
-summary shows the ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
+the suites its `IMP_ZFS_E2E_SUITES` names on a pool in a sparse file, the moves suite among them, so
+real VMs move between two ZFS hosts there. The job summary shows the ZFS timings, and the
+`zfs-e2e-results` artifact holds the logs.
 
 After a pass, a failure or a timeout, each group saves an `e2e-results-N` artifact (14 days):
 `results.json`, `metrics.jsonl`, `impd.log` (the dev container's whole log) and the dashboard

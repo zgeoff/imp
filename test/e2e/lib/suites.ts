@@ -169,6 +169,7 @@ export const SUITES: readonly Suite[] = [
     prefix: 'e2e-mv-',
     images: ['e2e-tiny', 'base'],
     journeys: [
+      'moves-backend',
       'moves-cold',
       'moves-leases',
       'moves-abort',

@@ -18,15 +18,17 @@
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file;
 #      IMP_ZFS_E2E_SUITES (default checkpoints,sleep) picks the suites (CI adds
-#      lifecycle, disks, backups and boot-templates);
+#      lifecycle, disks, backups, boot-templates and moves, whose second impd
+#      gets a root dataset and a data dir of its own);
 #      IMP_ZFS_TEST_UNIT=0 skips part 1 (the zfs CI job runs it on its own).
 #      The summary is also written to <dir>/summary.txt.
 #      IMP_ZFS_MODULE_VERSION_FILE (default /sys/module/zfs/version) is
 #      where the loaded module's version is read, for the script's tests.
 #
 # The run owns only what it creates: before it touches anything it refuses a
-# bench pool name that is taken, a bench.img or data dir already in the work
-# dir, and an imp-zfs container that is already there. Its cleanup releases
+# bench pool name that is taken, a bench.img or a data dir of either impd
+# already in the work dir, and an imp-zfs or imp-zfs-mv-b container that is
+# already there. Its cleanup releases
 # only what it made: it destroys the pool only when `zpool status -P` shows
 # its vdev is this run's bench.img, and never removes a bench.img a pool
 # still uses. The work dir holds the results, so it stays, and a second run
@@ -57,12 +59,16 @@ fi
 if [ -e "$work/bench.img" ] || [ -L "$work/bench.img" ]; then
   fail "$work/bench.img already exists; refusing to touch it"
 fi
-if [ -e "$work/data" ] || [ -L "$work/data" ]; then
-  fail "$work/data already exists; refusing to touch it"
-fi
-if docker container inspect "$IMP_DEV_NAME" >/dev/null 2>&1; then
-  fail "a container named $IMP_DEV_NAME already exists; refusing to touch it"
-fi
+for dir in data data-mv-b; do
+  if [ -e "$work/$dir" ] || [ -L "$work/$dir" ]; then
+    fail "$work/$dir already exists; refusing to touch it"
+  fi
+done
+for name in "$IMP_DEV_NAME" "$IMP_DEV_NAME-mv-b"; do
+  if docker container inspect "$name" >/dev/null 2>&1; then
+    fail "a container named $name already exists; refusing to touch it"
+  fi
+done
 
 mkdir -p "$work"
 # absolute, as zpool status -P prints the vdev
@@ -116,8 +122,15 @@ cleanup() {
     wait "$child" 2>/dev/null || true
   fi
   if [ -n "$started_instance" ]; then
+    # the moves suites' B, which a stopped run leaves up with its dataset
+    # busy in the pool, then A and the network both were on
+    if docker container inspect "$IMP_DEV_NAME-mv-b" >/dev/null 2>&1; then
+      docker logs "$IMP_DEV_NAME-mv-b" >"$work/impd-mv-b.log" 2>&1 || true
+      docker rm -f "$IMP_DEV_NAME-mv-b" >/dev/null 2>&1 || true
+    fi
     docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
     "$IMP_ROOT/scripts/dev/dev.sh" down || true
+    docker network rm "$IMP_DEV_NAME-mv" >/dev/null 2>&1 || true
   fi
   if [ -n "$made_img" ]; then
     local use=0
@@ -150,6 +163,7 @@ trap 'exit 130' INT
 # mkdir without -p and a noclobber create fail on an existing path, so a
 # path that appeared since the checks above is refused, never taken over
 mkdir "$work/data"
+mkdir "$work/data-mv-b"
 (set -o noclobber && : >"$img")
 made_img=1
 truncate -s "${gib}G" "$img"
@@ -158,11 +172,15 @@ truncate -s "${gib}G" "$img"
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
+# the moves suites' B, on a root dataset of its own (test/e2e/lib/move-hosts.ts)
+sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT-mv-b"
 
-# what test/e2e/main.ts proves before it wipes this run's data dir and
-# datasets to make the instance anew
+# what test/e2e/main.ts proves before it wipes this run's data dirs and
+# datasets to make an instance anew, one owner file for each impd
 printf '{"pool":"%s","root":"%s","vdev":"%s"}\n' "$pool" "$IMP_ZFS_ROOT" "$img" \
   >"$work/data/imp-e2e-zfs-owner"
+printf '{"pool":"%s","root":"%s","vdev":"%s"}\n' "$pool" "$IMP_ZFS_ROOT-mv-b" "$img" \
+  >"$work/data-mv-b/imp-e2e-zfs-owner"
 
 # summarize LABEL REGEX: count, min, median and max of the ms in each match
 summarize() {

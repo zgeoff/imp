@@ -20,6 +20,7 @@ import {
 import {
   buildHostBFixture,
   buildHostBFixtureDeps,
+  readHostBZfsRoot,
   readMoveOptions,
   removeMoveLeftovers,
 } from './lib/move-hosts';
@@ -104,8 +105,8 @@ async function resetInstance(): Promise<void> {
 
   // the moves suites' second host keeps its data between runs, which spares
   // its image seed; a reset takes it too, so no old migration outlives a
-  // rebase that renumbered it
-  const hostB = await resolveDataWipe(`${resolveDataPath()}-mv-b`);
+  // rebase that renumbered it; on ZFS its root dataset goes with it
+  const hostB = await resolveDataWipe(`${resolveDataPath()}-mv-b`, readHostBZfsRoot());
 
   const targets = [data, hostB].filter((target) => target !== null);
 

@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStubInstanceDocker } from './create-stub-instance-docker';
@@ -41,6 +41,36 @@ test('it fails to inspect any container when none is listed', () => {
   expect(
     Bun.spawnSync([join(stub.bin, 'docker'), 'container', 'inspect', 'imp-zfs']).exitCode,
   ).toBe(1);
+});
+
+test('it fails to inspect a container started later until its marker exists', () => {
+  const ctx = setupTest();
+  const marker = join(ctx.dir, 'started');
+
+  const stub = createStubInstanceDocker(ctx.dir, {
+    containers: [],
+    startedLater: { marker, containers: ['imp-zfs-mv-b'] },
+  });
+
+  expect(
+    Bun.spawnSync([join(stub.bin, 'docker'), 'container', 'inspect', 'imp-zfs-mv-b']).exitCode,
+  ).toBe(1);
+});
+
+test('it inspects a container started later once its marker exists', () => {
+  const ctx = setupTest();
+  const marker = join(ctx.dir, 'started');
+
+  const stub = createStubInstanceDocker(ctx.dir, {
+    containers: [],
+    startedLater: { marker, containers: ['imp-zfs-mv-b'] },
+  });
+
+  writeFileSync(marker, '');
+
+  expect(
+    Bun.spawnSync([join(stub.bin, 'docker'), 'container', 'inspect', 'imp-zfs-mv-b']).exitCode,
+  ).toBe(0);
 });
 
 test('it succeeds any other command silently', () => {
