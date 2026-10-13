@@ -178,7 +178,11 @@ test('it answers initialize over stdio, and nothing for a notification', async (
       jsonrpc: '2.0',
       id: 1,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     })}\n${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
   );
 

@@ -1,4 +1,5 @@
 import type { Scope } from '@imp/api';
+import type { CallToolResult, Tool as ToolDefinition } from '@modelcontextprotocol/server';
 import { ExecError, ORPCError } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import type { After } from '../after';
@@ -32,20 +33,6 @@ interface ToolAnnotations {
   readonly openWorldHint: boolean;
 }
 
-interface ToolDefinition {
-  readonly name: string;
-  readonly title: string;
-  readonly description: string;
-  readonly inputSchema: Readonly<Record<string, unknown>>;
-  readonly annotations: ToolAnnotations;
-}
-
-interface ToolResult {
-  readonly content: readonly [{ readonly type: 'text'; readonly text: string }];
-  readonly structuredContent?: Readonly<Record<string, unknown>>;
-  readonly isError: boolean;
-}
-
 export interface Tool {
   readonly definition: ToolDefinition;
 
@@ -59,7 +46,7 @@ export interface Tool {
 
   // never throws for a failed call: the agent reads the failure as an
   // isError result; a cancel throws the signal's reason
-  readonly call: (args: unknown, context: Readonly<ToolContext>) => Promise<ToolResult>;
+  readonly call: (args: unknown, context: Readonly<ToolContext>) => Promise<CallToolResult>;
 }
 
 // What a tool's run returns: `data` becomes both the structured content and
@@ -87,7 +74,10 @@ export function defineTool<Input extends z.ZodObject>(spec: Readonly<ToolSpec<In
     name: spec.name,
     title: spec.annotations.title,
     description: spec.description,
-    inputSchema: z.toJSONSchema(spec.input, { io: 'input' }),
+    inputSchema: {
+      ...JsonObjectSchema.parse(z.toJSONSchema(spec.input, { io: 'input' })),
+      type: 'object',
+    },
     annotations: spec.annotations,
   };
 
@@ -133,7 +123,7 @@ export function defineTool<Input extends z.ZodObject>(spec: Readonly<ToolSpec<In
   };
 }
 
-function buildErrorResult(text: string): ToolResult {
+function buildErrorResult(text: string): CallToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
 

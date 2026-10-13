@@ -1,4 +1,4 @@
-import { expect, mock, onTestFinished, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,17 +11,12 @@ import { buildQueryGate } from '@imp/daemon/src/test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { INVALID_PARAMS, METHOD_NOT_FOUND } from '@modelcontextprotocol/server';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
+import { PROTOCOL_VERSIONS } from './create-imp-server';
 import { createImpGuard } from './imp-guard';
-import {
-  INTERNAL_ERROR,
-  INVALID_PARAMS,
-  INVALID_REQUEST,
-  METHOD_NOT_FOUND,
-  PARSE_ERROR,
-} from './json-rpc';
-import { PROTOCOL_VERSIONS, createMcpServer } from './mcp-server';
+import { createMcpServer } from './test-utils/create-mcp-server';
 
 // The server's replies, parsed, and a client of impd's real app; an armed
 // `gate` holds impd's next imps read.
@@ -164,7 +159,11 @@ test.each([['2025-11-25'], ['2025-06-18'], ['2025-03-26']])(
         jsonrpc: '2.0',
         id: 1,
         method: 'initialize',
-        params: { protocolVersion: version },
+        params: {
+          protocolVersion: version,
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
       {
         reply: ctx.reply,
@@ -199,7 +198,11 @@ test('it offers the newest protocol version for one it does not support', async 
       jsonrpc: '2.0',
       id: 1,
       method: 'initialize',
-      params: { protocolVersion: '2024-11-05' },
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
     { reply: ctx.reply, client: ctx.client, guard: createImpGuard({ all: true }), scope: 'manage' },
   );
@@ -228,7 +231,11 @@ test('it names the guard in the instructions it gives at initialize', async () =
       jsonrpc: '2.0',
       id: 1,
       method: 'initialize',
-      params: { protocolVersion: '2025-11-25' },
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
     {
       reply: ctx.reply,
@@ -474,101 +481,6 @@ test('it refuses a call whose id a running call holds with an invalid-params err
       id: 7,
       error: { code: INVALID_PARAMS, message: 'request 7 is already running' },
     },
-  ]);
-});
-
-test('it answers a request whose reply fails with an internal error', async () => {
-  const ctx = await setupTest();
-
-  const printError = mock<(message: string, error: unknown) => void>();
-  const server = createMcpServer({ version: '1.2.3', printError });
-
-  const failure = new Error('write EPIPE');
-
-  // the transport's first write fails, as a closed pipe does
-  const reply = mock(ctx.reply).mockImplementationOnce(() => {
-    throw failure;
-  });
-
-  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }), {
-    reply,
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    scope: 'manage',
-  });
-
-  expect(ctx.sent).toStrictEqual([
-    { jsonrpc: '2.0', id: 1, error: { code: INTERNAL_ERROR, message: 'internal error' } },
-  ]);
-
-  expect(printError).toHaveBeenCalledExactlyOnceWith('imp mcp: request failed:', failure);
-});
-
-test('it answers a tool call whose result reply fails with an internal error', async () => {
-  const ctx = await setupTest();
-
-  const printError = mock<(message: string, error: unknown) => void>();
-  const server = createMcpServer({ version: '1.2.3', printError });
-
-  const failure = new Error('write EPIPE');
-
-  // the transport's first write, the tool's result, fails
-  const reply = mock(ctx.reply).mockImplementationOnce(() => {
-    throw failure;
-  });
-
-  await server.receive(
-    JSON.stringify({
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/call',
-      params: { name: 'imp_list', arguments: {} },
-    }),
-    { reply, client: ctx.client, guard: createImpGuard({ all: true }), scope: 'manage' },
-  );
-
-  expect(ctx.sent).toStrictEqual([
-    { jsonrpc: '2.0', id: 2, error: { code: INTERNAL_ERROR, message: 'internal error' } },
-  ]);
-
-  expect(printError).toHaveBeenCalledExactlyOnceWith('imp mcp: request failed:', failure);
-});
-
-test('it answers a line that is not JSON with a parse error and a null id', async () => {
-  const ctx = await setupTest();
-
-  const server = createMcpServer({ version: '1.2.3' });
-
-  await server.receive('not json', {
-    reply: ctx.reply,
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    scope: 'manage',
-  });
-
-  expect(ctx.sent).toStrictEqual([
-    { jsonrpc: '2.0', id: null, error: { code: PARSE_ERROR, message: 'parse error: not JSON' } },
-  ]);
-});
-
-test.each([
-  ['[{"jsonrpc":"2.0","id":1,"method":"ping"}]'],
-  ['{"jsonrpc":"1.0","id":1,"method":"ping"}'],
-  ['{"jsonrpc":"2.0","id":1}'],
-])('it answers the invalid request %s with an error and a null id', async (line) => {
-  const ctx = await setupTest();
-
-  const server = createMcpServer({ version: '1.2.3' });
-
-  await server.receive(line, {
-    reply: ctx.reply,
-    client: ctx.client,
-    guard: createImpGuard({ all: true }),
-    scope: 'manage',
-  });
-
-  expect(ctx.sent).toStrictEqual([
-    { jsonrpc: '2.0', id: null, error: { code: INVALID_REQUEST, message: 'invalid request' } },
   ]);
 });
 

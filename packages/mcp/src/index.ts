@@ -1,8 +1,12 @@
-export { createHttpTransport } from './http/http-transport';
-export type { HttpTransport, HttpTransportOptions, McpPrincipal } from './http/http-transport';
+export { createHttpTransport } from './http/create-http-transport';
+
+export type {
+  HttpTransport,
+  HttpTransportOptions,
+  McpPrincipal,
+} from './http/create-http-transport';
+
 export { GuardError, createImpGuard, createPatternGuard } from './imp-guard';
 export type { GuardOptions, ImpGuard } from './imp-guard';
-export { createMcpServer } from './mcp-server';
-export type { McpServer, McpServerOptions, MessageContext } from './mcp-server';
 export type { ToolClient } from './tools/tool-client';
-export { handleLines } from './serve-lines';
+export { runImpStdio } from './run-imp-stdio';

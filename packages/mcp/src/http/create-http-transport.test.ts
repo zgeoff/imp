@@ -16,8 +16,9 @@ import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { buildMockMcpPrincipal } from '../test-utils/build-mock-mcp-principal';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
-import { createHttpTransport } from './http-transport';
-import type { McpPrincipal } from './http-transport';
+import { readMcpAnswer } from '../test-utils/read-mcp-answer';
+import { createHttpTransport } from './create-http-transport';
+import type { McpPrincipal } from './create-http-transport';
 
 // A transport whose callers are the principals a test adds, by their
 // Authorization header; its timers tick and its clock moves only by hand.
@@ -185,15 +186,19 @@ test('it opens a session at initialize and answers with its id', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(response.status).toBe(200);
-  expect(response.headers.get('content-type')).toBe('application/json');
+  expect(response.headers.get('content-type')).toBe('text/event-stream');
   expect(response.headers.get('mcp-session-id')).toMatch(/^[0-9a-f-]{36}$/);
 
   expect(body).toStrictEqual({
@@ -225,7 +230,11 @@ test('it answers a request in the session that initialize opened', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -247,7 +256,7 @@ test('it answers a request in the session that initialize opened', async () => {
     }),
   );
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toStrictEqual({ jsonrpc: '2.0', id: 1, result: {} });
 });
@@ -322,7 +331,11 @@ test("it refuses a request in another caller's session with 404", async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -364,7 +377,11 @@ test('it refuses a protocol version header it does not support with 400', async 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -381,7 +398,7 @@ test('it refuses a protocol version header it does not support with 400', async 
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
         'mcp-session-id': session,
-        'mcp-protocol-version': '2099-01-01',
+        'mcp-protocol-version': '2024-11-05',
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
     }),
@@ -390,7 +407,7 @@ test('it refuses a protocol version header it does not support with 400', async 
   const body = await response.text();
 
   expect(response.status).toBe(400);
-  expect(body).toBe('unsupported mcp-protocol-version: 2099-01-01\n');
+  expect(body).toInclude('Unsupported protocol version: 2024-11-05');
 });
 
 test('it answers a request that names a protocol version it supports', async () => {
@@ -410,7 +427,11 @@ test('it answers a request that names a protocol version it supports', async () 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -453,7 +474,11 @@ test('it accepts a notification with 202 and no body', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -501,7 +526,11 @@ test('it lists only the read tools to a read caller', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -523,7 +552,7 @@ test('it lists only the read tools to a read caller', async () => {
     }),
   );
 
-  const json: unknown = await response.json();
+  const json = await readMcpAnswer(response);
 
   const Tool = z.object({ name: z.string() });
   const body = z.object({ result: z.object({ tools: z.array(Tool) }) }).parse(json);
@@ -536,13 +565,12 @@ test('it lists only the read tools to a read caller', async () => {
   ]);
 });
 
-test('it streams a tool call’s progress, keepalives and response as server-sent events', async () => {
+test('it streams a tool call’s progress and response as server-sent events', async () => {
   const ctx = await setupTest();
 
   const transport = createHttpTransport({
     version: '1.2.3',
     progressIntervalMs: 20,
-    keepaliveMs: 30,
     repeat: ctx.timer.repeat,
     authenticate: ctx.readPrincipal,
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
@@ -565,7 +593,11 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -595,7 +627,6 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
   await ctx.gate.reached;
 
   ctx.timer.tick(20);
-  ctx.timer.tick(30);
   ctx.gate.release();
 
   const text = await response.text();
@@ -608,8 +639,7 @@ test('it streams a tool call’s progress, keepalives and response as server-sen
     expect.stringMatching(
       /^event: message\ndata: \{.*"method":"notifications\/progress".*\}$/,
     ) as unknown,
-    ': keepalive',
-    expect.stringMatching(/^event: message\ndata: \{.*"id":1,"result":.*\}$/) as unknown,
+    expect.stringMatching(/^event: message\ndata: \{"result":.*"id":1\}$/) as unknown,
     '',
   ]);
 
@@ -660,7 +690,11 @@ test('it ends a call only once impd answers, after its stream drops', async () =
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -710,7 +744,7 @@ test('it ends a call only once impd answers, after its stream drops', async () =
       headers: {
         authorization: 'Bearer alice',
         'content-type': 'application/json',
-        accept: 'application/json',
+        accept: 'application/json, text/event-stream',
         'mcp-session-id': session,
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }),
@@ -739,14 +773,13 @@ test('it knows no call end for a response that is not a streamed call', () => {
   expect(transport.readCallEnd(new Response('x'))).toBeNull();
 });
 
-test('it answers a tool call as JSON, without its progress, when the client takes no event stream', async () => {
+test('it sends keepalive comments on the stream of a call still running', async () => {
   const ctx = await setupTest();
 
+  // the SDK's own interval, the shortest that a test waits on
   const transport = createHttpTransport({
     version: '1.2.3',
-    progressIntervalMs: 20,
-    keepaliveMs: 30,
-    repeat: ctx.timer.repeat,
+    keepaliveMs: 20,
     authenticate: ctx.readPrincipal,
     isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
   });
@@ -768,7 +801,11 @@ test('it answers a tool call as JSON, without its progress, when the client take
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -784,39 +821,82 @@ test('it answers a tool call as JSON, without its progress, when the client take
         authorization: 'Bearer alice',
         'content-type': 'application/json',
         'mcp-session-id': session,
-        accept: 'application/json',
+        accept: 'application/json, text/event-stream',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'tools/call',
-        params: { name: 'imp_list', arguments: {}, _meta: { progressToken: 'p' } },
+        params: { name: 'imp_list', arguments: {} },
       }),
     }),
   );
 
   await ctx.gate.reached;
 
-  ctx.timer.tick(20);
+  const response = await call;
+
+  invariant(response.body);
+
+  // the held call writes nothing, so the first frame is a keepalive
+  const reader = response.body.getReader();
+
+  onTestFinished(() => reader.cancel());
+
+  const first = await reader.read();
+
   ctx.gate.release();
 
-  const response = await call;
-  const body: unknown = await response.json();
-
-  expect(response.headers.get('content-type')).toBe('application/json');
-
-  expect(body).toStrictEqual({
-    jsonrpc: '2.0',
-    id: 1,
-    result: {
-      content: [{ type: 'text', text: '{\n  "imps": []\n}' }],
-      structuredContent: { imps: [] },
-      isError: false,
-    },
-  });
+  expect(new TextDecoder().decode(first.value)).toBe(': keepalive\n\n');
 });
 
-test('it ends a cancelled JSON call with 202 and no response', async () => {
+test('it refuses a POST from a client that takes no event stream with 406', async () => {
+  const ctx = await setupTest();
+
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const opened = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
+      }),
+    }),
+  );
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const response = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    }),
+  );
+
+  expect(response.status).toBe(406);
+});
+
+test('it ends a cancelled call’s stream with no answer', async () => {
   const ctx = await setupTest();
 
   ctx.gate.arm();
@@ -834,7 +914,11 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -850,7 +934,7 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
         authorization: 'Bearer alice',
         'content-type': 'application/json',
         'mcp-session-id': session,
-        accept: 'application/json',
+        accept: 'application/json, text/event-stream',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -886,8 +970,8 @@ test('it ends a cancelled JSON call with 202 and no response', async () => {
   const body = await response.text();
 
   expect(cancel.status).toBe(202);
-  expect(response.status).toBe(202);
-  expect(body).toBe('');
+  expect(response.status).toBe(200);
+  expect(body.split('\n').filter((line) => line.startsWith('data: '))).toStrictEqual([]);
 });
 
 test('it refuses an unknown caller with 401 and a bearer challenge', async () => {
@@ -905,7 +989,11 @@ test('it refuses an unknown caller with 401 and a bearer challenge', async () =>
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -932,7 +1020,11 @@ test('it refuses a batch of messages with 400', async () => {
           jsonrpc: '2.0',
           id: 0,
           method: 'initialize',
-          params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+          params: {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1.0.0' },
+          },
         },
       ]),
     }),
@@ -1011,7 +1103,11 @@ test('it refuses a page on another origin with 403 before it authenticates', asy
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1036,7 +1132,11 @@ test('it ends a session on DELETE', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1109,7 +1209,11 @@ test('it ends a caller’s sessions when what it authenticated with ends', async
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1169,7 +1273,11 @@ test('it keeps another caller’s session when one caller’s credential ends', 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1186,7 +1294,11 @@ test('it keeps another caller’s session when one caller’s credential ends', 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1241,7 +1353,11 @@ test('it evicts the least recently used idle session of a caller at its limit', 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1260,7 +1376,11 @@ test('it evicts the least recently used idle session of a caller at its limit', 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1285,7 +1405,11 @@ test('it evicts the least recently used idle session of a caller at its limit', 
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1356,7 +1480,11 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1372,7 +1500,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
         authorization: 'Bearer bob',
         'content-type': 'application/json',
         'mcp-session-id': bobSession,
-        accept: 'application/json',
+        accept: 'application/json, text/event-stream',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -1399,7 +1527,11 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1422,7 +1554,11 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1478,7 +1614,11 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1494,7 +1634,7 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
         authorization: 'Bearer alice',
         'content-type': 'application/json',
         'mcp-session-id': session,
-        accept: 'application/json',
+        accept: 'application/json, text/event-stream',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -1519,7 +1659,11 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1563,7 +1707,11 @@ test('it keeps a session used within the idle limit', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1618,7 +1766,11 @@ test('it ends a session idle past the idle limit', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );
@@ -1673,7 +1825,11 @@ test('it restarts the idle clock of a session each time it is used', async () =>
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
   );

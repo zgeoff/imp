@@ -19,8 +19,8 @@ import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { createImpGuard } from '../imp-guard';
-import { createMcpServer } from '../mcp-server';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
+import { createMcpServer } from '../test-utils/create-mcp-server';
 
 // impd's real app on stub VMs, with its database and data dir, a root client
 // for the scenario, and `sendToImpd`, which reaches the app without a socket
