@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import { formatError, formatUnauthorized } from './run-action';
 
 test('#formatError lists the validation issues of a BAD_REQUEST', () => {

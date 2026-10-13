@@ -1,8 +1,7 @@
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
 import type { ImpState } from '@imp/api';
-import { ORPCError } from '@orpc/client';
-import { openReverseForward } from '@zgeoff/imp-client';
+import { ORPCError, openReverseForward } from '@zgeoff/imp-client';
 import type {
   ReverseForward,
   ReverseForwardEnd,

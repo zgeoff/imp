@@ -111,8 +111,34 @@ test('#SUITES gives every suite its own e2e- imp name prefix', () => {
   expect(prefixes).toSatisfyAll((prefix: string) => prefix.startsWith('e2e-'));
 });
 
-test('#FAST_GROUPS holds every fast suite and nothing else', () => {
-  expect(FAST_GROUPS.flat()).toIncludeSameMembers([...(SUITE_SETS['fast'] ?? [])]);
+test('#SUITE_SETS builds the fast set from the groups, in run order', () => {
+  expect(SUITE_SETS['fast']).toStrictEqual([
+    'lifecycle',
+    'registry',
+    'checkpoints',
+    'disks',
+    'sleep',
+    'restart',
+    'mcp',
+    'offsets',
+    'session-logs',
+    'services',
+    'ssh',
+    'ssh-agent',
+    'reverse',
+    'proxy',
+    'dashboard',
+    'tokens',
+    'leases',
+    'cpu',
+    'templates',
+    'boot-templates',
+    'inner',
+    'socket',
+    'jail',
+    'memory',
+    'ksm',
+  ]);
 });
 
 test('#FAST_GROUPS puts no suite in two groups', () => {

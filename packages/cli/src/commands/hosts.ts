@@ -1,4 +1,4 @@
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import { isHttpUrl } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';

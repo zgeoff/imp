@@ -273,9 +273,10 @@ failed, was cancelled or was skipped. Each group boots real Firecracker guests o
 so a runner without KVM fails in seconds with the reason. The job then:
 
 1. builds the guest kernel and the system drive from the `system-files` stage, with the release's
-   GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/version` or
-   the kernel config files change, or after GitHub evicts the cache (7 days unused, or the repo's 10
-   GB quota). A cold kernel build takes about 10 minutes, so the job's timeout is 25.
+   GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/build.sh`,
+   `kernel/version` or the kernel config files change, or after GitHub evicts the cache (7 days
+   unused, or the repo's 10 GB quota). A cold kernel build takes about 10 minutes, so the job's
+   timeout is 25.
 2. builds the dev host image as `imp-host:dev` with a cache of its own (scope `imp-dev`). The `e2e`
    and `zfs` jobs in `ci.yml` set `IMP_HOST_IMAGE=imp-host:dev` and `IMP_HOST_IMAGE_READY=1`, so
    `scripts/dev.sh` uses that image instead of building it again. Only group 1's run on `main`

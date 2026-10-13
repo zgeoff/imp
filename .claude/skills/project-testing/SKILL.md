@@ -316,13 +316,15 @@ So a shell's `IMP_RAM_BUDGET_MIB` or `IMP_IDLE_TIMEOUT_S` wins when a suite file
 
 Flags: `--only <suites or sets>`, `--group <1|2|3>`, `--clean`, `--reuse`, `--keep`; `--help` lists
 the suites. The sets live in `SUITE_SETS`: `acceptance` (the default) is every suite, and `fast` is
-the CI subset. `main.ts` sets `E2E_ACCEPTANCE=1` when the run includes `acceptance`; tailnet suites
-then fail instead of skipping, and the timing limits fail the run instead of warning. `scale` is not
-in `fast`; the acceptance run keeps it before `restart` on the same instance.
+the CI subset, built from `FAST_GROUPS` in `SUITES` order. `main.ts` sets `E2E_ACCEPTANCE=1` when
+the run includes `acceptance`; tailnet suites then fail instead of skipping, and the timing limits
+fail the run instead of warning. `scale` is not in `fast`; the acceptance run keeps it before
+`restart` on the same instance.
 
-`--group N` runs `FAST_GROUPS[N - 1]` from `suites.ts`: three static lists that split `fast`, each
-in `SUITES` order, for three runners with an instance each. `suites.test.ts` checks that they hold
-every fast suite once and nothing else. They came to about 225 s of suite work each in two CI runs:
+`--group N` runs `FAST_GROUPS[N - 1]` from `suites.ts`: three static lists that make up `fast`, each
+in `SUITES` order, for three runners with an instance each. `suites.test.ts` checks that no suite
+sits in two groups and pins the `fast` set they make. They came to about 225 s of suite work each in
+two CI runs:
 
 | Group | Suites                                                                                                                                                                      |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

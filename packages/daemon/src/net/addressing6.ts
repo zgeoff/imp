@@ -108,10 +108,3 @@ export function buildUlaPrefix(random: Uint8Array): Prefix64 {
 export function deriveGuestIp6(prefix: Readonly<Prefix64>, guestIpv4: number): string {
   return formatIpv6(prefix.network + BigInt(guestIpv4));
 }
-
-// whether an address is in the /64
-export function isInPrefix(prefix: Readonly<Prefix64>, address: string): boolean {
-  const parsed = parseIpv6(address);
-
-  return parsed !== null && parsed >> 64n === prefix.network >> 64n;
-}

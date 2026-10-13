@@ -1,4 +1,4 @@
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';

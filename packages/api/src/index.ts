@@ -142,6 +142,7 @@ export type {
 } from './imp-schema';
 
 export { CONSOLE_SHELL } from './login-shell';
+export { MCP_PATH } from './mcp-path';
 
 export {
   MovePlanSchema,

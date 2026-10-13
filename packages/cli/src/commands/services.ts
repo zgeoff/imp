@@ -1,6 +1,6 @@
 import { ServiceRestartSchema } from '@imp/api';
 import type { ServiceDef, ServiceLog } from '@imp/api';
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
 import { formatOutput, formatServices } from '../format-output';
 import { formatError, runAction } from '../run-action';

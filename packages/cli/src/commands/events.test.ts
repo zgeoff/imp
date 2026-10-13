@@ -18,8 +18,7 @@ import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-c
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
-import { ORPCError } from '@orpc/client';
-import { createImpClient } from '@zgeoff/imp-client';
+import { ORPCError, createImpClient } from '@zgeoff/imp-client';
 import { buildStubBackoffClock } from '../test-utils/build-stub-backoff-clock';
 import { printEvents } from './events';
 

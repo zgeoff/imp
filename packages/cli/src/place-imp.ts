@@ -1,6 +1,6 @@
 import { isImpAllowed } from '@imp/api';
 import type { EgressMode, Identity, SystemInfo } from '@imp/api';
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import type { ImpClient } from './create-imp-client';
 import type { HostAnswer } from './fan-out';
 

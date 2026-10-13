@@ -56,7 +56,6 @@ export async function writeAuditEntry(db: ImpDatabase, entry: NewAuditEntry): Pr
   });
 }
 
-// newest first; one imp's when impId is set
 // newest first; one imp's when impId is set, and only imps within the
 // patterns when there are any
 export async function listAuditEntries(

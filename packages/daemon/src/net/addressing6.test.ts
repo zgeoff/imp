@@ -5,7 +5,6 @@ import {
   deriveGuestIp6,
   formatCidr6,
   formatIpv6,
-  isInPrefix,
   parseIpv6,
   parsePrefix64,
 } from './addressing6';
@@ -65,18 +64,6 @@ test('#deriveGuestIp6 gives an imp the prefix and its IPv4 address as the interf
   invariant(prefix);
 
   expect(deriveGuestIp6(prefix, 0x0a_42_00_02)).toBe('fd12:3456:789a::a42:2');
-});
-
-test.each([
-  ['fd12:3456:789a::a42:2', true],
-  ['fd12:3456:789b::a42:2', false],
-  ['10.66.0.2', false],
-])('#isInPrefix reads %s as in fd12:3456:789a::/64: %p', (address, isIn) => {
-  const prefix = parsePrefix64('fd12:3456:789a::/64');
-
-  invariant(prefix);
-
-  expect(isInPrefix(prefix, address)).toBe(isIn);
 });
 
 test.each([

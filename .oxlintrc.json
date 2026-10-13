@@ -197,5 +197,7 @@
       }
     }
   ],
-  "ignorePatterns": [".claude/**", ".cache/**", "kernel/**", "agent/**", "host/**"]
+  // .claude/** holds the skill-gate hook, which repo-sync delivers from
+  // zgeoff/tools: a fix lands upstream, never here
+  "ignorePatterns": [".claude/**", ".cache/**", "kernel/**", "agent/**"]
 }

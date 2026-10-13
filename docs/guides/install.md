@@ -446,10 +446,10 @@ host/build-release.sh          # tags imp-host:<git describe>; IMP_VERSION overr
 ```
 
 The build is multi-stage: the guest kernel, the agent and its system drive, impd and the CLI each
-build in their own stage. The kernel stage reads only `kernel/version`, `kernel/config-base`,
-`kernel/docker.fragment` and `kernel/make-vmlinux.sh`, so a change anywhere else reuses the cached
-kernel layer. A CI runner without that cache rebuilds the kernel; pass `--cache-from` and
-`--cache-to` through `build-release.sh` to keep it.
+build in their own stage. The kernel stage runs `kernel/build.sh` and reads only it,
+`kernel/version`, `kernel/config-base`, `kernel/docker.fragment` and `kernel/make-vmlinux.sh`, so a
+change anywhere else reuses the cached kernel layer. A CI runner without that cache rebuilds the
+kernel; pass `--cache-from` and `--cache-to` through `build-release.sh` to keep it.
 
 The kernel toolchain and `mksquashfs` come from dated Ubuntu and Debian snapshots, and the build
 stamps and drive times are fixed, so the same sources give the same `vmlinux` and

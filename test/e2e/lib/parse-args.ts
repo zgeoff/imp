@@ -1,3 +1,4 @@
+import { parseArgs as parseArgv } from 'node:util';
 import { FAST_GROUPS, SUITES, SUITE_SETS } from './suites';
 
 export interface HarnessArgs {
@@ -53,59 +54,34 @@ function resolveSuites(only: string): readonly string[] {
   return SUITES.map((suite) => suite.name).filter((name) => wanted.has(name));
 }
 
+// node's own parser reports an unknown flag, a stray argument and a flag
+// missing its value
 export function parseArgs(argv: readonly string[]): HarnessArgs {
-  const rest = [...argv];
-  let only: string | null = null;
-  let group: string | null = null;
-  let clean = false;
-  let keep = false;
-  let reuse = false;
-  let help = false;
+  const parsed = parseArgv({
+    args: [...argv],
+    options: {
+      only: { type: 'string' },
+      group: { type: 'string' },
+      clean: { type: 'boolean', default: false },
+      keep: { type: 'boolean', default: false },
+      reuse: { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
 
-  for (let arg = rest.shift(); arg !== undefined; arg = rest.shift()) {
-    switch (arg) {
-      case '--clean': {
-        clean = true;
-        break;
-      }
-      case '--keep': {
-        keep = true;
-        break;
-      }
-      case '--reuse': {
-        reuse = true;
-        break;
-      }
-      case '-h':
-      case '--help': {
-        help = true;
-        break;
-      }
-      case '--only': {
-        only = rest.shift() ?? null;
+  const only = parsed.values.only ?? null;
+  const group = parsed.values.group ?? null;
 
-        if (only === null) {
-          throw new Error('--only needs a suite list');
-        }
+  const flags = {
+    clean: parsed.values.clean,
+    keep: parsed.values.keep,
+    reuse: parsed.values.reuse,
+    help: parsed.values.help,
+  };
 
-        break;
-      }
-      case '--group': {
-        group = rest.shift() ?? null;
-
-        if (group === null) {
-          throw new Error('--group needs a group number');
-        }
-
-        break;
-      }
-      default: {
-        throw new Error(`unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  if (clean && reuse) {
+  if (flags.clean && flags.reuse) {
     throw new Error('--clean and --reuse contradict each other');
   }
 
@@ -114,7 +90,7 @@ export function parseArgs(argv: readonly string[]): HarnessArgs {
   }
 
   if (group !== null) {
-    return { suites: resolveGroup(group), acceptance: false, clean, keep, reuse, help };
+    return { suites: resolveGroup(group), acceptance: false, ...flags };
   }
 
   const acceptance = only === null || only.split(',').some((item) => item.trim() === 'acceptance');
@@ -122,9 +98,6 @@ export function parseArgs(argv: readonly string[]): HarnessArgs {
   return {
     suites: only === null ? (SUITE_SETS['acceptance'] ?? []) : resolveSuites(only),
     acceptance,
-    clean,
-    keep,
-    reuse,
-    help,
+    ...flags,
   };
 }

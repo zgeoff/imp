@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { EXEC_PATH, TUNNEL_PATH } from '@imp/api';
-import { MCP_PATH } from '../mcp/mcp-endpoint';
+import { EXEC_PATH, MCP_PATH, TUNNEL_PATH } from '@imp/api';
 
 // The wake proxy hands impd's API the client's address in-process, not in a
 // forwarded header a client could write: it sends a random handle that the

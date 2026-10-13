@@ -3,6 +3,7 @@ import {
   EXEC_PATH,
   EXEC_TICKET_PARAM,
   IMAGE_BUILD_PATH,
+  MCP_PATH,
   TUNNEL_CLOSE_RESTARTING,
   TUNNEL_PATH,
 } from '@imp/api';
@@ -34,7 +35,7 @@ import type { ExecSession } from './exec/exec-session';
 import { createExecTickets, isCallerLive } from './exec/exec-tickets';
 import { createInProcessSocket } from './exec/in-process-socket';
 import type { BuildContextRoute } from './images/build-context-route';
-import { MCP_PATH, createMcpEndpoint } from './mcp/mcp-endpoint';
+import { createMcpEndpoint } from './mcp/mcp-endpoint';
 import type { MoveService } from './moves/move-service';
 import { PROTECTED_RESOURCE_PATH } from './oauth/oauth-metadata';
 import { readPeerAddress } from './proxy/forwarded-peers';
