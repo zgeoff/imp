@@ -80,13 +80,12 @@ export function buildProtocolSchema(): ProtocolSchema {
       'imageBuild.error': toMessage('toClient', ImageBuildErrorSchema),
     },
     errors: Object.fromEntries(
-      Object.entries(IMP_ERRORS).map(([code, error]) => [
-        code,
-        {
-          status: 'status' in error && typeof error.status === 'number' ? error.status : null,
-          data: buildJsonSchema(error.data, 'output'),
-        },
-      ]),
+      Object.entries(IMP_ERRORS).map(([code, error]) => {
+        const status = 'status' in error && typeof error.status === 'number' ? error.status : null;
+        const data = 'data' in error ? error.data : undefined;
+
+        return [code, { status, data: buildJsonSchema(data, 'output') }];
+      }),
     ),
     constants: {
       EXEC_PATH,
@@ -151,13 +150,15 @@ function buildJsonSchema(schema: unknown, io: 'input' | 'output'): JsonSchema {
     io,
     unrepresentable: 'any',
     override: (context) => {
-      const type = (context.zodSchema as z.ZodType).type;
+      const zodSchema = context.zodSchema;
 
-      if (type === 'date') {
+      if (zodSchema instanceof z.ZodDate) {
         context.jsonSchema['type'] = 'string';
         context.jsonSchema['format'] = 'date-time';
-      } else if (type === 'custom' || type === 'transform') {
-        context.jsonSchema['x-unrepresentable'] = type;
+      } else if (zodSchema instanceof z.ZodCustom) {
+        context.jsonSchema['x-unrepresentable'] = 'custom';
+      } else if (zodSchema instanceof z.ZodTransform) {
+        context.jsonSchema['x-unrepresentable'] = 'transform';
       }
     },
   });
