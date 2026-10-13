@@ -244,6 +244,32 @@ test('#network_others names the containers on the network other than imp-host', 
   expect(result).toStrictEqual({ exitCode: 0, stdout: 'pod-a pod-b\n', stderr: '' });
 });
 
+test("#host_addresses lists the host's global addresses with their prefixes, comma-separated", () => {
+  const ctx = setupTest();
+
+  const ip = createStubBin(
+    ctx.dir,
+    'ip',
+    String.raw`printf '%s\n' \
+      '2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0' \
+      '2: eth0    inet6 2001:db8::10/64 scope global dynamic'`,
+  );
+
+  const result = runSourcedFunction({
+    script: new URL('host-env.sh', import.meta.url).pathname,
+    fn: 'host_addresses',
+    env: { PATH: `${ip.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result).toStrictEqual({
+    exitCode: 0,
+    stdout: '192.0.2.10/24,2001:db8::10/64\n',
+    stderr: '',
+  });
+
+  expect(readFileSync(ip.calls, 'utf8')).toBe('ip -o addr show scope global\n');
+});
+
 test('#create_host_network creates the network with the arguments the unit uses', () => {
   const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker');

@@ -139,7 +139,8 @@ version_ge() {
 readonly RAM_BUDGET_FLOOR_MIB=512
 # With IPv6, imp-host runs on this Docker network. The bridge has a fixed
 # name so a host firewall can admit it; the name keeps clear of imp's own
-# interfaces (imp0, imp+).
+# interfaces (imp0, imp+). bun run render:deploy writes both, and
+# host_addresses, from deploy/imp-host.args.json.
 readonly HOST_NETWORK=imp-host
 readonly HOST_BRIDGE=br-imphost
 # docker network inspect: IPv6 on, the bridge's name, then every subnet.
@@ -321,6 +322,11 @@ network_drift() {
   [ -n "$found" ] || echo "its IPv6 subnet is ${have[*]:-none}, not $want"
 }
 
+# host_addresses: the host's own global addresses, both families, with their
+# prefixes, comma-separated; impd keeps public imps from them
+# (docs/architecture/network/egress.md#public)
+host_addresses() { ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,; }
+
 # network_others: the containers on the network other than imp-host.
 network_others() {
   docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$HOST_NETWORK" 2>/dev/null \
@@ -328,9 +334,8 @@ network_others() {
 }
 
 # create_host_network SUBNET6: the network imp-host runs on with IPv6, on
-# the /64 SUBNET6. Its three definitions agree: this one, the unit's
-# ExecStartPre (deploy/imp-host.service) and the networks block of
-# deploy/compose.yaml.
+# the /64 SUBNET6, as the unit's ExecStartPre (deploy/imp-host.service) and
+# the networks block of deploy/compose.yaml make it.
 create_host_network() {
   docker network create --ipv6 --subnet "$1" \
     -o "com.docker.network.bridge.name=$HOST_BRIDGE" "$HOST_NETWORK" >/dev/null
@@ -1580,8 +1585,8 @@ EnvironmentFile=/etc/imp/imp-host.env
 ExecStartPre=-/usr/bin/docker rm -f imp-host
 # With IPv6 (IMP_HOST_NETWORK names it), the network imp-host on its /64,
 # created when it is missing; bootstrap.sh --check reports one that differs.
-# Keep it equal to create_host_network in deploy/bootstrap.sh and the
-# networks block of deploy/compose.yaml.
+# Its name and bridge come from deploy/imp-host.args.json (bun run
+# render:deploy), as do bootstrap.sh's and deploy/compose.yaml's.
 ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docker network inspect imp-host >/dev/null 2>&1 || /usr/bin/docker network create --ipv6 --subnet "$$IMP_HOST_SUBNET6" -o com.docker.network.bridge.name=br-imphost imp-host ;; esac'
 # The probed args (such as --device /dev/zfs) whose path this host has, into
 # IMP_HOST_PROBED; systemd reads the file again for ExecStart.

@@ -14,15 +14,14 @@ let
   zfs = cfg.storage == "zfs";
   ownFirewall = cfg.hostFirewall == "own";
   ipv6 = cfg.ipv6.enable;
-  # bootstrap.sh's names: the network imp-host runs on with IPv6, and its
-  # bridge, which the forward rules below name.
-  hostNetwork = "imp-host";
-  hostBridge = "br-imphost";
-
   # The docker run arguments, shared with deploy/imp-host.service and
   # bootstrap.sh (scripts/render-imp-host.ts writes those two from it). A
   # $NAME word is env-file words in the unit, and an option here.
   hostArgs = lib.importJSON ../imp-host.args.json;
+  # The network imp-host runs on with IPv6, and its bridge, which the
+  # forward rules below name; host-env.sh has the same from the same file.
+  hostNetwork = hostArgs.network.name;
+  hostBridge = hostArgs.network.bridge;
   # the seccomp profile from the store, not /etc/imp
   seccomp = "seccomp=${../imp-host.seccomp.json}";
   privileges = map (

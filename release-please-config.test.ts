@@ -35,7 +35,7 @@ test('it lists every file with a marker as a generic extra-file', () => {
     .object({ packages: z.object({ '.': rootPackage }) })
     .parse(JSON.parse(configText));
 
-  // the tests and the checker name the markers without being rewritten
+  // the tests, the checker and host-env.sh's strip_markers name the markers without being rewritten
   const result = Bun.spawnSync(
     [
       'git',
@@ -45,6 +45,7 @@ test('it lists every file with a marker as a generic extra-file', () => {
       '--',
       ':!*.test.ts',
       ':!scripts/test-utils/check-release-refs.ts',
+      ':!deploy/lib/host-env.sh',
     ],
     { cwd: new URL('.', import.meta.url).pathname },
   );

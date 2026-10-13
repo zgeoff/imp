@@ -1,5 +1,5 @@
 {
-  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/config.nix and scripts/dev.sh read this file. privileges replaces --privileged (docs/architecture/host.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/storage/backups.md). -e IMP_HOST_ADDRESSES: the unit writes the host's own addresses at each start, beside the probed args; without it in the environment, docker takes the env file's. proxy is the imp-docker-proxy container (deploy/imp-docker-proxy.service): imp-host reaches Docker through its socket only, never the host's.",
+  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/config.nix and scripts/dev.sh read this file. network is the Docker network imp-host runs on with IPv6 and its bridge, and addresses the pipeline that prints the host's own addresses for IMP_HOST_ADDRESSES: render:deploy writes both into the unit, deploy/lib/host-env.sh and compose.yaml. privileges replaces --privileged (docs/architecture/host.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/storage/backups.md). -e IMP_HOST_ADDRESSES: the unit writes the host's own addresses at each start, beside the probed args; without it in the environment, docker takes the env file's. proxy is the imp-docker-proxy container (deploy/imp-docker-proxy.service): imp-host reaches Docker through its socket only, never the host's.",
   "privileges": [
     ["--init", "--cgroupns=private", "--cap-drop", "ALL"],
     ["--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "--cap-add", "MKNOD"],
@@ -59,5 +59,7 @@
       ["-v", "/var/lib/imp-docker-proxy:/var/lib/imp-docker-proxy"]
     ],
     "command": ["/usr/local/bin/imp-docker-proxy"]
-  }
+  },
+  "network": { "name": "imp-host", "bridge": "br-imphost" },
+  "addresses": "ip -o addr show scope global | tr -s \" \" | cut -d \" \" -f 4 | paste -sd ,"
 }

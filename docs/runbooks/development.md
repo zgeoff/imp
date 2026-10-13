@@ -318,10 +318,11 @@ or a push to `main` changes `deploy/` or the test
 the parts in `deploy/bootstrap/`, the functions in `deploy/lib/host-env.sh` that `deploy/upgrade.sh`
 and the NixOS module source as well, and the units and env template it installs.
 `deploy/imp-host.args.json` holds the `docker run` arguments of imp-host and, under `proxy`, of
-imp-docker-proxy. After an edit to any of these, `bun run render:deploy` writes both units,
-`bootstrap.sh` and the privileges blocks of `deploy/compose.yaml`. `bun test` fails until it has
-(`scripts/render-imp-host.test.ts`), and so does a hand edit to `bootstrap.sh`. The NixOS module
-reads the arguments file itself.
+imp-docker-proxy, with the name and bridge of the IPv6 network and the pipeline that reads the
+host's addresses. After an edit to any of these, `bun run render:deploy` writes both units, the
+network lines of `deploy/lib/host-env.sh`, `bootstrap.sh`, and the privileges and network blocks of
+`deploy/compose.yaml`. `bun test` fails until it has (`scripts/render-imp-host.test.ts`), and so
+does a hand edit to `bootstrap.sh`. The NixOS module reads the arguments file itself.
 
 `.github/workflows/breaking-change.yml` fails a pull request that breaks the protocol between a
 client and impd without marking the change as breaking
