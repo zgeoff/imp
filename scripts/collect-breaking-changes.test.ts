@@ -1276,3 +1276,82 @@ test('it reports a property that both sides of an output intersection name and o
     'procedure imps.get output .name: max length <= 10 → <= 64',
   ]);
 });
+
+test('it finds nothing between an intersection of objects and itself, open in the input and closed in the output', () => {
+  const schema = {
+    procedures: {
+      'imps.label': {
+        input: {
+          allOf: [
+            { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+            { type: 'object', properties: { b: { type: 'string' } }, required: ['b'] },
+          ],
+        },
+        output: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { a: { type: 'string' } },
+              required: ['a'],
+              additionalProperties: false,
+            },
+            {
+              type: 'object',
+              properties: { b: { type: 'string' } },
+              required: ['b'],
+              additionalProperties: false,
+            },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
+});
+
+test('it passes a changed input property that a closed part of the intersection refused', () => {
+  const base = {
+    procedures: {
+      'imps.label': {
+        input: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { a: { type: 'string' } },
+              additionalProperties: false,
+            },
+            { type: 'object', properties: { b: { type: 'string' } } },
+          ],
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.label': {
+        input: {
+          type: 'object',
+          properties: { a: { type: 'string' }, b: { type: 'integer' } },
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([]);
+});
