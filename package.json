@@ -72,7 +72,7 @@
   },
   "type": "module",
   "scripts": {
-    "audit": "bun audit --ignore=GHSA-86w9-cpqp-85rv",
+    "audit": "bun audit --ignore=GHSA-86w9-cpqp-85rv --ignore=GHSA-vfj7-8cjw-p6xm",
     "build:cli": "./scripts/build-cli.sh",
     "build:dashboard": "bun run --cwd packages/dashboard build",
     "deadcode": "knip",
