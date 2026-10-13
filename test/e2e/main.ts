@@ -7,16 +7,13 @@ import { createMissingImages } from './lib/fixtures';
 import { createInstanceClient, listImageNames, readInfo, runImp } from './lib/imp-cli';
 import { removeImpsWithPrefix } from './lib/imps';
 import {
-  LIB_SCRIPT,
   REPO_ROOT,
   checkHealthReady,
-  getHostImage,
   instance,
   readHostImage,
   readImpdLogSince,
   readImpdLogTail,
   readToken,
-  runChecked,
   runCommand,
   runDevScript,
 } from './lib/instance';
@@ -26,7 +23,9 @@ import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
 import { checkPrivileges } from './lib/privileges';
+import { removeDataDir } from './lib/remove-data-dir';
 import { resetBaseline } from './lib/reset-baseline';
+import { resolveDataWipe } from './lib/resolve-data-wipe';
 import { runSuite, stopSuiteGroup } from './lib/run-suite';
 import { checkRunPassed, runSuites } from './lib/run-suites';
 import type { FixtureImage } from './lib/suites';
@@ -38,10 +37,6 @@ import {
   readSuiteSettings,
 } from './lib/suites';
 import { readTailscaleE2EAuthKey } from './lib/tailscale-key';
-import { resolveWipeTarget } from './lib/wipe-target';
-import type { WipeTarget } from './lib/wipe-target';
-import { ZFS_OWNER_FILE, resetZfsRoot } from './lib/zfs-owner';
-import type { ZfsCommandResult } from './lib/zfs-owner';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
@@ -97,25 +92,6 @@ function resolveDataPath(): string {
   return resolve(process.cwd(), configured);
 }
 
-// zpool and zfs as root, from the host image, as the data wipe runs
-async function runHostZfs(argv: readonly string[]): Promise<ZfsCommandResult> {
-  // scripts/lib.sh knows how the host image builds
-  await runChecked(['bash', '-c', 'source "$1" && ensure_host_image', 'bash', LIB_SCRIPT]);
-
-  return runCommand(['docker', 'run', '--rm', '--privileged', getHostImage(), ...argv]);
-}
-
-// the wipe's target for a data dir, as this run's instance stores it
-function resolveDataWipe(path: string): Promise<WipeTarget | null> {
-  return resolveWipeTarget({
-    path,
-    repoRoot: REPO_ROOT,
-    storageBackend: process.env['IMP_STORAGE_BACKEND'],
-    zfsRoot: process.env['IMP_ZFS_ROOT'],
-    run: runHostZfs,
-  });
-}
-
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
@@ -147,35 +123,8 @@ async function resetInstance(): Promise<void> {
   await runCommand(['docker', 'rm', '-f', `${instance.container}-mv-b`]);
 
   for (const target of targets) {
-    await removeDataFiles(target.dir);
-
-    if (target.zfs !== null) {
-      await resetZfsRoot(target.zfs, runHostZfs);
-    }
+    await removeDataDir(target);
   }
-}
-
-// every file in the data dir but the ZFS owner file, which the next reset
-// still needs to prove the dir
-async function removeDataFiles(data: string): Promise<void> {
-  const hostImage = getHostImage();
-
-  // scripts/lib.sh knows how the host image builds
-  await runChecked(['bash', '-c', 'source "$1" && ensure_host_image', 'bash', LIB_SCRIPT]);
-
-  // imp.xfs is root-owned, and a stale loop device can outlive the container
-  await runChecked([
-    'docker',
-    'run',
-    '--rm',
-    '--privileged',
-    '-v',
-    `${data}:/d`,
-    hostImage,
-    'bash',
-    '-c',
-    `for dev in $(losetup -n -O NAME -j /d/imp.xfs 2>/dev/null); do losetup -d "$dev" || true; done; find /d -mindepth 1 ! -path /d/${ZFS_OWNER_FILE} -delete`,
-  ]);
 }
 
 // The scale suite needs host RAM for the budget plus headroom, and disk on
@@ -287,13 +236,18 @@ async function resetSuites(prefixes: readonly string[]): Promise<void> {
   });
 }
 
-async function runJourneyProcess(journey: string, args: HarnessArgs): Promise<number> {
+async function runJourneyProcess(
+  journey: string,
+  args: HarnessArgs,
+  kept: readonly string[],
+): Promise<number> {
   const exitCode = await runSuite({
     argv: buildJourneyArgv(process.execPath, journey),
     cwd: REPO_ROOT,
     env: {
       ...process.env,
       E2E_KEEP: args.keep ? '1' : '0',
+      E2E_KEPT_PREFIXES: kept.join(','),
       E2E_ACCEPTANCE: args.acceptance ? '1' : '0',
       E2E_METRICS_FILE: METRICS_FILE,
     },
@@ -537,10 +491,10 @@ async function main(): Promise<number> {
         return suite === undefined ? [name] : listJourneys(suite);
       },
       keep: args.keep,
-      runJourney: (journey) => {
+      runJourney: (journey, kept) => {
         startedAt.set(journey, new Date());
 
-        return runJourneyProcess(journey, args);
+        return runJourneyProcess(journey, args, kept);
       },
       checkJourney: (suite, journey) =>
         checkNoBootFallbacks(suite, startedAt.get(journey) ?? new Date()),

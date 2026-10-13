@@ -12,7 +12,9 @@ import {
   runDevScript,
 } from './instance';
 import { checkPrivileges } from './privileges';
+import { removeDataDir } from './remove-data-dir';
 import { resetBaseline } from './reset-baseline';
+import { resolveDataWipe } from './resolve-data-wipe';
 
 // The moves suites' hosts: the run's own instance as A, and B beside it on
 // a Docker network, reached at its address there. B's data dir stays
@@ -229,6 +231,10 @@ export interface HostBFixtureDeps {
 
   // the baseline reset on B for the prefix
   readonly resetHost: (host: Readonly<DevInstance>, prefix: string) => Promise<void>;
+
+  // B down and its data dir emptied, so its next start makes it from nothing
+  readonly removeHost: (host: Readonly<DevInstance>) => Promise<void>;
+  readonly log: (line: string) => void;
 }
 
 function buildHostBFixtureDeps(): HostBFixtureDeps {
@@ -261,6 +267,19 @@ function buildHostBFixtureDeps(): HostBFixtureDeps {
 
       await resetBaseline({ client, prefixes: [prefix], dataDir: host.dataDir });
     },
+    removeHost: async (host) => {
+      // refused before anything goes, as for a dir that is no instance's
+      const target = await resolveDataWipe(host.dataDir);
+
+      await runDevScript('down', host);
+
+      if (target !== null) {
+        await removeDataDir(target);
+      }
+    },
+    log: (line) => {
+      console.error(line);
+    },
   };
 }
 
@@ -273,19 +292,38 @@ export function buildHostBFixture(
   const b = buildHostB(options);
   const reset = () => deps.resetHost(b, prefix);
 
+  // B up and saved in a fresh CLI config
+  const startLoggedIn = async () => {
+    await deps.startHost(b);
+
+    rmSync(deps.cliDir, { recursive: true, force: true });
+    mkdirSync(deps.cliDir, { recursive: true });
+
+    await deps.login(b, { XDG_CONFIG_HOME: deps.cliDir });
+  };
+
   return {
     start: async () => {
       await deps.removeLeftovers();
       await deps.createNetwork(names.network, buildMoveNetwork(readOffset()));
-      await deps.startHost(b);
 
-      rmSync(deps.cliDir, { recursive: true, force: true });
-      mkdirSync(deps.cliDir, { recursive: true });
+      await startLoggedIn();
 
-      await deps.login(b, { XDG_CONFIG_HOME: deps.cliDir });
+      // What an earlier, killed run or a failed journey left on B. A reset
+      // that fails makes B from nothing: a receiving imp whose source is
+      // gone stays marked, and impd refuses to remove it.
+      try {
+        await reset();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
 
-      // what an earlier, killed run left on B
-      await reset();
+        deps.log(`    ${b.container} could not be reset, so it starts from nothing: ${reason}`);
+
+        await deps.removeHost(b);
+
+        await startLoggedIn();
+        await reset();
+      }
     },
     reset,
     stop: async () => {

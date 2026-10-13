@@ -207,9 +207,9 @@ export const SUITES: readonly Suite[] = [
   },
   { name: 'memory', prefix: 'e2e-mem-', images: ['e2e-tiny'] },
 
-  // skips unless KSM runs on this host, as CI turns it on; impd cannot start
-  // with IMP_KSM elsewhere. One guest's memory as the budget, boots reserving
-  // 20 %, and no idle sleeps to hide a breach.
+  // skips unless KSM runs on this host, as CI turns it on; elsewhere impd
+  // cannot start with IMP_KSM, so the run's settings stay. One guest's memory
+  // as the budget, boots reserving 20 %, and no idle sleeps to hide a breach.
   {
     name: 'ksm',
     prefix: 'e2e-ksm-',
@@ -222,7 +222,7 @@ export const SUITES: readonly Suite[] = [
             IMP_BOOT_RESERVE_PERCENT: '20',
             IMP_IDLE_TIMEOUT_S: '600',
           }
-        : {},
+        : null,
   },
 
   // last: it reboots the instance with backups on, then off again

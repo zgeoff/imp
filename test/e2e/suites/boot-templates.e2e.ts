@@ -23,6 +23,9 @@ import { writeMetric } from '../lib/write-metric';
 // is its own machine. Each test removes the templates of its shape after
 // its imps, so a later run never starts on one.
 
+// Each test boots a memory size of its own: a template one test leaves
+// under --keep is no other test's.
+
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
@@ -178,28 +181,28 @@ test('it records each restored boot as its own cold boot, again after a restart 
 
   // the shape's template must be this test's own build, and goes after the
   // imps that boot it
-  await checkShapeTemplateAbsent(288);
+  await checkShapeTemplateAbsent(320);
 
-  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(320));
 
-  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', first, '--image', image, '--memory', '320', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
   await waitForExec(first);
-  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', spare, '--image', image, '--memory', '320', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
 
   await waitForExec(spare);
   await runImp('rm', spare);
-  await waitForShapeTemplate(288);
-  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1');
+  await waitForShapeTemplate(320);
+  await runImp('new', second, '--image', image, '--memory', '320', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
 
   await waitForExec(second);
-  await runImp('new', third, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', third, '--image', image, '--memory', '320', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, third));
 
@@ -240,23 +243,23 @@ test('it sleeps and wakes a restored imp like any other', async () => {
 
   // the shape's template must be this test's own build, and goes after the
   // imps that boot it
-  await checkShapeTemplateAbsent(288);
+  await checkShapeTemplateAbsent(336);
 
-  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(336));
 
-  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', first, '--image', image, '--memory', '336', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
   await waitForExec(first);
-  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', spare, '--image', image, '--memory', '336', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
 
   await waitForExec(spare);
   await runImp('rm', spare);
-  await waitForShapeTemplate(288);
-  await runImp('new', second, '--image', image, '--memory', '288', '--cpus', '1');
+  await waitForShapeTemplate(336);
+  await runImp('new', second, '--image', image, '--memory', '336', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, second));
 
@@ -286,22 +289,22 @@ test('it times imp new from a template: the wall time and its spans', async () =
 
   // the shape's template must be this test's own build, and goes after the
   // imps that boot it
-  await checkShapeTemplateAbsent(288);
+  await checkShapeTemplateAbsent(352);
 
-  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(288));
+  registerRemoval(ctx.stack, config.keep, () => removeShapeTemplates(352));
 
-  await runImp('new', first, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', first, '--image', image, '--memory', '352', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, first));
 
   await waitForExec(first);
-  await runImp('new', spare, '--image', image, '--memory', '288', '--cpus', '1');
+  await runImp('new', spare, '--image', image, '--memory', '352', '--cpus', '1');
 
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, spare));
 
   await waitForExec(spare);
   await runImp('rm', spare);
-  await waitForShapeTemplate(288);
+  await waitForShapeTemplate(352);
 
   // ten creates, one after another, each removed before the next
   for (let index = 0; index < 10; index += 1) {
@@ -311,7 +314,7 @@ test('it times imp new from a template: the wall time and its spans', async () =
 
     const wallStarted = performance.now();
 
-    await runImp('new', name, '--image', image, '--memory', '288', '--cpus', '1');
+    await runImp('new', name, '--image', image, '--memory', '352', '--cpus', '1');
 
     registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 

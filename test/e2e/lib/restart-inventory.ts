@@ -1,5 +1,6 @@
 import { listCheckpoints, listImps } from './imp-cli';
 import type { ImpRow } from './imp-cli';
+import { readSuitePrefix } from './suites';
 
 export interface InventoryEntry {
   readonly name: string;
@@ -35,6 +36,22 @@ export function findAwakeRows(rows: readonly Readonly<ImpRow>[]): readonly strin
   return rows
     .filter((row) => row.state !== 'sleeping' && row.state !== 'stopped')
     .map((row) => `${row.name} ${row.state}`);
+}
+
+// The names of scale's fleet when the harness kept it for this journey
+// (config.keptPrefixes), as scale names them: e2e-scale-01 on. None when it
+// kept no fleet, as when scale failed or did not run.
+export function buildKeptScaleFleet(keptPrefixes: readonly string[], scaleCount: number): string[] {
+  const prefix = readSuitePrefix('scale');
+
+  if (!keptPrefixes.includes(prefix)) {
+    return [];
+  }
+
+  return Array.from(
+    { length: scaleCount },
+    (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`,
+  );
 }
 
 // every imp on the instance by name, as buildInventoryEntry keeps it

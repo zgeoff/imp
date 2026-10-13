@@ -11,7 +11,9 @@ export interface RunSuitesDeps {
 
   // runs one journey file to its exit and returns its exit code; the caller
   // forgets the journey's process group once this settles, before any reset
-  readonly runJourney: (journey: string) => Promise<number>;
+
+  // `kept`: the prefixes of the imps a passing scale kept for restart
+  readonly runJourney: (journey: string, kept: readonly string[]) => Promise<number>;
 
   // what else decides a journey's verdict, such as the boot-fallback scan
   readonly checkJourney: (suite: string, journey: string) => Promise<boolean>;
@@ -151,7 +153,7 @@ export async function runSuites(deps: Readonly<RunSuitesDeps>): Promise<RunSuite
         }
       }
 
-      const verdict = await runChecked(deps, name, journey);
+      const verdict = await runChecked(deps, name, journey, carried);
 
       isKept = isKeptForRestart && verdict.isPassed && verdict.isClean;
 
@@ -411,11 +413,12 @@ async function runChecked(
   deps: Readonly<RunSuitesDeps>,
   suite: string,
   journey: string,
+  kept: readonly string[],
 ): Promise<JourneyVerdict> {
   let isPassed = false;
 
   try {
-    const exitCode = await deps.runJourney(journey);
+    const exitCode = await deps.runJourney(journey, kept);
 
     isPassed = exitCode === 0;
   } catch (error) {

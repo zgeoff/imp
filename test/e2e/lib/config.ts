@@ -36,6 +36,12 @@ export const config = {
 
   keep: process.env['E2E_KEEP'] === '1',
 
+  // the prefixes whose imps the suite before kept for this journey, as a
+  // passing scale keeps its fleet for restart (run-suites.ts)
+  keptPrefixes: (process.env['E2E_KEPT_PREFIXES'] ?? '')
+    .split(',')
+    .filter((prefix) => prefix !== ''),
+
   // the full definition of done: tailscale fails instead of skipping
   acceptance: process.env['E2E_ACCEPTANCE'] === '1',
 
