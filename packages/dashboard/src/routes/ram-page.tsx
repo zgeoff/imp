@@ -1,3 +1,4 @@
+import { formatMib } from '@imp/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { Imp } from '@zgeoff/imp-client';
@@ -5,7 +6,6 @@ import { ErrorText } from '../components/error-text';
 import { RamMeter } from '../components/ram-meter';
 import { StateBadge } from '../components/state-badge';
 import tableStyles from '../components/table.module.css';
-import { formatMib } from '../lib/format';
 import { useImpd } from '../lib/impd';
 import { LIVE } from '../lib/live';
 import styles from './page.module.css';

@@ -1,3 +1,4 @@
+import { formatBytes } from '@imp/shared';
 import type { Imp } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
 import {
@@ -199,17 +200,4 @@ function formatSeconds(ms: number): string {
   const minutes = Math.round(seconds / 60);
 
   return minutes < 120 ? `${String(minutes)}m` : `${String(Math.round(minutes / 60))}h`;
-}
-
-function formatBytes(bytes: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let value = bytes;
-  let unit = 0;
-
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-
-  return `${unit === 0 ? String(value) : value.toFixed(1)} ${units[unit] ?? 'B'}`;
 }

@@ -23,6 +23,7 @@
   "devDependencies": {
     "@imp/api": "workspace:*",
     "@imp/daemon": "workspace:*",
+    "@imp/shared": "workspace:*",
     "@imp/test-utils": "workspace:*",
     "msw": "catalog:",
     "tsdown": "catalog:"

@@ -5,6 +5,7 @@ import {
   ImageBuildResultSchema,
 } from '@imp/api';
 import type { Image, ImageBuildProgress } from '@imp/api';
+import { splitLines } from '@imp/shared';
 import { ORPCError } from '@orpc/client';
 
 // The image of impd's answer to `POST /images/build`: a stream of events, or
@@ -78,25 +79,15 @@ async function readBuildEvents(
   });
 }
 
+// each line of the body, as it completes
 async function* readLines(response: Response): AsyncGenerator<string> {
   if (response.body === null) {
     return;
   }
 
-  const decoder = new TextDecoder();
-
-  let pending = '';
-
-  for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
-    pending += decoder.decode(chunk, { stream: true });
-
-    const lines = pending.split('\n');
-
-    pending = lines.pop() ?? '';
-    yield* lines;
-  }
-
-  yield pending + decoder.decode();
+  yield* response.body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(splitLines()) as AsyncIterable<string>;
 }
 
 function parseJson(line: string): unknown {

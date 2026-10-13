@@ -1,6 +1,7 @@
+import { formatMib } from '@imp/shared';
 import { Link } from '@tanstack/react-router';
 import type { Imp } from '@zgeoff/imp-client';
-import { formatCpuUse, formatDiskUse, formatMib, formatRelativeTime } from '../lib/format';
+import { formatCpuUse, formatDiskUse, formatRelativeTime } from '../lib/format';
 import { ImpActions } from './imp-actions';
 import { ImpNotes } from './imp-notes';
 import { StateBadge } from './state-badge';

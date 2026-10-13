@@ -1,3 +1,4 @@
+import { splitLines } from '@imp/shared';
 import * as z from 'zod';
 
 // what this stand-in reads of an events.stream data line, as `/rpc` sends it
@@ -33,28 +34,6 @@ export function buildStubImpdWithNewReason(
 
     return new Response(body, { status: response.status, headers: response.headers });
   };
-}
-
-// each line of the text, without its newline, as it completes
-function splitLines(): TransformStream<string, string> {
-  const state = { pending: '' };
-
-  return new TransformStream<string, string>({
-    transform: (chunk, controller) => {
-      const lines = `${state.pending}${chunk}`.split('\n');
-
-      state.pending = lines.pop() ?? '';
-
-      for (const line of lines) {
-        controller.enqueue(line);
-      }
-    },
-    flush: (controller) => {
-      if (state.pending !== '') {
-        controller.enqueue(state.pending);
-      }
-    },
-  });
 }
 
 // an SSE data line of an ImpChanged event, with `reason` in place of its own

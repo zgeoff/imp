@@ -1,3 +1,4 @@
+import { formatBytes, formatMib } from '@imp/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { Imp } from '@zgeoff/imp-client';
@@ -10,7 +11,7 @@ import { ForkDialog } from '../components/fork-dialog';
 import { ImpActions } from '../components/imp-actions';
 import { ImpNotes } from '../components/imp-notes';
 import { StateBadge } from '../components/state-badge';
-import { formatBytes, formatDiskUse, formatMib, formatRelativeTime } from '../lib/format';
+import { formatDiskUse, formatRelativeTime } from '../lib/format';
 import { useImpd } from '../lib/impd';
 import { LIVE, SLOW } from '../lib/live';
 import { useNow } from '../lib/use-now';

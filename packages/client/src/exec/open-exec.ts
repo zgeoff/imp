@@ -535,28 +535,7 @@ function buildOutputStream(channel: 'stdout' | 'stderr', hooks: Readonly<OutputH
 }
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
+  const buffer = await new Response(stream).arrayBuffer();
 
-  for (;;) {
-    const result = await reader.read();
-
-    if (result.done) {
-      break;
-    }
-
-    chunks.push(result.value);
-  }
-
-  const all = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
-
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    all.set(chunk, offset);
-
-    offset += chunk.byteLength;
-  }
-
-  return all;
+  return new Uint8Array(buffer);
 }

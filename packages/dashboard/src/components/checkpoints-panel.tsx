@@ -1,7 +1,8 @@
+import { formatBytes } from '@imp/shared';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { Checkpoint } from '@zgeoff/imp-client';
 import { useState } from 'react';
-import { formatBytes, formatRelativeTime } from '../lib/format';
+import { formatRelativeTime } from '../lib/format';
 import { useImpd } from '../lib/impd';
 import { SLOW } from '../lib/live';
 import { readText } from '../lib/read-form';

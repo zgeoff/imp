@@ -1,3 +1,5 @@
+import { mergeBytes } from '@imp/shared';
+
 // One output stream, held to `maxBytes`: the first `headBytes` and the last
 // bytes up to the cap. The middle is dropped, where the least is lost: a
 // build's first error is near the head, its summary near the tail.
@@ -81,22 +83,6 @@ export function createOutputCollector(maxBytes: number, headBytes: number): Outp
       droppedBytes: counts.dropped,
     }),
   };
-}
-
-function mergeBytes(chunks: readonly Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-
-  const joined = new Uint8Array(total);
-
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    joined.set(chunk, offset);
-
-    offset += chunk.byteLength;
-  }
-
-  return joined;
 }
 
 // The text an agent reads: invalid UTF-8 becomes U+FFFD, and a marker says

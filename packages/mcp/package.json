@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@imp/api": "workspace:*",
+    "@imp/shared": "workspace:*",
     "@modelcontextprotocol/server": "2.3.1",
     "@zgeoff/imp-client": "workspace:*",
     "zod": "catalog:"
