@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ImpSchema } from '../imp-schema';
+import { ImpSchema } from '../schemas/imp-schema';
 import { buildMockImp } from './build-mock-imp';
 
 test('it builds a default imp', () => {

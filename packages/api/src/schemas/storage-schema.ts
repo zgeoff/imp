@@ -60,5 +60,3 @@ export const DatabaseCopySchema = z.object({
   createdAt: z.date(),
   integrity: z.string(),
 });
-
-export type DatabaseCopy = z.infer<typeof DatabaseCopySchema>;

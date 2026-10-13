@@ -72,8 +72,6 @@ export const BackupCheckSubsetSchema = z
   .string()
   .regex(/^(?:\d+\/\d+|\d+(?:\.\d+)?%|\d+[KMGT]?)$/v);
 
-export type BackupPoint = z.infer<typeof BackupPointSchema>;
-
 export type BackupStatus = z.infer<typeof BackupStatusSchema>;
 
 export type BackupRun = z.infer<typeof BackupRunSchema>;

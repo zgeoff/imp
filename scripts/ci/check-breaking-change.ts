@@ -2,8 +2,8 @@
 // docs/runbooks/releasing.md#breaking-changes describes. Reads BASE_SHA,
 // HEAD_SHA, PR_NUMBER, PR_TITLE and PR_BODY, and runs git in the working dir.
 import * as z from 'zod';
-import { ProtocolSchemaSchema } from '../../packages/api/src/build-protocol-schema';
-import type { ProtocolSchema } from '../../packages/api/src/build-protocol-schema';
+import { ProtocolSchemaSchema } from '../../packages/api/src/protocols/build-protocol-schema';
+import type { ProtocolSchema } from '../../packages/api/src/protocols/build-protocol-schema';
 import { PROTOCOL_SCHEMA_FILE } from '../render-protocol-schema';
 import { collectBreakingChanges } from './collect-breaking-changes';
 import { isMarkedBreaking } from './is-marked-breaking';

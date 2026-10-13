@@ -1,22 +1,16 @@
 import * as z from 'zod';
+import { BasicUserSchema } from './exposure-schema';
 import { NameSchema } from './name-schema';
 
 // The same form as an imp name, so a secret name is never a path or a flag
 // (impd keeps each value in a file by that name).
-export const SecretNameSchema = z
-  .string()
-  .regex(
-    /^[a-z][a-z0-9-]{0,30}$/,
-    'must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
-  );
+export const SecretNameSchema = NameSchema;
 
 // Printable ASCII without spaces: every API token is, and a value with CR or
 // LF could split the header impd sets from it.
-export const SecretValueSchema = z
-  .string()
-  .min(1)
-  .max(8192)
-  .regex(/^[!-~]+$/, 'must be printable ASCII without spaces');
+const PrintableSchema = z.string().regex(/^[!-~]+$/, 'must be printable ASCII without spaces');
+
+export const SecretValueSchema = PrintableSchema.min(1).max(8192);
 
 // A hostname as a CONNECT names it: lowercase, no port, no wildcard. The last
 // label starts with a letter, so an IP address is never one.
@@ -73,10 +67,7 @@ export const BrokerRuleSchema = z.object({
     .string()
     .regex(/^[a-z0-9-]{1,64}$/, 'must be a lowercase header name such as authorization'),
   scheme: z.enum(['bearer', 'basic', 'raw']),
-  user: z
-    .string()
-    .regex(/^[!-9;-~]{1,64}$/, 'must be printable ASCII without a colon')
-    .optional(),
+  user: BasicUserSchema.optional(),
   upstream: BrokerUpstreamSchema.optional(),
 });
 
@@ -94,11 +85,7 @@ export type SecretKind = z.infer<typeof SecretKindSchema>;
 // application/x-www-form-urlencoded, `json` a JSON body.
 export const OAuthConfigSchema = z.object({
   tokenUrl: z.url({ protocol: /^https$/ }).max(2048),
-  clientId: z
-    .string()
-    .min(1)
-    .max(256)
-    .regex(/^[!-~]+$/, 'must be printable ASCII without spaces'),
+  clientId: PrintableSchema.min(1).max(256),
   tokenFormat: z.enum(['json', 'form']).default('form'),
 });
 

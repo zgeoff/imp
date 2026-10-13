@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ImageSchema } from '../image-schema';
+import { ImageSchema } from '../schemas/image-schema';
 import { buildMockImage } from './build-mock-image';
 
 test('it builds a default image', () => {

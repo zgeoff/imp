@@ -1,24 +1,5 @@
+import { formatBytes, formatMib } from '@imp/shared';
 import type { Imp } from '@zgeoff/imp-client';
-
-const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'] as const;
-
-export function formatBytes(bytes: number): string {
-  let value = bytes;
-  let unit = 0;
-
-  while (value >= 1024 && unit < UNITS.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-
-  const digits = unit === 0 || value >= 100 ? 0 : 1;
-
-  return `${value.toFixed(digits)} ${UNITS[unit] ?? 'B'}`;
-}
-
-export function formatMib(mib: number): string {
-  return formatBytes(mib * 1024 * 1024);
-}
 
 const RELATIVE_STEPS = [
   { limit: 60, divisor: 1, unit: 's' },
@@ -61,19 +42,4 @@ export function formatDiskUse(imp: Imp): string {
   const partial = usage.isPartial ? '?' : '';
 
   return `${bound}${formatBytes(usage.exclusiveBytes)}${partial} / ${size}`;
-}
-
-// "45s", "12m", "3h 20m"
-export function formatDuration(ms: number): string {
-  const minutes = Math.floor(ms / 60_000);
-
-  if (minutes < 1) {
-    return `${String(Math.floor(ms / 1000))}s`;
-  }
-
-  if (minutes < 60) {
-    return `${String(minutes)}m`;
-  }
-
-  return `${String(Math.floor(minutes / 60))}h ${String(minutes % 60)}m`;
 }

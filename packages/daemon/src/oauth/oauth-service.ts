@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { ScopeSchema, hasScope } from '@imp/api';
 import type { OAuthApproval, OAuthClient, OAuthGrant, Scope } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildForbiddenError, buildNotFoundError } from '../api-errors';
 import type { Caller } from '../auth/caller';
 import type { Revocations } from '../auth/revocations';
-import { hasScope } from '../auth/scopes';
 import { ROOT_TOKEN_ID } from '../auth/token-store';
 import type { TokenStore } from '../auth/token-store';
 import {
@@ -71,7 +71,6 @@ const AUTHORIZE_BUCKET = { size: 10, refillMs: 6000 };
 // failed token requests per client; a valid one is never charged
 const TOKEN_FAILURE_BUCKET = { size: 30, refillMs: 2000 };
 const APPROVE_FAILURE_BUCKET = { size: 20, refillMs: 3000 };
-const SCOPES: readonly Scope[] = ['read', 'exec', 'manage'];
 
 // the failure bucket token requests from no known client share
 const UNKNOWN_CLIENT_KEY = '';
@@ -1017,7 +1016,9 @@ function readScopeList(text: string | null): Scope[] | null {
     return ['read'];
   }
 
-  const scopes = words.filter((word): word is Scope => SCOPES.some((scope) => scope === word));
+  const scopes = words.filter((word): word is Scope =>
+    ScopeSchema.options.some((scope) => scope === word),
+  );
 
   return scopes.length === words.length ? scopes : null;
 }

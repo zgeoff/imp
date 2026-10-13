@@ -1,7 +1,6 @@
-import { isImpAllowed } from '@imp/api';
+import { hasScope, isImpAllowed } from '@imp/api';
 import type { ApiActor, Identity, Scope } from '@imp/api';
 import type { GrantableSecret } from '../db/tokens';
-import { hasScope } from './scopes';
 
 // Who a request runs as (docs/guides/tokens.md): a token, the dashboard
 // session made with one, an ssh key, a tailnet identity, or an OAuth grant

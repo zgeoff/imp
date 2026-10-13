@@ -1,13 +1,11 @@
-import type { ColdBoot, ImpState } from '@imp/api';
+import type { IMP_ERRORS } from '@imp/api';
+import type { ReadonlyFields } from '@imp/shared';
+import type * as z from 'zod';
 import { ExecError } from './exec-error';
 
 // INVALID_STATE's data; coldBoots is set for an attach with wake: false to
 // an imp that is not running, unless it is still being created
-export interface InvalidStateData {
-  readonly state: ImpState;
-  readonly allowed: readonly ImpState[];
-  readonly coldBoots?: readonly ColdBoot[] | undefined;
-}
+export type InvalidStateData = ReadonlyFields<z.infer<typeof IMP_ERRORS.INVALID_STATE.data>>;
 
 // The imp is not in a state that allows this.
 export class InvalidStateError extends ExecError {

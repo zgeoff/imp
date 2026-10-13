@@ -1,22 +1,21 @@
 import { eventIterator, oc } from '@orpc/contract';
 import * as z from 'zod';
-import { ApiCallSchema } from './api-call-schema';
+import { DockerfilePathSchema, ImageOpEventSchema } from '../protocols/image-build-protocol';
+import { ApiCallSchema } from '../schemas/api-call-schema';
 import {
   BackupCheckSubsetSchema,
   BackupRestoreSchema,
   BackupRunSchema,
   BackupStatusSchema,
-} from './backup-schema';
-import { CheckpointSchema } from './checkpoint-schema';
-import { EgressPolicySchema } from './egress-schema';
-import { ImpEventSchema } from './event-schema';
-import { ExposeInputSchema, ExposeResultSchema } from './exposure-schema';
-import { DockerfilePathSchema, ImageOpEventSchema } from './image-build-protocol';
-import { ImageRefSchema } from './image-ref-schema';
-import { ImageSchema } from './image-schema';
-import { IMP_ERRORS } from './imp-errors';
-import { ForkResultSchema, ImpSchema } from './imp-schema';
-import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
+} from '../schemas/backup-schema';
+import { CheckpointSchema } from '../schemas/checkpoint-schema';
+import { EgressPolicySchema } from '../schemas/egress-schema';
+import { ImpEventSchema } from '../schemas/event-schema';
+import { ExposeInputSchema, ExposeResultSchema } from '../schemas/exposure-schema';
+import { ImageRefSchema } from '../schemas/image-ref-schema';
+import { ImageSchema } from '../schemas/image-schema';
+import { ForkResultSchema, ImpSchema } from '../schemas/imp-schema';
+import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from '../schemas/lease-schema';
 import {
   MovePlanSchema,
   MoveStatusSchema,
@@ -24,9 +23,9 @@ import {
   PeerUrlSchema,
   WarmHostSchema,
   WarmMoveSchema,
-} from './move-schema';
-import { NameSchema } from './name-schema';
-import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
+} from '../schemas/move-schema';
+import { NameSchema } from '../schemas/name-schema';
+import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from '../schemas/network-schema';
 import {
   ApprovalCodeSchema,
   GrantPatternSchema,
@@ -34,7 +33,7 @@ import {
   OAuthClientSchema,
   OAuthGrantSchema,
   RedirectUrisSchema,
-} from './oauth-schema';
+} from '../schemas/oauth-schema';
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
@@ -44,24 +43,24 @@ import {
   SecretNameSchema,
   SecretSchema,
   SecretValueSchema,
-} from './secret-schema';
+} from '../schemas/secret-schema';
 import {
   SERVICE_LOG_MAX_LINES,
   ServiceDefSchema,
   ServiceListSchema,
   ServiceLogSchema,
   ServiceNameSchema,
-} from './service-schema';
+} from '../schemas/service-schema';
 import {
   SessionLogDeleteInputSchema,
   SessionLogListInputSchema,
   SessionLogReadInputSchema,
   SessionLogReadSchema,
   SessionLogSchema,
-} from './session-log-schema';
-import { SessionNameSchema, SessionSchema } from './session-schema';
-import { DatabaseCopySchema, StorageGcSchema } from './storage-schema';
-import { SystemInfoSchema } from './system-info-schema';
+} from '../schemas/session-log-schema';
+import { SessionNameSchema, SessionSchema } from '../schemas/session-schema';
+import { DatabaseCopySchema, StorageGcSchema } from '../schemas/storage-schema';
+import { SystemInfoSchema } from '../schemas/system-info-schema';
 import {
   GrantableSchema,
   GrantableUpdateSchema,
@@ -72,7 +71,8 @@ import {
   SshKeySchema,
   SshPublicKeySchema,
   TokenSchema,
-} from './token-schema';
+} from '../schemas/token-schema';
+import { IMP_ERRORS } from './imp-errors';
 
 const base = oc.errors(IMP_ERRORS);
 const NameInputSchema = z.object({ name: NameSchema });
@@ -96,6 +96,12 @@ const LeaseInputSchema = z.object({
 // refuses more than the host has.
 const CpuLimitSchema = z.number().min(0.1);
 
+// the guest's cores, which the host's limit then shares out
+const VcpusSchema = z.int().min(1).max(32);
+
+// a TCP port in the guest
+const PortSchema = z.int().min(1).max(65_535);
+
 // cgroup v2 cpu.weight; 100 is the default share
 const CpuWeightSchema = z.int().min(1).max(10_000);
 
@@ -114,43 +120,48 @@ const ImageBuildInputSchema = z.object({
   dockerfile: DockerfilePathSchema.optional(),
 });
 
+// imps.create's input, which the MCP tool imp_create picks its fields from
+export const ImpCreateInputSchema = z.object({
+  name: NameSchema.optional(),
+  image: NameSchema.optional(),
+  vcpus: VcpusSchema.optional(),
+  memoryMib: z.int().min(128).optional(),
+
+  // what the guest may grow to under memory pressure, at most 4 ×
+  // memoryMib; memoryMib by default, which never grows
+  maxMemoryMib: z.int().min(128).optional(),
+
+  // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
+  diskMib: z.int().min(1024).optional(),
+
+  // the guest port the wake proxy forwards HTTP to (default 8080)
+  httpPort: PortSchema.optional(),
+
+  // what the imp may reach directly (default open)
+  policy: EgressPolicySchema.optional(),
+
+  // null, the default, is no limit
+  cpuLimit: CpuLimitSchema.nullable().optional(),
+  cpuWeight: CpuWeightSchema.optional(),
+
+  // networks it joins, which must exist; host-wide callers only
+  networks: z.array(NameSchema).max(MAX_CREATE_NETWORKS).optional(),
+
+  // false leaves the imp's disk and checkpoints out of every backup
+  // run, for its life (default true); an impd without
+  // features.backupOptOut ignores it, so check that first
+  backup: z.boolean().optional(),
+});
+
+// checkpoints.create's input, which the MCP tool imp_checkpoint builds on
+export const CheckpointCreateInputSchema = z.object({
+  name: NameSchema,
+  label: z.string().min(1).max(64).optional(),
+});
+
 export const impContract = {
   imps: {
-    create: base
-      .input(
-        z.object({
-          name: NameSchema.optional(),
-          image: NameSchema.optional(),
-          vcpus: z.int().min(1).max(32).optional(),
-          memoryMib: z.int().min(128).optional(),
-
-          // what the guest may grow to under memory pressure, at most 4 ×
-          // memoryMib; memoryMib by default, which never grows
-          maxMemoryMib: z.int().min(128).optional(),
-
-          // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
-          diskMib: z.int().min(1024).optional(),
-
-          // the guest port the wake proxy forwards HTTP to (default 8080)
-          httpPort: z.int().min(1).max(65_535).optional(),
-
-          // what the imp may reach directly (default open)
-          policy: EgressPolicySchema.optional(),
-
-          // null, the default, is no limit
-          cpuLimit: CpuLimitSchema.nullable().optional(),
-          cpuWeight: CpuWeightSchema.optional(),
-
-          // networks it joins, which must exist; host-wide callers only
-          networks: z.array(NameSchema).max(MAX_CREATE_NETWORKS).optional(),
-
-          // false leaves the imp's disk and checkpoints out of every backup
-          // run, for its life (default true); an impd without
-          // features.backupOptOut ignores it, so check that first
-          backup: z.boolean().optional(),
-        }),
-      )
-      .output(ImpSchema),
+    create: base.input(ImpCreateInputSchema).output(ImpSchema),
 
     // image builders only with `builders`; an impd from before them
     // ignores it
@@ -241,8 +252,8 @@ export const impContract = {
           name: NameSchema,
           cpuLimit: CpuLimitSchema.nullable().optional(),
           cpuWeight: CpuWeightSchema.optional(),
-          vcpus: z.int().min(1).max(32).optional(),
-          httpPort: z.int().min(1).max(65_535).optional(),
+          vcpus: VcpusSchema.optional(),
+          httpPort: PortSchema.optional(),
         }),
       )
       .output(ImpSchema),
@@ -327,14 +338,7 @@ export const impContract = {
   },
 
   checkpoints: {
-    create: base
-      .input(
-        z.object({
-          name: NameSchema,
-          label: z.string().min(1).max(64).optional(),
-        }),
-      )
-      .output(CheckpointSchema),
+    create: base.input(CheckpointCreateInputSchema).output(CheckpointSchema),
 
     list: base.input(NameInputSchema).output(z.array(CheckpointSchema)),
 

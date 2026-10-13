@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { IdentitySchema } from '../token-schema';
+import { IdentitySchema } from '../schemas/token-schema';
 import { buildMockIdentity } from './build-mock-identity';
 
 test('it builds a default identity', () => {

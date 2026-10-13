@@ -1,6 +1,9 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
+    // Uint8Array's base64 methods, which Bun has; the client's published types
+    // stay on ES2024 (packages/tsconfig.client-dts.json)
+    "lib": ["ES2024", "ESNext.TypedArrays"],
     "types": ["bun", "@zgeoff/bun-test-extended"]
   },
   "include": [

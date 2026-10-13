@@ -1,10 +1,10 @@
 import type { Lease, LeaseSummary } from '@imp/api';
+import { hasScope } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildForbiddenError, readCallerData } from '../api-errors';
 import type { LeaseRecord } from '../db/leases';
 import { formatCaller, isCallerAllowed } from './caller';
 import type { Caller } from './caller';
-import { hasScope } from './scopes';
 
 // What a caller may see of other callers' leases and of the imps a refusal
 // names (docs/guides/leases.md#owners). A null caller is an event's reader,

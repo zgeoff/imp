@@ -1,3 +1,4 @@
+import { formatBytes } from '@imp/shared';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { Image } from '@zgeoff/imp-client';
 import { useState } from 'react';
@@ -6,7 +7,7 @@ import { ConfirmDialog } from '../components/confirm-dialog';
 import { ErrorText } from '../components/error-text';
 import formStyles from '../components/form.module.css';
 import tableStyles from '../components/table.module.css';
-import { formatBytes, formatRelativeTime } from '../lib/format';
+import { formatRelativeTime } from '../lib/format';
 import { useImpd } from '../lib/impd';
 import { SLOW } from '../lib/live';
 import { readText } from '../lib/read-form';

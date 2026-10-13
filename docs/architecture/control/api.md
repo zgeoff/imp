@@ -7,6 +7,11 @@ beside it, because they need a shape a procedure call does not have: two-way str
 dashboard's files, the MCP endpoint, the login, and the routes a move's two hosts speak.
 [Auth](./auth.md) covers who may call what.
 
+The contract package splits by role: the contract itself, the schemas its procedures are built from,
+the wire protocols of the routes beside it, and the rules that impd and its clients both apply, such
+as how scopes nest and which imps a pattern allows. A client derives its types from those schemas
+rather than writing them again.
+
 ## Procedures
 
 A control call, such as a create, a checkpoint or a token change, is an oRPC procedure. The contract

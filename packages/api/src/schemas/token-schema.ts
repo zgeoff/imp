@@ -22,20 +22,16 @@ export const MAX_SSH_KEYS = 16;
 // the most secret names one token may grant
 const MAX_GRANTABLE = 32;
 
-// The secrets a token limited to some imps may grant to them and revoke
-// (docs/guides/tokens.md#granting-secrets): exact names, no two the same
-export const GrantableSchema = z
-  .array(SecretNameSchema)
-  .min(1)
-  .max(MAX_GRANTABLE)
-  .refine((names) => new Set(names).size === names.length, 'must not name a secret twice');
-
 // The whole list a tokens.update sets, as GrantableSchema; empty clears it
 // (docs/guides/tokens.md#change-the-list)
 export const GrantableUpdateSchema = z
   .array(SecretNameSchema)
   .max(MAX_GRANTABLE)
   .refine((names) => new Set(names).size === names.length, 'must not name a secret twice');
+
+// The secrets a token limited to some imps may grant to them and revoke
+// (docs/guides/tokens.md#granting-secrets): exact names, no two the same
+export const GrantableSchema = GrantableUpdateSchema.min(1);
 
 // An SSH public key line, as in a `.pub` file: `<type> <base64> [comment]`
 export const SshPublicKeySchema = z.string().trim().min(1).max(16_384);

@@ -1,6 +1,5 @@
-import { GrantPatternSchema } from '@imp/api';
+import { GrantPatternSchema, hasScope } from '@imp/api';
 import type { Scope } from '@imp/api';
-import { hasScope } from '../auth/scopes';
 
 // A grant never outgrows the token that approved it
 // (docs/guides/mcp.md#public-route); its narrow pattern grammar makes

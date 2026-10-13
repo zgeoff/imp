@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { Image } from '../image-schema';
+import type { Image } from '../schemas/image-schema';
 
 // An image pulled from a registry, with every field filled. The date counts
 // back from faker's reference date, which the preload fixes, so a seed gives

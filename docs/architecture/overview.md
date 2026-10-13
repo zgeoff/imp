@@ -7,8 +7,10 @@ costs no copy. One host runs every imp, and one daemon, impd, owns them all. imp
 imp under a RAM budget the owner sets, and sleeps the least recently active ones to make room.
 
 The code is one Bun workspace and one Go module. impd is `packages/daemon`. Its typed contract,
-`packages/api`, is shared with the CLI, the npm client, the MCP server and the dashboard. The guest
-agent is `agent/`.
+`packages/api`, is shared with the CLI, the npm client, the MCP server and the dashboard. Helpers
+that know nothing about imps, such as byte and duration formats, live in `packages/shared`, which
+imports no other workspace package and no Node module, so the dashboard and the published client can
+bundle it. The guest agent is `agent/`.
 
 ## The path of a request
 

@@ -1,3 +1,5 @@
+import { ScopeSchema } from '@imp/api';
+
 // The public route's discovery documents: protected resource metadata
 // (RFC 9728) for `<origin>/mcp`, and authorization server metadata (RFC
 // 8414) for the issuer `<origin>`
@@ -8,15 +10,14 @@ export const AUTHORIZE_PATH = '/oauth/authorize';
 export const TOKEN_PATH = '/oauth/token';
 export const REVOKE_PATH = '/oauth/revoke';
 
-// what a client may ask for; offline_access is left out: every grant gets a
-// refresh token already
-const SCOPES = ['read', 'exec', 'manage'];
-
 export function buildProtectedResourceMetadata(issuer: string, resource: string) {
   return {
     resource,
     authorization_servers: [issuer],
-    scopes_supported: SCOPES,
+
+    // what a client may ask for; offline_access is left out: every grant
+    // gets a refresh token already
+    scopes_supported: ScopeSchema.options,
     bearer_methods_supported: ['header'],
     resource_name: 'imp',
   };
@@ -34,7 +35,7 @@ export function buildAuthorizationServerMetadata(issuer: string) {
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: SCOPES,
+    scopes_supported: ScopeSchema.options,
     authorization_response_iss_parameter_supported: true,
     client_id_metadata_document_supported: false,
   };

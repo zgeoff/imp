@@ -1,6 +1,7 @@
 import {
   DETACH_REASONS,
   EXEC_CHANNELS,
+  EXEC_HIGH_WATER_BYTES,
   EXEC_MAX_STDIN_FRAME_BYTES,
   EXEC_STDIN_WINDOW_BYTES,
   EXEC_STDOUT_WINDOW_BYTES,
@@ -54,9 +55,6 @@ export interface ExecSession {
   readonly handleDrain: () => void;
 }
 
-// above this many queued bytes, output waits; the agent connection then stops
-// reading, so a slow client slows the guest process instead of growing memory
-const HIGH_WATER_BYTES = 1_048_576;
 const DRAIN_POLL_MS = 100;
 
 // One `/exec` WebSocket (packages/api exec-protocol): `start` or `attach`
@@ -170,8 +168,10 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
   const drainWaiter: { wake: (() => void) | null } = { wake: null };
 
+  // output waits while the client is behind; the agent connection then stops
+  // reading, so a slow client slows the guest process instead of growing memory
   const waitForPeerDrain = async (): Promise<void> => {
-    while (!state.closed && peer.readBufferedAmount() > HIGH_WATER_BYTES) {
+    while (!state.closed && peer.readBufferedAmount() > EXEC_HIGH_WATER_BYTES) {
       const drained = Promise.withResolvers<void>();
 
       drainWaiter.wake = drained.resolve;

@@ -1,13 +1,12 @@
 import * as z from 'zod';
 import { NameSchema } from './name-schema';
+import { OffsetSchema } from './offset-schema';
 import { ExecutionGenerationSchema } from './session-output-schema';
 import { SessionNameSchema } from './session-schema';
 
 // Session logs (docs/guides/session-logs.md): the output of a session
 // started with `log`, kept on the host per generation, read with the ring's
 // offsets and gap rules.
-
-const OffsetSchema = z.int().nonnegative();
 
 // the most one read returns; a client reads on from the offset after it
 export const SESSION_LOG_READ_MAX_BYTES = 1_048_576;

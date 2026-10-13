@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { SessionSchema } from '../session-schema';
+import { SessionSchema } from '../schemas/session-schema';
 import { buildMockSession } from './build-mock-session';
 
 test('it builds a default session', () => {

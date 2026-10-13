@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { TokenSchema } from '../token-schema';
+import { TokenSchema } from '../schemas/token-schema';
 import { buildMockToken } from './build-mock-token';
 
 test('it builds a default token', () => {

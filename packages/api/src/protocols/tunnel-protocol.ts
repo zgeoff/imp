@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { NameSchema } from './name-schema';
+import { NameSchema } from '../schemas/name-schema';
 
 // `/tunnel` WebSocket for `imp proxy`, one per TCP connection, bearer auth only.
 // The client sends `open` and waits for `opened`; binary messages then carry
@@ -45,6 +45,8 @@ const TunnelListenSchema = z
         : listen.port === undefined,
     { message: 'tcp takes a port, unix a path or null', path: ['network'] },
   );
+
+export type TunnelListen = z.infer<typeof TunnelListenSchema>;
 
 export const TunnelClientMessageSchema = z.discriminatedUnion('type', [
   z.object({

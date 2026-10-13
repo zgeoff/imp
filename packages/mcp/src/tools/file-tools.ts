@@ -199,7 +199,7 @@ function formatFailure(result: Readonly<CappedRunResult>, what: string): string 
 // null for bytes that are not UTF-8
 function encodeContent(bytes: Uint8Array, encoding: 'utf8' | 'base64'): string | null {
   if (encoding === 'base64') {
-    return Buffer.from(bytes).toString('base64');
+    return bytes.toBase64();
   }
 
   try {
@@ -209,18 +209,15 @@ function encodeContent(bytes: Uint8Array, encoding: 'utf8' | 'base64'): string |
   }
 }
 
-const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
-
 function decodeContent(content: string, encoding: 'utf8' | 'base64'): Uint8Array {
   if (encoding === 'utf8') {
     return new TextEncoder().encode(content);
   }
 
-  const compact = content.replaceAll(/\s/g, '');
-
-  if (compact.length % 4 !== 0 || !BASE64.test(compact)) {
+  // whitespace between the characters is skipped; the padding must be whole
+  try {
+    return Uint8Array.fromBase64(content, { lastChunkHandling: 'strict' });
+  } catch {
     throw new Error('content is not valid base64');
   }
-
-  return new Uint8Array(Buffer.from(compact, 'base64'));
 }

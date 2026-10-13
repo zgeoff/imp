@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker';
-import { EVENT_VERSION } from '../event-schema';
-import type { ImpEvent } from '../event-schema';
+import { EVENT_VERSION } from '../schemas/event-schema';
+import type { ImpEvent } from '../schemas/event-schema';
 
 type GovernorDecision = Extract<ImpEvent, { ev: 'GovernorDecision' }>;
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { OAuthConfigSchema } from '../secret-schema';
+import { OAuthConfigSchema } from '../schemas/secret-schema';
 import { buildMockOAuthConfig } from './build-mock-oauth-config';
 
 test('it builds a default oauth config', () => {

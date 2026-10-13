@@ -2,7 +2,7 @@
 // `--check` writes nothing and fails on a difference, as
 // scripts/render-protocol-schema.test.ts does under `bun test`.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { buildProtocolSchema } from '../packages/api/src/build-protocol-schema';
+import { buildProtocolSchema } from '../packages/api/src/protocols/build-protocol-schema';
 
 export const PROTOCOL_SCHEMA_FILE = 'packages/api/protocol-schema.json';
 

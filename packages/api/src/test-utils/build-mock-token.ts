@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { Token } from '../token-schema';
+import type { Token } from '../schemas/token-schema';
 
 // A manage token on every imp, with no SSH keys and nothing it may grant.
 // The date counts back from faker's reference date, which the preload fixes.

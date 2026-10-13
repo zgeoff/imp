@@ -5,8 +5,6 @@ import { NameSchema } from './name-schema';
 // internet too, through impd's public listeners (docs/guides/https.md#public-imps).
 export const ExposureSchema = z.enum(['tailnet', 'public']);
 
-export type Exposure = z.infer<typeof ExposureSchema>;
-
 // What a public imp asks for before the wake: nothing, a bearer token, or
 // basic auth. impd makes the token or the password and shows it once.
 export const PublicAuthSchema = z.enum(['none', 'token', 'basic']);

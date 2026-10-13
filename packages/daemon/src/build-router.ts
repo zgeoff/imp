@@ -1,4 +1,4 @@
-import { EVENT_VERSION, impContract, isImpAllowed } from '@imp/api';
+import { EVENT_VERSION, SYSTEM_FEATURES, hasScope, impContract, isImpAllowed } from '@imp/api';
 import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
@@ -23,7 +23,6 @@ import {
   toCallerError,
   toLeaseSummary,
 } from './auth/caller-view';
-import { hasScope } from './auth/scopes';
 import type { TokenStore } from './auth/token-store';
 import { buildBackupsOffError } from './backup/backup-service';
 import type { BackupService } from './backup/backup-service';
@@ -941,27 +940,6 @@ export function buildRouter(deps: RouterDeps) {
     },
   });
 }
-
-// what this impd can do; each session's `continuity` still decides whether
-// its imp's agent counts output
-const SYSTEM_FEATURES = {
-  sessionOffsets: true,
-  leases: true,
-  grantableTokens: true,
-  tokenUpdate: true,
-  secretRebind: true,
-  databaseCopy: true,
-  imageBuildStream: true,
-  imageOpStream: true,
-  execRequire: true,
-  oauthGrants: true,
-  secretFilesGc: true,
-  sessionLog: true,
-  publicEgress: true,
-  oauthSecrets: true,
-  secretUpstream: true,
-  backupOptOut: true,
-} as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second
 function buildCopyName(now: number): string {
