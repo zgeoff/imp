@@ -172,7 +172,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@imp/api": "workspace:*",
-        "@modelcontextprotocol/core": "2.3.1",
         "@modelcontextprotocol/server": "2.3.1",
         "@zgeoff/imp-client": "workspace:*",
         "zod": "catalog:",

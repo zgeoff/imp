@@ -110,15 +110,30 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     response: Response,
     ended: PromiseWithResolvers<void> | null,
   ): Response => {
-    if (ended !== null) {
-      if ((response.headers.get('content-type') ?? '').startsWith('text/event-stream')) {
-        callEnds.set(response, ended.promise);
-      } else {
-        ended.resolve();
-      }
+    if (ended === null) {
+      return response;
     }
 
-    return response;
+    if (
+      response.body === null ||
+      !(response.headers.get('content-type') ?? '').startsWith('text/event-stream')
+    ) {
+      ended.resolve();
+
+      return response;
+    }
+
+    // the SDK closes a call's stream once it has answered, and answers a call
+    // its schema refuses without running the tool; a stream the client drops
+    // never closes this way
+    const tracked = new Response(
+      response.body.pipeThrough(new TransformStream({ flush: () => ended.resolve() })),
+      { status: response.status, headers: response.headers },
+    );
+
+    callEnds.set(tracked, ended.promise);
+
+    return tracked;
   };
 
   const handleModern = async (

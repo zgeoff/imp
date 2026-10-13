@@ -256,7 +256,7 @@ test('it rotates a refresh, and ends the grant when a spent refresh token comes 
   const after = await sendMcp(ctx.origin, second.access_token, '', 'initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'e2e' },
+    clientInfo: { name: 'e2e', version: '1.0.0' },
   });
 
   expect(second.scope).toBe('read');
