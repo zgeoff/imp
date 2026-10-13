@@ -20,7 +20,7 @@ the rules for writing tests live in the testing skill.
 | Unit and package tests  | `bun test` at the root                                                 | Bun, bash, git, jq, tar, truncate, mkfs.ext4; the gated files below skip                |
 | Dashboard components    | `bun run test:dashboard`                                               | Nothing beyond Bun                                                                      |
 | Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; root-only tests skip                                            |
-| End to end              | `scripts/test-e2e.sh`                                                  | KVM, Docker; some suites need more (below)                                              |
+| End to end              | `test/test-e2e.sh`                                                     | KVM, Docker; some suites need more (below)                                              |
 | Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host`      | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
 | NixOS module evaluation | `nix build -L --no-link .#checks.x86_64-linux.eval`                    | Nix with flakes                                                                         |
 | NixOS VMs               | `nix build -L --no-link .#checks.x86_64-linux.vm`                      | Nix with `system-features = kvm nixos-test`, KVM with nesting                           |
@@ -153,11 +153,11 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
 
 ## End-to-end harness
 
-`scripts/test-e2e.sh` runs `test/e2e/main.ts`. The harness:
+`test/test-e2e.sh` runs `test/e2e/main.ts`. The harness:
 
-1. Brings the dev instance down and up with `scripts/dev.sh` (`--reuse` keeps a running one), then
-   checks the container's privileges against `deploy/` with `test/e2e/lib/privileges.ts`.
-2. Reads the API token with `scripts/dev.sh token` and sets `IMP_TOKEN` and `IMP_HOST_IMAGE`.
+1. Brings the dev instance down and up with `scripts/dev/dev.sh` (`--reuse` keeps a running one),
+   then checks the container's privileges against `deploy/` with `test/e2e/lib/privileges.ts`.
+2. Reads the API token with `scripts/dev/dev.sh token` and sets `IMP_TOKEN` and `IMP_HOST_IMAGE`.
 3. Resets the baseline for every suite's prefix (below), then builds the fixture images the selected
    suites list and impd does not have yet. This startup reset removes only what a suite prefix
    names, so an `e2e-` imp that matches no suite prefix survives it (the end-of-run cleanup in step
@@ -176,31 +176,31 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
 5. After each journey file, whether it passed, failed or was stopped, resets the baseline for its
    suite's prefix (`e2e-<abbr>-`), unless `--keep`; with the startup reset, every journey starts on
    the baseline. After a journey that failed, and before that reset, it reboots the instance with
-   the run's settings (`scripts/dev.sh reboot`), since the journey may have left impd rebooted onto
-   its own; an interrupted run skips that reboot, runs no more journeys, and fails the suite whose
-   journeys it skipped. A passing `scale` keeps its imps when `restart` runs after it, the harness
-   names scale's prefix to `restart` (`E2E_KEPT_PREFIXES`), which checks that the whole fleet is
-   there, and `restart`'s first reset takes them; a failed `scale`, or one with no `restart` after
-   it, gets the reboot and reset like any other suite. A journey whose process cannot start, or
-   whose checks throw, fails like one that exits non-zero, and the run goes on. A reset or reboot
-   that fails fails the suite, and the harness then makes the instance anew (the `--clean` reset
-   below, then up with the run's settings, privilege check, token and fixture images) before the
-   next journey; if that fails too, the run stops with the reason and fails. On the ZFS backend that
-   reset also empties the run's root dataset (below). It also fails a suite when the impd log since
-   one of its journeys started shows a boot-template fallback (the `chaos` suite may cause one). A
-   suite passes only when every journey passed, and its time runs from its start to its last reset.
-   The loop is `runSuites` in `test/e2e/lib/run-suites.ts`, which takes each step as a dependency;
-   `run-suites.test.ts` checks the order of runs, reboots, resets and re-creations, between the
-   journeys of one suite too.
+   the run's settings (`scripts/dev/dev.sh reboot`), since the journey may have left impd rebooted
+   onto its own; an interrupted run skips that reboot, runs no more journeys, and fails the suite
+   whose journeys it skipped. A passing `scale` keeps its imps when `restart` runs after it, the
+   harness names scale's prefix to `restart` (`E2E_KEPT_PREFIXES`), which checks that the whole
+   fleet is there, and `restart`'s first reset takes them; a failed `scale`, or one with no
+   `restart` after it, gets the reboot and reset like any other suite. A journey whose process
+   cannot start, or whose checks throw, fails like one that exits non-zero, and the run goes on. A
+   reset or reboot that fails fails the suite, and the harness then makes the instance anew (the
+   `--clean` reset below, then up with the run's settings, privilege check, token and fixture
+   images) before the next journey; if that fails too, the run stops with the reason and fails. On
+   the ZFS backend that reset also empties the run's root dataset (below). It also fails a suite
+   when the impd log since one of its journeys started shows a boot-template fallback (the `chaos`
+   suite may cause one). A suite passes only when every journey passed, and its time runs from its
+   start to its last reset. The loop is `runSuites` in `test/e2e/lib/run-suites.ts`, which takes
+   each step as a dependency; `run-suites.test.ts` checks the order of runs, reboots, resets and
+   re-creations, between the journeys of one suite too.
 
    A suite's `settings` in `suites.ts`, a function of the instance that returns impd environment,
    puts every one of its journeys on those settings. The harness reads them as the suite starts and
-   reboots onto them (`scripts/dev.sh reboot` with that environment) before the first journey and
-   again after any fresh instance; the reboot after a failed journey goes onto them too. After the
-   last journey, a failure or an interrupt it reboots back onto the run's settings, under `--keep`
-   too. A passing `scale` with `restart` after it is the exception: the instance stays on scale's
-   settings, so `restart` re-adopts the fleet still running under scale's 600 s idle timeout (a
-   reboot would sleep every VM), and the reboot back comes after `restart`'s last journey, or at
+   reboots onto them (`scripts/dev/dev.sh reboot` with that environment) before the first journey
+   and again after any fresh instance; the reboot after a failed journey goes onto them too. After
+   the last journey, a failure or an interrupt it reboots back onto the run's settings, under
+   `--keep` too. A passing `scale` with `restart` after it is the exception: the instance stays on
+   scale's settings, so `restart` re-adopts the fleet still running under scale's 600 s idle timeout
+   (a reboot would sleep every VM), and the reboot back comes after `restart`'s last journey, or at
    once when an interrupt stops the run before `restart`. A read that throws fails the suite with no
    reboot and no journey; a reboot onto the settings that fails runs no more of its journeys, fails
    the suite and still reboots back; a reboot back that fails fails the suite and makes the instance
@@ -339,29 +339,29 @@ Fixture images come from `images/base` (`base`, a slow Docker build) and `test/e
 (`e2e-tiny`, `e2e-bare`, `e2e-ws`, `e2e-git`, `e2e-ra`). A fixture's name carries a hash of its
 sources, so a changed fixture builds anew.
 
-| Variable                             | Default     | Effect                                             |
-| ------------------------------------ | ----------- | -------------------------------------------------- |
-| `E2E_RAM_BUDGET_MIB`                 | 6144        | impd's RAM budget, passed through `scripts/dev.sh` |
-| `E2E_IDLE_TIMEOUT_S`                 | 10          | impd's idle timeout                                |
-| `E2E_SCALE_COUNT`                    | 30          | imps the scale suite creates                       |
-| `E2E_SCALE_MEMORY_MIB`               | 512         | memory of each scale imp                           |
-| `E2E_SCALE_FILL_MIB`                 | 256         | tmpfs each scale imp fills                         |
-| `E2E_MAX_NEW_MS`                     | 3000        | limit for `imp new` plus the first exec            |
-| `E2E_MAX_CHECKPOINT_MS`              | 500         | limit for a checkpoint of a running imp            |
-| `E2E_CHAOS_ROUNDS`, `E2E_CHAOS_SEED` | 8, random   | the chaos suite's rounds and replay seed           |
-| `IMP_DEV_NAME`                       | `imp-dev`   | the dev container                                  |
-| `IMP_DEV_PORT_OFFSET`                | 0           | shifts every published port; needs `IMP_DEV_NAME`  |
-| `IMP_DEV_DATA`                       | `.data/dev` | the instance's data dir, mounted at `/data`        |
-| `IMP_DEV_READY_TIMEOUT_S`            | 600, 60     | `dev.sh`'s wait for /health on up, on restart      |
-| `IMP_DEV_STOP_TIMEOUT_S`             | 30          | `dev.sh restart`'s wait for the old impd to exit   |
+| Variable                             | Default     | Effect                                                 |
+| ------------------------------------ | ----------- | ------------------------------------------------------ |
+| `E2E_RAM_BUDGET_MIB`                 | 6144        | impd's RAM budget, passed through `scripts/dev/dev.sh` |
+| `E2E_IDLE_TIMEOUT_S`                 | 10          | impd's idle timeout                                    |
+| `E2E_SCALE_COUNT`                    | 30          | imps the scale suite creates                           |
+| `E2E_SCALE_MEMORY_MIB`               | 512         | memory of each scale imp                               |
+| `E2E_SCALE_FILL_MIB`                 | 256         | tmpfs each scale imp fills                             |
+| `E2E_MAX_NEW_MS`                     | 3000        | limit for `imp new` plus the first exec                |
+| `E2E_MAX_CHECKPOINT_MS`              | 500         | limit for a checkpoint of a running imp                |
+| `E2E_CHAOS_ROUNDS`, `E2E_CHAOS_SEED` | 8, random   | the chaos suite's rounds and replay seed               |
+| `IMP_DEV_NAME`                       | `imp-dev`   | the dev container                                      |
+| `IMP_DEV_PORT_OFFSET`                | 0           | shifts every published port; needs `IMP_DEV_NAME`      |
+| `IMP_DEV_DATA`                       | `.data/dev` | the instance's data dir, mounted at `/data`            |
+| `IMP_DEV_READY_TIMEOUT_S`            | 600, 60     | `dev.sh`'s wait for /health on up, on restart          |
+| `IMP_DEV_STOP_TIMEOUT_S`             | 30          | `dev.sh restart`'s wait for the old impd to exit       |
 
-`scripts/dev.test.ts` sets each of the two `dev.sh` deadlines to 1 s, against an impd that never
+`scripts/dev/dev.test.ts` sets each of the two `dev.sh` deadlines to 1 s, against an impd that never
 gets ready or never exits, beside a run where it does.
 
 `main.ts` sets `E2E_KEEP`, `E2E_KEPT_PREFIXES`, `E2E_ACCEPTANCE`, and `E2E_METRICS_FILE` for each
 suite process. It no longer sets `E2E_SUITES`: `scale` read it to keep its imps for `restart`, and
 that choice is now the harness's (step 5). Suites that reboot the instance pass impd settings
-through `process.env`, which `scripts/dev.sh` forwards from its allowlist.
+through `process.env`, which `scripts/dev/dev.sh` forwards from its allowlist.
 
 Suites with extra needs:
 
@@ -539,10 +539,10 @@ and how the call was made.
   mounts with sudo, and names in `IMP_TEST_SMALL_FS`; `bun run test:pebble`; and
   `bun run test:dashboard`.
 - **`e2e-group`** runs the end-to-end work as a matrix of three groups, one KVM runner each, with
-  `fail-fast: false` so every group reports. Each runs `scripts/check-kvm.sh` first, hands the cpu
-  cgroup controller to containers, turns KSM on, picks `/mnt/imp-e2e` or `.data/ci` as
+  `fail-fast: false` so every group reports. Each runs `scripts/ci/check-kvm.sh` first, hands the
+  cpu cgroup controller to containers, turns KSM on, picks `/mnt/imp-e2e` or `.data/ci` as
   `IMP_DEV_DATA`, builds inputs with `.github/actions/e2e-build`, adds `imp-e2e-registry.test` to
-  `/etc/hosts`, and runs `scripts/test-e2e.sh --group <n>` with `E2E_RAM_BUDGET_MIB=4096` and no
+  `/etc/hosts`, and runs `test/test-e2e.sh --group <n>` with `E2E_RAM_BUDGET_MIB=4096` and no
   Tailscale key. Only group 2 runs the host networking tests as root with `IMP_HOST_TESTS=required`,
   only group 1 sets up Playwright's browser (`if: matrix.browser`), and only group 1 on a push to
   `main` writes the build caches (`WRITE_CACHE`, which `.github/actions/e2e-build` takes as
@@ -552,7 +552,7 @@ and how the call was made.
   these against the workflow file.
 - **`e2e`** (a required check) is the aggregate: it needs `e2e-group` and passes only when
   `needs.e2e-group.result` is `success`.
-- **`zfs`** (not required) runs `scripts/check-kvm.sh`, installs ZFS, runs `scripts/test-zfs.sh`
+- **`zfs`** (not required) runs `scripts/ci/check-kvm.sh`, installs ZFS, runs `scripts/test-zfs.sh`
   with `IMP_ZFS_TEST_DIR` blank, then `scripts/zfs-host-test.sh` with `IMP_ZFS_TEST_UNIT=0` and
   `IMP_ZFS_E2E_SUITES=lifecycle,checkpoints,disks,sleep,backups,boot-templates`.
 - **`go`** runs `gofmt -l`, `go vet ./...` and `scripts/test-go.sh` in `agent/`, with
@@ -830,7 +830,7 @@ directory and challtestsrv's management API both answer. It logs each phase's ti
 e2e harness's own stack (`startPebble`, `stopPebble`) is named after the instance, keeps its minica
 PEM under `.cache/e2e`, and takes again a network that a dev instance still holds.
 `bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
-`scripts/pull-pebble-images.ts`, so no test pays for a pull.
+`scripts/dev/pull-pebble-images.ts`, so no test pays for a pull.
 
 ### Booting impd
 
@@ -906,7 +906,7 @@ file leaves every host on its real origin.
   a loopback address stands for a guest. Each test writes the file with the host it routes, and sets
   each answer it asserts; a TLS stand-in answers any other path with a 500 that names it. The OAuth
   token endpoint and a rule's plain-HTTP upstream are MSW handlers, not entries in the file.
-- **End to end.** `scripts/dev.sh` sets
+- **End to end.** `scripts/dev/dev.sh` sets
   `IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json`. The `connectors` suite starts
   `test/e2e/lib/start-stub-upstream.ts` (`startStubUpstream`, tested in
   `start-stub-upstream.test.ts`) on the container's gateway address. The stub serves git smart HTTP
@@ -946,14 +946,14 @@ file leaves every host on its real origin.
   its directory under `/var/tmp`, the disk-backed temp root, because `tmpdir()` is a tmpfs on some
   hosts. It never uses the checkout. Where `/var/tmp` is a tmpfs too, the test fails rather than
   passing on the wrong filesystem.
-- `scripts/check-kvm.sh` checks for `vmx` or `svm` and that `/dev/kvm` opens for read and write. The
-  dev container gets `/dev/kvm` and `/dev/net/tun` from `deploy/imp-host.args.json`, plus
+- `scripts/ci/check-kvm.sh` checks for `vmx` or `svm` and that `/dev/kvm` opens for read and write.
+  The dev container gets `/dev/kvm` and `/dev/net/tun` from `deploy/imp-host.args.json`, plus
   `/dev/loop-control` and loop devices for its XFS file.
-- The end-to-end harness drives the container that `scripts/dev.sh` starts: `IMP_DEV_NAME` (default
-  `imp-dev`), with data in `IMP_DEV_DATA` (default `.data/dev`, a sparse `imp.xfs`) and the API on
-  `localhost:7070` plus `IMP_DEV_PORT_OFFSET`. `test/e2e/lib/instance.ts` takes the API URL from
-  `IMP_URL` when it is set, and throws when `IMP_DEV_PORT_OFFSET` is set without `IMP_DEV_NAME`. The
-  token comes from `scripts/dev.sh token`, so it is the dev instance's.
+- The end-to-end harness drives the container that `scripts/dev/dev.sh` starts: `IMP_DEV_NAME`
+  (default `imp-dev`), with data in `IMP_DEV_DATA` (default `.data/dev`, a sparse `imp.xfs`) and the
+  API on `localhost:7070` plus `IMP_DEV_PORT_OFFSET`. `test/e2e/lib/instance.ts` takes the API URL
+  from `IMP_URL` when it is set, and throws when `IMP_DEV_PORT_OFFSET` is set without
+  `IMP_DEV_NAME`. The token comes from `scripts/dev/dev.sh token`, so it is the dev instance's.
 - `--clean` logs the instance out of the tailnet, removes the container, and wipes its data dir and
   the moves host's. `main.ts` refuses to wipe a data dir that is outside `.data/` and holds no
   `imp.xfs`.

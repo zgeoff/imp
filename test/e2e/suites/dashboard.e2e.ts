@@ -31,7 +31,7 @@ test('it logs in, creates, opens a console, sleeps and destroys an imp, and logs
   // the browser makes the imp; one a failed run leaves goes with the stack
   registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
 
-  // scripts/dev.sh serves packages/dashboard/dist, which impd reads per request
+  // scripts/dev/dev.sh serves packages/dashboard/dist, which impd reads per request
   await runChecked(['bun', 'run', '--cwd', dashboardDir, 'build']);
 
   // the headless shell of the Chromium that the locked Playwright pins; a

@@ -6,8 +6,8 @@ impz runs on one Linux machine, in one host container, in one of two ways:
   baked in, and nothing from the repo is mounted. [Bootstrap a server](#bootstrap-a-server) sets up
   a fresh server with one command; [run the release image](#run-the-release-image) covers the steps
   by hand.
-- **The dev instance** for working on imp: `scripts/dev.sh` builds the host container and runs impd
-  from the repo. The [set up](#set-up) steps below cover it.
+- **The dev instance** for working on imp: `scripts/dev/dev.sh` builds the host container and runs
+  impd from the repo. The [set up](#set-up) steps below cover it.
 
 ## Needs
 
@@ -52,16 +52,16 @@ impz runs on one Linux machine, in one host container, in one of two ways:
    container, and waits until impd reports ready.
 
    ```sh
-   scripts/dev.sh up
+   scripts/dev/dev.sh up
    ```
 
 5. Give the CLI the token:
 
    ```sh
-   scripts/dev.sh token | scripts/imp login http://localhost:7070 --name dev
+   scripts/dev/dev.sh token | scripts/imp login http://localhost:7070 --name dev
    ```
 
-   Or `export IMP_TOKEN=$(scripts/dev.sh token)` in each shell.
+   Or `export IMP_TOKEN=$(scripts/dev/dev.sh token)` in each shell.
 
 6. Check it:
 
@@ -347,21 +347,21 @@ the container's address on `imp-host` ([IPv6](../architecture/network/networking
 
 ### Test it
 
-`scripts/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on
-Debian 13 and Ubuntu 24.04 and 26.04, with a loop file and Docker inside. It checks `--check` on the
-fresh host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*`
-and `kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel
-settings and does not apply them; `accept_ra`, which is per network namespace, it applies. Each
-distro runs with `--ipv6 on`, as CI has no IPv6 route out. On Debian it also checks a network with
-another subnet, `accept_ra=2` on a dotted interface with a fake router-advert route, `--ipv6 off`,
-the refusal when a client takes the adverts, the `--data-device` refusals and what
+`test/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on Debian
+13 and Ubuntu 24.04 and 26.04, with a loop file and Docker inside. It checks `--check` on the fresh
+host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*` and
+`kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel settings
+and does not apply them; `accept_ra`, which is per network namespace, it applies. Each distro runs
+with `--ipv6 on`, as CI has no IPv6 route out. On Debian it also checks a network with another
+subnet, `accept_ra=2` on a dotted interface with a fake router-advert route, `--ipv6 off`, the
+refusal when a client takes the adverts, the `--data-device` refusals and what
 `--check --storage zfs` plans. With `--health`, an imp also reaches an IPv6 address outside the
 container. `--zfs` adds a real ZFS run on Ubuntu 24.04, on a pool with a unique name that the test
 destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
 
 ```sh
-scripts/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)
-scripts/test-bootstrap.sh --image imp-host:<tag> --health     # a release image; boots an imp
+test/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)
+test/test-bootstrap.sh --image imp-host:<tag> --health     # a release image; boots an imp
 ```
 
 Nothing has run on a real OVH or Vultr server yet.
@@ -442,7 +442,7 @@ release also moves the `latest` tag; pin it on purpose with
 ### Build it
 
 ```sh
-host/build-release.sh          # tags imp-host:<git describe>; IMP_VERSION overrides the version
+scripts/release/build-release.sh          # tags imp-host:<git describe>; IMP_VERSION overrides the version
 ```
 
 The build is multi-stage: the guest kernel, the agent and its system drive, impd and the CLI each
@@ -453,15 +453,15 @@ kernel; pass `--cache-from` and `--cache-to` through `build-release.sh` to keep 
 
 The kernel toolchain and `mksquashfs` come from dated Ubuntu and Debian snapshots, and the build
 stamps and drive times are fixed, so the same sources give the same `vmlinux` and
-`imp-system.squashfs` bytes. `kernel/build.sh` and `scripts/build-system-drive.sh` use the same
-stages, so the dev instance boots the same bytes as the release image. A release that leaves them
-alone does not change which drive or kernel the imps boot, and impd keeps an older drive while a
-snapshot needs it ([upgrades](./operations.md#upgrade)). Only these two files are reproducible; the
-image digest is not (apt packages, timestamps and the compiled impd differ per build).
+`imp-system.squashfs` bytes. `kernel/build.sh` and `scripts/release/build-system-drive.sh` use the
+same stages, so the dev instance boots the same bytes as the release image. A release that leaves
+them alone does not change which drive or kernel the imps boot, and impd keeps an older drive while
+a snapshot needs it ([upgrades](./operations.md#upgrade)). Only these two files are reproducible;
+the image digest is not (apt packages, timestamps and the compiled impd differ per build).
 
-`host/check-reproducible.sh` checks it: one cold build, one on a fresh builder, and one after a
-change under `packages/`. It takes 5 to 20 minutes; the `Reproducible` workflow runs it in CI by
-hand.
+`scripts/release/check-reproducible.sh` checks it: one cold build, one on a fresh builder, and one
+after a change under `packages/`. It takes 5 to 20 minutes; the `Reproducible` workflow runs it in
+CI by hand.
 
 ### Prepare the host
 

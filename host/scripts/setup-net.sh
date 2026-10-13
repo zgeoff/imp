@@ -4,6 +4,15 @@
 # container's own network namespace.
 set -euo pipefail
 
+# impd's own values, its defaults included, which host/entrypoint exports
+# from `impd --network-env`, so this script keeps no default of its own
+for name in IMP_SUBNET IMP_BROKER_PORT IMP_EGRESS_DNS_PORT; do
+  if [ -z "${!name:-}" ]; then
+    echo "setup-net: $name is unset; host/entrypoint sets it from impd --network-env" >&2
+    exit 1
+  fi
+done
+
 # Debian's iptables defaults to the nf_tables backend. Fall back to legacy
 # if this kernel cannot do nf_tables.
 if ! iptables -t nat -S >/dev/null 2>&1; then
@@ -31,9 +40,8 @@ rule() {
   iptables -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -t "$table" -A "$chain" "$@"
 }
 
-# IMP_SUBNET is the pool impd carves guest /30s from; keep the default in
-# step with packages/daemon/src/config.ts.
-subnet=${IMP_SUBNET:-10.66.0.0/16}
+# IMP_SUBNET is the pool impd carves guest /30s from.
+subnet=$IMP_SUBNET
 rule nat POSTROUTING -s "$subnet" -o "$out" -j MASQUERADE
 # No imp-to-imp traffic, except between two imps on one network: impd's
 # nftables table marks those packets (docs/guides/networks.md). The ACCEPT
@@ -118,9 +126,8 @@ rule raw PREROUTING -i imp+ -m rpfilter --invert -j DROP
 # in raw PREROUTING, before tailscaled's ts-input chain (inserted first in
 # INPUT later) can accept it. Both rules carry a comment, so a start with
 # another IMP_BROKER_PORT removes the old ones. The ACCEPT goes first in
-# INPUT: `rule` appends, which would put it under the DROP above. Keep the
-# default in step with packages/daemon/src/config.ts.
-broker_port=${IMP_BROKER_PORT:-7081}
+# INPUT: `rule` appends, which would put it under the DROP above.
+broker_port=$IMP_BROKER_PORT
 broker_tag=(-m comment --comment imp-broker)
 # The kept rule per chain: anything else tagged is stale, including the
 # INPUT DROP an older setup-net.sh added.
@@ -153,9 +160,8 @@ fi
 # none guests reach it through impd's nat redirect of port 53, over UDP and
 # TCP. The same pattern as the broker: an ACCEPT first in INPUT for the taps,
 # and a raw drop of the port for anything else, both tagged, so a start with
-# another IMP_EGRESS_DNS_PORT removes the old ones. Keep the default in step
-# with packages/daemon/src/config.ts.
-dns_port=${IMP_EGRESS_DNS_PORT:-7053}
+# another IMP_EGRESS_DNS_PORT removes the old ones.
+dns_port=$IMP_EGRESS_DNS_PORT
 dns_tag=(-m comment --comment imp-egress-dns)
 for where in "filter INPUT ACCEPT" "raw PREROUTING DROP"; do
   read -r table chain target <<<"$where"

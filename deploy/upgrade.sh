@@ -4,10 +4,12 @@
 #   deploy/upgrade.sh                      the systemd unit (deploy/imp-host.service)
 #   deploy/upgrade.sh --compose <file>     docker compose (deploy/compose.yaml)
 #
-# A host on an older release gets this script from the new image, not from
-# its own release (docs/guides/operations.md#upgrade):
+# A host on an older release gets this script, with the deploy/lib/host-env.sh
+# it sources, from the new image, not from its own release
+# (docs/guides/operations.md#upgrade):
 #
-#   docker run --rm <new image> cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
+#   docker run --rm <new image> tar -cf - -C /usr/local/share/imp deploy | tar -xf -
+#   deploy/upgrade.sh
 #
 # 1. Pulls the image: this script's own release, unless IMP_HOST_IMAGE (the
 #    environment, then with --compose the compose .env, then the env file)
@@ -50,6 +52,19 @@
 #      IMP_READY_TIMEOUT_S (default 120) is how long impd gets to answer ready.
 set -euo pipefail
 
+# the functions bootstrap.sh and the NixOS module share, beside this script
+# in the image and in a checkout; no dirname, which a host may lack, as the
+# tool checks below allow
+here=${BASH_SOURCE[0]%/*}
+[ "$here" != "${BASH_SOURCE[0]}" ] || here=.
+host_env=$here/lib/host-env.sh
+if [ ! -r "$host_env" ]; then
+  echo "upgrade: no $host_env beside this script; take both from the new image: docker run --rm <new image> tar -cf - -C /usr/local/share/imp deploy | tar -xf -, then run deploy/upgrade.sh (docs/guides/operations.md#upgrade)" >&2
+  exit 1
+fi
+# shellcheck source=deploy/lib/host-env.sh
+. "$host_env"
+
 container=imp-host
 env_file=${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
 unit_file=${IMP_HOST_UNIT_FILE:-/etc/systemd/system/imp-host.service}
@@ -78,31 +93,6 @@ case ${1:-} in
     ;;
   *) usage ;;
 esac
-
-# The awk function trim(line): line without a trailing \r or the blanks
-# around it, as an env file edited on another system may have them, and
-# without one pair of matching quotes around its value, which systemd takes
-# off too. Its caller passes -v q="'".
-# shellcheck disable=SC2016 # an awk program
-readonly trim_awk='
-function trim(line, value, first) {
-  sub(/\r$/, "", line)
-  gsub(/^[ \t]+|[ \t]+$/, "", line)
-  if (!match(line, /^[A-Za-z_][A-Za-z0-9_]*=/)) return line
-  value = substr(line, RLENGTH + 1)
-  first = substr(value, 1, 1)
-  if (length(value) < 2 || (first != q && first != "\"") || substr(value, length(value)) != first) return line
-  return substr(line, 1, RLENGTH) substr(value, 2, length(value) - 2)
-}'
-
-# trim_lines FILE: each line of FILE through trim
-trim_lines() {
-  awk -v q="'" "$trim_awk"' { print trim($0) }' "$1" 2>/dev/null || true
-}
-
-# strip_markers: stdin without the release-please marker lines, which only
-# the repo's copies need; deploy/bootstrap.sh strips them too
-strip_markers() { grep -vE '^# x-release-please-(start-[a-z]+|end)$' || true; }
 
 # the env file's pin, or nothing: its last non-empty IMP_HOST_IMAGE line
 # that is not the legacy one, which migrate_env_file turns into a comment
@@ -169,15 +159,6 @@ read_env_value() {
   esac
 }
 
-# check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
-# is empty: systemd passes it over the units' own image, and docker run gets
-# none. deploy/bootstrap.sh has the same check.
-check_env_image() {
-  [ "$(trim_lines "$1" | grep '^IMP_HOST_IMAGE=' | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
-  echo "upgrade: $1 sets IMP_HOST_IMAGE= empty, which systemd passes over the units' own image: delete the line, or set an image; nothing changed" >&2
-  return 1
-}
-
 # the image to move to: the environment, then (with --compose) the compose
 # .env's, in $compose_image, then the env file's pin, then this script's
 # release
@@ -230,7 +211,7 @@ rewrite_file() {
 migrate_env_file() {
   trim_lines "$env_file" | grep -qxF "$legacy_image_line" || return 0
   # shellcheck disable=SC2016 # an awk program
-  rewrite_file "$env_file" -v q="'" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" "$trim_awk"'
+  rewrite_file "$env_file" -v q="'" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" "$TRIM_AWK"'
     trim($0) == legacy { print pin; next }
     { print }'
   echo "upgrade: $env_file: $legacy_image_line was the old template's line, not a pin; it is a comment now, and the units run their release's image (the file before: $backup)"
@@ -378,7 +359,10 @@ if ! docker inspect "$container" >/dev/null 2>&1; then
 fi
 
 # compose takes its image from the shell or its .env, never the env file
-[ -n "$compose_file" ] || check_env_image "$env_file" || exit 1
+if [ -z "$compose_file" ] && ! refusal=$(check_env_image "$env_file" 2>&1); then
+  echo "upgrade: $refusal; nothing changed" >&2
+  exit 1
+fi
 compose_image=
 [ -z "$compose_file" ] || compose_image=$(compose_env_image) || exit 1
 

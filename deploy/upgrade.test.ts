@@ -1802,6 +1802,32 @@ test('it refuses to run on a host without jq', () => {
   expect(readFileSync(docker.calls, 'utf8')).toBe('');
 });
 
+// the command of the releases before deploy/lib/host-env.sh took upgrade.sh alone
+test('it refuses to run without lib/host-env.sh beside it, saying how to take both from the image', () => {
+  const ctx = setupTest();
+  const docker = createStubBin(ctx.dir, 'docker');
+
+  writeFileSync(
+    join(ctx.dir, 'upgrade.sh'),
+    readFileSync(new URL('upgrade.sh', import.meta.url), 'utf8'),
+  );
+
+  const result = Bun.spawnSync(['bash', 'upgrade.sh'], {
+    cwd: ctx.dir,
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    'upgrade: no ./lib/host-env.sh beside this script; take both from the new image: ' +
+      'docker run --rm <new image> tar -cf - -C /usr/local/share/imp deploy | tar -xf -, ' +
+      'then run deploy/upgrade.sh (docs/guides/operations.md#upgrade)\n',
+  );
+
+  expect(readFileSync(docker.calls, 'utf8')).toBe('');
+});
+
 test('it refuses a host with no imp-host container, before any pull', () => {
   const ctx = setupTest();
   const docker = createStubBin(ctx.dir, 'docker', 'exit 1');

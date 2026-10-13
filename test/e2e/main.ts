@@ -45,7 +45,7 @@ import { readTailscaleE2EAuthKey } from './lib/tailscale-key';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
-  scripts/test-e2e.sh [--only SUITES | --group N] [--clean | --reuse] [--keep]
+  test/test-e2e.sh [--only SUITES | --group N] [--clean | --reuse] [--keep]
 
   --only    comma-separated suites or sets (default: acceptance)
             suites: ${SUITES.map((suite) => suite.name).join(' ')}
@@ -58,7 +58,7 @@ const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
   --keep    leave the run's imps and images in place
 
 Env: IMP_DEV_NAME, IMP_DEV_PORT_OFFSET, IMP_DEV_DATA pick the dev instance
-(scripts/dev.sh). E2E_RAM_BUDGET_MIB (6144) and E2E_IDLE_TIMEOUT_S (10) tune
+(scripts/dev/dev.sh). E2E_RAM_BUDGET_MIB (6144) and E2E_IDLE_TIMEOUT_S (10) tune
 impd; E2E_SCALE_COUNT (30), E2E_SCALE_MEMORY_MIB (512), E2E_SCALE_FILL_MIB
 (256), E2E_MAX_NEW_MS (3000), E2E_MAX_CHECKPOINT_MS (500) tune the suites.
 
@@ -85,7 +85,7 @@ let interrupted = false;
 // signal can stop it
 let running: number | null = null;
 
-// as scripts/dev.sh resolves it: a relative IMP_DEV_DATA is relative to the
+// as scripts/dev/dev.sh resolves it: a relative IMP_DEV_DATA is relative to the
 // caller's directory
 function resolveDataPath(): string {
   const configured = process.env['IMP_DEV_DATA'] ?? join(REPO_ROOT, '.data', 'dev');
@@ -193,7 +193,7 @@ async function startInstance(args: HarnessArgs): Promise<void> {
   if (info.ramBudgetMib !== config.ramBudgetMib) {
     throw new Error(
       `impd RAM budget is ${String(info.ramBudgetMib)} MiB, not ${String(config.ramBudgetMib)}: ` +
-        'scripts/dev.sh did not pass IMP_RAM_BUDGET_MIB, or --reuse kept an instance with its own',
+        'scripts/dev/dev.sh did not pass IMP_RAM_BUDGET_MIB, or --reuse kept an instance with its own',
     );
   }
 
@@ -442,7 +442,7 @@ async function main(): Promise<number> {
   // one tag for the whole run: dev.sh, the suites and the clean reset
   process.env['IMP_HOST_IMAGE'] = await readHostImage();
 
-  // scripts/dev.sh passes these to impd
+  // scripts/dev/dev.sh passes these to impd
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
   process.env['IMP_IDLE_TIMEOUT_S'] = String(config.idleTimeoutS);
 

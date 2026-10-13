@@ -14,6 +14,7 @@
         { "type": "json", "path": "packages/client/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/daemon/package.json", "jsonpath": "$.version" },
         { "type": "generic", "path": "deploy/bootstrap.sh" },
+        { "type": "generic", "path": "deploy/bootstrap/start.sh" },
         { "type": "generic", "path": "deploy/upgrade.sh" },
         { "type": "generic", "path": "deploy/imp-host.service" },
         { "type": "generic", "path": "deploy/imp-docker-proxy.service" },

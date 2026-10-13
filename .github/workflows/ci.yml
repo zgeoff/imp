@@ -75,7 +75,7 @@ jobs:
         run: bun run audit
 
       - name: Bun Pin
-        run: scripts/check-bun-pin.sh
+        run: scripts/ci/check-bun-pin.sh
 
       - name: Dead Code
         run: bun run deadcode
@@ -212,7 +212,7 @@ jobs:
       - name: ShellCheck
         run: |
           shellcheck --version
-          scripts/shellcheck.sh
+          scripts/ci/shellcheck.sh
 
   # Compiles the CLI for every platform, as a release does, and runs the
   # linux-x64 one. The release workflow runs each binary on its own platform;
@@ -273,20 +273,20 @@ jobs:
 
       - name: Pack
         id: pack
-        run: echo "tarball=$(scripts/pack-client.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "tarball=$(scripts/release/pack-client.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Check the package
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: scripts/check-client-package.sh "$TARBALL"
+        run: scripts/release/check-client-package.sh "$TARBALL"
 
       - name: Smoke the package under Node, Bun and a compiled binary
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: scripts/check-client-runtimes.sh "$TARBALL"
+        run: scripts/release/check-client-runtimes.sh "$TARBALL"
 
   # Boots real microVMs: the fast end-to-end set in its three groups
-  # (FAST_GROUPS in test/e2e/lib/suites.ts, scripts/test-e2e.sh --group N),
+  # (FAST_GROUPS in test/e2e/lib/suites.ts, test/test-e2e.sh --group N),
   # each against a dev instance on its own runner's KVM. The `e2e` job below
   # is the required check over all three.
   e2e-group:
@@ -335,7 +335,7 @@ jobs:
 
       # first, so a runner without KVM fails before any build
       - name: Check KVM
-        run: scripts/check-kvm.sh
+        run: scripts/ci/check-kvm.sh
 
       # The cpu suite fails in CI unless a private cgroup namespace gets the
       # cpu controller. Docker's containers live under system.slice: hand cpu
@@ -438,7 +438,7 @@ jobs:
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.
       - name: End-to-end tests
-        run: scripts/test-e2e.sh --group ${{ matrix.group }}
+        run: test/test-e2e.sh --group ${{ matrix.group }}
 
       # The steps below also run after a failure or a timeout, with or
       # without a container, so none of them may fail the job.
@@ -514,7 +514,7 @@ jobs:
           persist-credentials: false
 
       - name: Check KVM
-        run: scripts/check-kvm.sh
+        run: scripts/ci/check-kvm.sh
 
       # the pool files go on /mnt, the runner's larger temp disk, when it has one
       - name: Pick the work dir
@@ -671,7 +671,7 @@ jobs:
           git checkout -B "$branch" FETCH_HEAD
           bun install
           bun run format
-          # One more pass at most (scripts/format-stable.test.ts): if the
+          # One more pass at most (scripts/ci/format-stable.test.ts): if the
           # second pass still leaves changes, the formatter does not settle
           if ! bun run format:check; then
             bun run format

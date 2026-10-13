@@ -143,8 +143,9 @@ volumes:
   imp-docker:
   imp-docker-proxy:
 
-# The same network as create_host_network in deploy/bootstrap.sh and the
-# ExecStartPre of deploy/imp-host.service; keep the three equal.
+# The network imp-host runs on with IPv6, as deploy/bootstrap.sh and
+# deploy/imp-host.service make it.
+# network: from deploy/imp-host.args.json (bun run render:deploy)
 # networks:
 #   imp-host:
 #     name: imp-host
@@ -154,3 +155,4 @@ volumes:
 #     ipam:
 #       config:
 #         - subnet: ${IMP_HOST_SUBNET6:?set IMP_HOST_SUBNET6 to a /64}
+# end of network

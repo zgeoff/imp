@@ -35,7 +35,7 @@ async function setupTest() {
 
   const client = await createInstanceClient();
 
-  // under the repo: scripts/dev.sh mounts it at the same path in the
+  // under the repo: scripts/dev/dev.sh mounts it at the same path in the
   // container, so `--on-host` finds the directory where impd runs docker build
   await mkdir(join(REPO_ROOT, '.cache', 'e2e'), { recursive: true });
 

@@ -31,7 +31,7 @@ test('it sizes a zfs host as bootstrap.sh does, and sets the ARC cap it leaves o
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -69,7 +69,7 @@ test('it writes the module settings into an env file only its owner reads', () =
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -107,7 +107,7 @@ test('it keeps an ARC cap already set, and leaves it out of the budget', () => {
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -146,7 +146,7 @@ test('it sets arcMaxMiB over an ARC cap already set', () => {
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -184,7 +184,7 @@ test('it sets no ARC cap on an xfs host, and leaves none out of the budget', () 
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -222,7 +222,7 @@ test('it writes a set ramBudgetMiB over the formula', () => {
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -259,7 +259,7 @@ test('it refuses a small host whose budget comes out below the floor, writing no
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -300,7 +300,7 @@ test('it starts a small host whose ramBudgetMiB is set', () => {
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -342,7 +342,7 @@ test('it copies the secrets file in, where a later line replaces an earlier one'
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -383,7 +383,7 @@ test('it refuses a secrets file it cannot read, writing nothing', () => {
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -424,7 +424,7 @@ test('it names the backup password file, never the password, when one is staged'
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -472,7 +472,7 @@ test('it keeps backups off when the staged backup password is empty', () => {
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -520,7 +520,7 @@ EOF`,
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -558,7 +558,7 @@ test('it leaves the host addresses empty, with a warning, when ip fails', () => 
     [
       'bash',
       new URL('imp-host-env.sh', import.meta.url).pathname,
-      new URL('../bootstrap.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
     ],
     {
       env: {
@@ -584,9 +584,9 @@ test('it leaves the host addresses empty, with a warning, when ip fails', () => 
   expect(result.stderr.toString()).toInclude("cannot read the host's addresses");
 });
 
-test('it refuses to run without the bootstrap.sh it sizes the host with, with its usage', () => {
+test('it refuses to run without the host-env.sh it sizes the host with, with its usage', () => {
   const result = Bun.spawnSync(['bash', new URL('imp-host-env.sh', import.meta.url).pathname]);
 
   expect(result.exitCode).toBe(1);
-  expect(result.stderr.toString()).toInclude('usage: imp-host-env.sh BOOTSTRAP_SH');
+  expect(result.stderr.toString()).toInclude('usage: imp-host-env.sh HOST_ENV_SH');
 });

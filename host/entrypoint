@@ -18,6 +18,13 @@ case $daemon in
   *) run_daemon=("$daemon") ;;
 esac
 
+# impd's values for the settings setup-net.sh reads, its defaults included;
+# a setting impd refuses stops the container here
+network_env=$("${run_daemon[@]}" --network-env)
+while IFS= read -r line; do
+  export "${line?}"
+done <<<"$network_env"
+
 "$lib/setup-cgroups.sh"
 "$lib/setup-storage.sh"
 "$lib/setup-net.sh"

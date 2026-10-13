@@ -6,7 +6,7 @@ FROM ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd
 
 # Docker's packages, at apt's exact versions. A bump is a reviewed dependency
 # change: update these versions, the licence tags they imply and the licence
-# sums below together. host/check-base-image.sh checks the image against them.
+# sums below together. scripts/release/check-base-image.sh checks the image against them.
 ARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble
 ARG DOCKER_CE_CLI_VERSION=5:29.8.2-1~ubuntu.24.04~noble
 ARG CONTAINERD_VERSION=2.3.6-1~ubuntu.24.04~noble

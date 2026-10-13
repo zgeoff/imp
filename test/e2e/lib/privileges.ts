@@ -58,7 +58,7 @@ export interface HostConfig {
   readonly Devices: readonly { readonly PathOnHost: string }[] | null;
 }
 
-// scripts/dev.sh's own device, for the loop file its XFS lives in
+// scripts/dev/dev.sh's own device, for the loop file its XFS lives in
 const DEV_DEVICES = ['/dev/loop-control'];
 const SECCOMP_PREFIX = 'seccomp=';
 

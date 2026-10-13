@@ -122,6 +122,14 @@ const EnvSchema = z.object({
   ...PublicMcpEnvSchema.shape,
 });
 
+// the settings the host container's network setup reads, with impd's defaults; `impd
+// --network-env` parses only these, since the rest may need the tailnet it has not joined yet
+export const NetworkEnvSchema = EnvSchema.pick({
+  IMP_SUBNET: true,
+  IMP_BROKER_PORT: true,
+  IMP_EGRESS_DNS_PORT: true,
+});
+
 // image builds (docs/guides/images.md#isolated-builds)
 interface BuildConfig {
   // `host` builds on the host's engine, which the build can reach the

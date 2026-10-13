@@ -17,7 +17,7 @@ function buildShellWord(value: string): string {
   return `'${value.replaceAll("'", String.raw`'\''`)}'`;
 }
 
-// A stub docker's script, for createStubBin, that answers scripts/dev.sh prune over `images`:
+// A stub docker's script, for createStubBin, that answers scripts/dev/dev.sh prune over `images`:
 // their tags and labels, the containers that use them, and an rm or prune that succeeds
 // unless an image is stuck. Any call prune does not make fails as unexpected.
 export function buildStubDevDocker(images: readonly StubDevImage[]): string {

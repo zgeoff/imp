@@ -8,6 +8,24 @@ import { runInNetns } from '../../packages/daemon/src/test-utils/run-in-netns';
 // namespace when not root, with a dummy uplink. Each test skips where that or
 // a tool it runs is missing, unless IMP_HOST_TESTS=required: `bun run test:host`.
 
+// it changes nothing before the check, so it runs anywhere
+test('it refuses to start without the settings host/entrypoint takes from impd', () => {
+  const result = Bun.spawnSync(['bash', join(import.meta.dir, 'setup-net.sh')], {
+    env: { PATH: process.env['PATH'] ?? '', IMP_SUBNET: '10.66.0.0/16', IMP_BROKER_PORT: '7081' },
+  });
+
+  expect({
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'setup-net: IMP_EGRESS_DNS_PORT is unset; host/entrypoint sets it from impd --network-env\n',
+  });
+});
+
 test.skipIf(
   !canUnshare([
     'sh',
@@ -28,7 +46,12 @@ bash "$SETUP_NET" >/dev/null
 iptables -S INPUT | grep imp-broker
 iptables -t raw -S PREROUTING | grep imp-broker
 `,
-    env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+    env: {
+      SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+      IMP_SUBNET: '10.66.0.0/16',
+      IMP_BROKER_PORT: '7081',
+      IMP_EGRESS_DNS_PORT: '7053',
+    },
     mount: false,
   });
 
@@ -73,7 +96,13 @@ for port in 7081 7082; do
 done
 kill "$LISTENER_PID"
 `,
-    env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh'), BUN: process.execPath },
+    env: {
+      SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+      BUN: process.execPath,
+      IMP_SUBNET: '10.66.0.0/16',
+      IMP_BROKER_PORT: '7081',
+      IMP_EGRESS_DNS_PORT: '7053',
+    },
     mount: false,
   });
 
@@ -92,7 +121,12 @@ ip route add default via 192.0.2.1
 sysctl -qw net.ipv4.ip_forward=0
 bash "$SETUP_NET"
 `,
-      env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+      env: {
+        SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+        IMP_SUBNET: '10.66.0.0/16',
+        IMP_BROKER_PORT: '7081',
+        IMP_EGRESS_DNS_PORT: '7053',
+      },
       mount: false,
     });
 
@@ -116,7 +150,12 @@ ip addr add 192.0.2.2/24 dev up0
 sysctl -qw net.ipv4.ip_forward=1
 bash "$SETUP_NET"
 `,
-      env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+      env: {
+        SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+        IMP_SUBNET: '10.66.0.0/16',
+        IMP_BROKER_PORT: '7081',
+        IMP_EGRESS_DNS_PORT: '7053',
+      },
       mount: false,
     });
 
@@ -143,7 +182,12 @@ bash "$SETUP_NET" >/dev/null
 iptables -S INPUT | grep imp-egress-dns
 iptables -t raw -S PREROUTING | grep imp-egress-dns
 `,
-    env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+    env: {
+      SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+      IMP_SUBNET: '10.66.0.0/16',
+      IMP_BROKER_PORT: '7081',
+      IMP_EGRESS_DNS_PORT: '7053',
+    },
     mount: false,
   });
 
@@ -185,7 +229,12 @@ ip6tables -t raw -S PREROUTING | grep imp+
 ip6tables -t mangle -S FORWARD | grep imp+
 sysctl -n net.ipv6.conf.up0.accept_ra net.ipv6.conf.default.accept_ra net.ipv6.conf.default.accept_redirects net.ipv6.conf.all.forwarding
 `,
-      env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+      env: {
+        SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+        IMP_SUBNET: '10.66.0.0/16',
+        IMP_BROKER_PORT: '7081',
+        IMP_EGRESS_DNS_PORT: '7053',
+      },
       mount: false,
     });
 
@@ -235,7 +284,12 @@ bash "$SETUP_NET" >/dev/null
 bash "$SETUP_NET" >/dev/null
 iptables -S FORWARD | grep -- '-i imp+ -o imp+'
 `,
-      env: { SETUP_NET: join(import.meta.dir, 'setup-net.sh') },
+      env: {
+        SETUP_NET: join(import.meta.dir, 'setup-net.sh'),
+        IMP_SUBNET: '10.66.0.0/16',
+        IMP_BROKER_PORT: '7081',
+        IMP_EGRESS_DNS_PORT: '7053',
+      },
       mount: false,
     });
 

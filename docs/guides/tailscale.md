@@ -113,7 +113,7 @@ Docker copies the host's resolv.conf into the container. On a host that runs Tai
 quad100 through the host. The imp host container runs its own `tailscaled`, which captures
 `100.64.0.0/10` in its own netns. With `--accept-dns=false` its quad100 has no upstream, so every
 lookup fails, including ACME for `tailscale serve`. `tailscale-up.sh` rewrites resolv.conf in that
-case. `scripts/dev.sh` also starts the host container with `--dns 1.1.1.1 --dns 8.8.8.8`.
+case. `scripts/dev/dev.sh` also starts the host container with `--dns 1.1.1.1 --dns 8.8.8.8`.
 
 ## Per-imp names
 
@@ -247,14 +247,13 @@ The `tailscale` suite of the end-to-end harness checks the tailnet from this mac
 a member (`tailscale status` reports `Running`):
 
 ```sh
-scripts/test-e2e.sh --only tailscale
+test/test-e2e.sh --only tailscale
 ```
 
 It waits for impd's node to come up, checks DNS inside the host container, then fetches an imp by
 the node's IP, MagicDNS name and short name, on the imp's own port and on the proxy port. Last, it
 sleeps the imp and checks that a tailnet request wakes it. The key comes from `TAILSCALE_AUTHKEY`,
 then 1Password (`op read` with a 20-second limit, reference in `IMP_TAILSCALE_AUTHKEY_REF`; the
-harness turns this on only for runs that include this suite), then `.env`, as for `scripts/dev.sh`.
-Without one the suite skips, except in the `acceptance` set, where it fails.
-`scripts/test-e2e.sh --clean` logs the node out with `tailscale-down.sh` before it wipes the
-instance.
+harness turns this on only for runs that include this suite), then `.env`, as for
+`scripts/dev/dev.sh`. Without one the suite skips, except in the `acceptance` set, where it fails.
+`test/test-e2e.sh --clean` logs the node out with `tailscale-down.sh` before it wipes the instance.

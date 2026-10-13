@@ -10,7 +10,7 @@ import { createStubBin } from '../scripts/test-utils/create-stub-bin';
 import { readEnvValues } from '../scripts/test-utils/read-env-values';
 import { runSourcedFunction } from '../scripts/test-utils/run-sourced-function';
 
-// bootstrap.sh's functions; scripts/test-bootstrap.sh runs the whole script in a container.
+// bootstrap.sh's own functions (host-env.test.ts has the shared ones); test-bootstrap.sh runs it.
 // render_env's args: env file, template, budget, image, image set, storage, zfs root,
 // firewall, ipv6, subnet6, ksm; it gets files through $(...), which drops trailing newlines.
 function setupTest() {
@@ -53,74 +53,6 @@ test('#env_template prints deploy/imp-host.env.example unchanged', () => {
     stdout: readFileSync(new URL('imp-host.env.example', import.meta.url), 'utf8'),
     stderr: '',
   });
-});
-
-// a 64 GB box reports about 62.5 GiB
-test.each([
-  [String(64_000 * 1024), '54400\n'],
-  [String(32 * 1024 * 1024), '24576\n'],
-  [String(128 * 1024 * 1024), '111412\n'],
-])(
-  '#ram_budget_mib keeps the larger of 8 GiB and 15 percent of %s KiB for the host, leaving %p',
-  (memTotalKib, budget) => {
-    const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-    expect(runSourcedFunction({ script, fn: 'ram_budget_mib', args: [memTotalKib] })).toStrictEqual(
-      { exitCode: 0, stdout: budget, stderr: '' },
-    );
-  },
-);
-
-test('#ram_budget_mib leaves the ZFS ARC cap out of the budget', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(
-    runSourcedFunction({ script, fn: 'ram_budget_mib', args: [String(64_000 * 1024), '6400'] })
-      .stdout,
-  ).toBe('48000\n');
-});
-
-test.each([
-  [String(64_000 * 1024), '6400\n'],
-  [String(8 * 1024 * 1024), '1024\n'],
-  [String(256 * 1024 * 1024), '8192\n'],
-])(
-  '#zfs_arc_max_mib caps the ARC of %s KiB of RAM at 10 percent within 1 to 8 GiB, %p',
-  (memTotalKib, cap) => {
-    const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-    expect(
-      runSourcedFunction({ script, fn: 'zfs_arc_max_mib', args: [memTotalKib] }),
-    ).toStrictEqual({ exitCode: 0, stdout: cap, stderr: '' });
-  },
-);
-
-test('#check_ram_budget refuses a budget below 512 MiB, naming the RAM, the ARC cap and the setting', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  const result = runSourcedFunction({
-    script,
-    fn: 'check_ram_budget',
-    args: ['-6144', String(3 * 1024 * 1024), '1024', 'IMP_RAM_BUDGET_MIB'],
-  });
-
-  expect(result.exitCode).toBe(1);
-
-  expect(result.stderr).toMatch(
-    /comes out at -6144 MiB, below the 512 MiB floor: RAM 3072 MiB.*ARC cap 1024 MiB.*Set IMP_RAM_BUDGET_MIB/u,
-  );
-});
-
-test('#check_ram_budget accepts a budget of 512 MiB', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(
-    runSourcedFunction({
-      script,
-      fn: 'check_ram_budget',
-      args: ['512', String(3 * 1024 * 1024), '0', 'IMP_RAM_BUDGET_MIB'],
-    }),
-  ).toStrictEqual({ exitCode: 0, stdout: '', stderr: '' });
 });
 
 // Debian 13 and Ubuntu 24.04 on their own kernels; the WSL dev box with Debian's xfsprogs (the
@@ -236,61 +168,6 @@ test('#ssh_ports_from_listen reads the ports of socket units and ss', () => {
   ).toBe('22\n2200\n');
 });
 
-// SSH, DHCP and ICMP only; a reload replaces our table in one transaction, never Docker's
-test('#render_firewall renders a table of its own that opens only SSH, DHCP and ICMP', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(runSourcedFunction({ script, fn: 'render_firewall', args: ['2222', '22', '22'] }).stdout)
-    .toMatchInlineSnapshot(`
-    "# imp host firewall, written by deploy/bootstrap.sh. Loaded by
-    # imp-firewall.service. Inbound: SSH only.
-    table inet imp_host
-    delete table inet imp_host
-    table inet imp_host {
-    	chain input {
-    		type filter hook input priority filter; policy drop;
-    		iif "lo" accept
-    		ct state established,related accept
-    		ct state invalid drop
-    		meta l4proto icmp accept
-    		meta l4proto ipv6-icmp accept
-    		udp dport 68 accept comment "DHCPv4 client"
-    		udp dport 546 accept comment "DHCPv6 client"
-    		tcp dport { 22, 2222 } accept comment "SSH"
-    	}
-    }
-    "
-  `);
-});
-
-// nft -c parses the ruleset against the kernel, which needs CAP_NET_ADMIN; an unprivileged
-// user namespace gives it where the host allows one, and IMP_HOST_TESTS=required insists
-test.skipIf(
-  process.env['IMP_HOST_TESTS'] !== 'required' &&
-    Bun.spawnSync(['unshare', '-rn', 'nft', '-c', 'list ruleset']).exitCode !== 0,
-)('#render_firewall renders a ruleset nft accepts', () => {
-  const ctx = setupTest();
-
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  writeFileSync(
-    join(ctx.dir, 'firewall.nft'),
-    runSourcedFunction({ script, fn: 'render_firewall', args: ['22'] }).stdout,
-  );
-
-  const result = Bun.spawnSync([
-    'unshare',
-    '-rn',
-    'nft',
-    '-c',
-    '-f',
-    join(ctx.dir, 'firewall.nft'),
-  ]);
-
-  expect(result.stderr.toString()).toBe('');
-  expect(result.exitCode).toBe(0);
-});
-
 test('#render_env writes a new env file from the template with the budget and the key, pinning no image', () => {
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -394,6 +271,35 @@ test('#render_env turns the old template image line, with a CR and blanks around
   });
 
   expect(existing).toInclude('\n  IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest\r\n');
+  expect(migrated).toStrictEqual(fresh);
+});
+
+// systemd takes the quotes off a value, as deploy/upgrade.sh's migration does
+test('#render_env turns the old template image line, in quotes, into the commented pin', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  const image = `ghcr.io/zgeoff/imp-host:${z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version}`;
+  const template = runSourcedFunction({ script, fn: 'env_template' }).stdout.replace(/\n+$/u, '');
+
+  const existing = template.replace(
+    `# IMP_HOST_IMAGE=${image}`,
+    'IMP_HOST_IMAGE="ghcr.io/zgeoff/imp-host:latest"',
+  );
+
+  const migrated = runSourcedFunction({
+    script,
+    fn: 'render_env',
+    args: [existing, template, '54400', image, '', 'xfs', '', 'own', 'off', '', ''],
+  });
+
+  const fresh = runSourcedFunction({
+    script,
+    fn: 'render_env',
+    args: [template, template, '54400', image, '', 'xfs', '', 'own', 'off', '', ''],
+  });
+
+  expect(existing).toInclude('\nIMP_HOST_IMAGE="ghcr.io/zgeoff/imp-host:latest"\n');
   expect(migrated).toStrictEqual(fresh);
 });
 
@@ -869,44 +775,6 @@ test('#ksm_tmpfiles starts ksmd with zero-page merging at boot', () => {
   );
 });
 
-test.each([
-  ['fd12:0034:0:0::/64', 'fd12:34::/64\n'],
-  ['FD12:3456:789A:0001::', 'fd12:3456:789a:1::\n'],
-  ['2001:db8:0:0:1:0:0:1', '2001:db8::1:0:0:1\n'],
-  ['fd12:0:0:1::/64', 'fd12:0:0:1::/64\n'],
-  ['::1', '::1\n'],
-  ['1:2:3:4:5:6:7:8', '1:2:3:4:5:6:7:8\n'],
-])('#ipv6_canon writes %s as Docker prints it, %p', (address, canonical) => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(runSourcedFunction({ script, fn: 'ipv6_canon', args: [address] })).toStrictEqual({
-    exitCode: 0,
-    stdout: canonical,
-    stderr: '',
-  });
-});
-
-test('#subnet6 accepts a /64 with no host bits, written as Docker prints it', () => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(
-    runSourcedFunction({ script, fn: 'subnet6', args: ['FD12:3456:789a:0::/64'] }),
-  ).toStrictEqual({ exitCode: 0, stdout: 'fd12:3456:789a::/64\n', stderr: '' });
-});
-
-test.each([['fd12::/56'], ['fd12::1/64'], ['fd12:::/64'], ['nope/64'], ['10.0.0.0/64']])(
-  '#subnet6 refuses %p, which is no IPv6 /64 without host bits',
-  (subnet) => {
-    const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-    expect(runSourcedFunction({ script, fn: 'subnet6', args: [subnet] })).toStrictEqual({
-      exitCode: 1,
-      stdout: '',
-      stderr: '',
-    });
-  },
-);
-
 test('#random_ula64 picks a unique local /64', () => {
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -923,26 +791,6 @@ test('#subnet6 accepts the subnet random_ula64 picks as it is', () => {
   const checked = runSourcedFunction({ script, fn: 'subnet6', args: [subnet] });
 
   expect(checked).toStrictEqual({ exitCode: 0, stdout: `${subnet}\n`, stderr: '' });
-});
-
-test.each([
-  ['true br-imphost 172.18.0.0/16 fd12:3456:789a::/64', ''],
-  ['false br-imphost 172.18.0.0/16', 'it has no IPv6\n'],
-  ['true unnamed 172.18.0.0/16 fd12:3456:789a::/64', 'its bridge is unnamed, not br-imphost\n'],
-  [
-    'true br-imphost 172.18.0.0/16 fd00::/64',
-    'its IPv6 subnet is fd00::/64, not fd12:3456:789a::/64\n',
-  ],
-])('#network_drift reads the network %p as differing by %p', (inspect, drift) => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(
-    runSourcedFunction({
-      script,
-      fn: 'network_drift',
-      args: ['fd12:3456:789a::/64', inspect],
-    }).stdout,
-  ).toBe(drift);
 });
 
 // an existing right network gives its subnet to an env file without one
@@ -1027,28 +875,6 @@ test('#ra_file_uplink reads the dotted interface name back from the accept_ra fi
   });
 });
 
-test('#create_host_network creates the network with the arguments the unit uses', () => {
-  const ctx = setupTest();
-  const docker = createStubBin(ctx.dir, 'docker');
-
-  runSourcedFunction({
-    script: new URL('bootstrap.sh', import.meta.url).pathname,
-    fn: 'eval',
-    args: ['ipv6_subnet=fd12::/64 create_host_network'],
-    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
-  });
-
-  const unit = readFileSync(new URL('imp-host.service', import.meta.url), 'utf8');
-
-  expect(readFileSync(docker.calls, 'utf8')).toBe(
-    'docker network create --ipv6 --subnet fd12::/64 -o com.docker.network.bridge.name=br-imphost imp-host\n',
-  );
-
-  expect(unit.replaceAll('"$$IMP_HOST_SUBNET6"', 'fd12::/64')).toInclude(
-    '/usr/bin/docker network create --ipv6 --subnet fd12::/64 -o com.docker.network.bridge.name=br-imphost imp-host ;;',
-  );
-});
-
 test('#blank_env_key blanks the key and leaves every other line alone', () => {
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
@@ -1094,39 +920,6 @@ test.each([
   expect(result.exitCode).toBe(exitCode);
 });
 
-test('#check_env_image refuses an env file whose last IMP_HOST_IMAGE is empty, naming the file', () => {
-  const ctx = setupTest();
-
-  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_PORT=7070\nIMP_HOST_IMAGE=\n');
-
-  const result = runSourcedFunction({
-    script: new URL('bootstrap.sh', import.meta.url).pathname,
-    fn: 'check_env_image',
-    args: [join(ctx.dir, 'imp-host.env')],
-  });
-
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toStartWith(`${join(ctx.dir, 'imp-host.env')} sets IMP_HOST_IMAGE= empty`);
-});
-
-test.each([
-  ['IMP_HOST_IMAGE=\nIMP_HOST_IMAGE=imp-host:1\n', 0],
-  ['# IMP_HOST_IMAGE=imp-host:1\n', 0],
-  ['IMP_HOST_IMAGE= \r\n', 1],
-])('#check_env_image answers the env file %p with exit %d', (env, exitCode) => {
-  const ctx = setupTest();
-
-  writeFileSync(join(ctx.dir, 'imp-host.env'), env);
-
-  const result = runSourcedFunction({
-    script: new URL('bootstrap.sh', import.meta.url).pathname,
-    fn: 'check_env_image',
-    args: [join(ctx.dir, 'imp-host.env')],
-  });
-
-  expect(result.exitCode).toBe(exitCode);
-});
-
 test.each([['unit_imp_host'], ['unit_imp_docker_proxy'], ['env_template']])(
   '#strip_markers takes the release-please markers out of what %s installs',
   (fn) => {
@@ -1166,37 +959,6 @@ test.each([
   const script = new URL('bootstrap.sh', import.meta.url).pathname;
 
   expect(runSourcedFunction({ script, fn: 'loop_reserve_gib', args: [freeGib] }).stdout).toBe(keep);
-});
-
-test.each([
-  ['fd12::1', 'fd12:0:0:0:0:0:0:1\n'],
-  ['::', '0:0:0:0:0:0:0:0\n'],
-  ['FD12:0034::', 'fd12:34:0:0:0:0:0:0\n'],
-  ['1:2:3:4:5:6:7:8', '1:2:3:4:5:6:7:8\n'],
-])('#ipv6_expand writes the eight groups of %s, %p', (address, groups) => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(runSourcedFunction({ script, fn: 'ipv6_expand', args: [address] })).toStrictEqual({
-    exitCode: 0,
-    stdout: groups,
-    stderr: '',
-  });
-});
-
-test.each([
-  ['fd12::1::2'],
-  ['1:2:3:4:5:6:7'],
-  ['1:2:3:4:5:6:7:8:9'],
-  ['fd12::12345'],
-  ['10.0.0.1'],
-])('#ipv6_expand refuses %p, which is no IPv6 address', (address) => {
-  const script = new URL('bootstrap.sh', import.meta.url).pathname;
-
-  expect(runSourcedFunction({ script, fn: 'ipv6_expand', args: [address] })).toStrictEqual({
-    exitCode: 1,
-    stdout: '',
-    stderr: '',
-  });
 });
 
 test('#parse_args reads the mode and the flags', () => {

@@ -4,7 +4,7 @@ import * as z from 'zod';
 import { runImp } from './imp-cli';
 import { instance } from './instance';
 
-// The broker's test upstreams (IMP_BROKER_TEST_UPSTREAMS, as scripts/dev.sh
+// The broker's test upstreams (IMP_BROKER_TEST_UPSTREAMS, as scripts/dev/dev.sh
 // sets it): the hosts a journey's stub upstream stands in for.
 
 export interface BrokerUpstreams {

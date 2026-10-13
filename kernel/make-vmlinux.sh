@@ -17,7 +17,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 jobs=${JOBS:-$(nproc)}
 
 # Fixed build metadata: the kernel stamps these into its version banner, and
-# a release must rebuild to the same bytes (host/check-reproducible.sh).
+# a release must rebuild to the same bytes (scripts/release/check-reproducible.sh).
 export KBUILD_BUILD_TIMESTAMP='1970-01-01 00:00:00 UTC'
 export KBUILD_BUILD_USER=imp
 export KBUILD_BUILD_HOST=imp

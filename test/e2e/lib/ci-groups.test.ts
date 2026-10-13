@@ -60,7 +60,7 @@ test('it runs each group with its own --group flag', () => {
   const step = jobs['e2e-group'].steps.find((candidate) => candidate.name === 'End-to-end tests');
 
   // an Actions expression, not a template placeholder
-  expect(step?.run).toBe(`scripts/test-e2e.sh --group \${{ matrix.group }}`);
+  expect(step?.run).toBe(`test/test-e2e.sh --group \${{ matrix.group }}`);
 });
 
 test('it runs the required e2e check whatever the groups did', () => {

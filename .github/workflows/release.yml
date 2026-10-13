@@ -100,9 +100,12 @@ jobs:
       # mode=max keeps the kernel layer, for the image job and the next
       # release
       - name: Build assets
-        run: >-
-          scripts/build-release-assets.sh --cache-from type=gha,scope=system-files --cache-to
-          type=gha,scope=system-files,mode=max
+        # a tag from before scripts/release/ keeps each release script at
+        # its old path, so a republish of one falls back to it
+        run: |
+          script=scripts/release/build-release-assets.sh
+          [ -f "$script" ] || script=scripts/build-release-assets.sh
+          "$script" --cache-from type=gha,scope=system-files --cache-to type=gha,scope=system-files,mode=max
 
       - name: Upload assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -193,14 +196,19 @@ jobs:
         env:
           IMP_VERSION: ${{ needs.assets.outputs.version }}
           IMP_RELEASE_IMAGE: ${{ env.IMAGE }}
-        run: >-
-          host/build-release.sh --cache-from type=gha,scope=system-files --cache-from
-          type=gha,scope=imp-host --cache-to type=gha,scope=imp-host,mode=max
+        run: |
+          script=scripts/release/build-release.sh
+          [ -f "$script" ] || script=host/build-release.sh
+          "$script" --cache-from type=gha,scope=system-files --cache-from type=gha,scope=imp-host \
+            --cache-to type=gha,scope=imp-host,mode=max
 
       - name: Check image
         env:
           VERSION: ${{ needs.assets.outputs.version }}
-        run: host/check-release-image.sh "$IMAGE:$VERSION" "$VERSION" dist/SHA256SUMS
+        run: |
+          script=scripts/release/check-release-image.sh
+          [ -f "$script" ] || script=host/check-release-image.sh
+          "$script" "$IMAGE:$VERSION" "$VERSION" dist/SHA256SUMS
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -290,7 +298,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ref=$BASE_IMAGE:$PUSH_TAG
-          if [ ! -f host/check-base-image.sh ] || ! grep -q '^ARG DOCKER_CE_VERSION=' images/base/Dockerfile; then
+          if { [ ! -f scripts/release/check-base-image.sh ] && [ ! -f host/check-base-image.sh ]; } || ! grep -q '^ARG DOCKER_CE_VERSION=' images/base/Dockerfile; then
             echo "::notice::this tree predates the published imp-base, so $ref is not built"
             echo "action=skip" >> "$GITHUB_OUTPUT"
             exit 0
@@ -339,7 +347,10 @@ jobs:
         if: steps.plan.outputs.action == 'push'
         env:
           PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
-        run: host/check-base-image.sh "$BASE_IMAGE:$PUSH_TAG"
+        run: |
+          script=scripts/release/check-base-image.sh
+          [ -f "$script" ] || script=host/check-base-image.sh
+          "$script" "$BASE_IMAGE:$PUSH_TAG"
 
       # The digest comes from the registry, after the push, so the
       # attestation names exactly what was pushed.
@@ -475,7 +486,9 @@ jobs:
           gh auth setup-git
           gh repo clone "$TAP" tap
           mkdir -p tap/Formula
-          scripts/build-formula.sh "$VERSION" dist/SHA256SUMS > tap/Formula/imp.rb
+          formula=scripts/release/build-formula.sh
+          [ -f "$formula" ] || formula=scripts/build-formula.sh
+          "$formula" "$VERSION" dist/SHA256SUMS > tap/Formula/imp.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -552,8 +565,10 @@ jobs:
       - name: Pack and check
         if: steps.plan.outputs.publish == 'true'
         run: |
-          tarball=$(scripts/pack-client.sh)
-          scripts/check-client-package.sh "$tarball"
+          dir=scripts/release
+          [ -f "$dir/pack-client.sh" ] || dir=scripts
+          tarball=$("$dir/pack-client.sh")
+          "$dir/check-client-package.sh" "$tarball"
           mkdir -p npm-tarball
           cp "$tarball" npm-tarball/
 

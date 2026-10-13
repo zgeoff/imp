@@ -228,7 +228,7 @@ gateway.
 
 - On the tailnet, `ssh box@imp` reaches it on port 22. The ACL decides who can connect.
 - The compose file and the systemd unit publish nothing for SSH.
-- `scripts/dev.sh` publishes it on `127.0.0.1:2222` (plus `IMP_DEV_PORT_OFFSET`).
+- `scripts/dev/dev.sh` publishes it on `127.0.0.1:2222` (plus `IMP_DEV_PORT_OFFSET`).
 
 The host key is `<data>/ssh/host_key` (ed25519, owner-only), made on the first start. The data
 directory outlives the container, so the key stays the same across restarts and upgrades.

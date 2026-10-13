@@ -22,7 +22,7 @@ function buildShellWord(value: string): string {
   return `'${value.replaceAll("'", String.raw`'\''`)}'`;
 }
 
-// A stub docker's script, for createStubBin, that answers scripts/dev.sh up and restart: the host
+// A stub docker's script, for createStubBin, that answers scripts/dev/dev.sh up and restart: the host
 // image, container states, the proxy's compile into the dir on /out, its socket, the logs, and
 // restart's pgrep, SIGHUP and kill -0 of impd. Any other call fails, naming itself on stderr.
 export function buildStubDevHostDocker(stub: StubDevHostDocker): string {

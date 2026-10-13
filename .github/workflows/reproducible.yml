@@ -1,7 +1,7 @@
 name: Reproducible
 
 # Rebuilds the guest kernel and the system drive from scratch and checks they
-# come out the same bytes (host/check-reproducible.sh). Two cold kernel
+# come out the same bytes (scripts/release/check-reproducible.sh). Two cold kernel
 # builds are too slow for every push, so it runs by hand; the release
 # pipeline can call it too.
 on:
@@ -24,4 +24,4 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Check
-        run: host/check-reproducible.sh
+        run: scripts/release/check-reproducible.sh

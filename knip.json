@@ -7,7 +7,7 @@
     ".": {
       // run-related-tests.ts is a synced CLI that test:related reaches through
       // run-branch-tests.ts; its other exports serve the tests in zgeoff/tools
-      "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts", "scripts/run-related-tests.ts"],
+      "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts", "scripts/ci/run-related-tests.ts"],
       "project": [
         "test/**/*.ts",
         "scripts/**/*.ts",
@@ -34,7 +34,7 @@
       "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"]
     },
     "packages/client": {
-      // the package smoke (scripts/check-client-runtimes.sh)
+      // the package smoke (scripts/release/check-client-runtimes.sh)
       "entry": ["smoke/*.ts"],
       "project": ["src/**/*.ts", "smoke/*.ts"]
     }

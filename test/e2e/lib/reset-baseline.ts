@@ -10,7 +10,7 @@ export interface ResetBaselineOptions {
   readonly prefixes: readonly string[];
 
   // where a journey may leave the broker's test upstreams file, as
-  // scripts/dev.sh sets IMP_BROKER_TEST_UPSTREAMS
+  // scripts/dev/dev.sh sets IMP_BROKER_TEST_UPSTREAMS
   readonly dataDir: string;
 }
 

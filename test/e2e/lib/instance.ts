@@ -3,11 +3,11 @@ import * as z from 'zod';
 import { config } from './config';
 import { buildFirecrackerPgrepArgv, readFirecrackerPids } from './firecracker-pids';
 
-// the harness drives scripts/dev.sh and scripts/imp from this checkout
+// the harness drives scripts/dev/dev.sh and scripts/imp from this checkout
 export const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
 export const FIXTURES_DIR = join(REPO_ROOT, 'test', 'e2e', 'fixtures');
 export const LIB_SCRIPT = join(REPO_ROOT, 'scripts', 'lib.sh');
-const DEV_SCRIPT = join(REPO_ROOT, 'scripts', 'dev.sh');
+const DEV_SCRIPT = join(REPO_ROOT, 'scripts', 'dev', 'dev.sh');
 const offset = Number(process.env['IMP_DEV_PORT_OFFSET'] ?? '0');
 
 // with the default name, an offset run would drive and wipe imp-dev, not its own instance
@@ -15,7 +15,7 @@ if (offset !== 0 && (process.env['IMP_DEV_NAME'] ?? '') === '') {
   throw new Error('IMP_DEV_PORT_OFFSET needs IMP_DEV_NAME: name the instance it belongs to');
 }
 
-// A dev instance (scripts/dev.sh) and where it listens
+// A dev instance (scripts/dev/dev.sh) and where it listens
 export interface DevInstance {
   readonly container: string;
 
@@ -25,13 +25,13 @@ export interface DevInstance {
   readonly proxyPort: number;
   readonly impPortBase: number;
 
-  // the SSH gateway, published on localhost by scripts/dev.sh
+  // the SSH gateway, published on localhost by scripts/dev/dev.sh
   readonly sshPort: number;
 
   // IMP_DEV_PORT_OFFSET, for what else instances side by side must not share
   readonly portOffset: number;
 
-  // what scripts/dev.sh reads for this instance, over this process's env;
+  // what scripts/dev/dev.sh reads for this instance, over this process's env;
   // each call passes it, so no instance's settings leak into another's
   readonly env: Readonly<Record<string, string>>;
 }
@@ -60,7 +60,7 @@ export interface InstanceOptions {
   readonly network: string;
   readonly ip: string;
 
-  // tuning for impd, passed through scripts/dev.sh
+  // tuning for impd, passed through scripts/dev/dev.sh
   readonly env?: Readonly<Record<string, string>>;
 }
 
@@ -147,7 +147,7 @@ export function getHostImage(): string {
   const image = process.env['IMP_HOST_IMAGE'] ?? '';
 
   if (image === '') {
-    throw new Error('IMP_HOST_IMAGE is not set: run the suites through scripts/test-e2e.sh');
+    throw new Error('IMP_HOST_IMAGE is not set: run the suites through test/test-e2e.sh');
   }
 
   return image;
@@ -178,7 +178,7 @@ export async function runDevScript(
   const exitCode = await proc.exited;
 
   if (exitCode !== 0) {
-    throw new Error(`scripts/dev.sh ${command} exited ${String(exitCode)}`);
+    throw new Error(`scripts/dev/dev.sh ${command} exited ${String(exitCode)}`);
   }
 }
 
@@ -186,7 +186,7 @@ export async function readToken(target: DevInstance = instance): Promise<string>
   const result = await runCommand([DEV_SCRIPT, 'token'], { env: target.env });
 
   if (result.exitCode !== 0) {
-    throw new Error(`scripts/dev.sh token exited ${String(result.exitCode)}: ${result.stderr}`);
+    throw new Error(`scripts/dev/dev.sh token exited ${String(result.exitCode)}: ${result.stderr}`);
   }
 
   return result.stdout.trim();
