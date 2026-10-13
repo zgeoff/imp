@@ -72,7 +72,9 @@ test('#ServiceDefSchema reads, past the name its file gives, every field of the 
     new URL('../../../agent/internal/contract/testdata/host/services-d.json', import.meta.url),
   ).json();
 
-  expect(ServiceDefSchema.omit({ name: true }).parse(fixture)).toStrictEqual(fixture);
+  const parsed: unknown = ServiceDefSchema.omit({ name: true }).parse(fixture);
+
+  expect(parsed).toStrictEqual(fixture);
 });
 
 test('#ServiceDefSchema accepts a service file with only a name and argv', () => {

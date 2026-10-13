@@ -56,8 +56,9 @@ test.each([
   ['cursor', LogCursorSchema],
 ] as const)('it parses the agent’s %s message with no field left over', (name, schema) => {
   const fixture = readAgentFixture(`guest/${name}.json`);
+  const parsed: unknown = schema.parse(fixture);
 
-  expect(schema.parse(fixture)).toStrictEqual(fixture);
+  expect(parsed).toStrictEqual(fixture);
 });
 
 test('it reads every fixture the agent writes', () => {
@@ -119,8 +120,9 @@ test('it finds each field it reads from a session in the activity the agent send
 
 test('it parses the data of NO_SESSION whole, with every field it reads set', () => {
   const fixture = AgentErrorResponseSchema.parse(readAgentFixture('guest/error-no-session.json'));
+  const parsed: unknown = NoSessionDataSchema.parse(fixture.error.data);
 
-  expect(NoSessionDataSchema.parse(fixture.error.data)).toStrictEqual(fixture.error.data);
+  expect(parsed).toStrictEqual(fixture.error.data);
 
   expect(collectJsonKeyPaths(fixture.error.data)).toIncludeAllMembers(
     collectSchemaKeyPaths(NoSessionDataSchema),
@@ -132,7 +134,9 @@ test('it parses the data of INVALID_RESUME whole, with every field it reads set'
     readAgentFixture('guest/error-invalid-resume.json'),
   );
 
-  expect(InvalidResumeDataSchema.parse(fixture.error.data)).toStrictEqual(fixture.error.data);
+  const parsed: unknown = InvalidResumeDataSchema.parse(fixture.error.data);
+
+  expect(parsed).toStrictEqual(fixture.error.data);
 
   expect(collectJsonKeyPaths(fixture.error.data)).toIncludeAllMembers(
     collectSchemaKeyPaths(InvalidResumeDataSchema),
@@ -180,8 +184,9 @@ test.each(listAgentFixtures('host/requests'))(
   'it sends the agent a %s request it parses with no field left over',
   (op) => {
     const fixture = readAgentFixture(`host/requests/${op}.json`);
+    const parsed: unknown = AgentRequestSchema.parse(fixture);
 
-    expect(AgentRequestSchema.parse(fixture)).toStrictEqual(fixture);
+    expect(parsed).toStrictEqual(fixture);
   },
 );
 
@@ -211,7 +216,8 @@ test.each([
   ['signal', AgentSignalSchema],
 ] as const)('it sends the agent a %s frame it parses with every field set', (name, schema) => {
   const fixture = readAgentFixture(`host/${name}.json`);
+  const parsed: unknown = schema.parse(fixture);
 
-  expect(schema.parse(fixture)).toStrictEqual(fixture);
+  expect(parsed).toStrictEqual(fixture);
   expect(collectJsonKeyPaths(fixture)).toStrictEqual(collectSchemaKeyPaths(schema));
 });

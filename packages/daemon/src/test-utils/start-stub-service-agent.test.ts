@@ -79,7 +79,7 @@ test('it refuses an op it does not know as UNKNOWN_OP', async () => {
 
   await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
 
-  expect(sendAgentRequest(ctx.vsockPath, { op: 'services.bogus' })).rejects.toMatchObject({
+  expect(sendAgentRequest(ctx.vsockPath, { op: 'thaw' })).rejects.toMatchObject({
     code: 'UNKNOWN_OP',
   });
 });

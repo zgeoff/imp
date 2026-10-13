@@ -1,7 +1,9 @@
+import type * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
 import type { AgentFeature } from './agent-outdated';
+import type { AgentRequestSchemas } from './agent-protocol';
 import { readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES } from './frame-codec';
 
@@ -50,7 +52,7 @@ export function openDialStream(
 // agent.accept both use it.
 export async function openRelayStream(
   vsockPath: string,
-  request: Readonly<Record<string, unknown>>,
+  request: Readonly<z.input<typeof AgentRequestSchemas.relay | typeof AgentRequestSchemas.accept>>,
   feature: AgentFeature,
   answerTimeoutMs: number,
 ): Promise<DialStream> {
