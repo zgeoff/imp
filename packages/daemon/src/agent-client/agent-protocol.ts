@@ -58,7 +58,7 @@ export const InvalidResumeDataSchema = z.object({ end: OffsetSchema, buffer_star
 
 // the inner container: whether it runs, how often it started again after its
 // init died, and why the last start failed
-export const AgentInnerSchema = z.object({
+const AgentInnerSchema = z.object({
   up: z.boolean(),
   restarts: z.int().nonnegative(),
   last_error: z.string().optional(),
@@ -142,7 +142,7 @@ export const AgentResumeSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
-export const AgentOutputSchema = z.object({
+const AgentOutputSchema = z.object({
   boot_id: AgentBootIdSchema,
   execution_generation: AgentGenerationSchema,
   buffer_start: OffsetSchema,
@@ -193,11 +193,11 @@ const AgentServiceDefObjectSchema = z.object({
   source: z.enum(['image', 'api']).optional(),
 });
 
-export const AgentServiceDefSchema = AgentServiceDefObjectSchema.readonly();
+const AgentServiceDefSchema = AgentServiceDefObjectSchema.readonly();
 
 export type AgentServiceDef = z.infer<typeof AgentServiceDefSchema>;
 
-export const AgentServiceSchema = z
+const AgentServiceSchema = z
   .object({
     name: z.string(),
     state: z.enum(['starting', 'running', 'backoff', 'stopped', 'exited']),
