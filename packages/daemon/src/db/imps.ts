@@ -11,6 +11,7 @@ import type {
 } from '@imp/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
+import { readErrorMessage } from '../read-error-message';
 import { ImpClashError } from './imp-clash-error';
 import type { ImpDatabase, ImpQueries } from './open-database';
 import type { DB } from './schema';
@@ -291,7 +292,7 @@ function toImpClash(error: unknown): ImpClashError | null {
     'code' in error &&
     error.code === 'SQLITE_CONSTRAINT_UNIQUE';
 
-  const match = isUnique ? /\bimps\.(?<column>\w+)/v.exec(String(error)) : null;
+  const match = isUnique ? /\bimps\.(?<column>\w+)/v.exec(readErrorMessage(error)) : null;
   const column = match?.groups?.['column'];
 
   return column === undefined ? null : new ImpClashError(column);

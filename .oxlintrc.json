@@ -48,6 +48,13 @@
           { "from": "package", "name": "CompiledQuery", "package": "kysely" },
           // a kysely connection bound to a live driver; not meaningfully freezable
           { "from": "package", "name": "DatabaseConnection", "package": "kysely" },
+          // kysely-codegen's introspection of the migrated database, which the
+          // schema render reads to build a copy
+          {
+            "from": "package",
+            "name": ["DatabaseMetadata", "TableMetadata", "ColumnMetadata", "EnumCollection"],
+            "package": "kysely-codegen"
+          },
           // a migrator result read once for its error field, never mutated
           { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
           // the Kysely handle above under its schema-bound aliases

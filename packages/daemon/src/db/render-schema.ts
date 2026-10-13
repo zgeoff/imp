@@ -81,7 +81,7 @@ export async function renderSchema(): Promise<string> {
 // introspection reads each as nullable; impd never writes one, and an
 // INTEGER one is the rowid, which is never NULL
 async function normalizePrimaryKeys(
-  context: Parameters<PostprocessFunction>[0],
+  context: Readonly<Parameters<PostprocessFunction>[0]>,
 ): Promise<DatabaseMetadata> {
   const tables = await Promise.all(
     context.metadata.tables.map(async (table) => {
