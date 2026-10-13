@@ -18,7 +18,7 @@ interface StubGuest {
 
   // the plugged sizes the next reads find, in order, as a guest that moves
   // between them; once empty, the guest moves as `isSlow` says
-  pluggedOnReads: number[];
+  pluggedOnReads: readonly number[];
 
   // true: a request lands, but its answer never comes back, as when
   // Firecracker applies it after impd's wait for the answer ran out
@@ -89,7 +89,9 @@ export function buildStubGuestMemory() {
           throw new Error('firecracker GET /hotplug/memory: no answer within 1000 ms');
         }
 
-        const scriptedMib = guest.pluggedOnReads.shift();
+        const [scriptedMib, ...laterMib] = guest.pluggedOnReads;
+
+        guest.pluggedOnReads = laterMib;
 
         if (scriptedMib !== undefined) {
           guest.pluggedMib = scriptedMib;
