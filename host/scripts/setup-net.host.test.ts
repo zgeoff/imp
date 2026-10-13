@@ -1,3 +1,4 @@
+// oxlint-disable zgeoff/test-beside-module -- tests setup-net.sh under a test-kind suffix the rule does not allow; GEO-472
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { canUnshare } from '../../packages/daemon/src/test-utils/can-unshare';
@@ -51,9 +52,9 @@ test.skipIf(
 )('it drops a connection to the broker port from outside the taps', () => {
   // lo stands in for eth0 and tailscale0: anything that is not imp+. The
   // first INPUT rule accepts it all, as tailscaled's ts-input does later.
-  // The listener says when both ports are bound, and the probes wait on it.
-  // Each probe prints its exit: 0 connected, 124 timed out (a drop), and 1 a
-  // refusal, so a port that answers with a reset does not pass as dropped.
+
+  // Each probe waits on the listener and prints its exit: 0 connected, 124
+  // timed out (a drop), 1 refused, so a reset does not pass as a drop.
   const run = runInNetns({
     script: `
 ip link add up0 type dummy

@@ -34,6 +34,7 @@ test('it joins again with the key when the saved node holds other tags than it a
 
   mkdirSync(join(ctx.dir, 'state'));
   writeFileSync(join(ctx.dir, 'state', 'tailscaled.state'), 'saved');
+
   // tailscaled runs already, and the script's waits pass at once
   createStubBin(ctx.dir, 'ps', 'echo S');
   createStubBin(ctx.dir, 'sleep');
@@ -259,6 +260,7 @@ test('it fails with the log tail when tailscaled does not open its socket', () =
 
   mkdirSync(join(ctx.dir, 'state'));
   writeFileSync(join(ctx.dir, 'state', 'tailscaled.state'), 'saved');
+
   // no tailscaled runs yet; the one the script starts logs and exits without
   // a socket, and the script's waits for the socket last until it has logged
   createStubBin(ctx.dir, 'ps');
