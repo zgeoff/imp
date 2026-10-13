@@ -1,8 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": ["@stylistic/eslint-plugin", "@zgeoff/oxlint-config"],
-  // POSIX tools the tests run through Bun's shell
-  "ignoreBinaries": ["mkfifo"],
+  // POSIX tools the tests run through Bun's shell, and the Go toolchain's
+  // gofmt, which the go:fmt-vet pre-push job runs
+  "ignoreBinaries": ["mkfifo", "gofmt"],
   "workspaces": {
     ".": {
       // run-related-tests.ts is a synced CLI that test:related reaches through
