@@ -1,5 +1,6 @@
 import {
   EXEC_CHANNELS,
+  EXEC_HIGH_WATER_BYTES,
   EXEC_PATH,
   EXEC_TICKET_PARAM,
   ExecServerMessageSchema,
@@ -144,9 +145,6 @@ export interface ExecSession {
 // impd waits for `start` before it wakes the imp, so the open is quick; the
 // start itself can take a cold boot, and impd bounds that on its side
 const OPEN_TIMEOUT_MS = 10_000;
-
-// the same mark impd uses for output (packages/daemon exec-session)
-const HIGH_WATER_BYTES = 1_048_576;
 const DRAIN_POLL_MS = 50;
 
 class BadMessageError extends Error {
@@ -403,7 +401,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   });
 
   const waitForDrain = async (): Promise<void> => {
-    while (!state.finished && countQueuedBytes() > HIGH_WATER_BYTES) {
+    while (!state.finished && countQueuedBytes() > EXEC_HIGH_WATER_BYTES) {
       await new Promise((resolve) => {
         setTimeout(resolve, DRAIN_POLL_MS);
       });
@@ -416,7 +414,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     sendStdin: (data) => {
       sendControl(encodeExecFrame(EXEC_CHANNELS.stdin, data));
 
-      return countQueuedBytes() <= HIGH_WATER_BYTES;
+      return countQueuedBytes() <= EXEC_HIGH_WATER_BYTES;
     },
     waitForDrain,
     closeStdin: () => {

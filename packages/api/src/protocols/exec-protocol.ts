@@ -63,6 +63,10 @@ export const EXEC_MAX_STDIN_FRAME_BYTES = 65_536;
 // disk on the client's side cannot grow the client's memory
 export const EXEC_STDOUT_WINDOW_BYTES = 1_048_576;
 
+// either end waits once its socket holds this many bytes unsent, until they
+// drain, so a slow peer slows the sender instead of growing its memory
+export const EXEC_HIGH_WATER_BYTES = 1_048_576;
+
 // the agent waits for the group at most this long before its SIGKILL
 export const KILL_GRACE_MAX_MS = 60_000;
 
