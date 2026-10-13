@@ -23,9 +23,17 @@ export function setupLogging(write: (line: string) => void = writeStdout): void 
   });
 }
 
+// the parts of a LogTape record a line shows
+interface RenderedRecord {
+  readonly level: LogRecord['level'];
+  readonly category: readonly string[];
+  readonly message: readonly unknown[];
+  readonly properties: Readonly<Record<string, unknown>>;
+}
+
 // "<LEVEL> <category> [imp=<name> ]<message>\n": the level, the category
 // joined with dots, and the imp the line is about, if any.
-function renderLogLine(record: Readonly<LogRecord>): string {
+function renderLogLine(record: RenderedRecord): string {
   const imp = record.properties['imp'];
   const about = typeof imp === 'string' ? `imp=${imp} ` : '';
 
