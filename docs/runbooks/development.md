@@ -315,6 +315,11 @@ imp-docker-proxy. After an edit, `bun run render:deploy` writes them into both u
 in `bootstrap.sh` and the privileges blocks of `deploy/compose.yaml`, and `bun test` fails until it
 has (`scripts/render-imp-host.test.ts`). The NixOS module reads the file itself.
 
+`.github/workflows/breaking-change.yml` fails a pull request that breaks the protocol between a
+client and impd without marking the change as breaking
+([Breaking changes](./releasing.md#breaking-changes)). It runs again when the PR's title or body
+changes, and its job is a required check.
+
 `.github/workflows/nix.yml` checks the format of the `.nix` files and runs `nix flake check` when
 `flake.nix`, `flake.lock`, `deploy/` or `tailscale-up.sh` change: the NixOS module's eval check, and
 a NixOS VM test that needs KVM ([NixOS](../guides/nixos.md#test-it)). It is not a required check.
@@ -325,6 +330,7 @@ system drive rebuild to the same bytes). It takes two cold kernel builds, so it 
 
 ## Branch rules
 
-`.github/rulesets/main.json` protects `main`: the seven required CI jobs must pass, changes arrive
-through a squash-merged pull request, and the branch cannot be deleted or force-pushed. Only a
-repository admin can bypass it. The ruleset is applied on GitHub as `main protection`.
+`.github/rulesets/main.json` protects `main`: the seven required CI jobs and the breaking-change job
+must pass, changes arrive through a squash-merged pull request, and the branch cannot be deleted or
+force-pushed. Only a repository admin can bypass it. The ruleset is applied on GitHub as
+`main protection`.

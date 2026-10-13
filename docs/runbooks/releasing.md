@@ -10,6 +10,43 @@ them. Every artifact carries the tag's version without the `v`, so a client, an 
 flake pinned to one tag agree. The workflows' own comments cover each job; this runbook holds the
 steps they do not do.
 
+## Breaking changes
+
+A client accepts any impd of its own major version, so a change that breaks the protocol between
+them must ship as a new major. release-please bumps the major only for a commit marked as breaking,
+and the breaking-change workflow fails a pull request whose protocol change breaks a client and
+carries no mark.
+
+The protocol lives in `packages/api/protocol-schema.json`: every oRPC procedure's input and output,
+the messages of the `/exec`, `/tunnel` and `/images/build` streams, the error codes with their data,
+and the wire constants, each as JSON Schema that zod derives from the contract.
+`bun run render:protocol` writes the file, and `bun test` fails until it matches the code. The check
+compares the file at the pull request's merge base with the file at its head, by these rules:
+
+- What a client sends must still pass: impd must accept every input it accepted before. A new
+  required field, a tighter bound, a dropped enum value, or a field impd no longer reads breaks a
+  client.
+- What impd sends must still make sense to an older client. A field that may now be missing, a
+  changed type, a looser bound, or a variant of a tagged union that impd stops sending breaks a
+  client. A new field, a new value of an enum, and a new variant of a tagged union do not, because a
+  client passes over what it does not know. The union's tag is its discriminator: the property each
+  variant fixes to its own value, such as `type`.
+- A removed procedure, message, error code or constant, a changed error status, and a procedure that
+  changes between one answer and an event stream all break a client.
+
+The check compares the protocol rather than the client's TypeScript declarations because the outcome
+to protect is a client that can still talk to impd. A type diff would flag a renamed export that
+breaks no request, and it would miss a tighter bound, which a TypeScript type does not show. The
+check cannot see a zod refinement, or what a transform in an output returns, because JSON Schema
+cannot express either.
+
+To mark a change, put a `!` after the type, as in `feat(#412)!: drop imps.get`, or add a
+`BREAKING CHANGE: <what breaks>` footer to a commit message. The repository squash-merges, and
+GitHub takes the subject of a pull request with one commit from that commit, so the `!` goes in the
+commit's subject there and in the PR title when the pull request has several commits. A
+`BEGIN_COMMIT_OVERRIDE` block in the PR body replaces the message release-please reads. Editing the
+title or the body runs the check again.
+
 ## Set up a repository for releases
 
 These steps are done for `zgeoff/imp`. They are here for a new repository, or to set one up again.

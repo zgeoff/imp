@@ -1,0 +1,61 @@
+name: Breaking change
+
+# From 1.0 a client accepts any impd of its own major, and release-please
+# bumps the major only for a `!` or a BREAKING CHANGE footer. This check fails
+# a pull request whose change to the protocol (packages/api/protocol-schema.json)
+# breaks a client of the same major and is not marked so
+# (scripts/check-breaking-change.ts). Its own workflow, so that editing the
+# title or the body reruns only this check. The job's name is a required status
+# check in .github/rulesets/main.json: rename both together.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions: {}
+
+concurrency:
+  group: breaking-change-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LEFTHOOK: 0
+
+jobs:
+  breaking-change:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # the whole history, for the merge base and the pull request's commits
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache Bun Packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # the title and body go through env, never into the script's text
+      - name: Check for an unmarked breaking change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bun scripts/check-breaking-change.ts

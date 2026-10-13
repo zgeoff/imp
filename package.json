@@ -80,6 +80,7 @@
     "lint:full": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
     "lint:docs": "bash .claude/skills/docs-writing/scripts/check-links.sh",
     "render:deploy": "bun scripts/render-imp-host.ts",
+    "render:protocol": "bun scripts/render-protocol-schema.ts",
     "lint:shell": "./scripts/shellcheck.sh",
     "test": "bun test",
     "test:host": "bun test ./packages/daemon/src/egress/egress-ruleset.host.test.ts ./host/scripts/setup-net.host.test.ts ./packages/daemon/src/test-utils/run-in-netns.host.test.ts ./packages/daemon/src/test-utils/build-stub-public-network.host.test.ts",

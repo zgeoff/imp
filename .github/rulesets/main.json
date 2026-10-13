@@ -35,7 +35,8 @@
           { "context": "shellcheck" },
           { "context": "cli" },
           { "context": "client" },
-          { "context": "e2e" }
+          { "context": "e2e" },
+          { "context": "breaking-change" }
         ]
       }
     }
