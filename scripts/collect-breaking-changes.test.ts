@@ -1314,6 +1314,29 @@ test('it finds nothing between an intersection of objects and itself, open in th
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
+test('it finds nothing between an intersection of two recursive schemas and itself', () => {
+  const schema = {
+    procedures: {
+      'files.chain': {
+        input: {
+          allOf: [{ $ref: '#/$defs/a' }, { $ref: '#/$defs/b' }],
+          $defs: {
+            a: { type: 'object', properties: { next: { $ref: '#/$defs/a' } } },
+            b: { type: 'object', properties: { next: { $ref: '#/$defs/b' } } },
+          },
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
+});
+
 test('it passes a changed input property that a closed part of the intersection refused', () => {
   const base = {
     procedures: {

@@ -175,7 +175,7 @@ function collectChanges(
   path: string,
   comparison: Comparison,
 ): string[] {
-  const refKey = `${findRef(narrowRef) ?? ''}|${findRef(wideRef) ?? ''}`;
+  const refKey = `${findCycleKey(narrowRef) ?? ''}|${findCycleKey(wideRef) ?? ''}`;
 
   if (refKey !== '|' && comparison.seen.has(refKey)) {
     return [];
@@ -246,6 +246,20 @@ function readStrings(schema: SchemaObject, keyword: string): readonly string[] {
   const items: readonly unknown[] = value;
 
   return items.filter((item): item is string => typeof item === 'string');
+}
+
+// What names a schema that a recursive schema meets again: its `$ref`, or the
+// whole of an intersection over `$ref`s, which a merge rebuilds at each level.
+function findCycleKey(schema: Schema): string | undefined {
+  const ref = findRef(schema);
+
+  if (ref !== undefined || typeof schema !== 'object') {
+    return ref;
+  }
+
+  const parts = readSchemaList(schema, 'allOf') ?? [];
+
+  return parts.some((part) => findRef(part) !== undefined) ? JSON.stringify(schema) : undefined;
 }
 
 function findRef(schema: Schema): string | undefined {
