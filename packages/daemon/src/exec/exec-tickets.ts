@@ -78,7 +78,7 @@ export function createExecTickets(deps: Readonly<ExecTicketsDeps>): ExecTickets 
 
   // the owner's tickets, oldest first
   const listOwned = (owner: string): string[] =>
-    [...live.rentries()].filter(([, entry]) => entry.owner === owner).map(([id]) => id);
+    [...live.rkeys()].filter((id) => live.peek(id)?.owner === owner);
 
   return {
     issue: (name, caller) => {

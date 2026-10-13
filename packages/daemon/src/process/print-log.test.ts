@@ -73,7 +73,7 @@ test('#printLog writes the bare line to stdout in a process that never set up lo
   expect(stdout).toBe('impd: gc: removed 2 drives\n');
 });
 
-test.each([
+test.each<[string, ReturnType<typeof parseLegacyLine>]>([
   ['impd: broker: kept secret value file a', { area: 'broker', imp: undefined, level: 'info' }],
   ['impd: web: booted pid 42', { area: 'imps', imp: 'web', level: 'info' }],
   ['impd: boot template abc built in 3ms', { area: 'boot', imp: undefined, level: 'info' }],
