@@ -438,6 +438,14 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
           if (state !== undefined && afterMib < before.pluggedMib) {
             state.lowerTo = afterMib;
             state.uncountedGrow = null;
+          } else if (
+            state !== undefined &&
+            state.uncountedGrow !== null &&
+            afterMib < before.requestedMib
+          ) {
+            // the unplug stopped a plug under way, whose rest the guest never
+            // gets; what it got may land in the statistics after this
+            state.uncountedGrow.totalMib -= before.requestedMib - afterMib;
           }
 
           // a plug under way gives nothing back
