@@ -116,9 +116,10 @@ func TestGuestFixturesMatchWhatTheAgentSends(t *testing.T) {
 			}
 
 			got, err := os.ReadFile(path)
-
 			assert.NilError(t, err, "run go test ./internal/contract -run GuestFixtures -write")
-			assert.Equal(t, string(got), string(want), "run go test ./internal/contract -run GuestFixtures -write")
+
+			// the values, not the bytes: the repo's formatter lays the files out
+			assert.DeepEqual(t, decodeJSON(t, got), decodeJSON(t, want))
 		})
 	}
 }

@@ -101,6 +101,15 @@ func declaredConsts(t *testing.T, path, prefix string) map[string]any {
 	return consts
 }
 
+// decodeJSON reads a fixture's JSON as plain values, to compare two whatever
+// their layout.
+func decodeJSON(t *testing.T, b []byte) any {
+	t.Helper()
+	var v any
+	assert.NilError(t, json.Unmarshal(b, &v))
+	return v
+}
+
 // decodeStrict decodes a fixture into v, refusing a field v does not have.
 func decodeStrict(t *testing.T, path string, v any) error {
 	t.Helper()
@@ -154,6 +163,13 @@ const (
 
 	assert.DeepEqual(t, declaredConsts(t, path, "Err"), map[string]any{"ErrA": "A", "ErrB": "B"})
 	assert.DeepEqual(t, declaredConsts(t, path, "Type"), map[string]any{"TypeOne": 1})
+}
+
+func TestDecodeJSONReadsTwoLayoutsOfOneValueAlike(t *testing.T) {
+	compact := decodeJSON(t, []byte(`{"argv":["make","-j4"]}`))
+	indented := decodeJSON(t, []byte("{\n  \"argv\": [\n    \"make\",\n    \"-j4\"\n  ]\n}\n"))
+
+	assert.DeepEqual(t, compact, indented)
 }
 
 func TestDecodeStrictRefusesAFieldTheTypeLacks(t *testing.T) {
