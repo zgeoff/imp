@@ -23,6 +23,11 @@ const RECLAIM_TIME_LIMIT_MS = 1000;
 // a plug or an unplug whose plugged size stands still this long has stopped
 const STALL_MS = 2000;
 
+// The balloon statistics count a plug at their next poll, 1 s at most after
+// it lands (configure-vm.ts); a grow they still miss this long after a tick
+// saw it land no longer holds back the next one.
+const GROW_UNCOUNTED_MS = 3000;
+
 export interface ElasticImp {
   readonly id: string;
   readonly name: string;
@@ -79,6 +84,11 @@ interface ImpState {
   // a plug or an unplug under way: where it stood, and since when
   change: { pluggedMib: number; since: number } | null;
 
+  // after a grow, the total the balloon statistics reach once they count it;
+  // the next grow waits for them, or for `until`, set once a tick sees the
+  // plug land (docs/architecture/lifecycle/elastic-memory.md#the-controller)
+  uncountedGrow: { totalMib: number; until: number | null } | null;
+
   // a stopped plug is logged once, until the guest's size moves again
   stalledAtMib: number | null;
 
@@ -123,6 +133,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
       shrinkAfter: 0,
       growAfter: 0,
       change: null,
+      uncountedGrow: null,
       stalledAtMib: null,
       lowerTo: null,
       isRefused: false,
@@ -231,7 +242,20 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     state.lowerTo = null;
 
-    deps.log(`impd: ${imp.name}: memory low, grew to ${String(imp.memoryMib + pluggedMib)} MiB`);
+    // Statistics that missed an earlier grow past its hold miss it here too,
+    // so this step counts on top of that one. The guest's struct pages for
+    // the step may come out of what it counts.
+    state.uncountedGrow = {
+      totalMib:
+        Math.max(memory.totalMib, state.uncountedGrow?.totalMib ?? 0) +
+        stepMib -
+        findStructPageMib(stepMib),
+      until: null,
+    };
+
+    deps.log(
+      `impd: ${imp.name}: memory low (${String(memory.availableMib)} of ${String(memory.totalMib)} MiB free), grew to ${String(imp.memoryMib + pluggedMib)} MiB`,
+    );
   };
 
   // an unplug toward the spare size; the guest gets there in its own time,
@@ -247,6 +271,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     }
 
     state.lowerTo = targetMib;
+    state.uncountedGrow = null;
 
     deps.log(
       `impd: ${imp.name}: memory to spare, shrinking to ${String(imp.memoryMib + targetMib)} MiB`,
@@ -289,6 +314,10 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     state.growAfter = time + BACKOFF_MS;
 
+    // the guest never got the rest of the step, and the statistics have had
+    // the stall's time to count what it did get
+    state.uncountedGrow = null;
+
     if (state.stalledAtMib === null) {
       deps.log(`impd: ${imp.name}: the guest could not plug past ${guestMib} MiB`);
     }
@@ -319,10 +348,23 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     applyLowerLimit(imp, memory);
 
+    if (state.uncountedGrow !== null) {
+      state.uncountedGrow.until ??= time + GROW_UNCOUNTED_MS;
+
+      if (memory.totalMib >= state.uncountedGrow.totalMib) {
+        state.uncountedGrow = null;
+      }
+    }
+
+    // past `until` the total stays until the statistics count it, for the
+    // next grow to count on
+    const held = state.uncountedGrow;
+    const isGrowHeld = held !== null && held.until !== null && time < held.until;
+
     if (memory.availableMib < findLowMib(memory.totalMib)) {
       state.spareSince = null;
 
-      if (time >= state.growAfter) {
+      if (time >= state.growAfter && !isGrowHeld) {
         await growImp(imp, memory);
       }
 
@@ -395,6 +437,15 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
           if (state !== undefined && afterMib < before.pluggedMib) {
             state.lowerTo = afterMib;
+            state.uncountedGrow = null;
+          } else if (
+            state !== undefined &&
+            state.uncountedGrow !== null &&
+            afterMib < before.requestedMib
+          ) {
+            // the unplug stopped a plug under way, whose rest the guest never
+            // gets; what it got may land in the statistics after this
+            state.uncountedGrow.totalMib -= before.requestedMib - afterMib;
           }
 
           // a plug under way gives nothing back

@@ -15,6 +15,10 @@ interface StubGuest {
 
   // true: a request is taken, but the guest has not moved yet
   isSlow: boolean;
+
+  // the balloon statistics a read reports while they lag the guest, as
+  // Firecracker's do between polls; null reports the guest as it is now
+  staleStats: { readonly totalMib: number; readonly availableMib: number } | null;
 }
 
 // virtio-mem plugs and unplugs whole 2 MiB blocks
@@ -48,6 +52,7 @@ export function buildStubGuestMemory() {
         regionMib: 1024,
         unplugFloorMib: 0,
         isSlow: false,
+        staleStats: null,
         ...guest,
       };
 
@@ -71,8 +76,7 @@ export function buildStubGuestMemory() {
         return {
           pluggedMib: guest.pluggedMib,
           requestedMib: guest.requestedMib,
-          totalMib,
-          availableMib: totalMib - guest.usedMib,
+          ...(guest.staleStats ?? { totalMib, availableMib: totalMib - guest.usedMib }),
         };
       },
 

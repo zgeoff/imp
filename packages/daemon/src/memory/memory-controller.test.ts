@@ -213,6 +213,282 @@ test('it waits for a plug under way and never asks twice', async () => {
   expect(ctx.guests.requests).toStrictEqual([256]);
 });
 
+test('it grows a guest once while its balloon statistics still show it from before the grow', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it waits for balloon statistics that count only part of a grow', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  guest.staleStats = { totalMib: 640, availableMib: 22 };
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it grows a guest again once its balloon statistics count the grow and it is still low', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  guest.usedMib = 740;
+  guest.staleStats = null;
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 512]);
+});
+
+test('it grows a guest again once its balloon statistics miss a landed grow for 3 s', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  ctx.advance(2999);
+
+  await controller.runTick();
+
+  ctx.advance(1);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 512]);
+});
+
+test('it holds the next grow while its balloon statistics miss a landed grow for less than 3 s', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  ctx.advance(2999);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it holds the next grow for 3 s from when a slow plug lands, not from when it was asked', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    isSlow: true,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  guest.isSlow = false;
+
+  ctx.advance(1000);
+
+  await controller.runTick();
+
+  ctx.advance(2999);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it holds the next grow for 3 s from when the plug lands, not from a slow admission', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  // the governor makes room for the grow by sleeping other imps
+  const controller = createMemoryController({
+    ...ctx.deps,
+    admitGrow: () => {
+      ctx.advance(3000);
+
+      return Promise.resolve(true);
+    },
+    readRamMib: () => 400,
+  });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it counts a grow after a missed one on top of it', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  ctx.advance(3000);
+
+  await controller.runTick();
+
+  // the statistics count the first grow only, and still show the guest low
+  guest.staleStats = { totalMib: 768, availableMib: 22 };
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 512]);
+});
+
 test('it keeps a guest that could give back a step for less than a minute', async () => {
   const ctx = setupTest();
 
@@ -591,6 +867,50 @@ test('it reclaims from idle guests only, and counts what they gave back', async 
   expect(ctx.plugged.get('dev')).toBe(496);
 });
 
+test('it counts no part of a plug that a reclaim stopped in the grow after it', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 490, isSlow: true });
+
+  // the reclaim's polls take time on the controller's clock
+  const controller = createMemoryController({
+    ...ctx.deps,
+    readRamMib: () => 400,
+    sleep: (ms) => {
+      ctx.advance(ms);
+
+      return Promise.resolve();
+    },
+  });
+
+  await controller.runTick();
+
+  // half the plug lands, then the guest goes idle and stops moving
+  guest.pluggedMib = 128;
+  guest.usedMib = 100;
+
+  await controller.reclaimIdle(null);
+
+  // the statistics count what landed, and the guest is low again
+  guest.isSlow = false;
+  guest.usedMib = 600;
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 0, 128, 384]);
+});
+
 test('it shrinks a large guest to leave 15 % of it free', async () => {
   const ctx = setupTest();
 
@@ -779,6 +1099,45 @@ test('it logs a second plug that never finishes no more', async () => {
 
   expect(ctx.guests.requests).toStrictEqual([256, 0, 256, 0]);
   expect(ctx.logs.filter((line) => line.includes('could not plug'))).toHaveLength(1);
+});
+
+test('it counts no part of a plug that never finished in the grow after it', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  guest.isSlow = false;
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+
+  // the statistics count the retried step, and the guest is still low
+  guest.usedMib = 750;
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 0, 256, 512]);
 });
 
 test('it plugs nothing for a grow that a sleep overtakes, and gives its reservation back', async () => {
