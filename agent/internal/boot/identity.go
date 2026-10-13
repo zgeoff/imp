@@ -123,7 +123,7 @@ func resetHostKeys(root fsroot.FS, keygen keygenFunc) error {
 		// a keygen that timed out may still write here: the next boot drops it
 		return fmt.Errorf("ssh-keygen -A: %w", err)
 	}
-	defer root.RemoveAll(stage)
+	defer func() { _ = root.RemoveAll(stage) }()
 	keys, err := listHostKeys(root, made)
 	if err != nil {
 		return err
@@ -173,7 +173,7 @@ func removeStaleStages(root fsroot.FS, dir string) {
 	entries, _ := root.ReadDir(dir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), stagePrefix) {
-			root.RemoveAll(filepath.Join(dir, e.Name()))
+			_ = root.RemoveAll(filepath.Join(dir, e.Name()))
 		}
 	}
 }

@@ -1,3 +1,7 @@
+//go:build root
+
+// The tests that make device nodes, so they need root: run them with -tags root as root.
+
 package inner
 
 import (
@@ -11,13 +15,13 @@ import (
 )
 
 func TestCopyDevKeepsNodesLinksAndModes(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("mknod needs root")
-	}
 	src, dst := t.TempDir(), t.TempDir()
 	assert.NilError(t, unix.Mknod(filepath.Join(src, "null"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))))
 	assert.NilError(t, os.Mkdir(filepath.Join(src, "net"), 0o755))
 	assert.NilError(t, unix.Mknod(filepath.Join(src, "net", "tun"), unix.S_IFCHR|0o666, int(unix.Mkdev(10, 200))))
+	// mknod applied the umask; the source keeps the modes a real /dev has
+	assert.NilError(t, os.Chmod(filepath.Join(src, "null"), 0o666))
+	assert.NilError(t, os.Chmod(filepath.Join(src, "net", "tun"), 0o666))
 	assert.NilError(t, os.Symlink("/proc/self/fd", filepath.Join(src, "fd")))
 
 	err := copyDev(src, dst)

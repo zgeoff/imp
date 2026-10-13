@@ -128,7 +128,7 @@ func (c *client) late(m message) {
 		return
 	}
 	log.Printf("inner: pid %d started after its spawn timed out; killing it", m.Pid)
-	safe.Go("inner: kill late spawn", func() { c.signal(m.Pid, syscall.SIGKILL, false) }, nil)
+	safe.Go("inner: kill late spawn", func() { _ = c.signal(m.Pid, syscall.SIGKILL, false) }, nil)
 }
 
 func statusOf(m message) reaper.Status {
@@ -157,7 +157,7 @@ func (c *client) shut() {
 	for pid, ch := range waiters {
 		ch <- reaper.Status{Pid: pid, Code: -1, Signal: syscall.SIGKILL}
 	}
-	unix.Shutdown(c.sock, unix.SHUT_RDWR)
+	_ = unix.Shutdown(c.sock, unix.SHUT_RDWR)
 	close(c.down)
 }
 
@@ -356,7 +356,7 @@ func connect(p *initProc) (*client, error) {
 	p.kill()
 	if !read {
 		// the read must end before the fd number can go to another socket
-		unix.Shutdown(p.sock, unix.SHUT_RDWR)
+		_ = unix.Shutdown(p.sock, unix.SHUT_RDWR)
 		<-ready
 	}
 	unix.Close(p.sock)

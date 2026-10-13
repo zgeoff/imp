@@ -143,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: agent
@@ -152,17 +152,21 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # go.mod lives in agent/, so the version and the module cache key both
-      # need pointing there
+      # need pointing there; the key also covers the lint tools and the
+      # Dockerfile difftest module
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
+          cache-dependency-path: |
+            agent/go.sum
+            agent/tools/go.sum
+            scripts/dockerfile-difftest/go.sum
 
       # gofmt -l lists unformatted files and exits 0 either way
       - name: Format
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(gofmt -l . ../scripts/dockerfile-difftest)
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt wants to reformat:"
             echo "$unformatted"
@@ -170,7 +174,33 @@ jobs:
           fi
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags root ./...
+          go -C ../scripts/dockerfile-difftest vet ./...
+
+      # golangci-lint, govulncheck and deadcode are pinned in tools/go.mod, a
+      # module of their own so their dependencies never move the agent's;
+      # the root tag adds the root-only tests to what the lint reads
+      - name: Lint
+        run: |
+          go tool -modfile=tools/go.mod golangci-lint run --build-tags root ./...
+          cd ../scripts/dockerfile-difftest
+          go tool -modfile=../../agent/tools/go.mod golangci-lint run --config ../../agent/.golangci.yml --disable depguard ./...
+
+      - name: Vulnerabilities
+        run: go tool -modfile=tools/go.mod govulncheck ./...
+
+      # deadcode lists functions no binary reaches, tests aside, and exits 0
+      # either way
+      - name: Dead Code
+        run: |
+          unreachable=$(go tool -modfile=tools/go.mod deadcode -test=false ./cmd/...)
+          if [ -n "$unreachable" ]; then
+            echo "::error::only tests call these; delete them or move them into the tests:"
+            echo "$unreachable"
+            exit 1
+          fi
 
       # gotestsum (pinned as a tool in go.mod) runs go test -race and keeps the
       # JSON event stream, so each run's timings can be compared later
@@ -178,6 +208,12 @@ jobs:
         run: ../scripts/test-go.sh
         env:
           GO_TEST_JSONFILE: ${{ runner.temp }}/go-test.json
+
+      # The tests behind the root build tag change credentials, chown, mknod
+      # and write cgroup.kill, so the whole suite runs again as root. Last: it
+      # leaves root-owned files in the build cache.
+      - name: Test as root
+        run: sudo -E env "PATH=$PATH" go test -tags root -race ./...
 
       - name: Upload Go test results
         if: always()

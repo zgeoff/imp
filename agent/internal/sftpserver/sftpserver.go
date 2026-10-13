@@ -32,7 +32,7 @@ func Run() error {
 func Serve(rwc io.ReadWriteCloser, home string) error {
 	var options []sftp.ServerOption
 	if home != "" {
-		if info, err := os.Stat(home); err == nil && info.IsDir() {
+		if info, err := os.Stat(home); err == nil && info.IsDir() { //nolint:gosec // G703: the user's own $HOME, read with the user's rights
 			options = append(options, sftp.WithServerWorkingDirectory(home))
 		}
 	}

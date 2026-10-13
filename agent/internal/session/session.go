@@ -145,7 +145,7 @@ func (s *session) run() {
 	if s.log {
 		grace += s.tapWait
 	}
-	s.master.SetReadDeadline(time.Now().Add(grace))
+	_ = s.master.SetReadDeadline(time.Now().Add(grace))
 	<-pumped
 	s.master.Close()
 
@@ -384,7 +384,7 @@ func (s *session) redraw(cols, rows uint16) {
 		return
 	}
 	if cols == s.cols && rows == s.rows && rows > 1 {
-		pty.SetWinsize(s.master, cols, rows-1)
+		_ = pty.SetWinsize(s.master, cols, rows-1)
 	}
 	s.resizeLocked(cols, rows)
 }
@@ -401,7 +401,7 @@ func (s *session) resizeLocked(cols, rows uint16) {
 	if s.exit != nil {
 		return
 	}
-	pty.SetWinsize(s.master, cols, rows)
+	_ = pty.SetWinsize(s.master, cols, rows)
 	s.cols, s.rows = cols, rows
 }
 
@@ -436,7 +436,7 @@ func (s *session) signal(v *viewer, sig syscall.Signal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.viewer == v && s.exit == nil {
-		s.proc.Signal(sig)
+		_ = s.proc.Signal(sig)
 	}
 }
 
@@ -463,7 +463,7 @@ func (s *session) writeStdin() {
 	for {
 		select {
 		case p := <-s.stdin:
-			s.master.Write(p)
+			_, _ = s.master.Write(p)
 		case <-s.done:
 			return
 		}

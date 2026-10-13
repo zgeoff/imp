@@ -163,8 +163,8 @@ func newSocketpair() ([2]int, error) {
 	}
 	for _, fd := range pair {
 		// FORCE passes rmem_max and wmem_max; the agent is root
-		unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, 2*maxMessage)
-		unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, 2*maxMessage)
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, 2*maxMessage)
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, 2*maxMessage)
 	}
 	return pair, nil
 }

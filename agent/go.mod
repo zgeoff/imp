@@ -2,6 +2,8 @@ module github.com/zgeoff/imp/agent
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/mdlayher/vsock v1.3.0

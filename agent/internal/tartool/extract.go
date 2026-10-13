@@ -264,7 +264,7 @@ func (x *extractor) writeFile(rel string, hdr *tar.Header, content io.Reader) er
 		err = unix.Renameat(dirfd, tmp, dirfd, base)
 	}
 	if err != nil {
-		unix.Unlinkat(dirfd, tmp, 0)
+		_ = unix.Unlinkat(dirfd, tmp, 0)
 		return err
 	}
 	return nil
@@ -386,7 +386,7 @@ func (x *extractor) makeSymlink(link pendingSymlink) error {
 		err = unix.Renameat(dirfd, tmp, dirfd, base)
 	}
 	if err != nil {
-		unix.Unlinkat(dirfd, tmp, 0)
+		_ = unix.Unlinkat(dirfd, tmp, 0)
 	}
 	return err
 }

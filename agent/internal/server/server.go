@@ -102,9 +102,9 @@ func (s *Server) handle(c net.Conn) {
 	defer safe.Recover("request", nil)
 	r, w := proto.NewReader(c), proto.NewWriter(c)
 
-	c.SetReadDeadline(time.Now().Add(requestTimeout))
+	_ = c.SetReadDeadline(time.Now().Add(requestTimeout))
 	f, err := r.Next()
-	c.SetReadDeadline(time.Time{})
+	_ = c.SetReadDeadline(time.Time{})
 	if err != nil {
 		return
 	}

@@ -151,7 +151,7 @@ func (s *Supervisor) stopOne(svc *service) {
 		close(svc.stop)
 	}
 	if svc.proc != nil {
-		svc.proc.Signal(syscall.SIGTERM)
+		_ = svc.proc.Signal(syscall.SIGTERM)
 	}
 	s.mu.Unlock()
 
@@ -160,7 +160,7 @@ func (s *Supervisor) stopOne(svc *service) {
 	case <-time.After(stopGrace):
 		s.mu.Lock()
 		if svc.proc != nil {
-			svc.proc.Signal(syscall.SIGKILL)
+			_ = svc.proc.Signal(syscall.SIGKILL)
 		}
 		s.mu.Unlock()
 		<-svc.done
@@ -194,20 +194,20 @@ func writeDef(fsys fsroot.FS, path string, def Def) error {
 	}
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		f.Close()
-		fsys.Remove(tmp)
+		_ = fsys.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		fsys.Remove(tmp)
+		_ = fsys.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		fsys.Remove(tmp)
+		_ = fsys.Remove(tmp)
 		return err
 	}
 	if err := fsys.Rename(tmp, path); err != nil {
-		fsys.Remove(tmp)
+		_ = fsys.Remove(tmp)
 		return err
 	}
 	return syncDir(fsys, dir)

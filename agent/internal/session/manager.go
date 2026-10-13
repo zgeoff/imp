@@ -109,12 +109,12 @@ func (m *Manager) Kill(name string) error {
 	if s.exited() {
 		return nil
 	}
-	s.proc.Signal(syscall.SIGHUP)
+	_ = s.proc.Signal(syscall.SIGHUP)
 	safe.Go("session "+name+" kill", func() {
 		select {
 		case <-s.done:
 		case <-time.After(m.killGrace):
-			s.proc.Signal(syscall.SIGKILL)
+			_ = s.proc.Signal(syscall.SIGKILL)
 		}
 	}, nil)
 	return nil

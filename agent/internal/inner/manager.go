@@ -379,7 +379,7 @@ func disableControllers(dir string) {
 	if len(off) == 0 {
 		return
 	}
-	if err := os.WriteFile(dir+"/cgroup.subtree_control", []byte(strings.Join(off, " ")), 0); err != nil {
+	if err := os.WriteFile(dir+"/cgroup.subtree_control", []byte(strings.Join(off, " ")), 0); err != nil { //nolint:gosec // G703: the path is the container's own cgroup, not input
 		log.Printf("inner: disable %v: %v", off, err)
 	}
 }

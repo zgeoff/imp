@@ -49,11 +49,11 @@ func (s *Supervisor) copyTruncateLog(path string) error {
 	}
 	if _, err := io.Copy(dst, src); err != nil {
 		dst.Close()
-		s.fsys.Remove(tmp)
+		_ = s.fsys.Remove(tmp)
 		return err
 	}
 	if err := dst.Close(); err != nil {
-		s.fsys.Remove(tmp)
+		_ = s.fsys.Remove(tmp)
 		return err
 	}
 	if err := s.fsys.Rename(tmp, path+".1"); err != nil {

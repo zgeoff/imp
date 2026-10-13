@@ -240,7 +240,7 @@ func TestLogsFollowsTheLogThroughATruncateAndARename(t *testing.T) {
 func TestLogsFollowsARunningServicesOutput(t *testing.T) {
 	s := newManagedSupervisor(t)
 	release := filepath.Join(t.TempDir(), "release")
-	s.Start(Def{Name: "web", Argv: []string{"sh", "-c", "echo started; while [ ! -e " + release + " ]; do sleep 0.01; done; echo later; exec sleep 30"}, Restart: "always"})
+	s.startAt(Def{Name: "web", Argv: []string{"sh", "-c", "echo started; while [ ! -e " + release + " ]; do sleep 0.01; done; echo later; exec sleep 30"}, Restart: "always"}, "")
 	waitRunning(t, s, "web", 0)
 	ls := startLogs(t, s, "web", 10, true, nil)
 	ls.waitResponse(t)

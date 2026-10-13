@@ -72,7 +72,7 @@ func Create(path string, w io.Writer, warn io.Writer) error {
 // countBytes is the size of every regular file under path, for progress
 func countBytes(path string) int64 {
 	var total int64
-	filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			if info, err := d.Info(); err == nil {
 				total += info.Size()

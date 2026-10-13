@@ -108,7 +108,7 @@ func (d *Dialer) runHelper(args []string, max int, failCode string) ([]int, erro
 		// A helper that hangs must not outlive its request; the reaper reaps
 		// it. Kill reaches only this helper, never a process that reused its
 		// pid.
-		p.Kill()
+		_ = p.Kill()
 		waitHelper(p)
 		return nil, err
 	}
@@ -126,18 +126,8 @@ func waitHelper(p *proc.Process) {
 		return
 	case <-time.After(helperTimeout):
 	}
-	p.Kill()
+	_ = p.Kill()
 	<-p.Done
-}
-
-// receiveSocket reads a dial helper's answer: one stream socket, or the
-// error it met.
-func receiveSocket(conn int, timeout time.Duration) (int, error) {
-	fds, err := receiveFds(conn, timeout, 1, proto.ErrDialFailed)
-	if err != nil {
-		return -1, err
-	}
-	return fds[0], nil
 }
 
 // receiveFds reads a helper's answer: up to max fds, the first a stream

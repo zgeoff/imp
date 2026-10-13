@@ -19,7 +19,8 @@ the rules for writing tests live in the testing skill.
 | ----------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Unit and package tests  | `bun test` at the root                                                 | Bun, bash, git, jq, tar, truncate, mkfs.ext4; the gated files below skip                |
 | Dashboard components    | `bun run test:dashboard`                                               | Nothing beyond Bun                                                                      |
-| Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; root-only tests skip                                            |
+| Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; the root-only tests sit behind the `root` build tag             |
+| Agent Go tests as root  | `cd agent && sudo -E env "PATH=$PATH" go test -tags root -race ./...`  | Root, a writable cgroup2                                                                |
 | End to end              | `test/test-e2e.sh`                                                     | KVM, Docker; some suites need more (below)                                              |
 | Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host`      | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
 | NixOS module evaluation | `nix build -L --no-link .#checks.x86_64-linux.eval`                    | Nix with flakes                                                                         |
