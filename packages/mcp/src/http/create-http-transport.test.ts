@@ -1668,6 +1668,172 @@ test('it frees a session whose tool call the SDK refuses before the tool runs', 
   expect(next.status).toBe(200);
 });
 
+test('it frees a session whose refused tool call’s stream the client drops unread', async () => {
+  const ctx = await setupTest();
+
+  const transport = createHttpTransport({
+    version: '1.2.3',
+    limits: { perCaller: 1, total: 4, idleMs: 60_000 },
+    now: () => ctx.clock.now,
+    authenticate: ctx.readPrincipal,
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
+  });
+
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const opened = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
+      }),
+    }),
+  );
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  // a call with no tool name, which the SDK's schema answers itself
+  const refused = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} }),
+    }),
+  );
+
+  await refused.body?.cancel();
+
+  ctx.clock.now = 1;
+
+  const next = await transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
+      }),
+    }),
+  );
+
+  expect(next.status).toBe(200);
+});
+
+test('it refuses a call in a session whose id a running call holds, and still answers the first', async () => {
+  const ctx = await setupTest();
+
+  ctx.gate.arm();
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const opened = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
+      }),
+    }),
+  );
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const first = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'imp_list', arguments: {} },
+      }),
+    }),
+  );
+
+  await ctx.gate.reached;
+
+  const duplicate = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'imp_list', arguments: {} },
+      }),
+    }),
+  );
+
+  const refusal = await readMcpAnswer(duplicate);
+
+  ctx.gate.release();
+
+  const answer = await readMcpAnswer(first);
+
+  expect(refusal).toStrictEqual({
+    jsonrpc: '2.0',
+    id: 1,
+    error: { code: -32_602, message: 'request 1 is already running' },
+  });
+
+  expect(answer).toMatchObject({ jsonrpc: '2.0', id: 1, result: { isError: false } });
+});
+
 test('it refuses a new session with 429 to a caller whose sessions are all busy', async () => {
   const ctx = await setupTest();
 
@@ -2136,4 +2302,57 @@ test('it ends a 2026-07-28 call unanswered when what its caller authenticated wi
   ctx.gate.release();
 
   expect(call).rejects.toThrow();
+});
+
+test('it waits at close for a 2026-07-28 create whose request the client aborted', async () => {
+  const ctx = await setupTest();
+
+  const transport = createHttpTransport({
+    version: '1.2.3',
+    now: () => ctx.clock.now,
+    authenticate: ctx.readPrincipal,
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
+  });
+
+  // it closes before impd stops
+  ctx.stack.defer(() => transport.close());
+  ctx.gate.arm();
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  // what drops the connection under every request, as a client gone away
+  const abort = new AbortController();
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://impd.test/mcp'), {
+      requestInit: { headers: { authorization: 'Bearer alice' } },
+      fetch: (url, init) =>
+        transport.handle(new Request(url.toString(), { ...init, signal: abort.signal })),
+    }),
+  );
+
+  onTestFinished(() => client.close());
+
+  const call = client.callTool({ name: 'imp_create', arguments: { name: 'box' } });
+
+  // the create waits inside impd while its request aborts
+  await ctx.gate.reached;
+
+  abort.abort();
+
+  await expect(call).rejects.toThrow();
+
+  const closing = transport.close();
+
+  const whileCreating = await Promise.race([closing.then(() => 'closed'), Bun.sleep(50)]);
+
+  ctx.gate.release();
+
+  await closing;
+
+  expect(whileCreating).toBeUndefined();
 });

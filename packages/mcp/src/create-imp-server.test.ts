@@ -484,6 +484,65 @@ test('it refuses a call whose id a running call holds with an invalid-params err
   ]);
 });
 
+test('it cancels the first call after refusing a second with its id', async () => {
+  const ctx = await setupTest();
+
+  const server = createMcpServer({ version: '1.2.3' });
+
+  const context = {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  } as const;
+
+  ctx.gate.arm();
+
+  const running = server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'imp_list', arguments: {} },
+    }),
+    context,
+  );
+
+  await ctx.gate.reached;
+
+  await server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'imp_list', arguments: {} },
+    }),
+    context,
+  );
+
+  await server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'notifications/cancelled',
+      params: { requestId: 7 },
+    }),
+    context,
+  );
+
+  ctx.gate.release();
+
+  await running;
+
+  // the SDK sends no answer to a cancelled call
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 7,
+      error: { code: INVALID_PARAMS, message: 'request 7 is already running' },
+    },
+  ]);
+});
+
 test.each([
   ['{"jsonrpc":"2.0","method":"notifications/initialized"}'],
   ['{"jsonrpc":"2.0","id":5,"result":{}}'],

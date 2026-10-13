@@ -1,4 +1,5 @@
 import {
+  INVALID_PARAMS,
   INVALID_REQUEST,
   PARSE_ERROR,
   createMcpHandler,
@@ -6,6 +7,7 @@ import {
   isJSONRPCRequest,
   isLegacyRequest,
 } from '@modelcontextprotocol/server';
+import type { AuthInfo, RequestId } from '@modelcontextprotocol/server';
 import { createCallRegistry } from '../create-call-registry';
 import { createCallerAuth, findCallerAuth } from '../create-caller-auth';
 import { createImpServer } from '../create-imp-server';
@@ -46,6 +48,14 @@ export interface HttpTransport {
   readonly readCallEnd: (response: Response) => Promise<void> | null;
 }
 
+interface Exchange {
+  readonly authInfo: AuthInfo;
+  readonly ended: PromiseWithResolvers<void> | null;
+
+  // true once the SDK has handed the call to its handler
+  started: boolean;
+}
+
 const SESSION_HEADER = 'mcp-session-id';
 const KEEPALIVE_MS = 5000;
 const DEFAULT_LIMITS = { perCaller: 16, total: 256, idleMs: 3_600_000 };
@@ -63,6 +73,10 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
 
   // every tool call in flight, for close
   const running = new Set<Promise<void>>();
+
+  // each session's tool call ids from arrival to end: the SDK keeps one
+  // stream and one abort per id, which a second call would replace
+  const sessionCallIDs = new WeakMap<LegacySession, Set<RequestId>>();
 
   const sessions = createLegacySessions({
     limits: options.limits ?? DEFAULT_LIMITS,
@@ -85,10 +99,10 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
   );
 
   // the AuthInfo that carries the caller, and for a tool call the end that
-  // readCallEnd reports
-  const startExchange = (message: unknown, principal: Readonly<McpPrincipal>) => {
+  // readCallEnd reports and whether its tool started
+  const startExchange = (message: unknown, principal: Readonly<McpPrincipal>): Exchange => {
     if (!isJSONRPCRequest(message) || message.method !== 'tools/call') {
-      return { authInfo: createCallerAuth(principal), ended: null };
+      return { authInfo: createCallerAuth(principal), ended: null, started: false };
     }
 
     const ended = Promise.withResolvers<void>();
@@ -101,39 +115,42 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       running.delete(ended.promise);
     })();
 
-    return { authInfo: createCallerAuth(principal, ended.resolve), ended };
+    const exchange: Exchange = {
+      authInfo: createCallerAuth(principal, {
+        onCallStart: () => {
+          exchange.started = true;
+        },
+        onCallEnd: ended.resolve,
+      }),
+      ended,
+      started: false,
+    };
+
+    return exchange;
   };
 
-  // a call answered on a stream ends when its tool does; one answered any
-  // other way has ended, or never ran
-  const buildExchangeResponse = (
+  // A call ends when its tool does, even past an aborted request's 499. A
+  // call the SDK has not started once it had its chance, such as one its
+  // schema refuses, never ran and has ended.
+  const waitForExchangeStart = async (
+    exchange: Exchange,
     response: Response,
-    ended: PromiseWithResolvers<void> | null,
-  ): Response => {
-    if (ended === null) {
+  ): Promise<Response> => {
+    if (exchange.ended === null) {
       return response;
     }
 
-    if (
-      response.body === null ||
-      !(response.headers.get('content-type') ?? '').startsWith('text/event-stream')
-    ) {
-      ended.resolve();
+    await waitForMicrotasks();
 
-      return response;
+    if (!exchange.started) {
+      exchange.ended.resolve();
     }
 
-    // the SDK closes a call's stream once it has answered, and answers a call
-    // its schema refuses without running the tool; a stream the client drops
-    // never closes this way
-    const tracked = new Response(
-      response.body.pipeThrough(new TransformStream({ flush: () => ended.resolve() })),
-      { status: response.status, headers: response.headers },
-    );
+    if ((response.headers.get('content-type') ?? '').startsWith('text/event-stream')) {
+      callEnds.set(response, exchange.ended.promise);
+    }
 
-    callEnds.set(tracked, ended.promise);
-
-    return tracked;
+    return response;
   };
 
   const handleModern = async (
@@ -158,7 +175,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       { authInfo: exchange.authInfo, parsedBody: message },
     );
 
-    return buildExchangeResponse(response, exchange.ended);
+    return waitForExchangeStart(exchange, response);
   };
 
   const runInSession = async (
@@ -167,11 +184,27 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     message: unknown,
     principal: Readonly<McpPrincipal>,
   ): Promise<Response> => {
+    const ids = sessionCallIDs.get(session) ?? new Set<RequestId>();
+
+    sessionCallIDs.set(session, ids);
+
+    if (isJSONRPCRequest(message) && message.method === 'tools/call' && ids.has(message.id)) {
+      return Response.json({
+        jsonrpc: '2.0',
+        id: message.id,
+        error: {
+          code: INVALID_PARAMS,
+          message: `request ${String(message.id)} is already running`,
+        },
+      });
+    }
+
     const exchange = startExchange(message, principal);
 
     if (exchange.ended !== null && isJSONRPCRequest(message)) {
       const id = message.id;
 
+      ids.add(id);
       sessions.track(session, exchange.ended.promise);
 
       // a cancelled call gets no answer, which would leave its stream open
@@ -183,6 +216,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
         await ended;
         await waitForMicrotasks();
 
+        ids.delete(id);
         session.transport.closeSSEStream(id);
       })();
     }
@@ -192,7 +226,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       parsedBody: message,
     });
 
-    return buildExchangeResponse(response, exchange.ended);
+    return waitForExchangeStart(exchange, response);
   };
 
   const handleLegacy = async (

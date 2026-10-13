@@ -11,11 +11,16 @@ export interface McpCaller {
   readonly scope: Scope;
 }
 
-interface CallerAuth {
-  readonly caller: McpCaller;
+interface CallHooks {
+  // runs when the request's tool call starts, past the SDK's checks
+  readonly onCallStart: () => void;
 
   // runs once the request's tool call ends, answered or not
   readonly onCallEnd: () => void;
+}
+
+interface CallerAuth extends CallHooks {
+  readonly caller: McpCaller;
 }
 
 // the caller behind each AuthInfo this module made; the SDK hands a request's
@@ -24,10 +29,17 @@ const callers = new WeakMap<AuthInfo, CallerAuth>();
 
 // The AuthInfo that carries `caller` through the SDK to the request's handler.
 // The SDK checks nothing in it: impd authenticated the request already.
-export function createCallerAuth(caller: Readonly<McpCaller>, onCallEnd = () => {}): AuthInfo {
+export function createCallerAuth(
+  caller: Readonly<McpCaller>,
+  hooks: Partial<CallHooks> = {},
+): AuthInfo {
   const authInfo: AuthInfo = { token: '', clientId: 'imp', scopes: [caller.scope] };
 
-  callers.set(authInfo, { caller, onCallEnd });
+  callers.set(authInfo, {
+    caller,
+    onCallStart: hooks.onCallStart ?? (() => {}),
+    onCallEnd: hooks.onCallEnd ?? (() => {}),
+  });
 
   return authInfo;
 }

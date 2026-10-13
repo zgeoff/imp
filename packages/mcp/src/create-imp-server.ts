@@ -94,13 +94,6 @@ export function createImpServer(
       );
     }
 
-    if (calls.has(id)) {
-      throw new ProtocolError(
-        ProtocolErrorCode.InvalidParams,
-        `request ${String(id)} is already running`,
-      );
-    }
-
     const requestCaller = findCallerAuth(ctx.http?.authInfo)?.caller ?? caller;
 
     // the SDK's signal aborts on a cancel the gate lets through, or when the
@@ -148,6 +141,8 @@ export function createImpServer(
   };
 
   server.setRequestHandler('tools/call', async (request, ctx) => {
+    findCallerAuth(ctx.http?.authInfo)?.onCallStart();
+
     try {
       return await runToolCall(request, ctx);
     } finally {

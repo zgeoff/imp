@@ -91,12 +91,14 @@ export function createMcpServer(options: Readonly<ImpServerOptions>): TestMcpSer
 
       // a cancelled call gets no answer: its end resolves the receive, once
       // the SDK has had its chance to answer
-      const authInfo = createCallerAuth(context, () => {
-        void (async () => {
-          await waitForMicrotasks();
+      const authInfo = createCallerAuth(context, {
+        onCallEnd: () => {
+          void (async () => {
+            await waitForMicrotasks();
 
-          answered.resolve();
-        })();
+            answered.resolve();
+          })();
+        },
       });
 
       transport.onmessage?.(message, { authInfo });
