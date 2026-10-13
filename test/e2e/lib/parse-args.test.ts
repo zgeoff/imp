@@ -160,15 +160,25 @@ test('it rejects a suite or set it does not know', () => {
 });
 
 test('it rejects --only with no suite list after it', () => {
-  expect(() => parseArgs(['--only'])).toThrowWithMessage(Error, '--only needs a suite list');
+  expect(() => parseArgs(['--only'])).toThrow(
+    expect.objectContaining({ code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' }),
+  );
 });
 
 test('it rejects an --only list that names no suite', () => {
   expect(() => parseArgs(['--only', ','])).toThrowWithMessage(Error, '--only names no suite');
 });
 
-test('it rejects an argument it does not know', () => {
-  expect(() => parseArgs(['--fast'])).toThrowWithMessage(Error, 'unknown argument: --fast');
+test('it rejects a flag it does not know', () => {
+  expect(() => parseArgs(['--fast'])).toThrow(
+    expect.objectContaining({ code: 'ERR_PARSE_ARGS_UNKNOWN_OPTION' }),
+  );
+});
+
+test('it rejects an argument that is not a flag', () => {
+  expect(() => parseArgs(['fast'])).toThrow(
+    expect.objectContaining({ code: 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL' }),
+  );
 });
 
 test('it rejects --clean with --reuse', () => {
@@ -179,7 +189,9 @@ test('it rejects --clean with --reuse', () => {
 });
 
 test('it rejects --group with no number after it', () => {
-  expect(() => parseArgs(['--group'])).toThrowWithMessage(Error, '--group needs a group number');
+  expect(() => parseArgs(['--group'])).toThrow(
+    expect.objectContaining({ code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' }),
+  );
 });
 
 test.each([['0'], ['4'], ['one'], ['1.5'], ['01']])(

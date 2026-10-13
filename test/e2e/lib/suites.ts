@@ -221,40 +221,6 @@ export const SUITES: readonly Suite[] = [
   { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },
 ];
 
-// `acceptance` is the definition of done: every suite, tailscale required.
-// `fast` is what CI runs; docs/runbooks/development.md#end-to-end-tests lists
-// its suites.
-export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
-  acceptance: SUITES.map((suite) => suite.name),
-  fast: [
-    'lifecycle',
-    'checkpoints',
-    'disks',
-    'sleep',
-    'restart',
-    'mcp',
-    'offsets',
-    'session-logs',
-    'services',
-    'ssh',
-    'ssh-agent',
-    'reverse',
-    'proxy',
-    'dashboard',
-    'tokens',
-    'leases',
-    'cpu',
-    'templates',
-    'boot-templates',
-    'inner',
-    'socket',
-    'registry',
-    'jail',
-    'memory',
-    'ksm',
-  ],
-};
-
 // The fast set as three static lists in SUITES order, one per CI runner and
 // instance; each held about 225 s of suite work in CI runs 37683236504 and
 // 37680258353. Rebalance by the times in .cache/e2e/results.json.
@@ -282,6 +248,15 @@ export const FAST_GROUPS: readonly (readonly string[])[] = [
   ['sleep', 'reverse', 'jail'],
   ['mcp', 'inner', 'memory', 'ksm'],
 ];
+
+// `acceptance` is the definition of done: every suite, tailscale required.
+// `fast` is what CI runs: the groups' suites, in SUITES order.
+export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
+  acceptance: SUITES.map((suite) => suite.name),
+  fast: SUITES.map((suite) => suite.name).filter((name) =>
+    FAST_GROUPS.some((group) => group.includes(name)),
+  ),
+};
 
 // The group whose CI runner also runs the host networking tests (bun run
 // test:host), so they run once: group 1 installs the dashboard's browser and

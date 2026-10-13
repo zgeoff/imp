@@ -1,17 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { PEBBLE_IMAGES } from '../../../scripts/pebble-images';
 import { REPO_ROOT, instance, runChecked, runCommand } from './instance';
 import { waitFor } from './wait-for';
-
-// Let's Encrypt's test CA and the DNS server it asks, pinned by digest
-const PEBBLE_IMAGE =
-  'ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199';
-
-const CHALLTESTSRV_IMAGE =
-  'ghcr.io/letsencrypt/pebble-challtestsrv:2.10.1@sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b';
-
-// what scripts/pull-pebble-images.ts pulls before `bun run test:pebble`
-export const PEBBLE_IMAGES = [PEBBLE_IMAGE, CHALLTESTSRV_IMAGE] as const;
 
 // the domain impd gets in the https suite; challtestsrv answers for it
 export const PEBBLE_DOMAIN = 'imp.test';
@@ -189,7 +180,7 @@ function createChallTestSrv(names: PebbleNames): Promise<string> {
     'challtestsrv',
     '-p',
     '127.0.0.1::8055',
-    CHALLTESTSRV_IMAGE,
+    PEBBLE_IMAGES.challtestsrv,
     '-defaultIPv6',
     '',
     '-defaultIPv4',
@@ -218,7 +209,7 @@ function createPebble(names: PebbleNames): Promise<string> {
     '127.0.0.1::14000',
     '-p',
     '127.0.0.1::15000',
-    PEBBLE_IMAGE,
+    PEBBLE_IMAGES.pebble,
     '-dnsserver',
     'challtestsrv:8053',
   ]);
