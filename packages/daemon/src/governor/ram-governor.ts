@@ -116,6 +116,10 @@ export interface RamGovernor extends RamAdmission {
   // false when the imp is not awake, or only busy or held imps could make room
   readonly admitGrow: (request: GrowRequest) => Promise<boolean>;
 
+  // a grow that did not plug: the imp's reservation goes back to what it was
+  // before the grow, as a boot's or a wake's that the grow counted in
+  readonly releaseGrow: (id: string) => void;
+
   // sleeps LRU imps while measured usage is over the budget; when the imps it
   // may sleep cannot free enough, it sleeps all of them to get as close as it
   // can
@@ -153,11 +157,20 @@ export interface RamGovernorDeps {
   readonly reclaim?: (excludeId: string | null) => Promise<number>;
 }
 
+interface Reservation {
+  readonly mib: number;
+  readonly until: number;
+}
+
 export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
   // one admission or enforcement at a time
   const admission = createSemaphore(1);
 
-  const reservations = new Map<string, { readonly mib: number; readonly until: number }>();
+  // a grow's keeps the reservation it replaced, null when there was none
+  const reservations = new Map<
+    string,
+    Reservation & { readonly beforeGrow?: Reservation | null }
+  >();
 
   const now = deps.now ?? Date.now;
 
@@ -472,14 +485,32 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           return false;
         }
 
+        const before = reservations.get(request.id);
+
         // the grow counts until the guest's RSS shows it
         reservations.set(request.id, {
           mib: (usage.byImp.get(request.id) ?? 0) + request.mib,
           until: now() + RESERVATION_TTL_MS,
+          beforeGrow: before === undefined ? null : { mib: before.mib, until: before.until },
         });
 
         return true;
       }),
+
+    releaseGrow: (id) => {
+      const reservation = reservations.get(id);
+
+      // a boot or a wake reserved since the grow: it is not the grow's
+      if (reservation?.beforeGrow === undefined) {
+        return;
+      }
+
+      if (reservation.beforeGrow === null) {
+        reservations.delete(id);
+      } else {
+        reservations.set(id, reservation.beforeGrow);
+      }
+    },
 
     readUsage: async () => {
       const usage = await readEffectiveUsage(null);

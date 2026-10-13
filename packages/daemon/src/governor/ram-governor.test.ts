@@ -590,6 +590,62 @@ test('it counts a grow as reserved until the grower measures it', async () => {
   expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 260, headroomMib: 0 });
 });
 
+test('it puts back the wake reservation that a released grow counted in', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 2000,
+    ids: ['grower'],
+    awake: [{ id: 'grower', rssMib: 300 }],
+  });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  await governor.admit({ id: 'grower', name: 'grower', reserveMib: 500, memoryMib: 600 });
+  await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  governor.releaseGrow('grower');
+
+  const usage = await governor.readUsage();
+
+  expect(usage).toStrictEqual({ usedMib: 300, reservedMib: 200, headroomMib: 0 });
+});
+
+test('it reserves nothing once a grow with no reservation before it is released', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 2000,
+    ids: ['grower'],
+    awake: [{ id: 'grower', rssMib: 300 }],
+  });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  governor.releaseGrow('grower');
+
+  const usage = await governor.readUsage();
+
+  expect(usage).toStrictEqual({ usedMib: 300, reservedMib: 0, headroomMib: 0 });
+});
+
+test('it keeps a wake reservation made after a grow when the grow is released', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 2000,
+    ids: ['grower'],
+    awake: [{ id: 'grower', rssMib: 300 }],
+  });
+
+  const governor = createRamGovernor({ ...host.deps, log: () => {} });
+
+  await governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+  await governor.admit({ id: 'grower', name: 'grower', reserveMib: 500, memoryMib: 600 });
+
+  governor.releaseGrow('grower');
+
+  const usage = await governor.readUsage();
+
+  expect(usage).toStrictEqual({ usedMib: 300, reservedMib: 200, headroomMib: 0 });
+});
+
 test('it refuses a grow when only busy imps could make room, and publishes why', async () => {
   const host = buildStubGovernedHost({
     budgetMib: 1000,
