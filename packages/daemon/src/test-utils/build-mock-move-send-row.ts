@@ -1,8 +1,8 @@
 import { faker } from '@faker-js/faker';
-import type { Insertable } from 'kysely';
+import type { Selectable } from 'kysely';
 import type { DB } from '../db/schema';
 
-type MoveSendRow = Insertable<DB['move_sends']>;
+type MoveSendRow = Selectable<DB['move_sends']>;
 
 // A move_sends row as a prepare writes one: a cold move of files with no
 // target, ticket, receipt or error yet; its imp, size and age arbitrary.

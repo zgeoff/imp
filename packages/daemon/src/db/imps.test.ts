@@ -117,7 +117,7 @@ test('#createImp emits one ImpAdded', async () => {
   expect(writes).toStrictEqual([{ kind: 'added', imp }]);
 });
 
-test('#createImp rejects a duplicate name', async () => {
+test('#createImp rejects a duplicate name with a clash naming the column', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
 
@@ -128,10 +128,27 @@ test('#createImp rejects a duplicate name', async () => {
       ctx.db,
       buildMockNewImp({ name: 'dev', imageId: image.id, slot: 1, ip: '10.66.0.3' }),
     ),
-  ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: imps\.name/u);
+  ).rejects.toMatchObject({ name: 'ImpClashError', column: 'name' });
 });
 
-test('#createImp rejects a duplicate slot', async () => {
+test('#createImp rejects a jail uid another imp holds with a clash naming the column', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+
+  // two creates outside a transaction both read the lowest free uid before
+  // either inserts
+  const created = await Promise.allSettled([
+    createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0, ip: '10.66.0.2' })),
+    createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' })),
+  ]);
+
+  expect(created).toMatchObject([
+    { status: 'fulfilled' },
+    { status: 'rejected', reason: { name: 'ImpClashError', column: 'jail_uid' } },
+  ]);
+});
+
+test('#createImp rejects a duplicate slot with a clash naming the column', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
 
@@ -139,7 +156,7 @@ test('#createImp rejects a duplicate slot', async () => {
 
   expect(
     createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0, ip: '10.66.9.9' })),
-  ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: imps\.slot/u);
+  ).rejects.toMatchObject({ name: 'ImpClashError', column: 'slot' });
 });
 
 test('#createImp rejects an imp whose image does not exist', async () => {

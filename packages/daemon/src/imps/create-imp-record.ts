@@ -1,10 +1,10 @@
 import type { EgressPolicy, ImpKind } from '@imp/api';
 import { buildConflictError } from '../api-errors';
 import type { ImageRecord } from '../db/images';
+import { ImpClashError } from '../db/imp-clash-error';
 import { createImpInFreeSlot, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { countSlots } from '../net/addressing';
-import { readErrorMessage } from '../read-error-message';
 import { resolveCpuSettings } from './cpu-limit';
 import type { ImpContext } from './imp-context';
 
@@ -77,11 +77,13 @@ export async function createImpRecord(
     try {
       return await createRecord();
     } catch (error) {
-      if (isJailUidClash(error) && attempt < CREATE_TRIES) {
+      const clash = error instanceof ImpClashError ? error.column : null;
+
+      if (clash === 'jail_uid' && attempt < CREATE_TRIES) {
         continue;
       }
 
-      if (isUniqueViolation(error) && !isJailUidClash(error)) {
+      if (clash !== null && clash !== 'jail_uid') {
         throw buildConflictError('imp', name);
       }
 
@@ -107,17 +109,4 @@ async function resolveImpName(context: ImpContext, requested: string | undefined
       return name;
     }
   }
-}
-
-function isJailUidClash(error: unknown): boolean {
-  return isUniqueViolation(error) && readErrorMessage(error).includes('jail_uid');
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'SQLITE_CONSTRAINT_UNIQUE'
-  );
 }

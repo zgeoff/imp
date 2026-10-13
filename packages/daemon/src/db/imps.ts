@@ -11,6 +11,7 @@ import type {
 } from '@imp/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
+import { ImpClashError } from './imp-clash-error';
 import type { ImpDatabase, ImpQueries } from './open-database';
 import type { DB } from './schema';
 
@@ -267,7 +268,10 @@ async function writeImpRow(db: ImpQueries, imp: NewImp): Promise<ImpRecord> {
       jail_uid: jailUid,
     })
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
+    .catch((error: unknown) => {
+      throw toImpClash(error) ?? error;
+    });
 
   if (imp.networkIds !== undefined && imp.networkIds.length > 0) {
     await db
@@ -277,6 +281,20 @@ async function writeImpRow(db: ImpQueries, imp: NewImp): Promise<ImpRecord> {
   }
 
   return toImpRecord(row);
+}
+
+// SQLite names the column in its message: `UNIQUE constraint failed: imps.name`
+function toImpClash(error: unknown): ImpClashError | null {
+  const isUnique =
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'SQLITE_CONSTRAINT_UNIQUE';
+
+  const match = isUnique ? /\bimps\.(?<column>\w+)/v.exec(String(error)) : null;
+  const column = match?.groups?.['column'];
+
+  return column === undefined ? null : new ImpClashError(column);
 }
 
 interface FreeSlots {
