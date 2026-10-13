@@ -2,10 +2,11 @@
 
 ## [1.0.3](https://github.com/zgeoff/imp/compare/v1.0.2...v1.0.3) (2026-10-13)
 
-
 ### Bug Fixes
 
-* **geo-757:** combine an intersection's constraints in the break check ([#344](https://github.com/zgeoff/imp/issues/344)) ([eabbbc3](https://github.com/zgeoff/imp/commit/eabbbc33ec96e6825f30eee0623e3955aa0b4f5e))
+- **geo-757:** combine an intersection's constraints in the break check
+  ([#344](https://github.com/zgeoff/imp/issues/344))
+  ([eabbbc3](https://github.com/zgeoff/imp/commit/eabbbc33ec96e6825f30eee0623e3955aa0b4f5e))
 
 ## [1.0.2](https://github.com/zgeoff/imp/compare/v1.0.1...v1.0.2) (2026-10-13)
 
