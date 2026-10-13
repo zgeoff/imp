@@ -12,6 +12,7 @@ import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-c
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { buildMockMcpPrincipal } from '../test-utils/build-mock-mcp-principal';
@@ -1869,4 +1870,188 @@ test('it restarts the idle clock of a session each time it is used', async () =>
   );
 
   expect(response.status).toBe(200);
+});
+
+test('it still answers a cancelled create in a session, so the agent learns what it made', async () => {
+  const ctx = await setupTest();
+
+  ctx.gate.arm();
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const opened = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
+      }),
+    }),
+  );
+
+  const session = opened.headers.get('mcp-session-id');
+
+  invariant(session);
+
+  const call = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'imp_create', arguments: { name: 'box' } },
+      }),
+    }),
+  );
+
+  // the create waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
+  const cancel = await ctx.transport.handle(
+    new Request('http://impd.test/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer alice',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': session,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 1 },
+      }),
+    }),
+  );
+
+  ctx.gate.release();
+
+  const answer = await readMcpAnswer(call);
+
+  expect(cancel.status).toBe(202);
+
+  expect(answer).toMatchObject({
+    jsonrpc: '2.0',
+    id: 1,
+    result: { content: [{ type: 'text', text: expect.any(String) as unknown }] },
+  });
+});
+
+test('it lists only the read tools to a read caller over the 2026-07-28 protocol, with no session', async () => {
+  const ctx = await setupTest();
+
+  ctx.principals.set(
+    'Bearer reader',
+    buildMockMcpPrincipal({ key: 'reader', scope: 'read', client: ctx.client }),
+  );
+
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  const sessions: (string | null)[] = [];
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://impd.test/mcp'), {
+      requestInit: { headers: { authorization: 'Bearer reader' } },
+      fetch: async (url, init) => {
+        const response = await ctx.transport.handle(new Request(url.toString(), init));
+
+        sessions.push(response.headers.get('mcp-session-id'));
+
+        return response;
+      },
+    }),
+  );
+
+  onTestFinished(() => client.close());
+
+  const listed = await client.listTools();
+
+  expect(listed.tools.map((tool) => tool.name)).toStrictEqual([
+    'imp_list',
+    'imp_url',
+    'imp_image_list',
+    'imp_checkpoint_list',
+  ]);
+
+  expect(sessions).toSatisfyAll((session: string | null) => session === null);
+});
+
+test('it lists every tool to a manage caller over the 2026-07-28 protocol', async () => {
+  const ctx = await setupTest();
+
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://impd.test/mcp'), {
+      requestInit: { headers: { authorization: 'Bearer alice' } },
+      fetch: (url, init) => ctx.transport.handle(new Request(url.toString(), init)),
+    }),
+  );
+
+  onTestFinished(() => client.close());
+
+  const listed = await client.listTools();
+
+  expect(listed.tools.map((tool) => tool.name)).toIncludeAllMembers(['imp_create', 'imp_exec']);
+});
+
+test('it ends a 2026-07-28 call unanswered when what its caller authenticated with ends', async () => {
+  const ctx = await setupTest();
+
+  const ends = new AbortController();
+
+  ctx.gate.arm();
+
+  ctx.principals.set(
+    'Bearer alice',
+    buildMockMcpPrincipal({ key: 'alice', client: ctx.client, ends: ends.signal }),
+  );
+
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://impd.test/mcp'), {
+      requestInit: { headers: { authorization: 'Bearer alice' } },
+      fetch: (url, init) => ctx.transport.handle(new Request(url.toString(), init)),
+    }),
+  );
+
+  onTestFinished(() => client.close());
+
+  const call = client.callTool({ name: 'imp_list', arguments: {} });
+
+  await ctx.gate.reached;
+
+  ends.abort();
+  ctx.gate.release();
+
+  expect(call).rejects.toThrow();
 });

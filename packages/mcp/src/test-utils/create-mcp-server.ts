@@ -7,13 +7,13 @@ import { createImpServer } from '../create-imp-server';
 import type { ImpServerOptions } from '../create-imp-server';
 
 // Who one message comes from, and where its answers go
-export interface MessageContext extends McpCaller {
+interface MessageContext extends McpCaller {
   // gets each message the server sends about the request, whole: its
   // progress, then its response
   readonly reply: (message: string) => void;
 }
 
-export interface TestMcpServer {
+interface TestMcpServer {
   // delivers one JSON-RPC message; resolves once a request is answered, or
   // once a cancelled call that gets no answer has ended
   readonly receive: (line: string, context: Readonly<MessageContext>) => Promise<void>;

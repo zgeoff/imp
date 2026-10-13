@@ -6,6 +6,7 @@ import { invariant } from '@imp/test-utils/invariant';
 import { readImpEnv } from '@imp/test-utils/read-imp-env';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createImpClient } from '@zgeoff/imp-client';
 import { readMcpAnswer } from '../../../mcp/src/test-utils/read-mcp-answer';
 import { buildApiListenOptions } from '../api-listen-options';
@@ -1156,43 +1157,33 @@ test('it answers a long JSON tool call through the wake proxy', async () => {
 
   const via = `http://127.0.0.1:${String(front.port)}`;
 
-  const opened = await fetch(`${via}/mcp`, {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer root-token',
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2025-06-18',
-        capabilities: {},
-        clientInfo: { name: 'test', version: '1.0.0' },
+  // a 2026-07-28 call with no progress token gets one JSON answer; a
+  // 2025-era session streams every answer
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  const answers: (string | null)[] = [];
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${via}/mcp`), {
+      requestInit: { headers: { authorization: 'Bearer root-token' } },
+      fetch: async (url, init) => {
+        const response = await fetch(url, init);
+
+        answers.push(response.headers.get('content-type'));
+
+        return response;
       },
     }),
-  });
+  );
 
-  const session = opened.headers.get('mcp-session-id');
+  ctx.stack.defer(() => client.close());
 
-  invariant(session);
-
-  const call = fetch(`${via}/mcp`, {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer root-token',
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      'mcp-session-id': session,
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 1' } },
-    }),
+  const call = client.callTool({
+    name: 'imp_exec',
+    arguments: { name: 'box', command: 'wait 1' },
   });
 
   await waitFor(() => {
@@ -1201,14 +1192,13 @@ test('it answers a long JSON tool call through the wake proxy', async () => {
 
   done.resolve();
 
-  const response = await call;
-  const text = await response.text();
+  const result = await call;
 
-  expect(response.headers.get('content-type')).toBe('application/json');
+  expect(answers).toSatisfyAll((type: string | null) => type === 'application/json');
 
-  expect(JSON.parse(text)).toMatchObject({
-    id: 1,
-    result: { isError: false, structuredContent: { exitCode: 0, stdout: 'waited\n' } },
+  expect(result).toMatchObject({
+    isError: false,
+    structuredContent: { exitCode: 0, stdout: 'waited\n' },
   });
 });
 

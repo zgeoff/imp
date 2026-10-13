@@ -11,7 +11,7 @@ export interface McpCaller {
   readonly scope: Scope;
 }
 
-export interface CallerAuth {
+interface CallerAuth {
   readonly caller: McpCaller;
 
   // runs once the request's tool call ends, answered or not
