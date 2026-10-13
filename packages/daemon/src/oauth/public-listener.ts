@@ -1,5 +1,5 @@
+import { MCP_PATH } from '@imp/api';
 import type { HttpTransport } from '@imp/mcp';
-import { MCP_PATH } from '../mcp/mcp-endpoint';
 import {
   AUTHORIZATION_SERVER_PATH,
   AUTHORIZE_PATH,

@@ -1,7 +1,7 @@
 import { ImpEventSchema } from '@imp/api';
 import type { ImpEvent } from '@imp/api';
 import { metrics } from '@opentelemetry/api';
-import { SCOPE } from '../telemetry/imp-telemetry';
+import { SCOPE } from '../telemetry/scope';
 
 // how often the drops of one event type are logged, at most
 const LOG_INTERVAL_MS = 5 * 60_000;

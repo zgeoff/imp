@@ -6,8 +6,6 @@ import packageJson from '../../package.json' with { type: 'json' };
 import { isSameOrigin } from '../auth/authenticate';
 import type { Caller } from '../auth/caller';
 
-export const MCP_PATH = '/mcp';
-
 // the client's calls never leave the process, so the host is a placeholder
 const IN_PROCESS_URL = 'http://impd.internal';
 
