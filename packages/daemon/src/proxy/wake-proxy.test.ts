@@ -16,8 +16,8 @@ import {
 } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubHeaderEcho } from '../test-utils/start-stub-header-echo';
@@ -1137,7 +1137,7 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
     silent.stop(true);
   });
 
-  const timers = buildStubTimers();
+  const clock = buildStubClock();
 
   const proxy = startWakeProxy({
     config: ctx.config,
@@ -1147,7 +1147,7 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
     peers: createForwardedPeers(Date.now),
     ports: { proxy: 0, slot: () => 0 },
     upstreamSocketTimeoutMs: 50,
-    startTimer: timers.startTimer,
+    startTimer: clock.startTimer,
   });
 
   ctx.stack.defer(() => proxy.stop());
@@ -1171,10 +1171,10 @@ test('it answers a 502 when the imp’s WebSocket does not open in time', async 
 
   // the open deadline passes while the silent listener holds the handshake
   await waitFor(() => {
-    expect(timers.readPendingMs()).toStrictEqual([50]);
+    expect(clock.readPendingMs()).toStrictEqual([50]);
   });
 
-  timers.firePending();
+  clock.firePending();
 
   const response = await responding;
 

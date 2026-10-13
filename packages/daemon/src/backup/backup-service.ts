@@ -3,7 +3,6 @@ import {
   copyFileSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -32,9 +31,11 @@ import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
-import { createKeyedMutex } from '../imps/keyed-mutex';
 import type { NetworkService } from '../networks/network-service';
+import { buildBackoffMs } from '../process/build-backoff-ms';
+import { createKeyedMutex } from '../process/keyed-mutex';
 import { printLog } from '../process/print-log';
+import { writeFileDurably } from '../process/write-file-durably';
 import { readErrorMessage } from '../read-error-message';
 import { BACKUP_TREE, buildBackupPaths, toDigestHex } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -175,7 +176,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const intervalMs = deps.backup.intervalS * 1000;
 
     if (retry.failures > 0) {
-      const waitMs = Math.min(intervalMs, RETRY_FIRST_MS * 2 ** (retry.failures - 1));
+      const waitMs = buildBackoffMs(retry.failures, { baseMs: RETRY_FIRST_MS, capMs: intervalMs });
 
       return at - retry.lastFailureAt >= waitMs;
     }
@@ -193,8 +194,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
   const writeState = (change: Partial<BackupState>): void => {
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(`${paths.state}.new`, JSON.stringify({ ...readState(), ...change }));
-    renameSync(`${paths.state}.new`, paths.state);
+    writeFileDurably(paths.state, JSON.stringify({ ...readState(), ...change }));
   };
 
   // Under the imp's lock. A running guest is frozen around the copy; a

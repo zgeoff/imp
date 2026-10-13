@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubRoomCheck } from '../test-utils/build-stub-room-check';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import {
   createGenerationLog,
   loadGenerationLog,
@@ -428,7 +428,7 @@ test('it keeps the last segment when asked to remove the oldest', async () => {
 test('it starts a commit one second after an append', async () => {
   const ctx = await setupTest();
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const log = await createGenerationLog(
     {
@@ -460,7 +460,7 @@ test('it starts a commit one second after an append', async () => {
 test('it writes the appended bytes into the meta when the commit timer fires', async () => {
   const ctx = await setupTest();
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const log = await createGenerationLog(
     {
@@ -495,7 +495,7 @@ test('it writes the appended bytes into the meta when the commit timer fires', a
 test('it cancels the pending commit when the log is abandoned', async () => {
   const ctx = await setupTest();
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const log = await createGenerationLog(
     {

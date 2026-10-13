@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { ORPCError } from '@orpc/server';
-import { runCommand } from '../process/run-command';
+import { buildExitError, runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 
 // CAP_SETFCAP's bit in /proc/<pid>/status (linux/capability.h)
@@ -43,9 +43,8 @@ export async function writeExportedTree(containerId: string, root: string): Prom
 // binary that lost its capability would fail later, in the imp, with EPERM
 export function assertUnpacked(result: CommandResult): void {
   if (result.exitCode !== 0) {
-    throw new Error(
-      `docker export | tar exited ${String(result.exitCode)}: ${result.stderr.trim() || result.stdout.trim()}`,
-    );
+    // the argv joins to the pipeline's name, "docker export | tar"
+    throw buildExitError(['docker', 'export', '|', 'tar'], result);
   }
 
   const failure = findXattrFailure(result.stderr);

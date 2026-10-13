@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { runCommand } from '../process/run-command';
-import type { CommandResult } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
 
 const ServeStatusSchema = z.object({
   TCP: z.record(z.string(), z.unknown()).optional(),
@@ -25,9 +25,7 @@ export function parseServePorts(json: string): readonly number[] {
 
 // The ports `tailscale serve` holds now; none when tailscale fails or is
 // missing. `run` runs the command, runCommand by default.
-export async function readServePorts(
-  run: (argv: readonly string[]) => Promise<CommandResult> = runCommand,
-): Promise<readonly number[]> {
+export async function readServePorts(run: CommandRunner = runCommand): Promise<readonly number[]> {
   try {
     const result = await run(['tailscale', 'serve', 'status', '--json']);
 

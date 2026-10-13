@@ -21,6 +21,8 @@ import type { ImpRecord } from '../db/imps';
 import type { EventBus } from '../events/event-bus';
 import { findSignalName } from '../exec/signal-names';
 import type { ImpRuntime } from '../imps/imp-runtime';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 
 // The `services` API (docs/guides/services.md) through the guest agent. A
 // call wakes or boots the imp and counts as an exec, except a list and a
@@ -68,17 +70,6 @@ interface ServiceApiParts {
   // setTimeout by default
   readonly now?: () => number;
   readonly startTimer?: StartTimer;
-}
-
-// starts a timer and returns its cancel
-type StartTimer = (fire: () => void, ms: number) => () => void;
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
 }
 
 // lines in all when every service's log goes, split among them

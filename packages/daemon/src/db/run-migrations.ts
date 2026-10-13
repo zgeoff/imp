@@ -2,9 +2,7 @@ import { sql } from 'kysely';
 import type { Kysely } from 'kysely';
 import { Migrator } from 'kysely/migration';
 import type { Migration, MigrationProvider, MigrationResultSet } from 'kysely/migration';
-
-// every disk before sizes was a 32 GiB sparse file
-const LEGACY_DISK_BYTES = 32 * 1024 ** 3;
+import { LEGACY_DISK_BYTES } from '../process/legacy-disk-bytes';
 
 // Each migration types the database as it stood when the migration ran, never
 // as today's schema.ts, so a later column change cannot break an older

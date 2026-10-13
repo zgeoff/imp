@@ -3,6 +3,9 @@ import * as z from 'zod';
 import type { ImpDatabase } from '../db/open-database';
 import { findSecret, listSecrets } from '../db/secrets';
 import type { SecretRecord } from '../db/secrets';
+import { buildBackoffMs } from '../process/build-backoff-ms';
+import { createKeyedMutex } from '../process/keyed-mutex';
+import { createSingleFlight } from '../process/single-flight';
 import { readErrorMessage } from '../read-error-message';
 import type { Upstream } from './forward-request';
 import { formatOAuthState, isHeaderSafeToken, parseOAuthState, readJwtExpiry } from './oauth-state';
@@ -96,9 +99,9 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
   const send = deps.fetch ?? sendToken;
   const timeoutMs = deps.timeoutMs ?? 30_000;
   const log = deps.log;
+  const locks = createKeyedMutex();
+  const inflight = createSingleFlight<RefreshOutcome>();
 
-  const tails = new Map<string, Promise<void>>();
-  const inflight = new Map<string, Promise<RefreshOutcome>>();
   const backoff = new Map<string, { failures: number; nextAt: number }>();
 
   // a result whose write failed, kept to write again before the next call:
@@ -112,26 +115,9 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     running: null,
   };
 
-  // Each holder waits for the one before it; a gate opens when its work ends,
-  // however it ends, so the chain never rejects.
-  const withLock = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
-    const previous = tails.get(name) ?? Promise.resolve();
-    const gate = Promise.withResolvers<void>();
-
-    tails.set(name, gate.promise);
-
-    await previous;
-
-    try {
-      return await work();
-    } finally {
-      gate.resolve();
-
-      if (tails.get(name) === gate.promise) {
-        tails.delete(name);
-      }
-    }
-  };
+  // Each holder waits for the one before it, and a failed holder never
+  // blocks the next.
+  const withLock = locks.runExclusive;
 
   const writeState = (
     name: string,
@@ -337,7 +323,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     error: string,
   ): RefreshOutcome => {
     const failures = (backoff.get(name)?.failures ?? 0) + 1;
-    const delay = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (failures - 1));
+    const delay = buildBackoffMs(failures, { baseMs: BACKOFF_BASE_MS, capMs: BACKOFF_CAP_MS });
 
     backoff.set(name, { failures, nextAt: now() + delay });
 
@@ -377,23 +363,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       return Promise.resolve({ kind: 'transient', error: 'impd is stopping' });
     }
 
-    const running = inflight.get(name);
-
-    if (running !== undefined) {
-      return running;
-    }
-
-    const started = (async () => {
-      try {
-        return await withLock(name, () => runRefresh(name, force));
-      } finally {
-        inflight.delete(name);
-      }
-    })();
-
-    inflight.set(name, started);
-
-    return started;
+    return inflight.run(name, () => withLock(name, () => runRefresh(name, force)));
   };
 
   // Writes a result an earlier write failed on. The secret's row is read
@@ -508,7 +478,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       await timer.running;
 
       // a refresh under way ends, its write included, before stop answers
-      await Promise.allSettled(inflight.values());
+      await inflight.waitForAll();
 
       // one last try at each result still unsaved, for a restart to find
       await Promise.allSettled([...unsaved.keys()].map((name) => writeUnsaved(name)));

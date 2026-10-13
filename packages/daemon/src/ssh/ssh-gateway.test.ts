@@ -15,8 +15,8 @@ import { buildMovingError } from '../api-errors';
 import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import { buildMockImpRecord } from '../test-utils/build-mock-imp-record';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubSshBackend } from '../test-utils/build-stub-ssh-backend';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { openSshChannel } from '../test-utils/open-ssh-channel';
 import { openSshClient } from '../test-utils/open-ssh-client';
@@ -458,10 +458,10 @@ test('it drops a connection at once past 32 pending logins by default', async ()
 test('it drops a client that does not log in within the auth timeout', async () => {
   const ctx = await setupTest();
 
-  const timers = buildStubTimers();
+  const clock = buildStubClock();
 
   const gateway = await startSshGateway(
-    { ...ctx.deps, limits: { authTimeoutMs: 50 }, startTimer: timers.startTimer },
+    { ...ctx.deps, limits: { authTimeoutMs: 50 }, startTimer: clock.startTimer },
     0,
     '127.0.0.1',
   );
@@ -482,10 +482,10 @@ test('it drops a client that does not log in within the auth timeout', async () 
   socket.resume();
 
   await waitFor(() => {
-    expect(timers.readPendingMs()).toStrictEqual([50]);
+    expect(clock.readPendingMs()).toStrictEqual([50]);
   });
 
-  timers.firePending();
+  clock.firePending();
 
   await closed.promise;
 
@@ -495,10 +495,10 @@ test('it drops a client that does not log in within the auth timeout', async () 
 test('it keeps a client that has not logged in while its auth timeout is pending', async () => {
   const ctx = await setupTest();
 
-  const timers = buildStubTimers();
+  const clock = buildStubClock();
 
   const gateway = await startSshGateway(
-    { ...ctx.deps, limits: { authTimeoutMs: 50 }, startTimer: timers.startTimer },
+    { ...ctx.deps, limits: { authTimeoutMs: 50 }, startTimer: clock.startTimer },
     0,
     '127.0.0.1',
   );
@@ -521,7 +521,7 @@ test('it keeps a client that has not logged in while its auth timeout is pending
   await greeted.promise;
 
   await waitFor(() => {
-    expect(timers.readPendingMs()).toStrictEqual([50]);
+    expect(clock.readPendingMs()).toStrictEqual([50]);
   });
 
   expect(socket.destroyed).toBeFalse();
@@ -542,13 +542,13 @@ test('it frees the pending slot of a client that logs in, and keeps it past the 
     run.emit({ type: 'exit', code: 0, signal: 0 });
   };
 
-  const timers = buildStubTimers();
+  const clock = buildStubClock();
 
   const gateway = await startSshGateway(
     {
       ...ctx.deps,
       limits: { authTimeoutMs: 1000, maxUnauthenticated: 1 },
-      startTimer: timers.startTimer,
+      startTimer: clock.startTimer,
     },
     0,
     '127.0.0.1',
@@ -581,7 +581,7 @@ test('it frees the pending slot of a client that logs in, and keeps it past the 
 
   await greeted.promise;
 
-  timers.firePending();
+  clock.firePending();
 
   await closed.promise;
 

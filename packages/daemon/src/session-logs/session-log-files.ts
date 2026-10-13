@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { SessionLog, SessionLogRead } from '@imp/api';
 import { SESSION_LOG_READ_MAX_BYTES } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { writeFileDurably } from '../storage/write-file-durably';
+import { writeFileDurably } from '../process/write-file-durably';
 import {
   countLogBytes,
   findSegmentPath,

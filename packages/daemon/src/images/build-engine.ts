@@ -1,6 +1,7 @@
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { getImpdLogger } from '../process/get-impd-logger';
 import type { ExternalImage } from './dockerfile-check';
 import { PIN_INSPECT_FORMAT, PinInspectSchema, normalizePlatform } from './image-pin';
 import type { PinInspect } from './image-pin';
@@ -118,7 +119,9 @@ export function createBuildEngine(run: EngineRun): BuildEngine {
         });
       }
 
-      console.log(`impd: pulled the Dockerfile frontend ${DOCKERFILE_FRONTEND}`);
+      getImpdLogger('image').info('pulled the Dockerfile frontend {frontend}', {
+        frontend: DOCKERFILE_FRONTEND,
+      });
     },
   };
 }

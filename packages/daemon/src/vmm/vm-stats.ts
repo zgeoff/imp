@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { readStatFields } from '../process/proc';
 import { isFirecrackerAlive } from './firecracker-process';
 
 const KIB_PER_MIB = 1024;
@@ -26,10 +27,11 @@ export function parseSmapsRollup(text: string): ReadonlyMap<string, number> {
 export function readOwnedRamMib(pid: number, apiSocket: string, procRoot = '/proc'): number | null {
   const fields = readVmSmaps(pid, apiSocket, procRoot);
 
-  if (fields === null) {
-    return null;
-  }
+  return fields === null ? null : countOwnedMib(fields);
+}
 
+// Pss_Anon + Pss_Shmem in MiB: what readOwnedRamMib counts
+function countOwnedMib(fields: ReadonlyMap<string, number>): number {
   return Math.round(((fields.get('Pss_Anon') ?? 0) + (fields.get('Pss_Shmem') ?? 0)) / KIB_PER_MIB);
 }
 
@@ -71,10 +73,8 @@ export function readVmMemory(
     return { ramMib: null, rssMib: null };
   }
 
-  const anonKb = (fields.get('Pss_Anon') ?? 0) + (fields.get('Pss_Shmem') ?? 0);
-
   return {
-    ramMib: Math.round(anonKb / KIB_PER_MIB),
+    ramMib: countOwnedMib(fields),
     rssMib: Math.round((fields.get('Rss') ?? 0) / KIB_PER_MIB),
   };
 }
@@ -97,14 +97,8 @@ function readVmSmaps(
 
 // utime + stime in clock ticks (USER_HZ, 100 on Linux), or null when gone
 export function readCpuTicks(pid: number, procRoot = '/proc'): number | null {
-  try {
-    const stat = readFileSync(`${procRoot}/${String(pid)}/stat`, 'utf8');
+  // fields after the parenthesised command name, starting at field 3
+  const fields = readStatFields(pid, procRoot);
 
-    // fields after the parenthesised command name, starting at field 3
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-
-    return Number(fields[11]) + Number(fields[12]);
-  } catch {
-    return null;
-  }
+  return fields === null ? null : Number(fields[11]) + Number(fields[12]);
 }

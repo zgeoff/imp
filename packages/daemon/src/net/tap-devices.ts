@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { runCommand } from '../process/run-command';
-import type { CommandResult } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
 import type { SlotAddress } from './addressing';
 import { GATEWAY_IP6 } from './addressing6';
 
@@ -21,8 +21,6 @@ interface TapOwner {
   readonly gid: number;
 }
 
-type RunCommand = (argv: readonly string[]) => Promise<CommandResult>;
-
 // the MAC a tap has now, or null when there is no such tap
 export function readTapMac(tap: string): string | null {
   try {
@@ -36,7 +34,7 @@ export function readTapMac(tap: string): string | null {
 type ReadOwner = (tap: string) => TapOwner | null;
 
 export function createTapDevices(
-  run: RunCommand = runCommand,
+  run: CommandRunner = runCommand,
   readOwner: ReadOwner = readTapOwner,
 ): TapDevices {
   // `tolerated`: stderr fragments that mean the change is already in place;

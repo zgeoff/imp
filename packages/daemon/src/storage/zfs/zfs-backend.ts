@@ -9,9 +9,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createKeyedMutex } from '../../imps/keyed-mutex';
+import { createKeyedMutex } from '../../process/keyed-mutex';
+import { readMounts as readHostMounts } from '../../process/mounts';
 import { printLog } from '../../process/print-log';
 import { runCommand } from '../../process/run-command';
+import type { CommandRunner } from '../../process/run-command';
 import { createStreamRunner } from '../../process/run-stream';
 import type { StreamRunner } from '../../process/run-stream';
 import { readErrorMessage } from '../../read-error-message';
@@ -46,7 +48,7 @@ import {
   parseZfsMounts,
   parseZfsRelease,
 } from './zfs-commands';
-import type { CommandRunner, ZfsEntry } from './zfs-commands';
+import type { ZfsEntry } from './zfs-commands';
 import { planReclaimStep } from './zfs-reclaim';
 
 // ARC and record sizes are set where the datasets are made (deploy/
@@ -124,7 +126,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
   const heldSnapshots = new Set<string>();
 
   const log = deps.log ?? printLog;
-  const readMounts = deps.readMounts ?? (() => readFileSync('/proc/self/mounts', 'utf8'));
+  const readMounts = deps.readMounts ?? readHostMounts;
   const readModuleVersion = deps.readModuleVersion ?? readZfsModuleVersion;
 
   // Dataset changes run one at a time: a reclaim must never see a restore

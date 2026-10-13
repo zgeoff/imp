@@ -1,7 +1,7 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import type { Imp } from '@imp/api';
 import { EVENT_VERSION } from '@imp/api';
-import { buildStubTimers } from '@imp/daemon/src/test-utils/build-stub-timers';
+import { buildStubClock } from '@imp/daemon/src/test-utils/build-stub-clock';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { buildMockImp } from '../test-utils/build-mock-imp';
 import { buildMockImpChangedEvent } from '../test-utils/build-mock-imp-changed-event';
@@ -198,7 +198,7 @@ test('#impdLogouts ends every open stream at a logout', async () => {
 });
 
 test('#openImpdEventStream ends when the session expires and not before', async () => {
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const stream = openImpdEventStream(
     { imps: null, expiresAt: new Date(Date.UTC(2026, 9, 2, 12) + 50) },

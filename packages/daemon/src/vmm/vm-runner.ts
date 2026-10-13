@@ -4,10 +4,12 @@ import { waitForAgent } from '../agent-client/wait-for-agent';
 import { BLOCK_MIB, ONLINE_MOVABLE_ARG, SLOT_MIB, findRegionMib } from '../memory/elastic-memory';
 import type { SlotAddress } from '../net/addressing';
 import { GATEWAY_IP6 } from '../net/addressing6';
+import { stopPid } from '../process/proc';
 import { runCommand } from '../process/run-command';
+import { VM_DEADLINES } from '../process/vm-deadlines';
+import { writeToDisk } from '../process/write-file-durably';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths, SnapshotPaths } from '../storage/data-layout';
-import { writeToDisk } from '../storage/write-file-durably';
 import { BASE_BOOT_ARGS, VM_DEVICES, createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
@@ -21,7 +23,6 @@ import {
   readPidFile,
   readVmOwner,
   startFirecracker,
-  stopProcess,
   waitForExit,
 } from './firecracker-process';
 import { setupSnapshotFile } from './jail';
@@ -30,9 +31,7 @@ import { buildTemplateVm, loadTemplateVm } from './template-vm';
 import type { TemplateBuildPlan, TemplateRestorePlan } from './template-vm';
 import { createOwnedFile } from './vm-files';
 
-const AGENT_DEADLINE_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
-const KILL_TIMEOUT_MS = 3000;
 const WAKE_AGENT_DEADLINE_MS = 10_000;
 
 // the memory controller asks every 500 ms: a VM that does not answer soon is
@@ -252,9 +251,9 @@ export function createVmRunner(
 
   // the VM is gone: its jail's mounts can go
   const stopVmNow = async (pid: number, paths: ImpPaths): Promise<boolean> => {
-    stopProcess(pid, 'SIGKILL');
+    stopPid(pid);
 
-    const exited = await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS);
+    const exited = await waitForExit(pid, paths.apiSocket, VM_DEADLINES.killMs);
 
     if (exited) {
       await removeVmMounts(paths);
@@ -344,7 +343,9 @@ export function createVmRunner(
 
         setMark('instanceStart');
 
-        const ping = await waitForAgent(plan.paths.vsockSocket, { deadlineMs: AGENT_DEADLINE_MS });
+        const ping = await waitForAgent(plan.paths.vsockSocket, {
+          deadlineMs: VM_DEADLINES.agentMs,
+        });
 
         setMark('agent');
 
@@ -361,7 +362,7 @@ export function createVmRunner(
 
         // the disk stays open until the process is gone: a retry must not
         // put a second VM on it
-        await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
+        await waitForExit(pid, plan.paths.apiSocket, VM_DEADLINES.killMs);
 
         const reason = readErrorMessage(error);
 

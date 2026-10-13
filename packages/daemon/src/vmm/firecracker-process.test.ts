@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { stopPid } from '../process/proc';
 import { startStubFirecrackerProcess } from '../test-utils/start-stub-firecracker-process';
 import {
   buildFirecrackerCommand,
@@ -15,7 +16,6 @@ import {
   readPidFile,
   readVmOwner,
   startFirecracker,
-  stopProcess,
   waitForExit,
 } from './firecracker-process';
 import { buildJailerCommand } from './jail';
@@ -131,30 +131,6 @@ test('#waitForExit resolves false at the timeout while the firecracker still run
   expect(exited).toBeFalse();
 });
 
-test('#stopProcess kills a running process', async () => {
-  const child = Bun.spawn(['sleep', '30']);
-
-  onTestFinished(() => {
-    child.kill('SIGKILL');
-  });
-
-  stopProcess(child.pid);
-
-  await child.exited;
-
-  expect(child.signalCode).toBe('SIGKILL');
-});
-
-test('#stopProcess ignores a process that is gone', async () => {
-  const child = Bun.spawn(['true']);
-
-  await child.exited;
-
-  expect(() => {
-    stopProcess(child.pid);
-  }).not.toThrow();
-});
-
 test('#readPidFile reads a missing pid file as none', () => {
   const ctx = setupTest();
 
@@ -254,7 +230,7 @@ test('#startFirecracker resolves with the pid and writes it to the pid file once
   });
 
   onTestFinished(() => {
-    stopProcess(pid);
+    stopPid(pid);
   });
 
   expect(readPidFile(join(ctx.dir, 'pid'))).toBe(pid);

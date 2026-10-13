@@ -5,6 +5,8 @@ import type { AuthContext, ClientInfo, Connection } from 'ssh2';
 import { isCallerAllowed } from '../auth/caller';
 import type { Caller } from '../auth/caller';
 import type { ImpRecord } from '../db/imps';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 import { createAgentForwarding } from './agent-forwarding';
 import { formatFailure } from './channel-io';
 import { handleForward, resolveSocketTarget, resolveTcpTarget } from './forward-channel';
@@ -54,7 +56,7 @@ export interface SshGatewayDeps {
   readonly limits?: Partial<SshGatewayLimits>;
 
   // the auth timeout's timer, returning its cancel; setTimeout by default
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
 }
 
 export interface SshGateway {
@@ -70,14 +72,6 @@ interface PendingSocket {
 
   // cancels the auth timeout
   readonly cancelTimer: () => void;
-}
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
 }
 
 // a full login with its imp and who it runs as, a key query to accept, or

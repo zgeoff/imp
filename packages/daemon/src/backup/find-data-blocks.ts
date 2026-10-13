@@ -1,5 +1,5 @@
-import { FFIType, dlopen, read } from 'bun:ffi';
 import { fstatSync } from 'node:fs';
+import { getLibc, readErrno } from '../process/libc';
 
 // lseek(2) whence values and the one errno that is an answer, on Linux
 const SEEK_DATA = 3;
@@ -10,7 +10,6 @@ const ENXIO = 6;
 // not data the scan missed; a file restic restored measured 0 on XFS and ext4
 const SLACK_MIN_BYTES = 1024 * 1024;
 const SLACK_FRACTION = 0.001;
-const libc = loadLibc();
 
 // an lseek result: the offset, or the errno of a -1
 type SeekResult = { readonly offset: number } | { readonly errno: number };
@@ -19,36 +18,20 @@ export type SeekFile = (fd: number, offset: number, whence: number) => SeekResul
 
 export type ReadAllocated = (fd: number) => number;
 
-function loadLibc() {
-  try {
-    return dlopen('libc.so.6', {
-      lseek: { args: [FFIType.i32, FFIType.i64, FFIType.i32], returns: FFIType.i64 },
-
-      // libc's name for the thread's errno
-      __errno_location: { args: [], returns: FFIType.ptr },
-    });
-  } catch {
-    return null;
-  }
-}
-
 function runLseek(fd: number, offset: number, whence: number): SeekResult {
-  const symbols = libc?.symbols;
+  const libc = getLibc();
 
-  if (symbols === undefined) {
+  if (libc === null) {
     return { errno: -1 };
   }
 
-  const result = Number(symbols.lseek(fd, offset, whence));
+  const result = Number(libc.lseek(fd, offset, whence));
 
   if (result >= 0) {
     return { offset: result };
   }
 
-  // oxlint-disable-next-line no-underscore-dangle -- libc's name for the thread's errno
-  const errnoAt = symbols.__errno_location();
-
-  return { errno: errnoAt === null ? -1 : read.i32(errnoAt) };
+  return { errno: readErrno() };
 }
 
 function buildBlocksFrom(

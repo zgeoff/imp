@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { runCommand } from '../process/run-command';
-import type { CommandResult } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
+import { createTtlCache } from '../process/ttl-cache';
 
 export interface TailscaleStatus {
   // tailscaled's BackendState: `Running` once the node is up
@@ -57,7 +58,7 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
 // `run` runs the command, runCommand by default.
 export async function readTailscaleStatus(
   configured: boolean,
-  run: (argv: readonly string[]) => Promise<CommandResult> = runCommand,
+  run: CommandRunner = runCommand,
 ): Promise<TailscaleStatus> {
   if (!configured) {
     return UNKNOWN;
@@ -77,16 +78,25 @@ export function createStatusCache(
   read: () => Promise<TailscaleStatus>,
   now: () => number,
 ): () => Promise<TailscaleStatus> {
-  const state: { status: Promise<TailscaleStatus> | null; at: number } = { status: null, at: 0 };
+  // read again at 30 s, where lru-cache keeps an entry until its age passes
+  // the ttl, hence one ms less
+  const cache = createTtlCache<'status', Promise<TailscaleStatus>>({
+    max: 1,
+    ttlMs: STATUS_TTL_MS - 1,
+    now,
+  });
 
   return () => {
-    const at = now();
+    const cached = cache.get('status');
 
-    if (state.status === null || at - state.at >= STATUS_TTL_MS) {
-      state.status = read();
-      state.at = at;
+    if (cached !== undefined) {
+      return cached;
     }
 
-    return state.status;
+    const status = read();
+
+    cache.set('status', status);
+
+    return status;
   };
 }

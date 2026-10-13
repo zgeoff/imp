@@ -1,7 +1,7 @@
 import { mkdtempSync, rmdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { runCommand } from '../process/run-command';
-import type { CommandRunner } from '../storage/zfs/zfs-commands';
+import { buildExitError, runCommand } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
 
 export interface ZfsTestDatasetOptions {
   // the run's pool dataset and its mount dir (readZfsTestPool)
@@ -19,7 +19,7 @@ async function runOrThrow(run: CommandRunner, argv: readonly string[]): Promise<
   const result = await run(argv);
 
   if (result.exitCode !== 0) {
-    throw new Error(`${argv.join(' ')} exited ${String(result.exitCode)}: ${result.stderr.trim()}`);
+    throw buildExitError(argv, { exitCode: result.exitCode, stderr: result.stderr });
   }
 }
 

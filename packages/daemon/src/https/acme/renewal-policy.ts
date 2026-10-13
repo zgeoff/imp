@@ -1,3 +1,4 @@
+import { buildBackoffMs } from '../../process/build-backoff-ms';
 import type { AttemptState } from './cert-store';
 
 export interface CertificateInfo {
@@ -21,7 +22,7 @@ const MAX_BACKOFF_MS = 24 * 3_600_000;
 const RENEW_AT_FRACTION = 2 / 3;
 
 export function readBackoffMs(failures: number): number {
-  return failures === 0 ? 0 : Math.min(FIRST_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
+  return buildBackoffMs(failures, { baseMs: FIRST_BACKOFF_MS, capMs: MAX_BACKOFF_MS });
 }
 
 // the names one certificate must hold for the domain

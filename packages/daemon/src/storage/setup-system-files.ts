@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Config } from '../config';
+import { writeCopyDurably } from '../process/write-file-durably';
 import { buildSystemDrivePath } from './data-layout';
 import { deriveFileSha256, readKernelInfo } from './system-file-info';
 import type { SystemFileInfo } from './system-file-info';
@@ -60,6 +61,5 @@ function hasContent(path: string, content: Uint8Array): boolean {
 // a crash mid-copy leaves only the .new file, never a short target
 function writeCopy(source: string, target: string): void {
   mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(source, `${target}.new`);
-  renameSync(`${target}.new`, target);
+  writeCopyDurably(source, target);
 }

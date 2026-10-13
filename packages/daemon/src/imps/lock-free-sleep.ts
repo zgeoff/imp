@@ -1,4 +1,4 @@
-import type { TryResult } from './keyed-mutex';
+import type { TryResult } from '../process/keyed-mutex';
 
 // 'skipped' when the imp's lock is taken or it no longer qualifies;
 // 'diskFull' when the disk cannot take its memory snapshot

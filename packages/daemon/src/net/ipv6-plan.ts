@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { buildNat66Removal, buildNat66Ruleset } from '../egress/egress-ruleset';
 import { runChecked, runCommand } from '../process/run-command';
-import type { CommandResult } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { buildUlaPrefix, formatCidr6, parsePrefix64 } from './addressing6';
 import type { Prefix64 } from './addressing6';
@@ -132,14 +132,12 @@ const HOST_SYSCTLS6: readonly (readonly [string, string])[] = [
   ['all/forwarding', '1'],
 ];
 
-type RunCommand = (argv: readonly string[]) => Promise<CommandResult>;
-
 // The first of setup-net's IPv6 rules and settings that is missing, or null.
 // `procSys` is where the kernel shows the IPv6 settings, and `run` runs
 // ip6tables, runCommand by default.
 export async function checkHostRules6(
   procSys = '/proc/sys/net/ipv6/conf',
-  run: RunCommand = runCommand,
+  run: CommandRunner = runCommand,
 ): Promise<string | null> {
   for (const table of ['filter', 'raw']) {
     const result = await run(['ip6tables', '-w', '-t', table, '-S']);
@@ -178,7 +176,9 @@ function readSysctl(path: string): string | null {
 
 // `ip -6 route show default`: the device of the first default route; `run`
 // runs it, runCommand by default
-export async function readIpv6DefaultRoute(run: RunCommand = runCommand): Promise<string | null> {
+export async function readIpv6DefaultRoute(
+  run: CommandRunner = runCommand,
+): Promise<string | null> {
   const result = await run(['ip', '-6', 'route', 'show', 'default']);
 
   if (result.exitCode !== 0) {

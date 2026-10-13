@@ -1,4 +1,5 @@
 import type { ImpEvent } from '@imp/api';
+import type { StartTimer } from '../process/clock';
 import { startTimerAt } from '../process/start-timer-at';
 import type { EventBus } from './event-bus';
 
@@ -18,7 +19,7 @@ interface EventStreamOptions {
   readonly now: () => number;
 
   // starts the end's timer and returns its cancel; setTimeout by default
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
   readonly queueLimit?: number;
 
   // the events this subscriber may see, such as those of a token's imps;

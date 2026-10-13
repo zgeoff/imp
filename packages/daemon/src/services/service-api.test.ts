@@ -22,8 +22,8 @@ import {
 } from '../storage/data-layout';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { readInBackground } from '../test-utils/read-in-background';
@@ -948,7 +948,7 @@ test('it looks again after the short retry, not the long recheck, while a lifecy
 
   await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   // impd's own services API over its runtime, with timers the test fires
   const api = createServiceApi({
@@ -1027,7 +1027,7 @@ test('it goes on with a follow when the wake’s event comes before the wake let
 
   onTestFinished(unsubscribe);
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   // impd's own services API over its runtime, with timers the test fires
   const api = createServiceApi({
@@ -1092,7 +1092,7 @@ test('it ends a follow with the error once its log fails to open five times in a
 
   agent.writeLog('web', 'one\n');
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   // impd's own services API over its runtime, with timers the test fires
   const api = createServiceApi({
@@ -1145,7 +1145,7 @@ test('it lets a list wait out a step that holds a running imp', async () => {
 
   agent.services.push({ name: 'web', state: 'running', pid: 40, restarts: 0 });
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   // impd's own services API over its runtime, with timers the test fires
   const api = createServiceApi({
@@ -1181,7 +1181,7 @@ test('it refuses a list as INVALID_STATE once a step holds a running imp past 10
 
   await ctx.client.imps.create({ name: 'dev' });
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const clock = { ms: 0 };
 
   // impd's own services API over its runtime, with a clock and timers the

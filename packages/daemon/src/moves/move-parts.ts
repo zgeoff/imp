@@ -1,3 +1,6 @@
+import type { Clock } from '../process/clock';
+import { REAL_CLOCK } from '../process/real-clock';
+
 // A move's stream goes in parts of at most this many bytes, one POST each,
 // so impd's request body limit never has to fit a whole disk
 export const MOVE_PART_BYTES = 256 * 1024 * 1024;
@@ -26,27 +29,13 @@ interface Part {
   readonly consumed: PromiseWithResolvers<void>;
 }
 
-// The clock a pipe's wait for the next part reads, and the timer that wakes
-// it at the deadline; schedule returns the timer's cancel
-export interface PartTimer {
-  readonly now: () => number;
-  readonly schedule: (run: () => void, ms: number) => () => void;
-}
-
-const WALL_TIMER: PartTimer = {
-  now: Date.now,
-  schedule: (run, ms) => {
-    const timer = setTimeout(run, ms);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  },
-};
-
 // The receiving end: each POST hands its body over, and the frame reader
-// reads them in turn as if they were one stream.
-export function createPartPipe(waitMs = PART_WAIT_MS, timer: PartTimer = WALL_TIMER): PartPipe {
+// reads them in turn as if they were one stream. `timer` is the clock the
+// wait for the next part reads and the timer that wakes it at the deadline.
+export function createPartPipe(
+  waitMs = PART_WAIT_MS,
+  timer: Pick<Clock, 'now' | 'startTimer'> = REAL_CLOCK,
+): PartPipe {
   const parts: Part[] = [];
 
   const state: {
@@ -84,7 +73,7 @@ export function createPartPipe(waitMs = PART_WAIT_MS, timer: PartTimer = WALL_TI
 
       state.waiter = waiter;
 
-      const cancel = timer.schedule(
+      const cancel = timer.startTimer(
         () => {
           waiter.resolve();
         },

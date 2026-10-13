@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'bun:test';
+import type { CommandRunner } from '../../process/run-command';
 import {
   buildReceiveArgv,
   buildSendArgv,
@@ -10,7 +11,6 @@ import {
   parseZfsSpace,
   parseZfsVersion,
 } from './zfs-commands';
-import type { CommandRunner } from './zfs-commands';
 
 // The rows below are what OpenZFS 2.2 prints: tabs between columns, `-`
 // where a property does not apply.

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { EXEC_PATH, MCP_PATH, TUNNEL_PATH } from '@imp/api';
+import { createTtlCache } from '../process/ttl-cache';
 
 // The wake proxy hands impd's API the client's address in-process, not in a
 // forwarded header a client could write: it sends a random handle that the
@@ -19,32 +20,31 @@ export interface ForwardedPeers {
 }
 
 export function createForwardedPeers(now: () => number): ForwardedPeers {
-  const handles = new Map<string, { readonly address: string; readonly expiresAt: number }>();
+  // each handle's address. A handle is gone at 30 s, where lru-cache keeps
+  // an entry until its age passes the ttl, hence one ms less; a set past
+  // MAX_HANDLES evicts the oldest, as no read touches recency
+  const handles = createTtlCache<string, string>({
+    max: MAX_HANDLES,
+    ttlMs: HANDLE_TTL_MS - 1,
+    now,
+  });
 
   return {
     register: (address) => {
-      const at = now();
-
-      for (const [handle, entry] of handles) {
-        if (entry.expiresAt > at && handles.size < MAX_HANDLES) {
-          break;
-        }
-
-        handles.delete(handle);
-      }
+      handles.purgeStale();
 
       const handle = randomBytes(24).toString('base64url');
 
-      handles.set(handle, { address, expiresAt: at + HANDLE_TTL_MS });
+      handles.set(handle, address);
 
       return handle;
     },
     take: (handle) => {
-      const entry = handles.get(handle);
+      const address = handles.peek(handle);
 
       handles.delete(handle);
 
-      return entry === undefined || entry.expiresAt <= now() ? null : entry.address;
+      return address ?? null;
     },
   };
 }

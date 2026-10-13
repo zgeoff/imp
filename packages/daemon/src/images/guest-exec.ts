@@ -1,4 +1,6 @@
 import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 
 // the most of a step's stdout impd keeps when nothing streams it, and of its
 // stderr, from the end
@@ -76,17 +78,6 @@ async function sendStdin(
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
-}
-
-// starts a timer and returns its cancel
-type StartTimer = (fire: () => void, ms: number) => () => void;
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
 }
 
 // Runs each step through `open`, which reaches the builder's agent: stdin

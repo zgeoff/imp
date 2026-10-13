@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Caller } from '../auth/caller';
 import type { Revocations } from '../auth/revocations';
 import type { TokenStore } from '../auth/token-store';
+import { createTtlCache } from '../process/ttl-cache';
 
 // Single-use `/exec` tickets: a browser WebSocket cannot send the bearer
 // header, and the token must never land in a URL (docs/architecture/daemon.md).
@@ -39,7 +40,6 @@ interface LiveTicket {
   readonly secret: Buffer;
   readonly holder: TicketHolder;
   readonly owner: string;
-  readonly expiresAt: number;
 }
 
 interface ExecTicketsDeps {
@@ -67,63 +67,48 @@ export function isCallerLive(
 export function createExecTickets(deps: Readonly<ExecTicketsDeps>): ExecTickets {
   const now = deps.now;
 
-  const live = new Map<string, LiveTicket>();
+  // gone at 30 s, where lru-cache keeps an entry until its age passes the
+  // ttl, hence one ms less; lookups peek, so a set past MAX_LIVE_TICKETS
+  // evicts the oldest ticket of any caller
+  const live = createTtlCache<string, LiveTicket>({
+    max: MAX_LIVE_TICKETS,
+    ttlMs: TICKET_TTL_MS - 1,
+    now,
+  });
 
-  // a Map iterates in insertion order: the first match is the oldest
-  const removeOldest = (owner: string | null): void => {
-    for (const [id, entry] of live) {
-      if (owner === null || entry.owner === owner) {
-        live.delete(id);
-
-        return;
-      }
-    }
-  };
-
-  const countOwned = (owner: string): number =>
-    [...live.values()].filter((entry) => entry.owner === owner).length;
-
-  const removeExpired = (at: number): void => {
-    for (const [id, entry] of live) {
-      if (entry.expiresAt <= at) {
-        live.delete(id);
-      }
-    }
-  };
+  // the owner's tickets, oldest first
+  const listOwned = (owner: string): string[] =>
+    [...live.rkeys()].filter((id) => live.peek(id)?.owner === owner);
 
   return {
     issue: (name, caller) => {
       const at = now();
       const owner = readOwner(caller);
 
-      removeExpired(at);
+      live.purgeStale();
 
-      if (countOwned(owner) >= MAX_LIVE_TICKETS_PER_CALLER) {
-        removeOldest(owner);
-      }
+      const owned = listOwned(owner);
 
-      if (live.size >= MAX_LIVE_TICKETS) {
-        removeOldest(null);
+      if (owned.length >= MAX_LIVE_TICKETS_PER_CALLER && owned[0] !== undefined) {
+        live.delete(owned[0]);
       }
 
       const id = randomBytes(12).toString('base64url');
       const secret = randomBytes(32);
       const expiresAt = at + TICKET_TTL_MS;
 
-      live.set(id, { secret, holder: { name, caller }, owner, expiresAt });
+      live.set(id, { secret, holder: { name, caller }, owner });
 
       return { ticket: `${id}.${secret.toString('base64url')}`, expiresAt: new Date(expiresAt) };
     },
     redeem: (ticket) => {
-      removeExpired(now());
-
       const [id, secretText, ...rest] = ticket.split('.');
 
       if (id === undefined || secretText === undefined || rest.length > 0) {
         return null;
       }
 
-      const entry = live.get(id);
+      const entry = live.peek(id);
 
       if (entry === undefined) {
         return null;

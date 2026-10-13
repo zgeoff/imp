@@ -1,5 +1,7 @@
-import { closeSync, existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
+import { IMPD_USER } from '../process/impd-user';
+import { listPids, readStatFields, stopPid } from '../process/proc';
 import { readProcessCgroup, readProcessUid } from './process-owner';
 import { readRegularFile, setupLogFile, writeRegularFile } from './vm-files';
 
@@ -17,15 +19,12 @@ export interface FoundVm {
   readonly owner: VmOwner;
 }
 
-// root in the container: an unjailed Firecracker runs as impd does
-const IMPD_UID = process.getuid?.() ?? 0;
-
 // Imp `impId`'s VM by what no jail can forge: it runs as impd (unjailed), as
 // the imp's own jail uid, or in the imp's cgroup. With no record, and so no
 // jail uid, only the first and the last.
 export function isImpVm(owner: VmOwner, impId: string, jailUid: number | null): boolean {
   return (
-    owner.uid === IMPD_UID ||
+    owner.uid === IMPD_USER.uid ||
     (jailUid !== null && owner.uid === jailUid) ||
     owner.cgroup === `/imps/${impId}`
   );
@@ -88,7 +87,7 @@ export async function startFirecracker(
 
   while (!existsSync(paths.apiSocket)) {
     if (child.exitCode !== null || Date.now() > deadline) {
-      stopProcess(child.pid);
+      stopPid(child.pid);
 
       throw new Error(
         `firecracker did not open its API socket (exit ${String(child.exitCode)}): ${readLogTail(paths.logFile)}`,
@@ -105,24 +104,18 @@ export async function startFirecracker(
 // fails the cmdline check.
 // `procRoot` is where /proc is mounted, /proc by default
 export function isFirecrackerAlive(pid: number, apiSocket: string, procRoot = '/proc'): boolean {
-  try {
-    const stat = readFileSync(`${procRoot}/${String(pid)}/stat`, 'utf8');
-    const cmdline = readFileSync(`${procRoot}/${String(pid)}/cmdline`, 'utf8').split('\0');
+  const state = readStatFields(pid, procRoot)?.[0];
 
-    // the state field follows the parenthesised command name
-    const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
-
-    return state !== 'Z' && state !== 'X' && cmdline.includes(apiSocket);
-  } catch {
+  if (state === undefined || state === 'Z' || state === 'X') {
     return false;
   }
-}
 
-export function stopProcess(pid: number, signal: NodeJS.Signals = 'SIGKILL'): void {
   try {
-    process.kill(pid, signal);
+    const cmdline = readFileSync(`${procRoot}/${String(pid)}/cmdline`, 'utf8').split('\0');
+
+    return cmdline.includes(apiSocket);
   } catch {
-    // already gone
+    return false;
   }
 }
 
@@ -171,12 +164,7 @@ export function readPidFile(pidFile: string): number | null {
 export function listFirecrackers(): FoundVm[] {
   const found: FoundVm[] = [];
 
-  for (const entry of readdirSync('/proc')) {
-    if (!/^\d+$/.test(entry)) {
-      continue;
-    }
-
-    const pid = Number(entry);
+  for (const pid of listPids()) {
     const argv = readCommandLine(pid);
     const flag = argv.indexOf('--api-sock');
     const apiSocket = argv[flag + 1];

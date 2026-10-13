@@ -5,12 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubGuest } from '../test-utils/build-stub-guest';
 import {
   STUB_BUILDER_CONTAINER,
   buildStubImageBuilder,
 } from '../test-utils/build-stub-image-builder';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { DockerBuildError } from './docker-build';
 import { loadGuestImage, runGuestBuild, writeGuestTree } from './guest-build';
 import { createGuestExec } from './guest-exec';
@@ -489,7 +489,7 @@ test('#writeGuestTree ends an export that sends nothing for its idle limit', asy
     isExportStalled: true,
   });
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const writing = writeGuestTree(
     createGuestExec(builder.guest.open),

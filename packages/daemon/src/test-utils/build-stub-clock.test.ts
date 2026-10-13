@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { buildStubClock } from './build-stub-clock';
 
 test('it starts at 0 and moves only with runFor', () => {
@@ -106,4 +106,82 @@ test('it records the delay of each timer it starts', () => {
   clock.startTimer(() => {}, 0);
 
   expect(clock.delays).toStrictEqual([100, 0]);
+});
+
+test('it fires each pending timer by hand once, in the order they started', () => {
+  const clock = buildStubClock();
+  const fired: string[] = [];
+
+  clock.startTimer(() => {
+    fired.push('first');
+  }, 500);
+
+  clock.startTimer(() => {
+    fired.push('second');
+  }, 100);
+
+  clock.firePending();
+  clock.firePending();
+
+  expect(fired).toStrictEqual(['first', 'second']);
+  expect(clock.readPendingMs()).toStrictEqual([]);
+});
+
+test('it leaves the time where it is when it fires timers by hand', () => {
+  const clock = buildStubClock();
+
+  clock.startTimer(() => {}, 500);
+  clock.firePending();
+
+  expect(clock.now()).toBe(0);
+});
+
+test('it never fires a cancelled timer by hand', () => {
+  const clock = buildStubClock();
+  const fire = mock((): void => {});
+  const cancel = clock.startTimer(fire, 500);
+
+  cancel();
+
+  clock.firePending();
+
+  expect(fire).not.toHaveBeenCalled();
+});
+
+test('it leaves a timer that a fire by hand starts pending until the next fire', () => {
+  const clock = buildStubClock();
+  const fire = mock((): void => {});
+
+  clock.startTimer(() => {
+    clock.startTimer(fire, 200);
+  }, 100);
+
+  clock.firePending();
+
+  expect(fire).not.toHaveBeenCalled();
+  expect(clock.readPendingMs()).toStrictEqual([200]);
+});
+
+test('it holds a timer that a timer starts past the end of the run', () => {
+  const clock = buildStubClock();
+  const fire = mock((): void => {});
+
+  clock.startTimer(() => {
+    clock.startTimer(fire, 15);
+  }, 10);
+
+  clock.runFor(20);
+
+  expect(fire).not.toHaveBeenCalled();
+  expect(clock.countPending()).toBe(1);
+});
+
+test('it counts the timers that have neither fired nor been cancelled', () => {
+  const clock = buildStubClock();
+
+  clock.startTimer(() => {}, 10);
+  clock.startTimer(() => {}, 30);
+  clock.runFor(10);
+
+  expect(clock.countPending()).toBe(1);
 });

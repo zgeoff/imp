@@ -4,7 +4,9 @@
 
 import { chmodSync, rmSync } from 'node:fs';
 import { BUILD_IMAGE_PATTERN, DEFAULT_BUILD_IMAGE } from '../images/build-image';
+import { getImpdLogger } from '../process/get-impd-logger';
 import { printLog } from '../process/print-log';
+import { setupLogging } from '../process/setup-logging';
 import { loadOrCreateToken } from '../token';
 import { createDockerProxy } from './proxy';
 
@@ -54,6 +56,8 @@ function readBuilderImage(): string | null {
 }
 
 function main(): void {
+  setupLogging();
+
   const listen = readEnv('IMP_DOCKER_PROXY_LISTEN', '/run/imp-docker/docker.sock');
   const upstreamSocket = readEnv('IMP_DOCKER_PROXY_UPSTREAM', '/var/run/docker.sock');
   const stateDir = readEnv('IMP_DOCKER_PROXY_STATE', '/var/lib/imp-docker-proxy');
@@ -95,7 +99,7 @@ function main(): void {
 
   chmodSync(listen, 0o600);
 
-  printLog(
+  getImpdLogger('docker-proxy').info(
     `imp-docker-proxy on ${listen}, engine ${upstreamSocket}, host image ${hostImage}, ${builderImage === null ? 'pulls and builds as host isolation allows' : `pulls only ${builderImage}, no builds`}`,
   );
 

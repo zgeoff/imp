@@ -1,7 +1,6 @@
-import type { CommandResult } from '../../process/run-command';
-
-// runCommand in impd; a fake ZFS in tests
-export type CommandRunner = (argv: readonly string[]) => Promise<CommandResult>;
+import { parseMounts } from '../../process/mounts';
+import { runChecked } from '../../process/run-command';
+import type { CommandRunner } from '../../process/run-command';
 
 export interface ZfsEntry {
   readonly name: string;
@@ -74,25 +73,17 @@ export interface ZfsSpace {
 }
 
 export function createZfsCommands(run: CommandRunner): ZfsCommands {
-  const runChecked = async (argv: readonly string[]): Promise<string> => {
-    const result = await run(argv);
-
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `${argv.join(' ')} exited ${String(result.exitCode)}: ${result.stderr.trim() || result.stdout.trim()}`,
-      );
-    }
-
-    return result.stdout;
-  };
+  // `run` gets the argv alone, as a stand-in records each call
+  const readStdout = (argv: readonly string[]): Promise<string> =>
+    runChecked(argv, {}, (command) => run(command));
 
   const runQuiet = async (argv: readonly string[]): Promise<void> => {
-    await runChecked(argv);
+    await readStdout(argv);
   };
 
   return {
     list: async (root) => {
-      const stdout = await runChecked([
+      const stdout = await readStdout([
         'zfs',
         'list',
         '-Hp',
@@ -119,24 +110,24 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
     destroyDeferred: (snapshot) => runQuiet(['zfs', 'destroy', '-d', snapshot]),
     destroyRecursive: (name) => runQuiet(['zfs', 'destroy', '-r', name]),
     estimateSend: async (snapshot, base) => {
-      const stdout = await runChecked(['zfs', 'send', '-nP', ...buildSendArgs(snapshot, base)]);
+      const stdout = await readStdout(['zfs', 'send', '-nP', ...buildSendArgs(snapshot, base)]);
 
       return parseSendSize(stdout);
     },
     readWritten: async (snapshot) => {
-      const stdout = await runChecked(['zfs', 'get', '-Hp', '-o', 'value', 'written', snapshot]);
+      const stdout = await readStdout(['zfs', 'get', '-Hp', '-o', 'value', 'written', snapshot]);
 
       return parseBytes(stdout.trim());
     },
     readUsage: async (name) => {
-      const stdout = await runChecked(['zfs', 'list', '-Hp', '-o', 'used,available', name]);
+      const stdout = await readStdout(['zfs', 'list', '-Hp', '-o', 'used,available', name]);
 
       const [used = '', available = ''] = stdout.trim().split('\t');
 
       return { used: parseBytes(used), available: parseBytes(available) };
     },
     listSpace: async (root) => {
-      const stdout = await runChecked([
+      const stdout = await readStdout([
         'zfs',
         'list',
         '-Hp',
@@ -151,7 +142,7 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
       return parseZfsSpace(stdout);
     },
     readVersion: async () => {
-      const stdout = await runChecked(['zfs', 'version']);
+      const stdout = await readStdout(['zfs', 'version']);
 
       return parseZfsVersion(stdout);
     },
@@ -268,22 +259,10 @@ export function parseZfsRelease(version: string): { major: string; minor: string
 // /proc/self/mounts → the ZFS dataset mounted on each directory. A space in a
 // path is written \040.
 export function parseZfsMounts(mounts: string): Map<string, string> {
-  const found = new Map<string, string>();
-
-  for (const line of mounts.split('\n')) {
-    const [source = '', dir = '', fstype = ''] = line.split(' ');
-
-    if (fstype === 'zfs') {
-      found.set(decodeMountField(dir), decodeMountField(source));
-    }
-  }
-
-  return found;
-}
-
-function decodeMountField(field: string): string {
-  return field.replaceAll(/\\(?<octal>[0-7]{3})/g, (_match, octal: string) =>
-    String.fromCodePoint(Number.parseInt(octal, 8)),
+  return new Map(
+    parseMounts(mounts)
+      .filter((mount) => mount.fstype === 'zfs')
+      .map((mount) => [mount.target, mount.source]),
   );
 }
 

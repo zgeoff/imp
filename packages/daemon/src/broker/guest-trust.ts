@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import { openExecStream } from '../agent-client/exec-stream';
+import type { StartTimer } from '../process/clock';
+import { buildExitError } from '../process/run-command';
+import { startRealTimer } from '../process/start-real-timer';
 import { readErrorMessage } from '../read-error-message';
 
 // How a guest trusts the broker: an exec builds the CA bundle in the guest
@@ -240,7 +243,7 @@ interface BundleInstallOptions {
   readonly timeoutMs?: number;
 
   // runs `cut` once `ms` is up and returns the cancel; setTimeout by default
-  readonly startTimer?: (cut: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
 }
 
 // The install as an exec through the agent, as root (uid 0, which needs no
@@ -252,16 +255,7 @@ export async function runBundleInstall(
   options: Readonly<BundleInstallOptions> = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? INSTALL_TIMEOUT_MS;
-
-  const startTimer =
-    options.startTimer ??
-    ((cut: () => void, ms: number) => {
-      const timer = setTimeout(cut, ms);
-
-      return () => {
-        clearTimeout(timer);
-      };
-    });
+  const startTimer = options.startTimer ?? startRealTimer;
 
   const stream = await openExecStream(vsockPath, {
     argv: ['/bin/sh', '-c', buildInstallScript()],
@@ -288,7 +282,8 @@ export async function runBundleInstall(
         stderr.push(new TextDecoder().decode(event.data));
       } else if (event.type === 'exit') {
         if (event.code !== 0 || event.signal !== 0) {
-          throw new Error(`the install exited ${String(event.code)}: ${stderr.join('').trim()}`);
+          // no argv here, only what the message calls it; stderr alone
+          throw buildExitError(['the install'], { exitCode: event.code, stderr: stderr.join('') });
         }
 
         return;

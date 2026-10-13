@@ -1,6 +1,6 @@
 import type { PublicImp } from '../db/exposure';
-import { createSemaphore } from '../imps/semaphore';
 import type { TailscaleStatus } from '../net/tailscale-status';
+import { createSemaphore } from '../process/semaphore';
 import type { Ticker, TickerTimer } from '../process/ticker';
 import { startTicker } from '../process/ticker';
 import { readErrorMessage } from '../read-error-message';

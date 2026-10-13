@@ -1,10 +1,19 @@
-// A clock from `startMs` (0) that moves only with runFor: each timer it passes
-// fires in time order, with the clock at that time, as setTimeout's would.
-// `delays` and `sleeps` record each timer and each sleep.
+import type { Clock } from '../process/clock';
+
+interface StubTimer {
+  readonly at: number;
+  readonly ms: number;
+  readonly fire: () => void;
+}
+
+// The one fake Clock for tests, from `startMs` (0): runFor moves the time and
+// fires the timers it passes in time order, as setTimeout's would;
+// firePending fires them by hand and leaves the time where it is.
 export function buildStubClock(options: Readonly<{ startMs?: number }> = {}) {
   const state = { nowMs: options.startMs ?? 0, nextId: 0 };
 
-  const pending = new Map<number, { at: number; fire: () => void }>();
+  // by id, so in the order they started
+  const pending = new Map<number, StubTimer>();
 
   const delays: number[] = [];
   const sleeps: number[] = [];
@@ -25,7 +34,7 @@ export function buildStubClock(options: Readonly<{ startMs?: number }> = {}) {
 
       pending.delete(id);
 
-      state.nowMs = timer.at;
+      state.nowMs = Math.max(state.nowMs, timer.at);
 
       timer.fire();
     }
@@ -33,33 +42,53 @@ export function buildStubClock(options: Readonly<{ startMs?: number }> = {}) {
     state.nowMs = until;
   };
 
+  // starts a timer `ms` from now; returns its cancel
+  const startTimer = (fire: () => void, ms: number): (() => void) => {
+    state.nextId += 1;
+
+    const id = state.nextId;
+
+    delays.push(ms);
+    pending.set(id, { at: state.nowMs + ms, ms, fire });
+
+    return () => {
+      pending.delete(id);
+    };
+  };
+
+  // an injected sleep: it moves the clock by `ms`, and records it
+  const sleep = (ms: number): Promise<void> => {
+    sleeps.push(ms);
+
+    runFor(ms);
+
+    return Promise.resolve();
+  };
+
+  const clock: Clock = { now: () => state.nowMs, startTimer, sleep };
+
   return {
+    ...clock,
     delays,
     sleeps,
-    now: (): number => state.nowMs,
     runFor,
 
-    // an injected sleep: it moves the clock by `ms`, and records it
-    sleep: (ms: number): Promise<void> => {
-      sleeps.push(ms);
+    // fires each timer pending now once, in the order they started; one a
+    // fire starts waits for the next call
+    firePending: (): void => {
+      const pendingNow = [...pending];
 
-      runFor(ms);
-
-      return Promise.resolve();
+      for (const [id, timer] of pendingNow) {
+        // a fire before it may have cancelled it
+        if (pending.delete(id)) {
+          timer.fire();
+        }
+      }
     },
 
-    // starts a timer `ms` from now; returns its cancel
-    startTimer: (fire: () => void, ms: number): (() => void) => {
-      state.nextId += 1;
+    // the delay of each timer that has neither fired nor been cancelled
+    readPendingMs: (): number[] => [...pending.values()].map((timer) => timer.ms),
 
-      const id = state.nextId;
-
-      delays.push(ms);
-      pending.set(id, { at: state.nowMs + ms, fire });
-
-      return () => {
-        pending.delete(id);
-      };
-    },
+    countPending: (): number => pending.size,
   };
 }

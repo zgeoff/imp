@@ -1,5 +1,6 @@
-import { FFIType, dlopen, ptr, read } from 'bun:ffi';
+import { ptr } from 'bun:ffi';
 import { closeSync, openSync } from 'node:fs';
+import { getLibc, readErrno } from '../process/libc';
 
 // _IOWR('f', 11, struct fiemap): the 32-byte header; extents follow it
 const FS_IOC_FIEMAP = 0xc0_20_66_0b;
@@ -32,28 +33,6 @@ interface ExtentRead {
   readonly isComplete: boolean;
 }
 
-const libc = loadLibc();
-
-function loadLibc() {
-  try {
-    return dlopen('libc.so.6', {
-      ioctl: { args: [FFIType.i32, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-
-      // libc's name for the thread's errno
-      __errno_location: { args: [], returns: FFIType.ptr },
-    });
-  } catch {
-    return null;
-  }
-}
-
-function readErrno(): number {
-  // oxlint-disable-next-line no-underscore-dangle -- libc's name for the thread's errno
-  const at = libc?.symbols.__errno_location();
-
-  return at === null || at === undefined ? -1 : read.i32(at);
-}
-
 // one FIEMAP call from `start`; never FIEMAP_FLAG_SYNC, which would flush the
 // guest's dirty pages first
 function readBatch(fd: number, start: number, buffer: Uint8Array): Extent[] {
@@ -64,7 +43,7 @@ function readBatch(fd: number, start: number, buffer: Uint8Array): Extent[] {
   view.setBigUint64(8, 0xff_ff_ff_ff_ff_ff_ff_ffn, true);
   view.setUint32(24, BATCH_EXTENTS, true);
 
-  const result = libc?.symbols.ioctl(fd, FS_IOC_FIEMAP, ptr(buffer));
+  const result = getLibc()?.ioctl(fd, FS_IOC_FIEMAP, ptr(buffer));
 
   if (result !== 0) {
     throw new Error(`FIEMAP failed: errno ${String(readErrno())}`);

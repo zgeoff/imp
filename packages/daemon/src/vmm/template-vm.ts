@@ -2,10 +2,13 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { sendClaim, sendPing } from '../agent-client/agent-requests';
 import type { Claim } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
+import { IMPD_USER } from '../process/impd-user';
+import { stopPid } from '../process/proc';
+import { VM_DEADLINES } from '../process/vm-deadlines';
+import { writeToDisk } from '../process/write-file-durably';
 import { readErrorMessage } from '../read-error-message';
 import { waitForGuestAge } from '../sleep/guest-age';
 import type { ImpPaths } from '../storage/data-layout';
-import { writeToDisk } from '../storage/write-file-durably';
 import { VM_DEVICES, createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
@@ -13,18 +16,12 @@ import {
   buildFirecrackerCommand,
   readLogTail,
   startFirecracker,
-  stopProcess,
   waitForExit,
 } from './firecracker-process';
 import { setupTemplateFile } from './jail';
 import type { JailUser, Jails, RunPaths } from './jail';
 import { createOwnedFile } from './vm-files';
 import type { StartedVm } from './vm-runner';
-
-// root in the container: who owns the snapshot files of an unjailed build
-const IMPD_USER = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
-const AGENT_DEADLINE_MS = 15_000;
-const KILL_TIMEOUT_MS = 3000;
 
 // the ping after a claim: the rest of a cold boot, without the kernel
 const CLAIMED_AGENT_DEADLINE_MS = 10_000;
@@ -161,7 +158,7 @@ async function runBuildVm(
       await api.instanceStart();
 
       await waitForAgent(plan.paths.vsockSocket, {
-        deadlineMs: AGENT_DEADLINE_MS,
+        deadlineMs: VM_DEADLINES.agentMs,
         isParked: true,
       });
 
@@ -186,9 +183,9 @@ async function runBuildVm(
 
       await api.createSnapshot({ snapshotPath: plan.vmstate, memFilePath: plan.memFile });
     } finally {
-      stopProcess(pid, 'SIGKILL');
+      stopPid(pid);
 
-      await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
+      await waitForExit(pid, plan.paths.apiSocket, VM_DEADLINES.killMs);
     }
   } finally {
     // kills every process of the uid too: nothing writes the files after
@@ -292,7 +289,7 @@ export async function loadTemplateVm(
     marks.setMark('resume');
 
     await waitForAgent(plan.paths.vsockSocket, {
-      deadlineMs: AGENT_DEADLINE_MS,
+      deadlineMs: VM_DEADLINES.agentMs,
       attemptMs: 200,
       maxDelayMs: RESTORE_PING_DELAY_MS,
       isParked: true,
@@ -343,9 +340,9 @@ export async function loadTemplateVm(
       bootId: ping.boot_id,
     };
   } catch (error) {
-    stopProcess(pid, 'SIGKILL');
+    stopPid(pid);
 
-    await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
+    await waitForExit(pid, plan.paths.apiSocket, VM_DEADLINES.killMs);
 
     await jails.release(plan.paths.impId);
 

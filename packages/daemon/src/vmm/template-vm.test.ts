@@ -12,13 +12,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { stopPid } from '../process/proc';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockTemplateBuildPlan } from '../test-utils/build-mock-template-build-plan';
 import { buildMockTemplateRestorePlan } from '../test-utils/build-mock-template-restore-plan';
 import { buildStubJails } from '../test-utils/build-stub-jails';
 import { buildStubFirecrackerArgv } from '../test-utils/start-stub-firecracker';
 import { startStubParkedAgent } from '../test-utils/start-stub-parked-agent';
-import { isFirecrackerAlive, stopProcess } from './firecracker-process';
+import { isFirecrackerAlive } from './firecracker-process';
 import { TemplateRestoreError, buildTemplateVm, loadTemplateVm } from './template-vm';
 
 // A temp dir with one log that the stub VMM and the stub jails both append
@@ -64,7 +65,7 @@ test('#loadTemplateVm owns the disk of a jailed restore once the clone is done, 
   const pid = Number(readFileSync(paths.pidFile, 'utf8'));
 
   onTestFinished(() => {
-    stopProcess(pid);
+    stopPid(pid);
   });
 
   await waitFor(() => {

@@ -4,11 +4,11 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { runChecked, runCommand } from '../../process/run-command';
+import type { CommandRunner } from '../../process/run-command';
 import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
 import { readZfsTestPool } from '../../test-utils/read-zfs-test-pool';
 import { writeSyncedFile } from '../../test-utils/write-synced-file';
 import { createZfsBackend } from './zfs-backend';
-import type { CommandRunner } from './zfs-commands';
 
 // Against a real pool, as root: scripts/test-zfs.sh sets the pool, in the
 // `zfs` CI job and on a host. Each test skips everywhere else.

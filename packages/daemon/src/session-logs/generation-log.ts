@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { mkdir, open, rename, stat, truncate, unlink } from 'node:fs/promises';
+import { mkdir, open, stat, truncate, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as z from 'zod';
@@ -8,6 +8,10 @@ import {
   AgentGenerationSchema,
   AgentSessionNameSchema,
 } from '../agent-client/agent-ids';
+import type { StartTimer } from '../process/clock';
+import { createKeyedMutex } from '../process/keyed-mutex';
+import { startRealTimer } from '../process/start-real-timer';
+import { writeFileDurablyAsync } from '../process/write-file-durably';
 import { readLogBounds } from './plan-log-read';
 import type { LogBounds, LogSegment } from './plan-log-read';
 
@@ -97,7 +101,7 @@ export interface GenerationLogOptions {
 
   // starts the timer that flushes appended bytes and returns its cancel;
   // an unref'd setTimeout by default, a test passes one it fires
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
 }
 
 type StopReason = NonNullable<StoredMeta['stopped']>;
@@ -205,16 +209,6 @@ async function readFileSize(path: string): Promise<number | null> {
   }
 }
 
-function startUnrefTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  timer.unref();
-
-  return () => {
-    clearTimeout(timer);
-  };
-}
-
 async function removeQuietly(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -229,35 +223,6 @@ async function stopQuietly(file: FileHandle): Promise<void> {
     await file.close();
   } catch {
     // the log is being abandoned
-  }
-}
-
-function setNothingDone(): void {
-  // replaced before the first wait
-}
-
-// the meta's own text: written next to it, flushed, renamed over it
-async function writeMetaFile(dir: string, meta: GenerationMeta): Promise<void> {
-  const path = join(dir, META_FILE);
-  const next = `${path}.new`;
-
-  const file = await open(next, 'w', 0o600);
-
-  try {
-    await file.writeFile(JSON.stringify(meta));
-    await file.datasync();
-  } finally {
-    await file.close();
-  }
-
-  await rename(next, path);
-
-  const directory = await open(dir, 'r');
-
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close();
   }
 }
 
@@ -282,25 +247,11 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     abandoned: false,
   };
 
-  // every write waits for the one before it
-  let chain: Promise<void> = Promise.resolve();
+  // every write waits for the one before it, under one key
+  const writes = createKeyedMutex();
 
-  const runInOrder = async <T>(task: () => Promise<T>, fallback: T): Promise<T> => {
-    const before = chain;
-    let setDone = setNothingDone;
-
-    chain = new Promise<void>((resolve) => {
-      setDone = resolve;
-    });
-
-    try {
-      await before;
-
-      return state.abandoned ? fallback : await task();
-    } finally {
-      setDone();
-    }
-  };
+  const runInOrder = <T>(task: () => Promise<T>, fallback: T): Promise<T> =>
+    writes.runExclusive(META_FILE, () => (state.abandoned ? Promise.resolve(fallback) : task()));
 
   const readEnd = (): number => readLogBounds(meta.segments, meta.origin).logEnd;
 
@@ -322,11 +273,14 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     }
   };
 
-  // the bytes reach the disk before the meta that counts them
+  // the bytes reach the disk before the meta that counts them; the meta's
+  // own text is written next to it, flushed, and renamed over it
   const writeMeta = async (): Promise<void> => {
     await state.file?.datasync();
 
-    await writeMetaFile(options.dir, meta);
+    await writeFileDurablyAsync(join(options.dir, META_FILE), JSON.stringify(meta), {
+      mode: 0o600,
+    });
   };
 
   const runCommit = async (): Promise<void> => {
@@ -337,7 +291,8 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     }
   };
 
-  const startTimer = options.startTimer ?? startUnrefTimer;
+  const startTimer: StartTimer =
+    options.startTimer ?? ((fire, ms) => startRealTimer(fire, ms, { isUnref: true }));
 
   const startCommitTimer = (): void => {
     if (state.cancelTimer !== null) {

@@ -3,7 +3,7 @@ import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import * as dnsPacket from 'dns-packet';
 import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubDnsUpstream } from '../test-utils/start-stub-dns-upstream';
 import { createDnsForward } from './dns-upstream';
@@ -117,19 +117,19 @@ test('it rejects with every upstream failure when none answers', async () => {
 test('it gives an upstream 2 s to answer by default', async () => {
   const upstream = await startStubDnsUpstream({ port: findFreePorts(1).take(), udp: 'drop' });
 
-  const timers = buildStubTimers();
-  const forward = createDnsForward(['127.0.0.1'], upstream.port, undefined, timers.startTimer);
+  const clock = buildStubClock();
+  const forward = createDnsForward(['127.0.0.1'], upstream.port, undefined, clock.startTimer);
   const forwarded = forward(buildMockDnsQuery({ name: 'example.com', type: 'A' }));
 
   const pendingMs = await waitFor(() => {
-    const pending = timers.readPendingMs();
+    const pending = clock.readPendingMs();
 
     invariant(pending[0]);
 
     return pending;
   });
 
-  timers.firePending();
+  clock.firePending();
 
   expect(pendingMs).toStrictEqual([2000]);
 

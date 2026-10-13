@@ -1,28 +1,26 @@
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
-  closeSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
-  writeFileSync,
-  writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { writeFileDurably } from '../process/write-file-durably';
 
 // Secret values, one file each in <dataDir>/secrets: the directory 0700, each
 // file 0600, unencrypted, as the key would live on the same disk. A file is
 // named by buildValueFile, or by the bare secret name from an older impd.
 export interface SecretFiles {
+  // a new file, durably: temp file, fsync, rename, fsync of the directory
   readonly write: (file: string, value: string) => void;
 
-  // Replaces a file's content in place by name, durably: temp file, fsync,
-  // rename, fsync of the directory. Only an oauth secret's file is rewritten
+  // Replaces a file's content in place by name, durably, as write does.
+  // Only an oauth secret's file is rewritten
   // (docs/guides/connectors.md#value-files).
   readonly rewrite: (file: string, value: string) => void;
 
@@ -65,8 +63,18 @@ export function buildValueFile(name: string): string {
   return `${name}.${randomBytes(8).toString('hex')}`;
 }
 
-export function createSecretFiles(dataDir: string): SecretFiles {
+interface SecretFilesOptions {
+  // flushes one open file or directory to the disk; fsync by default, and a
+  // test passes a recorder that calls it
+  readonly sync?: (fd: number) => void;
+}
+
+export function createSecretFiles(
+  dataDir: string,
+  options: Readonly<SecretFilesOptions> = {},
+): SecretFiles {
   const dir = join(dataDir, 'secrets');
+  const sync = options.sync ?? fsyncSync;
 
   mkdirSync(dir, { recursive: true, mode: 0o700 });
 
@@ -74,48 +82,13 @@ export function createSecretFiles(dataDir: string): SecretFiles {
   chmodSync(dir, 0o700);
 
   return {
-    // a temp file then a rename, so a reader never sees half a value
+    // a temp file then a rename, so a reader never sees half a value, each
+    // flushed to the disk, so an added secret outlives a power loss
     write: (file, value) => {
-      const temp = join(dir, `.${file}.${randomBytes(6).toString('hex')}`);
-
-      try {
-        writeFileSync(temp, value, { mode: 0o600, flag: 'wx' });
-        renameSync(temp, join(dir, file));
-      } finally {
-        rmSync(temp, { force: true });
-      }
+      writeFileDurably(join(dir, file), value, { mode: 0o600, sync });
     },
     rewrite: (file, value) => {
-      const temp = join(dir, `.${file}.${randomBytes(6).toString('hex')}`);
-
-      try {
-        const fd = openSync(temp, 'wx', 0o600);
-
-        try {
-          const bytes = Buffer.from(value, 'utf8');
-          let written = 0;
-
-          while (written < bytes.length) {
-            written += writeSync(fd, bytes, written);
-          }
-
-          fsyncSync(fd);
-        } finally {
-          closeSync(fd);
-        }
-
-        renameSync(temp, join(dir, file));
-
-        const dirFd = openSync(dir, 'r');
-
-        try {
-          fsyncSync(dirFd);
-        } finally {
-          closeSync(dirFd);
-        }
-      } finally {
-        rmSync(temp, { force: true });
-      }
+      writeFileDurably(join(dir, file), value, { mode: 0o600, sync });
     },
     read: (file) => {
       try {

@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { release } from 'node:os';
 import type { OutdatedPart } from '@imp/api';
 import * as z from 'zod';
+import { writeFileDurably } from '../process/write-file-durably';
 import type { ImpPaths } from '../storage/data-layout';
 import type { SystemFiles } from '../storage/setup-system-files';
 import { readCpuIdentity } from './cpu-identity';
@@ -60,10 +61,7 @@ export function readHostIdentity(
 
 // written next to the old file and renamed over it: a crash never leaves half
 export function writeVmIdentity(paths: Readonly<ImpPaths>, identity: Readonly<VmIdentity>): void {
-  const next = `${paths.vmIdentity}.new`;
-
-  writeFileSync(next, `${JSON.stringify(identity, null, 2)}\n`);
-  renameSync(next, paths.vmIdentity);
+  writeFileDurably(paths.vmIdentity, `${JSON.stringify(identity, null, 2)}\n`);
 }
 
 // null for a VM booted before impd kept the file, or a broken one

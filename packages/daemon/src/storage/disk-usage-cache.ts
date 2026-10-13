@@ -2,6 +2,8 @@ import type { ImpChangeReason } from '@imp/api';
 import { listCheckpoints } from '../db/checkpoints';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpDiskUsage, StorageBackend } from './storage-backend';
 
@@ -44,15 +46,7 @@ interface DiskUsageCacheDeps {
   readonly refreshDelayMs?: number;
 
   // runs `fire` once `ms` is up and returns the cancel; setTimeout by default
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
-}
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
+  readonly startTimer?: StartTimer;
 }
 
 // Usage is slow to measure on XFS (FIEMAP over every file), so `imp ls` and

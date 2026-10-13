@@ -11,6 +11,7 @@ import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
+import { createCountedLimit } from '../process/counted-limit';
 import { readErrorMessage } from '../read-error-message';
 import type { ReverseForwards } from '../reverse/reverse-forwards';
 import { runGuestListener } from '../reverse/run-guest-listener';
@@ -66,38 +67,9 @@ export interface TunnelLimits {
 }
 
 export function createTunnelLimits(max = MAX_TUNNELS_PER_IMP): TunnelLimits {
-  const counts = new Map<string, number>();
+  const counts = createCountedLimit(max);
 
-  return {
-    max,
-    tryOpen: (impId) => {
-      const count = counts.get(impId) ?? 0;
-
-      if (count >= max) {
-        return null;
-      }
-
-      counts.set(impId, count + 1);
-
-      let released = false;
-
-      return () => {
-        if (released) {
-          return;
-        }
-
-        released = true;
-
-        const left = (counts.get(impId) ?? 1) - 1;
-
-        if (left === 0) {
-          counts.delete(impId);
-        } else {
-          counts.set(impId, left);
-        }
-      };
-    },
-  };
+  return { max, tryOpen: counts.tryClaim };
 }
 
 function buildErrorMessage(error: unknown): TunnelServerMessage {
