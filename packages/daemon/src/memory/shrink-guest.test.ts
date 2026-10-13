@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubElasticGuest } from '../test-utils/build-stub-elastic-guest';
+import { buildStubGuestMemory } from '../test-utils/build-stub-guest-memory';
 import { findShrinkTargetMib, shrinkGuest } from './shrink-guest';
 
 test('#findShrinkTargetMib leaves the guest a step more available than its grow mark', () => {
@@ -46,7 +47,7 @@ test('#shrinkGuest waits until the guest gets to the target', async () => {
     sleep: clock.sleep,
   });
 
-  expect(shrunk).toBe(496);
+  expect(shrunk.pluggedMib).toBe(496);
   expect(stub.requests).toStrictEqual([496]);
   expect(clock.now()).toBe(300);
 });
@@ -70,7 +71,7 @@ test('#shrinkGuest asks an unplug that stops partway back to what it reached', a
     sleep: clock.sleep,
   });
 
-  expect(shrunk).toBe(768);
+  expect(shrunk.pluggedMib).toBe(768);
   expect(stub.requests).toStrictEqual([496, 768]);
 
   // 768 reached at 200 ms, then 500 ms without a move
@@ -96,7 +97,7 @@ test('#shrinkGuest ends a slow unplug at the time limit with what the guest hold
   });
 
   // 20 looks of 100 ms, each 16 MiB further down
-  expect(shrunk).toBe(704);
+  expect(shrunk.pluggedMib).toBe(704);
   expect(clock.now()).toBe(2000);
   expect(stub.requests).toStrictEqual([496, 704]);
 });
@@ -115,7 +116,7 @@ test('#shrinkGuest asks nothing of a guest with nothing to spare', async () => {
     timeLimitMs: 2000,
   });
 
-  expect(shrunk).toBe(300);
+  expect(shrunk.pluggedMib).toBe(300);
   expect(stub.requests).toStrictEqual([]);
 });
 
@@ -133,6 +134,34 @@ test('#shrinkGuest counts a plug under way at its request', async () => {
     timeLimitMs: 2000,
   });
 
-  expect(shrunk).toBe(556);
+  expect(shrunk.pluggedMib).toBe(556);
   expect(stub.requests).toStrictEqual([]);
+});
+
+test('#shrinkGuest reports the most the guest held, when a plug moves after its first read', async () => {
+  const clock = buildStubClock();
+  const guests = buildStubGuestMemory();
+  const paths = buildImpPaths('/data', 'dev');
+
+  // the rest of the plug lands before the guest takes the unplug, which
+  // then stops at 128
+  guests.addGuest(paths, {
+    pluggedMib: 64,
+    requestedMib: 256,
+    usedMib: 100,
+    unplugFloorMib: 128,
+    pluggedOnReads: [64, 256],
+  });
+
+  const shrunk = await shrinkGuest(guests.vms, paths, {
+    timeLimitMs: 2000,
+    now: clock.now,
+    sleep: clock.sleep,
+  });
+
+  expect(shrunk).toStrictEqual({
+    before: { pluggedMib: 64, requestedMib: 256, totalMib: 576, availableMib: 476 },
+    reachedMib: 256,
+    pluggedMib: 128,
+  });
 });

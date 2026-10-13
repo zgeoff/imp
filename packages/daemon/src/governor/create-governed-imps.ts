@@ -86,7 +86,9 @@ export function createGovernedImps(deps: GovernedDeps): {
     isBusy,
     tryWhileRunning: imps.tryWhileRunning,
     admitGrow: (request) => holder.governor?.admitGrow(request) ?? Promise.resolve(true),
-    releaseGrow: admission.release,
+    releaseGrow: (id) => {
+      holder.governor?.releaseGrow(id);
+    },
     limit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
     readRamMib: (imp) => readRamMib(imp.pid, imp.paths.apiSocket),
     setPluggedMib: pluggedSizes.write,
