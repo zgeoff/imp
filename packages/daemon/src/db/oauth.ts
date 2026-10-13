@@ -1,6 +1,7 @@
 import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
+import { ImpsSchema } from './imps-schema';
 import type { ImpDatabase } from './open-database';
 import type { OauthClients, OauthGrants } from './schema';
 
@@ -53,7 +54,6 @@ export interface IssuedTokens {
 }
 
 const UrisSchema = z.array(z.string());
-const ImpsSchema = z.array(z.string()).nullable();
 
 export async function listOAuthClients(db: ImpDatabase): Promise<OAuthClientRecord[]> {
   const rows = await db.selectFrom('oauth_clients').selectAll().orderBy('name').execute();
@@ -114,7 +114,8 @@ export async function updateOAuthClientUris(
     .execute();
 }
 
-// the client, its grants and their tokens; returns the grants' ids
+// the client and its grants, whose tokens go with them; returns the grants'
+// ids
 export function removeOAuthClient(db: ImpDatabase, id: string): Promise<string[]> {
   return db.transaction().execute(async (trx) => {
     const grants = await trx
@@ -126,7 +127,6 @@ export function removeOAuthClient(db: ImpDatabase, id: string): Promise<string[]
     const ids = grants.map((grant) => grant.id);
 
     if (ids.length > 0) {
-      await trx.deleteFrom('oauth_tokens').where('grant_id', 'in', ids).execute();
       await trx.deleteFrom('oauth_grants').where('id', 'in', ids).execute();
     }
 
@@ -168,15 +168,11 @@ export async function writeOAuthGrant(
   });
 }
 
-// the grant and its tokens; false when it was gone already
-export function removeOAuthGrant(db: ImpDatabase, id: string): Promise<boolean> {
-  return db.transaction().execute(async (trx) => {
-    await trx.deleteFrom('oauth_tokens').where('grant_id', '=', id).execute();
+// the grant, whose tokens go with it; false when it was gone already
+export async function removeOAuthGrant(db: ImpDatabase, id: string): Promise<boolean> {
+  const result = await db.deleteFrom('oauth_grants').where('id', '=', id).executeTakeFirst();
 
-    const result = await trx.deleteFrom('oauth_grants').where('id', '=', id).executeTakeFirst();
-
-    return result.numDeletedRows > 0n;
-  });
+  return result.numDeletedRows > 0n;
 }
 
 export async function findAccessToken(
@@ -303,7 +299,6 @@ export function removeExpiredOAuthRows(db: ImpDatabase, now: number): Promise<st
     const ids = lapsed.map((grant) => grant.id);
 
     if (ids.length > 0) {
-      await trx.deleteFrom('oauth_tokens').where('grant_id', 'in', ids).execute();
       await trx.deleteFrom('oauth_grants').where('id', 'in', ids).execute();
     }
 

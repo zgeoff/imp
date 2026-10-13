@@ -308,3 +308,102 @@ test('#runMigrations leaves existing secrets without an oauth config in the oaut
 
   expect(rows).toStrictEqual([{ name: 'gh', oauth: null }]);
 });
+
+test('#runMigrations keeps every OAuth token in the token cascade migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '027_add_imp_backup');
+
+  // rows as an impd at 027 wrote them
+  await sql`INSERT INTO tokens (id, name, secret_hash, scope, imps, created_at)
+    VALUES ('tok', 'laptop', 'h', 'admin', NULL, 0)`.execute(db);
+
+  await sql`INSERT INTO oauth_clients (id, name, redirect_uris, created_at)
+    VALUES ('client', 'claude', '[]', 0)`.execute(db);
+
+  await sql`INSERT INTO oauth_grants (id, client_id, token_id, scope, imps, resource, created_at)
+    VALUES ('grant', 'client', 'tok', 'admin', NULL, 'https://impd.test/mcp', 0)`.execute(db);
+
+  await sql`INSERT INTO oauth_tokens
+    (id, grant_id, kind, secret_hash, created_at, expires_at, spent_at)
+    VALUES ('access', 'grant', 'access', 'ha', 1, 2, NULL),
+      ('refresh', 'grant', 'refresh', 'hr', 3, 4, 5)`.execute(db);
+
+  await runMigrations(db);
+
+  const rows = await db.selectFrom('oauth_tokens').selectAll().orderBy('id').execute();
+
+  expect(rows).toStrictEqual([
+    {
+      id: 'access',
+      grant_id: 'grant',
+      kind: 'access',
+      secret_hash: 'ha',
+      created_at: 1,
+      expires_at: 2,
+      spent_at: null,
+    },
+    {
+      id: 'refresh',
+      grant_id: 'grant',
+      kind: 'refresh',
+      secret_hash: 'hr',
+      created_at: 3,
+      expires_at: 4,
+      spent_at: 5,
+    },
+  ]);
+});
+
+test('#runMigrations makes a grant’s delete remove its tokens in the token cascade migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '027_add_imp_backup');
+
+  // rows as an impd at 027 wrote them
+  await sql`INSERT INTO tokens (id, name, secret_hash, scope, imps, created_at)
+    VALUES ('tok', 'laptop', 'h', 'admin', NULL, 0)`.execute(db);
+
+  await sql`INSERT INTO oauth_clients (id, name, redirect_uris, created_at)
+    VALUES ('client', 'claude', '[]', 0)`.execute(db);
+
+  await sql`INSERT INTO oauth_grants (id, client_id, token_id, scope, imps, resource, created_at)
+    VALUES ('gone', 'client', 'tok', 'admin', NULL, 'https://impd.test/mcp', 0),
+      ('kept', 'client', 'tok', 'admin', NULL, 'https://impd.test/mcp', 0)`.execute(db);
+
+  await sql`INSERT INTO oauth_tokens
+    (id, grant_id, kind, secret_hash, created_at, expires_at, spent_at)
+    VALUES ('gone-access', 'gone', 'access', 'h1', 0, 1, NULL),
+      ('kept-access', 'kept', 'access', 'h2', 0, 1, NULL)`.execute(db);
+
+  await runMigrations(db);
+
+  await db.deleteFrom('oauth_grants').where('id', '=', 'gone').execute();
+
+  const rows = await db.selectFrom('oauth_tokens').select('id').execute();
+
+  expect(rows).toStrictEqual([{ id: 'kept-access' }]);
+});
+
+test('#runMigrations keeps the OAuth token indexes in the token cascade migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrations(db);
+
+  const indexes = await sql<{ name: string; sql: string }>`
+    SELECT name, sql FROM sqlite_master
+    WHERE type = 'index' AND tbl_name = 'oauth_tokens' AND sql IS NOT NULL
+    ORDER BY name
+  `.execute(db);
+
+  expect(indexes.rows).toStrictEqual([
+    {
+      name: 'oauth_tokens_expires_at',
+      sql: 'CREATE INDEX "oauth_tokens_expires_at" on "oauth_tokens" ("expires_at")',
+    },
+    {
+      name: 'oauth_tokens_grant_id',
+      sql: 'CREATE INDEX "oauth_tokens_grant_id" on "oauth_tokens" ("grant_id")',
+    },
+  ]);
+});

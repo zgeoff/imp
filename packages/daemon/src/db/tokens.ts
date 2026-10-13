@@ -2,6 +2,7 @@ import { isImpAllowed } from '@imp/api';
 import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
+import { ImpsSchema } from './imps-schema';
 import type { ImpDatabase } from './open-database';
 import type { TokenSshKeys, Tokens } from './schema';
 
@@ -34,7 +35,6 @@ export interface TokenSshKeyRecord {
   readonly createdAt: Date;
 }
 
-const ImpsSchema = z.array(z.string()).nullable();
 const GrantableSchema = z.array(z.object({ name: z.string(), generation: z.string() }));
 
 export async function listTokenRecords(db: ImpDatabase): Promise<TokenRecord[]> {
@@ -149,8 +149,8 @@ export async function readTokenGrantable(
   return row === undefined ? null : GrantableSchema.parse(JSON.parse(row.grantable));
 }
 
-// the token, its keys, and the OAuth grants it approved with their tokens;
-// returns the grants' ids, for their revocation
+// the token, its keys, and the OAuth grants it approved, whose tokens go with
+// them; returns the grants' ids, for their revocation
 export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]> {
   return db.transaction().execute(async (trx) => {
     await trx.deleteFrom('token_ssh_keys').where('token_id', '=', id).execute();
@@ -164,7 +164,6 @@ export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]
     const grantIds = grants.map((grant) => grant.id);
 
     if (grantIds.length > 0) {
-      await trx.deleteFrom('oauth_tokens').where('grant_id', 'in', grantIds).execute();
       await trx.deleteFrom('oauth_grants').where('id', 'in', grantIds).execute();
     }
 
