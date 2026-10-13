@@ -229,7 +229,7 @@ let
       lib.optionalString (cfg.backupPasswordFile != null) (stagedPath "backup-password")
     }
     export IMP_BACKUP_IN_CONTAINER=${containerPath "backup-password"}
-    exec ${pkgs.bash}/bin/bash ${./imp-host-env.sh} ${../bootstrap.sh}
+    exec ${pkgs.bash}/bin/bash ${./imp-host-env.sh} ${../lib/host-env.sh}
   '';
 
   # The image the unit runs. With imageArchive, it is loaded whenever the
@@ -273,7 +273,7 @@ let
         pkgs.gnugrep
       ]
     }
-    source ${../bootstrap.sh}
+    source ${../lib/host-env.sh}
     ${
       if ipv6 then
         ''
@@ -290,7 +290,7 @@ let
             echo "imp-host: the $HOST_NETWORK network differs ($drift); making it again"
             docker network rm "$HOST_NETWORK" >/dev/null
           fi
-          create_host_network
+          create_host_network "$ipv6_subnet"
         ''
       else
         ''
@@ -355,10 +355,11 @@ let
       "iifname ${denySet} ${family} daddr { ${lib.concatStringsSep ", " cidrs} } ct direction original drop";
   denyRules = denyRule "ip" denied.wrong ++ denyRule "ip6" denied.right;
 
-  # bootstrap.sh's ruleset for hostFirewall = "own", for the SSH ports.
+  # host-env.sh's ruleset, which bootstrap.sh loads too, for hostFirewall =
+  # "own", for the SSH ports.
   firewallRules = pkgs.runCommand "imp-firewall.nft" { } ''
     ${pkgs.bash}/bin/bash -c 'source "$1"; shift; render_firewall "$@"' render \
-      ${../bootstrap.sh} ${lib.escapeShellArgs (map toString config.services.openssh.ports)} >$out
+      ${../lib/host-env.sh} ${lib.escapeShellArgs (map toString config.services.openssh.ports)} >$out
   '';
 in
 {

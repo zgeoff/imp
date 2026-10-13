@@ -10,8 +10,13 @@ cd "$(dirname "$0")/.."
 # moby's contrib/check-config.sh, kept as upstream wrote it
 vendored=(kernel/check-config.sh)
 
+# deploy/bootstrap.sh's parts share its variables, so each is checked within
+# the whole: deploy/bootstrap.sh, which scripts/render-imp-host.ts writes
+parts=deploy/bootstrap/
+
 is_excluded() {
   local path
+  [[ $1 == "$parts"* ]] && return 0
   for path in "${vendored[@]}"; do
     [[ $1 == "$path" ]] && return 0
   done

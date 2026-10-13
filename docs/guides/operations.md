@@ -36,17 +36,18 @@ the host runs under compose; the default is the systemd unit. It needs `docker`,
 deploy/upgrade.sh
 ```
 
-Take `upgrade.sh` from the new image, not from the release the host runs. A host on the release
-before the Docker socket proxy must: its own `upgrade.sh` refuses the new image, whose
-`imp.host-contract` label is `socket-proxy`. Each release's `upgrade.sh` moves the host to that
-release, so pick the release in the image you take it from:
+Take `upgrade.sh` from the new image, not from the release the host runs, with the `lib/host-env.sh`
+beside it that it sources. A host on the release before the Docker socket proxy must: its own
+`upgrade.sh` refuses the new image, whose `imp.host-contract` label is `socket-proxy`. Each
+release's `upgrade.sh` moves the host to that release, so pick the release in the image you take it
+from:
 
 <!-- x-release-please-start-version -->
 
 ```sh
 docker pull ghcr.io/zgeoff/imp-host:1.0.3
-docker run --rm ghcr.io/zgeoff/imp-host:1.0.3 cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
-bash upgrade.sh
+docker run --rm ghcr.io/zgeoff/imp-host:1.0.3 tar -cf - -C /usr/local/share/imp deploy | tar -xf -
+bash deploy/upgrade.sh
 ```
 
 <!-- x-release-please-end -->

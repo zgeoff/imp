@@ -269,10 +269,11 @@ COPY --from=system-files / /usr/local/share/imp/
 COPY --from=compile /out/impd /out/imp-docker-proxy /out/imp /usr/local/bin/
 COPY --from=dashboard /src/packages/dashboard/dist /usr/local/share/imp/dashboard
 # deploy/bootstrap.sh and deploy/upgrade.sh install the units and seccomp
-# profile of the image they run; a host on an older release gets upgrade.sh
-# from here (docs/guides/operations.md)
+# profile of the image they run; a host on an older release gets upgrade.sh,
+# with the lib/host-env.sh it sources, from here (docs/guides/operations.md)
 COPY deploy/imp-host.service deploy/imp-docker-proxy.service deploy/imp-host.seccomp.json \
      deploy/upgrade.sh /usr/local/share/imp/deploy/
+COPY deploy/lib/host-env.sh /usr/local/share/imp/deploy/lib/
 # the CLI in the container finds impd's token with no IMP_TOKEN
 RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
 

@@ -1,20 +1,20 @@
 #!/bin/bash
-# imp-host-env.sh BOOTSTRAP_SH: write /etc/imp/imp-host.env for the NixOS
+# imp-host-env.sh HOST_ENV_SH: write /etc/imp/imp-host.env for the NixOS
 # module (deploy/nixos/module.nix), which runs it before each start of
 # imp-host. The module's settings come from the Nix store, so they hold no
 # secret; the secrets come from a file outside it, read here and written
 # only to the env file (0600). The Tailscale key never comes here: the
 # module mounts its file into the container.
 #
-# It sources deploy/bootstrap.sh for the RAM budget, so both installers size
-# a host the same way.
+# It sources deploy/lib/host-env.sh for the RAM budget, which bootstrap.sh
+# shares, so both installers size a host the same way.
 #
 # Input, from the environment:
 #   IMP_SETTINGS   the module's settings, KEY=value lines
 #   IMP_STORAGE    xfs or zfs
-#   IMP_RAM_BUDGET MiB, or empty for bootstrap.sh's formula
+#   IMP_RAM_BUDGET MiB, or empty for host-env.sh's formula
 #   IMP_ARC_MAX    the ZFS ARC cap in MiB (zfs only), which the budget leaves
-#                  out; empty: keep a cap already set, else bootstrap.sh's
+#                  out; empty: keep a cap already set, else host-env.sh's
 #   IMP_SECRETS    an env file of secrets, or empty
 #   IMP_BACKUP_STAGED       the host copy of the backup password, or empty
 #   IMP_BACKUP_IN_CONTAINER where the container sees that copy
@@ -23,8 +23,8 @@
 #   IMP_ARC_PARAM  default /sys/module/zfs/parameters/zfs_arc_max
 set -euo pipefail
 
-# shellcheck source=deploy/bootstrap.sh
-. "${1:?usage: imp-host-env.sh BOOTSTRAP_SH}"
+# shellcheck source=deploy/lib/host-env.sh
+. "${1:?usage: imp-host-env.sh HOST_ENV_SH}"
 
 out=${IMP_ENV_OUT:-/etc/imp/imp-host.env}
 meminfo=${IMP_MEMINFO:-/proc/meminfo}
