@@ -216,7 +216,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -265,7 +269,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -316,7 +324,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -367,7 +379,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -412,7 +428,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -453,7 +473,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -487,7 +511,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -521,7 +549,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -551,7 +583,11 @@
                   "@imp/test-utils",
                   "@imp/test-utils/**",
                   "**/test-utils",
-                  "**/test-utils/**"
+                  "**/test-utils/**",
+                  "**/mocks",
+                  "**/mocks/**",
+                  "**/smoke",
+                  "**/smoke/**"
                 ],
                 "message": "Production code never imports test support."
               },
@@ -625,6 +661,10 @@
                   "@imp/dashboard/**"
                 ],
                 "message": "@imp/test-utils is a leaf: it may import only @imp/shared."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
               }
             ]
           }

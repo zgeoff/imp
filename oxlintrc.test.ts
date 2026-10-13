@@ -130,6 +130,8 @@ test.each([
   ['packages/daemon/src/imps/fixture.ts', '@imp/test-utils/wait-for'],
   ['packages/daemon/src/imps/fixture.ts', '../test-utils/build-stub-vmm'],
   ['packages/cli/src/fixture.ts', './test-utils/start-cli'],
+  ['packages/dashboard/src/fixture.ts', './mocks/db/imp-collection'],
+  ['packages/client/src/fixture.ts', '../smoke/run-stub-impd'],
 
   // the client may import @imp/api, but not the api's test helpers
   ['packages/client/src/fixture.ts', '@imp/api/test-utils/build-mock-image'],
@@ -245,28 +247,31 @@ test.each([
   expect(messages).toStrictEqual([]);
 });
 
-test('it refuses a package that reaches another by a relative path', () => {
-  const ctx = setupTest();
-  const file = join(ctx.dir, 'packages/cli/src/fixture.ts');
+test.each([['cli'], ['test-utils']])(
+  'it refuses packages/%s reaching another package by a relative path',
+  (pkg) => {
+    const ctx = setupTest();
+    const file = join(ctx.dir, 'packages', pkg, 'src/fixture.ts');
 
-  mkdirSync(dirname(file), { recursive: true });
+    mkdirSync(dirname(file), { recursive: true });
 
-  writeFileSync(
-    file,
-    "import { value } from '../../daemon/src/create-impd';\n\nexport const used = value;\n",
-  );
+    writeFileSync(
+      file,
+      "import { value } from '../../daemon/src/create-impd';\n\nexport const used = value;\n",
+    );
 
-  const result = Bun.spawnSync([ctx.oxlint, '--format', 'json', file], { cwd: ctx.dir });
-  const report = DiagnosticsSchema.parse(JSON.parse(result.stdout.toString()));
+    const result = Bun.spawnSync([ctx.oxlint, '--format', 'json', file], { cwd: ctx.dir });
+    const report = DiagnosticsSchema.parse(JSON.parse(result.stdout.toString()));
 
-  const messages = report.diagnostics
-    .filter((diagnostic) => diagnostic.code === 'eslint(no-restricted-imports)')
-    .map((diagnostic) => diagnostic.help);
+    const messages = report.diagnostics
+      .filter((diagnostic) => diagnostic.code === 'eslint(no-restricted-imports)')
+      .map((diagnostic) => diagnostic.help);
 
-  expect([...new Set(messages)]).toStrictEqual([
-    'Import another package by its package name, never by a relative path.',
-  ]);
-});
+    expect([...new Set(messages)]).toStrictEqual([
+      'Import another package by its package name, never by a relative path.',
+    ]);
+  },
+);
 
 test('it counts a type-only import against the package order', () => {
   const ctx = setupTest();
