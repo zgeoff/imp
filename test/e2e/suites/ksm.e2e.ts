@@ -2,14 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-governor';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import {
-  createInstanceClient,
-  listImps,
-  readInfo,
-  requireImp,
-  runImp,
-  runShellInImp,
-} from '../lib/imp-cli';
+import { readPluggedMib } from '../lib/guest-memory';
+import { createInstanceClient, listImps, readInfo, runImp, runShellInImp } from '../lib/imp-cli';
 import { holdImp, waitForExec } from '../lib/imps';
 import {
   checkHostRunsKsm,
@@ -193,12 +187,28 @@ test.skipIf(!checkHostRunsKsm())(
         'i=0; while [ $i -lt 6 ]; do dd if=/dev/zero of=/mnt/fill/$i bs=1M count=20 2>/dev/null || exit 1; i=$((i+1)); sleep 1; done',
     );
 
-    const grown = await requireImp(name);
+    const growStarted = performance.now();
+
+    // the grow can land after the fill ends, so wait for it rather than
+    // read the plugged size once
+    await waitFor(
+      `${name} to grow under the fill`,
+      async () => {
+        const pluggedMib = await readPluggedMib(name);
+
+        if (pluggedMib < 256) {
+          throw new Error(`${String(pluggedMib)} MiB plugged`);
+        }
+      },
+      { timeoutMs: 30_000, intervalMs: 200 },
+    );
+
+    writeMetric('ksm_grow_after_fill_ms', Math.round(performance.now() - growStarted));
+
     const mappings = await readGuestMappings(name);
 
     writeMetric('ksm_elastic_mappings', mappings);
 
-    expect(grown.pluggedMib ?? 0).toBeGreaterThanOrEqual(256);
     expect(new Set(mappings)).toStrictEqual(new Set(['rw-p mg']));
   },
   600_000,
