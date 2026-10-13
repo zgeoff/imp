@@ -2,7 +2,9 @@
   "name": "main protection",
   "target": "branch",
   "enforcement": "active",
-  "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
+  "bypass_actors": [
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request" }
+  ],
   "conditions": {
     "ref_name": {
       "include": ["~DEFAULT_BRANCH"],
@@ -19,8 +21,10 @@
         "dismiss_stale_reviews_on_push": false,
         "require_code_owner_review": false,
         "require_last_push_approval": false,
+        "require_extra_approval_for_unattributed_changes": true,
         "required_approving_review_count": 0,
-        "required_review_thread_resolution": false
+        "required_review_thread_resolution": false,
+        "required_reviewers": []
       }
     },
     {
@@ -36,7 +40,11 @@
           { "context": "cli" },
           { "context": "client" },
           { "context": "e2e" },
-          { "context": "breaking-change" }
+          { "context": "zfs" },
+          { "context": "breaking-change" },
+          { "context": "eval" },
+          { "context": "vm" },
+          { "context": "bootstrap" }
         ]
       }
     }

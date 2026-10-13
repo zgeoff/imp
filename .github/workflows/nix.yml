@@ -2,16 +2,11 @@ name: Nix
 
 # `nix flake check`: the NixOS module's eval check, and a NixOS VM that runs
 # it on a ZFS pool with a stand-in image (docs/guides/nixos.md#test-it).
+# eval and vm are required checks in .github/rulesets/main.json: rename both
+# together. They run on every pull request, and skip their work, reporting
+# success, unless the pull request changes a path that push lists below.
 on:
   pull_request:
-    paths:
-      - flake.nix
-      - flake.lock
-      - package.json
-      - deploy/**
-      - host/scripts/tailscale-up.sh
-      - scripts/check-kvm.sh
-      - .github/workflows/nix.yml
   push:
     branches: [main]
     paths:
@@ -31,8 +26,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The module's eval check and the format; no KVM.
+  # Whether the pull request changes the paths push lists; keep both lists
+  # alike. This list adds the detector, so a change to it runs the work.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.paths.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Paths changed
+        id: paths
+        uses: ./.github/actions/paths-changed
+        with:
+          paths: |
+            flake.nix
+            flake.lock
+            package.json
+            deploy/**
+            host/scripts/tailscale-up.sh
+            scripts/check-kvm.sh
+            .github/workflows/nix.yml
+            .github/actions/paths-changed/**
+
+  # The module's eval check and the format; no KVM. Only a 'false' skips it,
+  # so a failed changes job runs the work rather than pass it.
   eval:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.changed != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -52,6 +78,8 @@ jobs:
 
   # The NixOS VM test. It needs /dev/kvm, and nested KVM inside the VMs.
   vm:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.changed != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

@@ -308,7 +308,7 @@ next.
 
 `.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub --zfs` when a pull request
 or a push to `main` changes `deploy/` or the test
-([Bootstrap a server](../guides/install.md#test-it)). It is not a required check.
+([Bootstrap a server](../guides/install.md#test-it)). Its job is a required check.
 
 `deploy/imp-host.args.json` holds the `docker run` arguments of imp-host and, under `proxy`, of
 imp-docker-proxy. After an edit, `bun run render:deploy` writes them into both units, their copies
@@ -322,7 +322,13 @@ changes, and its job is a required check.
 
 `.github/workflows/nix.yml` checks the format of the `.nix` files and runs `nix flake check` when
 `flake.nix`, `flake.lock`, `deploy/` or `tailscale-up.sh` change: the NixOS module's eval check, and
-a NixOS VM test that needs KVM ([NixOS](../guides/nixos.md#test-it)). It is not a required check.
+a NixOS VM test that needs KVM ([NixOS](../guides/nixos.md#test-it)). Both jobs are required checks.
+
+A required check must report on every pull request, because GitHub blocks the merge while a required
+check waits for a status. The nix and bootstrap workflows therefore run on every pull request, and a
+first job compares the files the pull request changes against the workflow's path list. When none
+match, the work jobs skip, and GitHub reports a job skipped by its condition as a success. A push to
+`main` keeps its own path filter.
 
 `.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
 system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:
@@ -330,7 +336,7 @@ system drive rebuild to the same bytes). It takes two cold kernel builds, so it 
 
 ## Branch rules
 
-`.github/rulesets/main.json` protects `main`: the seven required CI jobs and the breaking-change job
-must pass, changes arrive through a squash-merged pull request, and the branch cannot be deleted or
-force-pushed. Only a repository admin can bypass it. The ruleset is applied on GitHub as
-`main protection`.
+`.github/rulesets/main.json` protects `main`: every job it lists as a required status check must
+pass, changes arrive through a squash-merged pull request, and the branch cannot be deleted or
+force-pushed. A repository admin can bypass it only to merge a pull request, never to push to
+`main`. The ruleset is applied on GitHub as `main protection`.
