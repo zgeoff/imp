@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { findPublicImp, listPublicImpNames } from '../db/exposure';
-import { subscribeImpWrites } from '../db/imp-write-feed';
 import type { ImpDatabase } from '../db/open-database';
 import { readServePorts } from '../net/tailscale-serve';
 import type { TailscaleStatus } from '../net/tailscale-status';
@@ -59,7 +58,7 @@ export function buildHttpsService(options: BuildHttpsOptions): HttpsService {
 
   // the destroy of a public imp takes its record; an expose and an unexpose
   // update the records themselves, to report how the write went
-  const unsubscribe = subscribeImpWrites(options.db, (write) => {
+  const unsubscribe = options.db.writes.subscribe((write) => {
     if (write.kind === 'removed' && write.imp.publicAuth !== null) {
       void service.updatePublicRecords();
     }

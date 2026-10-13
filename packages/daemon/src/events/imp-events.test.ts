@@ -16,7 +16,6 @@ import { createImpd } from '../create-impd';
 import type { ImpdDeps } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
-import { subscribeImpWrites } from '../db/imp-write-feed';
 import type { ImpWrite } from '../db/imp-write-feed';
 import { findImpByName } from '../db/imps';
 import { openDatabase } from '../db/open-database';
@@ -330,7 +329,7 @@ test('it reports an adopted change when a restarted impd adopts a running VM', a
   // on its event bus: the write its publisher turns into the event shows it
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 

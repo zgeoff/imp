@@ -20,7 +20,9 @@ import {
   buildBackupPaths,
   buildImagePaths,
   buildImpPaths,
+  buildImpsDir,
   buildSnapshotPaths,
+  toDigestHex,
 } from '../data-layout';
 import { isHoldingFiles, readDirectoryOrphan } from '../orphan-files';
 import { printSweep } from '../print-sweep';
@@ -417,7 +419,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
         .map((id) => ({ kind, id, dir: join(parent, id) }));
 
     const unknownDirs = [
-      ...listUnknownDirs('imp', join(deps.dataDir, 'imps')),
+      ...listUnknownDirs('imp', buildImpsDir(deps.dataDir)),
       ...listUnknownDirs('memory', join(deps.dataDir, 'mem')),
     ];
 
@@ -1372,10 +1374,6 @@ function removeMountDir(dir: string): void {
   if (existsSync(dir)) {
     rmdirSync(dir);
   }
-}
-
-function toDigestHex(digest: string): string {
-  return digest.replace(/^sha256:/, '');
 }
 
 function readSnapshotId(name: string): string {

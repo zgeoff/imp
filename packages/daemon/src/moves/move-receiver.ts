@@ -12,17 +12,26 @@ import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { writeMovedBoots } from '../db/cold-boots';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
-import { emitImpWrite } from '../db/imp-write-feed';
 import {
   SlotTakenError,
   findImpById,
   findImpByName,
-  isSlotFree,
   listImps,
   updateImpCommitted,
 } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { listLeases, writeMovedLeases } from '../db/leases';
+import {
+  claimMoveTicketStream,
+  createMoveTicketInFreeSlot,
+  findMoveTicket,
+  findStagedMoveTicket,
+  listMoveTickets,
+  removeMoveTickets,
+  updateMoveTicket,
+  writeMoveTicket,
+} from '../db/move-tickets';
+import type { MoveTicketRow, NewMoveTicketRow } from '../db/move-tickets';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
@@ -31,7 +40,7 @@ import { findColdBootReason, readSnapshotMeta, writeSnapshotMeta } from '../slee
 import type { SnapshotMeta } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { writeVmIdentity } from '../sleep/vm-identity';
-import { buildSystemDrivePath } from '../storage/data-layout';
+import { buildSystemDrivePath, toDigestHex } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -72,22 +81,6 @@ import { findWarmMismatches } from './warm-facts';
 const STREAM_WINDOW_MS = 10 * 60 * 1000;
 const COMMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const ID_ATTEMPTS = 5;
-
-interface MoveTicketRow {
-  readonly id: string;
-  readonly secret_sha256: string;
-  readonly name: string;
-  readonly bytes: number;
-  readonly imp_id: string | null;
-  readonly stream_by: number;
-  readonly stream_used_at: number | null;
-  readonly receipt: string | null;
-  readonly commit_until: number | null;
-  readonly committed_at: number | null;
-
-  // a warm move's slot
-  readonly slot: number | null;
-}
 
 export interface MoveReceiver {
   // with `warm`, a warm move's: checked against this host, its slot kept
@@ -211,9 +204,6 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
   const sessions = new Map<string, ReceiveSession>();
 
-  const findTicketRow = (id: string): Promise<MoveTicketRow | undefined> =>
-    deps.db.selectFrom('move_tickets').selectAll().where('id', '=', id).executeTakeFirst();
-
   // the ticket in the header, checked against its stored hash
   const requireTicket = async (request: Request): Promise<CheckedTicket> => {
     const ticket = readTicketHeader(request);
@@ -222,7 +212,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(401, 'no move ticket in the Authorization header');
     }
 
-    const row = await findTicketRow(ticket.id);
+    const row = await findMoveTicket(deps.db, ticket.id);
 
     if (row === undefined || !isSameHash(row.secret_sha256, buildSecretHash(ticket.secret))) {
       throw new MoveRequestError(401, 'unknown move ticket');
@@ -231,32 +221,31 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     return { row, ticket };
   };
 
+  // a new ticket's row and the ticket the source presents; `write` stores
+  // the row, a warm move's in its slot
   const writeTicketRow = async (
     name: string,
     bytes: number,
     fields: Partial<MoveTicketRow>,
-    db: ImpDatabase = deps.db,
+    write: (row: NewMoveTicketRow) => Promise<void> = (row) => writeMoveTicket(deps.db, row),
   ) => {
     const created = createTicket();
     const now = deps.now();
 
-    await db
-      .insertInto('move_tickets')
-      .values({
-        id: created.id,
-        secret_sha256: buildSecretHash(created.secret),
-        name,
-        bytes,
-        imp_id: fields.imp_id ?? null,
-        issued_at: now,
-        stream_by: now + STREAM_WINDOW_MS,
-        stream_used_at: fields.stream_used_at ?? null,
-        receipt: fields.receipt ?? null,
-        commit_until: fields.commit_until ?? null,
-        committed_at: null,
-        slot: fields.slot ?? null,
-      })
-      .execute();
+    await write({
+      id: created.id,
+      secret_sha256: buildSecretHash(created.secret),
+      name,
+      bytes,
+      imp_id: fields.imp_id ?? null,
+      issued_at: now,
+      stream_by: now + STREAM_WINDOW_MS,
+      stream_used_at: fields.stream_used_at ?? null,
+      receipt: fields.receipt ?? null,
+      commit_until: fields.commit_until ?? null,
+      committed_at: null,
+      slot: fields.slot ?? null,
+    });
 
     return {
       ticket: created.text,
@@ -392,7 +381,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
       const taken = await findImageByName(deps.db, header.image.name);
 
-      const hex = digest.replace(/^sha256:/, '').slice(0, 8);
+      const hex = toDigestHex(digest).slice(0, 8);
 
       const name =
         taken === undefined ? header.image.name : `${header.image.name.slice(0, 22)}-${hex}`;
@@ -528,11 +517,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(409, 'the ticket is for a warm move, and the stream is cold');
     }
 
-    await deps.db
-      .updateTable('move_tickets')
-      .set({ imp_id: header.imp.id })
-      .where('id', '=', row.id)
-      .execute();
+    await updateMoveTicket(deps.db, row.id, { imp_id: header.imp.id });
 
     const count = createByteCounter(row.bytes);
     const files: ReceivedFile[] = [];
@@ -644,11 +629,10 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       secret,
     );
 
-    await deps.db
-      .updateTable('move_tickets')
-      .set({ receipt: JSON.stringify(receipt), commit_until: deps.now() + COMMIT_WINDOW_MS })
-      .where('id', '=', row.id)
-      .execute();
+    await updateMoveTicket(deps.db, row.id, {
+      receipt: JSON.stringify(receipt),
+      commit_until: deps.now() + COMMIT_WINDOW_MS,
+    });
 
     deps.log(`impd: move: ${header.imp.name}: received, waiting for the commit`);
 
@@ -827,11 +811,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
       // the ticket streams once, so a refused header or a failed stream
       // gives up its slot now, abort or not
-      await deps.db
-        .updateTable('move_tickets')
-        .set({ slot: null })
-        .where('id', '=', row.id)
-        .execute();
+      await updateMoveTicket(deps.db, row.id, { slot: null });
 
       return readErrorReply(error, deps.log);
     }
@@ -844,14 +824,9 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     }
 
     // single use: only the first stream marks it
-    const marked = await deps.db
-      .updateTable('move_tickets')
-      .set({ stream_used_at: deps.now() })
-      .where('id', '=', row.id)
-      .where('stream_used_at', 'is', null)
-      .executeTakeFirst();
+    const isClaimed = await claimMoveTicketStream(deps.db, row.id, deps.now());
 
-    if (marked.numUpdatedRows === 0n) {
+    if (!isClaimed) {
       throw new MoveRequestError(409, 'the move ticket was used for a stream already');
     }
 
@@ -949,7 +924,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     const leases = await listLeases(deps.db, deps.now(), [imp.id]);
 
     if (leases.length > 0) {
-      emitImpWrite(deps.db, { kind: 'changed', imp: committed, reason: 'held' });
+      deps.db.writes.publish({ kind: 'changed', imp: committed, reason: 'held' });
     }
 
     deps.log(`impd: move: ${row.name}: committed; it lives here now`);
@@ -967,7 +942,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     }
 
     return deps.imps.lockImpId(impId, async (imp) => {
-      const row = await findTicketRow(checked.row.id);
+      const row = await findMoveTicket(deps.db, checked.row.id);
 
       const settled = row === undefined ? 'none' : readSettled(row, imp);
 
@@ -998,17 +973,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     // a stream still open stops reading now
     sessions.get(checked.row.id)?.pipe.fail(new Error('the source aborted the move'));
-
-    const removeTickets = () =>
-      deps.db
-        .deleteFrom('move_tickets')
-        .where((eb) =>
-          eb.or([
-            eb('id', '=', checked.row.id),
-            ...(impId === null ? [] : [eb('imp_id', '=', impId)]),
-          ]),
-        )
-        .execute();
+    const removeTickets = () => removeMoveTickets(deps.db, checked.row.id, impId);
 
     if (impId === null) {
       await removeTickets();
@@ -1017,7 +982,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     }
 
     const settled = await deps.imps.lockImpId(impId, async (imp) => {
-      const row = await findTicketRow(checked.row.id);
+      const row = await findMoveTicket(deps.db, checked.row.id);
 
       const found = row === undefined ? 'none' : readSettled(row, imp);
 
@@ -1091,15 +1056,18 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
         });
       }
 
-      // in one transaction, so two tickets never keep the same slot
-      return deps.db.transaction().execute(async (trx) => {
-        if (!(await isSlotFree(trx, warm.slot, deps.now()))) {
+      return writeTicketRow(name, bytes, { slot: warm.slot }, async (row) => {
+        const isKept = await createMoveTicketInFreeSlot(
+          deps.db,
+          { ...row, slot: warm.slot },
+          deps.now(),
+        );
+
+        if (!isKept) {
           throw new ORPCError('CONFLICT', {
             message: `slot ${String(warm.slot)}, which ${name}'s memory needs, is taken here`,
           });
         }
-
-        return writeTicketRow(name, bytes, { slot: warm.slot }, trx);
       });
     },
 
@@ -1107,14 +1075,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       const imp = await findImpByName(deps.db, name);
 
       const staged =
-        imp?.moveState === 'receiving'
-          ? await deps.db
-              .selectFrom('move_tickets')
-              .selectAll()
-              .where('imp_id', '=', imp.id)
-              .where('receipt', 'is not', null)
-              .executeTakeFirst()
-          : undefined;
+        imp?.moveState === 'receiving' ? await findStagedMoveTicket(deps.db, imp.id) : undefined;
 
       if (imp === undefined || staged === undefined) {
         throw new ORPCError('NOT_FOUND', {
@@ -1141,7 +1102,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       const ticket = readTicketHeader(request);
 
       // before the route: an abort removes the ticket
-      const row = ticket === null ? undefined : await findTicketRow(ticket.id);
+      const row = ticket === null ? undefined : await findMoveTicket(deps.db, ticket.id);
 
       const response = await handleRoute(request, peer);
 
@@ -1162,7 +1123,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     },
 
     recover: async () => {
-      const rows = await deps.db.selectFrom('move_tickets').selectAll().execute();
+      const rows = await listMoveTickets(deps.db);
 
       for (const row of rows) {
         const isCutShort = row.stream_used_at !== null && row.receipt === null;
@@ -1177,12 +1138,12 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
         }
 
         if (isCutShort || isUnused || isSpent) {
-          await deps.db.deleteFrom('move_tickets').where('id', '=', row.id).execute();
+          await removeMoveTickets(deps.db, row.id, null);
         }
       }
 
       // an abort that removed the tickets, then stopped before the imp
-      const left = await deps.db.selectFrom('move_tickets').select('imp_id').execute();
+      const left = await listMoveTickets(deps.db);
 
       const ticketed = new Set(left.map((row) => row.imp_id));
 

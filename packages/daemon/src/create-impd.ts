@@ -17,7 +17,6 @@ import type { AppDeps } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import type { DiskFreezer } from './checkpoints/consistent-disk';
 import type { Config } from './config';
-import { subscribeImpWrites } from './db/imp-write-feed';
 import { countImpsByState } from './db/imps';
 import { isImpSetWrite } from './db/is-imp-set-write';
 import type { ImpDatabase } from './db/open-database';
@@ -711,7 +710,7 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
   });
 
   // an imp that comes or goes opens or closes its proxy port and its grants
-  subscribeImpWrites(db, (write) => {
+  db.writes.subscribe((write) => {
     // storage comes or goes with an imp or a checkpoint, and changes when
     // its disk grows or a stop or sleep writes it out
     if (write.kind !== 'changed' || CHANGES_USAGE.has(write.reason)) {

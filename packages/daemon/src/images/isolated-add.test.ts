@@ -1765,7 +1765,7 @@ test('it keeps the rootfs when an image rm runs while an add of its digest is be
 
   const images = createImageService({
     config,
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     storage: ctx.storage,
     storageGate: ctx.impd.storageGate,
     diskBudget: ctx.impd.diskBudget,
@@ -1843,7 +1843,7 @@ test("it removes that rootfs after all when the add's row then fails", async () 
 
   const images = createImageService({
     config,
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     storage: ctx.storage,
     storageGate: ctx.impd.storageGate,
     diskBudget: ctx.impd.diskBudget,

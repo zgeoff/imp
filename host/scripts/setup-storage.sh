@@ -51,7 +51,6 @@ setup_zfs() {
     mount -t zfs "$dataset" "$root"
     echo "setup-storage: mounted $dataset on $root"
   fi
-  mkdir -p "$root"/{db,system,images,imps}
 }
 
 if [ "$backend" = zfs ]; then
@@ -160,5 +159,3 @@ if ! cp --reflink=always "$probe" "$probe.clone" 2>/dev/null; then
   fail "$root is XFS without reflink${mounted:+ (from $mounted)}; recreate it with mkfs.xfs -m reflink=1"
 fi
 rm -f "$probe" "$probe.clone"
-
-mkdir -p "$root"/{db,system,images,imps}

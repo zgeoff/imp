@@ -1,6 +1,12 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["bun.lock", "kernel/out/**", ".cache/**", "packages/api/protocol-schema.json"],
+  "ignorePatterns": [
+    "bun.lock",
+    "kernel/out/**",
+    ".cache/**",
+    "packages/api/protocol-schema.json",
+    "packages/daemon/src/db/schema.ts"
+  ],
   "proseWrap": "always",
   "semi": true,
   "trailingComma": "all",

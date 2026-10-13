@@ -106,7 +106,7 @@ test('#expose refuses an imp a move marks between its read and its write', async
   const gate = buildQueryGate('imps');
 
   const exposure = createExposureService({
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     https: loadConfig({
       IMP_DOMAIN: 'imp.example.com',
       IMP_DNS_PROVIDER: 'cloudflare',
@@ -435,7 +435,7 @@ test('#unexpose refuses an imp a move marks between its read and its write', asy
   const gate = buildQueryGate('imps');
 
   const exposure = createExposureService({
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     https: loadConfig({}).https,
     updateRecords: () => Promise.resolve(null),
   });

@@ -205,6 +205,9 @@ next boot, wake, sleep, stop or agent check does (succeed, fail, die or hang), h
 releases it, and restarts impd over the same database and VMs. `findBrokenInvariants` reads the raw
 records, because a read through the service repairs what it finds.
 
+After you add a migration, run `bun run render:db-schema`: kysely-codegen writes the daemon's typed
+schema from a freshly migrated database, and `bun test` fails while the committed file differs.
+
 The property tests (`*.property.test.ts`) use fast-check. On a failure it prints the seed and the
 path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay
 the case.

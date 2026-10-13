@@ -76,7 +76,7 @@ async function setupTest() {
   const gate = buildQueryGate('imps');
 
   const impd = await createImpd(config, {
-    db: db.withPlugin(gate.plugin),
+    db: gate.wrap(db),
 
     // the bearer the root client sends
     rootToken: 'root-token',

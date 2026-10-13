@@ -25,7 +25,9 @@
       // suites only their own scripts run (test:pebble), and the scripts a
       // test runs in a child Bun
       "entry": ["src/docker-proxy/main.ts", "src/**/*.pebble.ts", "src/test-utils/run-*.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      // kysely-codegen writes a type for every table, used or not
+      "ignoreIssues": { "src/db/schema.ts": ["types"] }
     },
     "packages/dashboard": {
       "entry": ["augment-bun-test.ts", "e2e/*.e2e.ts"],

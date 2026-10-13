@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
-import { sql } from 'kysely';
 import { loadTokenStore } from '../auth/token-store';
 import { writeConsistentCopy } from '../db/database-copy';
 import { runMigrationsTo } from '../db/run-migrations';
@@ -12,6 +11,7 @@ import { writeTokenRecord } from '../db/tokens';
 import { buildMockTokenRecord } from '../test-utils/build-mock-token-record';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
+import { runSql } from '../test-utils/run-sql';
 import { createRestoredAccess } from './create-restored-access';
 
 // This host's database and token store, and a directory for the copy a test
@@ -98,12 +98,17 @@ test('it migrates a copy from an older impd forward before it reads the copy', a
 
   await runMigrationsTo(source, '019_add_imp_max_memory');
 
-  await sql`INSERT INTO secrets (name, kind, rules, created_at)
-    VALUES ('gh', 'github', '[]', 1790000000000)`.execute(source);
-
-  await sql`INSERT INTO tokens (id, name, secret_hash, scope, imps, created_at)
-    VALUES ('tok0123456789abc', 'agent', ${'ab'.repeat(32)}, 'exec', NULL, 1790000000000)`.execute(
+  await runSql(
     source,
+    `INSERT INTO secrets (name, kind, rules, created_at)
+    VALUES ('gh', 'github', '[]', 1790000000000)`,
+  );
+
+  await runSql(
+    source,
+    `INSERT INTO tokens (id, name, secret_hash, scope, imps, created_at)
+    VALUES ('tok0123456789abc', 'agent', ?, 'exec', NULL, 1790000000000)`,
+    ['ab'.repeat(32)],
   );
 
   await writeConsistentCopy(source, ctx.copyPath);
@@ -121,8 +126,11 @@ test('it refuses a copy from a newer impd and writes nothing', async () => {
 
   await createSecret(source.db, { name: 'gh', kind: 'github', rules: [], valueFile: 'gh' });
 
-  await sql`INSERT INTO kysely_migration (name, timestamp)
-    VALUES ('999_from_a_newer_impd', '2030-01-01T00:00:00.000Z')`.execute(source.db);
+  await runSql(
+    source.db,
+    `INSERT INTO kysely_migration (name, timestamp)
+    VALUES ('999_from_a_newer_impd', '2030-01-01T00:00:00.000Z')`,
+  );
 
   await writeConsistentCopy(source.db, ctx.copyPath);
 

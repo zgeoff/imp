@@ -9,6 +9,7 @@ import { findImageById } from '../db/images';
 import { findImpById, findImpByName, listImps, updateImpMove } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { listLeases } from '../db/leases';
+import { findMoveSend, removeMoveSend, updateMoveSend, writeMoveSend } from '../db/move-sends';
 import { listNetworkMembers } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
@@ -270,9 +271,6 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   // imps the prepare stopped while they ran; a refusal before any byte went
   // starts them again
   const halted = new Set<string>();
-
-  const findSendRow = (impId: string) =>
-    deps.db.selectFrom('move_sends').selectAll().where('imp_id', '=', impId).executeTakeFirst();
 
   const requireImp = async (name: string): Promise<ImpRecord> => {
     const imp = await findImpByName(deps.db, name);
@@ -574,7 +572,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       }
     }
 
-    await deps.db.deleteFrom('move_sends').where('imp_id', '=', imp.id).execute();
+    await removeMoveSend(deps.db, imp.id);
 
     deps.log(`impd: move: ${imp.name}: committed on ${peer}; the copy here is gone`);
   };
@@ -679,12 +677,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     checkReceiptFiles(body, imp, sent);
 
     // from here both hosts hold the imp, and neither may wake it
-    await deps.db
-      .updateTable('move_sends')
-      .set({ receipt: JSON.stringify(receipt) })
-      .where('imp_id', '=', imp.id)
-      .execute();
-
+    await updateMoveSend(deps.db, imp.id, { receipt: JSON.stringify(receipt) });
     await updateImpMove(deps.db, imp.id, 'moved');
     await runCommit(imp, peer, ticket);
   };
@@ -725,8 +718,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
   const removeMark = async (imp: ImpRecord): Promise<void> => {
     await updateImpMove(deps.db, imp.id, null);
-
-    await deps.db.deleteFrom('move_sends').where('imp_id', '=', imp.id).execute();
+    await removeMoveSend(deps.db, imp.id);
   };
 
   // Before a receipt, a failure undoes the move on both hosts. The mark and
@@ -748,11 +740,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     } catch (error) {
       const message = `the target did not confirm the abort (${readErrorMessage(error)}); run imp move ${imp.name} <host> --abort`;
 
-      await deps.db
-        .updateTable('move_sends')
-        .set({ error: message })
-        .where('imp_id', '=', imp.id)
-        .execute();
+      await updateMoveSend(deps.db, imp.id, { error: message });
 
       deps.log(`impd: move: ${imp.name}: ${message}`);
 
@@ -859,7 +847,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   const readStatusOf = async (imp: ImpRecord): Promise<MoveStatus> => {
     const task = tasks.get(imp.id);
 
-    const row = await findSendRow(imp.id);
+    const row = await findMoveSend(deps.db, imp.id);
 
     const last = finished.get(imp.id);
 
@@ -935,20 +923,17 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const bytes = await countBytes(imp, mode, meta);
 
-    await deps.db
-      .insertInto('move_sends')
-      .values({
-        imp_id: imp.id,
-        peer_url: null,
-        ticket: null,
-        total_bytes: bytes,
-        mode,
-        warm: isWarm ? 1 : 0,
-        receipt: null,
-        error: null,
-        created_at: deps.now(),
-      })
-      .execute();
+    await writeMoveSend(deps.db, {
+      imp_id: imp.id,
+      peer_url: null,
+      ticket: null,
+      total_bytes: bytes,
+      mode,
+      warm: isWarm ? 1 : 0,
+      receipt: null,
+      error: null,
+      created_at: deps.now(),
+    });
 
     const marked = await updateImpMove(deps.db, imp.id, 'sending');
 
@@ -1018,7 +1003,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   const runRecover = async (): Promise<void> => {
     try {
       for (const imp of await listImps(deps.db)) {
-        const row = await findSendRow(imp.id);
+        const row = await findMoveSend(deps.db, imp.id);
 
         if (imp.moveState === 'sending') {
           const isUndone = await resetSend(imp, row?.peer_url ?? null, row?.ticket ?? null);
@@ -1080,7 +1065,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       const peer = requirePeer(to);
 
       const imp = await requireImp(name);
-      const row = await findSendRow(imp.id);
+      const row = await findMoveSend(deps.db, imp.id);
 
       if (imp.moveState !== 'sending' || row === undefined || tasks.has(imp.id)) {
         throw new ORPCError('CONFLICT', {
@@ -1089,11 +1074,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         });
       }
 
-      await deps.db
-        .updateTable('move_sends')
-        .set({ peer_url: peer, ticket })
-        .where('imp_id', '=', imp.id)
-        .execute();
+      await updateMoveSend(deps.db, imp.id, { peer_url: peer, ticket });
 
       startSend(imp, { peer, ticket, mode: row.mode, isWarm: row.warm === 1 }, row.total_bytes);
 
@@ -1112,7 +1093,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     resume: async (name, ticket) => {
       const imp = await requireImp(name);
-      const row = await findSendRow(imp.id);
+      const row = await findMoveSend(deps.db, imp.id);
 
       const useTicket = ticket ?? row?.ticket ?? null;
 
@@ -1124,11 +1105,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       }
 
       if (ticket !== undefined) {
-        await deps.db
-          .updateTable('move_sends')
-          .set({ ticket })
-          .where('imp_id', '=', imp.id)
-          .execute();
+        await updateMoveSend(deps.db, imp.id, { ticket });
       }
 
       if (imp.moveState === 'moved') {
@@ -1173,7 +1150,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         return readStatusOf(fresh ?? imp);
       }
 
-      const row = await findSendRow(imp.id);
+      const row = await findMoveSend(deps.db, imp.id);
 
       const peer = row?.peer_url ?? null;
       const ticket = row?.ticket ?? null;

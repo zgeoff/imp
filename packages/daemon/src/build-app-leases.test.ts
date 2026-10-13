@@ -66,7 +66,7 @@ async function setupTest() {
   const leaseReads = buildQueryGate('imp_leases');
 
   const impd = await createImpd(config, {
-    db: db.withPlugin(leaseReads.plugin),
+    db: leaseReads.wrap(db),
 
     // the bearer the root client sends
     rootToken: 'root-token',

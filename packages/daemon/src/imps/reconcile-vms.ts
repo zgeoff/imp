@@ -1,5 +1,4 @@
 import { rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { writeUnknownBoot } from '../db/cold-boots';
 import { updateImpActivity } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
@@ -10,7 +9,7 @@ import {
   removeSnapshotMeta,
   resetSnapshotLoading,
 } from '../sleep/snapshot-meta';
-import { buildImpPaths, buildWatchdogSlot } from '../storage/data-layout';
+import { buildImpPaths, buildImpsDir, buildWatchdogSlot } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { isImpVm } from '../vmm/firecracker-process';
 import type { ImpContext } from './imp-context';
@@ -281,7 +280,7 @@ function removePartialFiles(paths: ImpPaths): void {
 
 // the imp id when `apiSocket` is exactly the socket of one under `dataDir`
 function parseImpId(dataDir: string, apiSocket: string): string | null {
-  const prefix = `${join(dataDir, 'imps')}/`;
+  const prefix = `${buildImpsDir(dataDir)}/`;
 
   if (!apiSocket.startsWith(prefix)) {
     return null;

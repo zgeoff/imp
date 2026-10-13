@@ -16,7 +16,14 @@ import { printLog } from '../process/print-log';
 import { runChecked } from '../process/run-command';
 import { countOwnerBytes } from './count-owner-bytes';
 import type { OwnedFile } from './count-owner-bytes';
-import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
+import {
+  BACKUP_TREE,
+  buildBackupPaths,
+  buildImagePaths,
+  buildImagesDir,
+  buildImpPaths,
+  buildImpsDir,
+} from './data-layout';
 import { readExtents } from './fiemap';
 import { readLoopHostFreeBytes } from './loop-backing-file';
 import { isHoldingFiles, listFilesUnder, readDirectoryOrphan } from './orphan-files';
@@ -105,7 +112,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   const createImage = async (digest: string, write: (dir: string) => Promise<void>) => {
     const paths = buildImagePaths(deps.dataDir, digest);
-    const staged = join(deps.dataDir, 'images', `${STAGING_PREFIX}${Bun.randomUUIDv7()}`);
+    const staged = join(buildImagesDir(deps.dataDir), `${STAGING_PREFIX}${Bun.randomUUIDv7()}`);
 
     mkdirSync(staged, { recursive: true });
 
@@ -168,7 +175,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       [...live.imageDigests].map((digest) => basename(buildImagePaths(deps.dataDir, digest).dir)),
     );
 
-    const impIds = listEntries(join(deps.dataDir, 'imps'));
+    const impIds = listEntries(buildImpsDir(deps.dataDir));
 
     // a named imp's checkpoint with no row is an orphan: an older database
     // lacks the newer rows
@@ -186,12 +193,12 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       .filter((checkpoint) => !live.checkpointIds.has(checkpoint.id));
 
     // hidden entries are image builds in flight, which only start drops
-    const unknownImages = listEntries(join(deps.dataDir, 'images'))
+    const unknownImages = listEntries(buildImagesDir(deps.dataDir))
       .filter((name) => !name.startsWith('.') && !liveDigests.has(name))
       .map((name) => ({
         kind: 'image' as const,
         id: name,
-        dir: join(deps.dataDir, 'images', name),
+        dir: join(buildImagesDir(deps.dataDir), name),
       }));
 
     const unknownImps = impIds
@@ -219,7 +226,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   const removeLeftover = (dropped: DroppedStorage, live: LiveStorage): void => {
     if (dropped.kind === 'image') {
-      rmSync(join(deps.dataDir, 'images', dropped.id), { recursive: true, force: true });
+      rmSync(join(buildImagesDir(deps.dataDir), dropped.id), { recursive: true, force: true });
     }
 
     if (dropped.kind === 'imp') {
@@ -253,11 +260,11 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
   // the owners besides imps; the backup tree's reflinks hold blocks between
   // runs, so it is one
   const listOtherFiles = () => {
-    const images = listEntries(join(deps.dataDir, 'images'))
+    const images = listEntries(buildImagesDir(deps.dataDir))
       .filter((name) => !name.startsWith('.'))
       .map((name) => ({
         owner: `image:${name}`,
-        path: join(deps.dataDir, 'images', name, 'rootfs.ext4'),
+        path: join(buildImagesDir(deps.dataDir), name, 'rootfs.ext4'),
       }));
 
     const tree = listFilesUnder(backup.tree).map((path) => ({ owner: 'backup', path }));
@@ -312,7 +319,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
     // an image build that a crash cut short leaves its staging dir
     start: (live) => {
-      const imagesDir = join(deps.dataDir, 'images');
+      const imagesDir = buildImagesDir(deps.dataDir);
 
       for (const name of listEntries(imagesDir).filter((entry) => entry.startsWith('.'))) {
         rmSync(join(imagesDir, name), { recursive: true, force: true });

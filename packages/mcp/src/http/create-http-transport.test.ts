@@ -60,7 +60,7 @@ async function setupTest() {
   const vmm = buildStubVmm();
 
   const impd = await createImpd(config, {
-    db: opened.withPlugin(gate.plugin),
+    db: gate.wrap(opened),
 
     // the bearer the tools' client sends
     rootToken: 'root-token',

@@ -1,11 +1,11 @@
 import type { ImpChangeReason, ImpEventDetail } from '@imp/api';
+import type { EventBus } from '../events/event-bus';
 import type { CheckpointRecord } from './checkpoints';
 import type { ImpRecord } from './imps';
-import type { ImpDatabase } from './open-database';
 
 // A committed write to the imps or checkpoints table, for the event stream:
-// db/imps.ts and db/checkpoints.ts emit every one but activity times and the
-// egress policy, which the API does not show.
+// db/imps.ts and db/checkpoints.ts publish every one but activity times and
+// the egress policy, which the API does not show.
 export type ImpWrite =
   | { readonly kind: 'added'; readonly imp: ImpRecord }
   | {
@@ -18,25 +18,6 @@ export type ImpWrite =
   | { readonly kind: 'checkpointAdded'; readonly checkpoint: CheckpointRecord }
   | { readonly kind: 'checkpointRemoved'; readonly checkpoint: CheckpointRecord };
 
-type ImpWriteListener = (write: ImpWrite) => void;
-
-// by database handle: a test's database and impd's never share listeners
-const listeners = new WeakMap<ImpDatabase, Set<ImpWriteListener>>();
-
-// calls `listener` after each write to this database; returns the unwatch
-export function subscribeImpWrites(db: ImpDatabase, listener: ImpWriteListener): () => void {
-  const set = listeners.get(db) ?? new Set<ImpWriteListener>();
-
-  set.add(listener);
-  listeners.set(db, set);
-
-  return () => {
-    set.delete(listener);
-  };
-}
-
-export function emitImpWrite(db: ImpDatabase, write: ImpWrite): void {
-  for (const listener of listeners.get(db) ?? []) {
-    listener(write);
-  }
-}
+// The bus a database publishes its imp writes on, after each commit;
+// openDatabase takes it, so a test can pass its own.
+export type ImpWriteFeed = EventBus<ImpWrite>;

@@ -48,10 +48,17 @@
           { "from": "package", "name": "CompiledQuery", "package": "kysely" },
           // a kysely connection bound to a live driver; not meaningfully freezable
           { "from": "package", "name": "DatabaseConnection", "package": "kysely" },
+          // kysely-codegen's introspection of the migrated database, which the
+          // schema render reads to build a copy
+          {
+            "from": "package",
+            "name": ["DatabaseMetadata", "TableMetadata", "ColumnMetadata", "EnumCollection"],
+            "package": "kysely-codegen"
+          },
           // a migrator result read once for its error field, never mutated
           { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
-          // the Kysely handle above under its schema-bound alias
-          { "from": "file", "name": "ImpDatabase" },
+          // the Kysely handle above under its schema-bound aliases
+          { "from": "file", "name": ["ImpDatabase", "ImpQueries"] },
           // tar-stream's live pack and extract streams, which `imp cp` drives
           { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
           // a live socket or listener; reading and writing it is the point
@@ -163,6 +170,30 @@
         "react/jsx-max-depth": "off",
         // stylesheets are imported for their side effect
         "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }]
+      }
+    },
+    {
+      // the database boundary: only db and test support build queries, so
+      // every other module goes through db's repositories
+      "files": ["packages/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/daemon/src/db/**", "packages/daemon/src/test-utils/**"],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     }
   ],

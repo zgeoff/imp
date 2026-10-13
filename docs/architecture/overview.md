@@ -90,7 +90,9 @@ All of impd's state lives in one data directory.
 
 - **The database.** One SQLite file, through Kysely on `bun:sqlite`, in WAL mode with a single
   connection. It holds the imps, checkpoints, images, tokens, grants, networks, leases, moves and
-  the audit rows. Its migrations live in code.
+  the audit rows. Its migrations live in code. Only the daemon's database module builds queries;
+  every other module reads and writes through its repositories, and an imp write goes out on a write
+  feed that the module takes when it opens the file.
 - **Each imp's directory.** The disk, the memory snapshot of a sleeping imp, the record of what its
   VM booted with, the Firecracker sockets and the session logs. A disk is a reflink clone on XFS or
   a dataset on ZFS ([storage](./storage/storage.md)).

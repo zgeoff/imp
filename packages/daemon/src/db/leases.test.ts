@@ -5,7 +5,6 @@ import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
 import { createImage } from './images';
-import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
 import { createImp, findImpById, removeImp } from './imps';
 import { isBlockingLease, listLeases, removeLeases, writeLease, writeMovedLeases } from './leases';
@@ -116,7 +115,7 @@ test('#writeLease emits nothing for a renew', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -137,7 +136,7 @@ test('#writeLease emits ImpChanged with its reason', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -342,7 +341,7 @@ test('#removeLeases emits nothing for a removal that took nothing', async () => 
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -363,7 +362,7 @@ test('#removeLeases emits for a removal that took nothing when told to', async (
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -420,7 +419,7 @@ test('#removeLeases emits how many leases a forced clear released', async () => 
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -499,7 +498,7 @@ test('#writeMovedLeases emits nothing', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 

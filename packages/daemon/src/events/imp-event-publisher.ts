@@ -1,7 +1,6 @@
 import { EVENT_VERSION } from '@imp/api';
 import type { Imp, ImpEvent } from '@imp/api';
 import { toApiCheckpoint } from '../db/checkpoints';
-import { subscribeImpWrites } from '../db/imp-write-feed';
 import type { ImpWrite } from '../db/imp-write-feed';
 import { findImpById } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -42,7 +41,7 @@ export function startImpEventPublisher(deps: PublisherDeps): () => void {
     state.draining = false;
   };
 
-  return subscribeImpWrites(deps.db, (write) => {
+  return deps.db.writes.subscribe((write) => {
     pending.push(write);
 
     if (!state.draining) {

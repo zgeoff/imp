@@ -3,7 +3,6 @@ import { existsSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sql } from 'kysely';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage, findImageByName } from '../db/images';
@@ -21,6 +20,7 @@ import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { runSql } from '../test-utils/run-sql';
 import { BUILDER_IMAGE } from './builder-imps';
 
 async function setupTest() {
@@ -809,8 +809,11 @@ test('it removes the cloned disk and rethrows when the image row fails to write'
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
   // the database refuses every template row
-  await sql`CREATE TRIGGER refuse_templates BEFORE INSERT ON images WHEN NEW.source = 'imp'
-    BEGIN SELECT RAISE(ABORT, 'template rows refused'); END`.execute(ctx.db);
+  await runSql(
+    ctx.db,
+    `CREATE TRIGGER refuse_templates BEFORE INSERT ON images WHEN NEW.source = 'imp'
+    BEGIN SELECT RAISE(ABORT, 'template rows refused'); END`,
+  );
 
   const creating = ctx.impd.templates.createTemplate('dev', 'tools');
 

@@ -2,8 +2,9 @@ import { isImpAllowed } from '@imp/api';
 import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
-import type { ImpDatabase } from './open-database';
-import type { TokenSshKeysTable, TokensTable } from './schema';
+import { ImpsSchema } from './imps-schema';
+import type { ImpDatabase, ImpQueries } from './open-database';
+import type { TokenSshKeys, Tokens } from './schema';
 
 // a secret a token may grant: its name, and its generation when the token
 // was made; a secret deleted and made again under the name is another one
@@ -34,7 +35,6 @@ export interface TokenSshKeyRecord {
   readonly createdAt: Date;
 }
 
-const ImpsSchema = z.array(z.string()).nullable();
 const GrantableSchema = z.array(z.object({ name: z.string(), generation: z.string() }));
 
 export async function listTokenRecords(db: ImpDatabase): Promise<TokenRecord[]> {
@@ -81,7 +81,7 @@ export async function writeTokenRecord(
 export function updateTokenGrantable(
   db: ImpDatabase,
   id: string,
-  read: (trx: ImpDatabase) => Promise<GrantableSecret[]>,
+  read: (trx: ImpQueries) => Promise<GrantableSecret[]>,
 ): Promise<{ grantable: GrantableSecret[]; dropped: number } | null> {
   return db.transaction().execute(async (trx) => {
     const row = await trx
@@ -137,7 +137,7 @@ export function updateTokenGrantable(
 // the token's grantable list as the database holds it now, read in the
 // caller's transaction; null for no such token
 export async function readTokenGrantable(
-  db: ImpDatabase,
+  db: ImpQueries,
   id: string,
 ): Promise<GrantableSecret[] | null> {
   const row = await db
@@ -149,8 +149,8 @@ export async function readTokenGrantable(
   return row === undefined ? null : GrantableSchema.parse(JSON.parse(row.grantable));
 }
 
-// the token, its keys, and the OAuth grants it approved with their tokens;
-// returns the grants' ids, for their revocation
+// the token, its keys, and the OAuth grants it approved, whose tokens go with
+// them; returns the grants' ids, for their revocation
 export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]> {
   return db.transaction().execute(async (trx) => {
     await trx.deleteFrom('token_ssh_keys').where('token_id', '=', id).execute();
@@ -164,7 +164,6 @@ export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]
     const grantIds = grants.map((grant) => grant.id);
 
     if (grantIds.length > 0) {
-      await trx.deleteFrom('oauth_tokens').where('grant_id', 'in', grantIds).execute();
       await trx.deleteFrom('oauth_grants').where('id', 'in', grantIds).execute();
     }
 
@@ -202,7 +201,7 @@ async function writeSshKeyRow(
     .execute();
 }
 
-function toTokenRecord(row: Readonly<Selectable<TokensTable>>): TokenRecord {
+function toTokenRecord(row: Readonly<Selectable<Tokens>>): TokenRecord {
   const imps: unknown = row.imps === null ? null : JSON.parse(row.imps);
 
   return {
@@ -216,7 +215,7 @@ function toTokenRecord(row: Readonly<Selectable<TokensTable>>): TokenRecord {
   };
 }
 
-function toTokenSshKeyRecord(row: Readonly<Selectable<TokenSshKeysTable>>): TokenSshKeyRecord {
+function toTokenSshKeyRecord(row: Readonly<Selectable<TokenSshKeys>>): TokenSshKeyRecord {
   return {
     id: row.id,
     tokenId: row.token_id,

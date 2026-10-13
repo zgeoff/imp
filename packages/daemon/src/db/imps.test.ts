@@ -6,7 +6,6 @@ import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createImage } from './images';
-import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
 import {
   JAIL_UIDS,
@@ -107,7 +106,7 @@ test('#createImp emits one ImpAdded', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -118,7 +117,7 @@ test('#createImp emits one ImpAdded', async () => {
   expect(writes).toStrictEqual([{ kind: 'added', imp }]);
 });
 
-test('#createImp rejects a duplicate name', async () => {
+test('#createImp rejects a duplicate name with a clash naming the column', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
 
@@ -129,10 +128,27 @@ test('#createImp rejects a duplicate name', async () => {
       ctx.db,
       buildMockNewImp({ name: 'dev', imageId: image.id, slot: 1, ip: '10.66.0.3' }),
     ),
-  ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: imps\.name/u);
+  ).rejects.toMatchObject({ name: 'ImpClashError', column: 'name' });
 });
 
-test('#createImp rejects a duplicate slot', async () => {
+test('#createImp rejects a jail uid another imp holds with a clash naming the column', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+
+  // two creates outside a transaction both read the lowest free uid before
+  // either inserts
+  const created = await Promise.allSettled([
+    createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0, ip: '10.66.0.2' })),
+    createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 1, ip: '10.66.0.3' })),
+  ]);
+
+  expect(created).toMatchObject([
+    { status: 'fulfilled' },
+    { status: 'rejected', reason: { name: 'ImpClashError', column: 'jail_uid' } },
+  ]);
+});
+
+test('#createImp rejects a duplicate slot with a clash naming the column', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
 
@@ -140,7 +156,7 @@ test('#createImp rejects a duplicate slot', async () => {
 
   expect(
     createImp(ctx.db, buildMockNewImp({ imageId: image.id, slot: 0, ip: '10.66.9.9' })),
-  ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: imps\.slot/u);
+  ).rejects.toMatchObject({ name: 'ImpClashError', column: 'slot' });
 });
 
 test('#createImp rejects an imp whose image does not exist', async () => {
@@ -300,7 +316,7 @@ test('#allocateSlot gives concurrent creates distinct slots', async () => {
         const slot = await allocateSlot(trx, 16);
 
         return createImp(
-          trx,
+          Object.assign(trx, { writes: ctx.db.writes }),
           buildMockNewImp({ name, imageId: image.id, slot, ip: `10.66.0.${String(slot + 2)}` }),
         );
       }),
@@ -431,7 +447,7 @@ test('#createImpInFreeSlot emits one ImpAdded, once it commits', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -563,7 +579,7 @@ test('#updateImpState emits the change with its reason', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -715,7 +731,7 @@ test('#updateImpDisk emits ImpChanged resized for a new disk size', async () => 
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -733,7 +749,7 @@ test('#updateImpDisk emits nothing for a pending grow alone', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -774,7 +790,7 @@ test('#updateImpSettings emits ImpChanged updated', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -912,7 +928,7 @@ test('#removeImp emits one ImpRemoved', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 

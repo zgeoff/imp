@@ -696,7 +696,7 @@ test('it keeps the rootfs when an image rm runs while a build of its digest is b
 
   const images = createImageService({
     config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     storage: ctx.storage,
     storageGate: createStorageGate(),
     diskBudget: ctx.recordedBudget,
@@ -766,7 +766,7 @@ test("it removes that rootfs after all when the build's row then fails", async (
 
   const images = createImageService({
     config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     storage: ctx.storage,
     storageGate: createStorageGate(),
     diskBudget: ctx.recordedBudget,

@@ -1,4 +1,3 @@
-import { mkdirSync } from 'node:fs';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
@@ -18,6 +17,7 @@ import { startWakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
+import { createDataDirs } from './storage/data-layout';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   // before any instrument is made: a meter taken earlier stays a no-op
   const stopExport = await startOtlpExport(process.env, packageJson.version);
 
-  mkdirSync(join(config.dataDir, 'db'), { recursive: true });
+  createDataDirs(config.dataDir);
 
   const systemFiles = await setupSystemFiles(config);
 

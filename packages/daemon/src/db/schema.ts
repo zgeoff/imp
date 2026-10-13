@@ -1,366 +1,247 @@
-import type {
-  ApiActor,
-  ColdBootCause,
-  ImageSource,
-  ImpKind,
-  ImpState,
-  MoveState,
-  Scope,
-} from '@imp/api';
-import type { Generated } from 'kysely';
+// Written by kysely-codegen from the migrated database: run
+// `bun run render:db-schema` after a migration, never edit it by hand.
 
-// Timestamps are integer milliseconds since the epoch.
+import type { ApiActor, ColdBootCause, ImageSource, ImpKind, ImpState, MoveState, Scope } from "@imp/api";
+import type { ColumnType } from "kysely";
 
-interface ImagesTable {
-  id: string;
-  name: string;
-  ref: string;
-  digest: string;
-  size_bytes: number;
-  created_at: number;
+export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
+  ? ColumnType<S, I | undefined, U>
+  : ColumnType<T, T | undefined, T>;
 
-  // `oci` from docker, `imp` a template from an imp's disk
-  source: Generated<ImageSource>;
-
-  // a template's source imp, by name: a token must reach it to copy its disk
-  source_imp: string | null;
-}
-
-interface ImpsTable {
-  id: string;
-  name: string;
-  image_id: string;
-  state: ImpState;
-  kind: Generated<ImpKind>;
-  vcpus: number;
-  memory_mib: number;
-  slot: number;
-  ip: string;
-  created_at: number;
-  last_active_at: number;
-  slept_at: number | null;
-
-  // the latest end of the imp's leases, kept with each lease write
-  // (db/leases.ts); null while it has none
-  hold_until: number | null;
-  error: string | null;
-  pid: number | null;
-  firecracker_version: string | null;
-  http_port: Generated<number>;
-
-  // the egress mode, `open`, `box` or `none` (docs/architecture/networking.md),
-  // and a box's allow-list as a JSON array
-  egress_policy: Generated<string>;
-
-  // the disk file's size; 32 GiB for an imp from before sizes
-  disk_bytes: Generated<number>;
-
-  // 1 while a sleeping imp's guest has not grown into a resize yet: its
-  // next wake grows it, a cold boot grows it anyway
-  disk_grow_pending: Generated<number>;
-  egress_allow: Generated<string>;
-
-  // cores the VM may use, null for no limit; its share under contention
-  cpu_limit: number | null;
-  cpu_weight: Generated<number>;
-  wake_count: Generated<number>;
-
-  // awake time before awake_since, which is set while the imp runs
-  awake_ms: Generated<number>;
-  awake_since: number | null;
-
-  // 1 until the first cold boot of an imp from a template gives it its own
-  // machine-id and ssh host keys
-  identity_reset_pending: Generated<number>;
-
-  // 0 for an imp left out of every backup run (docs/architecture/storage/backups.md)
-  backup: Generated<number>;
-
-  // `tailnet` or `public` (docs/guides/https.md#public-imps); a public imp's
-  // auth (`none`, `token`, `basic`), basic's user, and the sha256 of the
-  // token or password, base64url
-  exposure: Generated<string>;
-  public_auth: string | null;
-  public_user: string | null;
-  public_hash: string | null;
-
-  // set while the imp moves between hosts: nothing wakes or changes it
-  move_state: MoveState | null;
-
-  // the cause the next cold boot records, when impd knew it before the
-  // boot: `recovery`, `wake_fallback` or `restore`
-  next_boot_cause: Generated<ColdBootCause | null>;
-
-  // the uid and gid its jailed Firecracker runs as (docs/architecture/daemon.md#the-jailer)
-  jail_uid: number | null;
-
-  // 1 from a warm move's commit to the imp's first wake here, which installs
-  // this host's broker CA in the guest
-  trust_pending: Generated<number>;
-
-  // the most the guest may grow to with hot-plugged memory; null when it
-  // stays at memory_mib (docs/architecture/memory.md)
-  max_memory_mib: number | null;
-}
-
-// an imp's last cold boots (docs/architecture/daemon.md#output-offsets)
-interface ImpColdBootsTable {
-  seq: Generated<number>;
-  imp_id: string;
-  boot_id: string;
-  cause: ColdBootCause;
+export interface ApiAudit {
+  actor: ApiActor;
+  actor_name: string | null;
   at: number;
+  detail: string | null;
+  duration_ms: number;
+  id: Generated<number>;
+  imp_name: string | null;
+  outcome: string;
+  procedure: string;
 }
 
-interface BrokerSessionsTable {
+export interface BrokerAudit {
+  at: number;
+  duration_ms: number;
+  host: string;
+  id: Generated<number>;
   imp_id: string;
+  method: string;
+  path: string;
+  request_bytes: number;
+  response_bytes: number;
+  secret_name: string;
+  status: number;
+}
+
+export interface BrokerSessions {
+  at: number;
   generation: string;
-  at: number;
+  imp_id: string;
 }
 
-interface CheckpointsTable {
+export interface Checkpoints {
+  created_at: number;
+  disk_bytes: Generated<number>;
   id: string;
   imp_id: string;
   label: string | null;
-  created_at: number;
   size_bytes: number | null;
-
-  // the imp's disk size when the checkpoint was taken
-  disk_bytes: Generated<number>;
 }
 
-// A secret's metadata. Its value is a file in <dataDir>/secrets, never a row.
-interface SecretsTable {
-  name: string;
-  kind: string;
-
-  // BrokerRule[] as JSON
-  rules: string;
-  created_at: number;
-
-  // random, set on create and kept by a rotation; a rebind or a delete and
-  // create gives another (docs/guides/connectors.md#rotate-or-rebind)
-  generation: string;
-
-  // the file in <dataDir>/secrets that holds the value; a replace writes a
-  // new one and switches to it with the rules
-  value_file: string;
-
-  // OAuthConfig as JSON ({ tokenUrl, clientId, tokenFormat }); null unless kind
-  // is oauth
-  oauth: Generated<string | null>;
-}
-
-// A value file a committed delete or replace displaced, until it is removed
-interface SecretFileRemovalsTable {
-  value_file: string;
-  created_at: number;
-}
-
-interface GrantsTable {
+export interface Grants {
   imp_id: string;
+  secret_generation: Generated<string>;
   secret_name: string;
-
-  // the secret's generation at the grant: a rebind gives the secret another,
-  // and a grant counts only while the two match
-  secret_generation: string;
 }
 
-interface BrokerAuditTable {
-  id: Generated<number>;
-  imp_id: string;
-  secret_name: string;
-  at: number;
-  method: string;
-  host: string;
-  path: string;
-  status: number;
-  request_bytes: number;
-  response_bytes: number;
-  duration_ms: number;
-}
-
-export interface ApiAuditTable {
-  id: Generated<number>;
-  at: number;
-  procedure: string;
-  actor: ApiActor;
-
-  // null on rows from before named tokens
-  actor_name: string | null;
-
-  // the name, not a reference: a destroyed imp's rows stay
-  imp_name: string | null;
-  outcome: string;
-  duration_ms: number;
-
-  // what the call resolved that its name does not show: an image add's
-  // pulled reference, by digest; null for most calls and older rows
-  detail: string | null;
-}
-
-export interface TokensTable {
+export interface Images {
+  created_at: number;
+  digest: string;
   id: string;
   name: string;
-
-  // SHA-256 of the secret, in hex; the secret itself is never stored
-  secret_hash: string;
-  scope: Scope;
-
-  // a JSON array of imp patterns; null for every imp and the host
-  imps: string | null;
-
-  // a JSON array of { name, generation }: the secrets it may grant to its
-  // imps. Set at create, and changed only by tokens.update; a non-empty
-  // list also marks a token able to grant.
-  grantable: Generated<string>;
-  created_at: number;
+  ref: string;
+  size_bytes: number;
+  source: Generated<ImageSource>;
+  source_imp: string | null;
 }
 
-// an SSH key bound to a token (docs/guides/ssh.md#keys-bound-to-tokens)
-export interface TokenSshKeysTable {
-  id: string;
-  token_id: string;
-
-  // `SHA256:<base64>` of the key blob; a key binds to one token at most
-  fingerprint: string;
-
-  // `<type> <base64>`, without the comment
-  public_key: string;
-  comment: string;
-  created_at: number;
-}
-
-// a private network between imps (docs/guides/networks.md)
-interface NetworksTable {
-  id: string;
-  name: string;
-  created_at: number;
-}
-
-interface NetworkMembersTable {
-  network_id: string;
+export interface ImpColdBoots {
+  at: number;
+  boot_id: string;
+  cause: ColdBootCause;
   imp_id: string;
+  seq: Generated<number>;
 }
 
-// one owner's hold on an imp (docs/guides/leases.md): the principal impd
-// derived for the caller, and a label the caller picked
-export interface ImpLeasesTable {
-  imp_id: string;
-  principal: string;
-  label: string;
-
-  // the owner as a person reads it, when the lease was written
+export interface ImpLeases {
+  created_at: number;
   display: string;
-
-  // null holds with no end
-  until: number | null;
-  created_at: number;
-}
-
-// The target's side of a move: one receive ticket. Only the ticket's sha256
-// is kept. The stream must start by stream_by; the commit is good until
-// commit_until, set at the receipt.
-interface MoveTicketsTable {
-  id: string;
-  secret_sha256: string;
-  name: string;
-  bytes: number;
-
-  // the imp the stream staged, once it started
-  imp_id: string | null;
-  issued_at: number;
-  stream_by: number;
-  stream_used_at: number | null;
-
-  // the receipt as sent, JSON
-  receipt: string | null;
-  commit_until: number | null;
-  committed_at: number | null;
-
-  // a warm move's slot, which no other imp takes until the commit
-  slot: number | null;
-}
-
-// The source's side of a move: the target's URL and ticket, kept so a
-// restart can finish the commit, and the receipt once it came
-interface MoveSendsTable {
   imp_id: string;
+  label: string;
+  principal: string;
+  until: number | null;
+}
+
+export interface Imps {
+  awake_ms: Generated<number>;
+  awake_since: number | null;
+  backup: Generated<number>;
+  cpu_limit: number | null;
+  cpu_weight: Generated<number>;
+  created_at: number;
+  disk_bytes: Generated<number>;
+  disk_grow_pending: Generated<number>;
+  egress_allow: Generated<string>;
+  egress_policy: Generated<string>;
+  error: string | null;
+  exposure: Generated<string>;
+  firecracker_version: string | null;
+  hold_until: number | null;
+  http_port: Generated<number>;
+  id: string;
+  identity_reset_pending: Generated<number>;
+  image_id: string;
+  ip: string;
+  jail_uid: number | null;
+  kind: Generated<ImpKind>;
+  last_active_at: number;
+  max_memory_mib: number | null;
+  memory_mib: number;
+  move_state: MoveState | null;
+  name: string;
+  next_boot_cause: ColdBootCause | null;
+  pid: number | null;
+  public_auth: string | null;
+  public_hash: string | null;
+  public_user: string | null;
+  slept_at: number | null;
+  slot: number;
+  state: ImpState;
+  trust_pending: Generated<number>;
+  vcpus: number;
+  wake_count: Generated<number>;
+}
+
+export interface MoveSends {
+  created_at: number;
+  error: string | null;
+  imp_id: string;
+  mode: Generated<"files" | "zfs">;
   peer_url: string | null;
+  receipt: string | null;
   ticket: string | null;
   total_bytes: number;
-
-  // how the disk goes: `files`, or `zfs` streams to a ZFS target
-  mode: 'files' | 'zfs';
-
-  // 1 when the memory snapshot goes too: a warm move
   warm: Generated<number>;
-  receipt: string | null;
-  error: string | null;
-  created_at: number;
 }
 
-// a public client of the MCP route (docs/guides/mcp.md#public-route)
-export interface OAuthClientsTable {
-  // the client_id a connector holds
+export interface MoveTickets {
+  bytes: number;
+  commit_until: number | null;
+  committed_at: number | null;
+  id: string;
+  imp_id: string | null;
+  issued_at: number;
+  name: string;
+  receipt: string | null;
+  secret_sha256: string;
+  slot: number | null;
+  stream_by: number;
+  stream_used_at: number | null;
+}
+
+export interface NetworkMembers {
+  imp_id: string;
+  network_id: string;
+}
+
+export interface Networks {
+  created_at: number;
   id: string;
   name: string;
+}
 
-  // a JSON array, each matched exactly
+export interface OauthClients {
+  created_at: number;
+  id: string;
+  name: string;
   redirect_uris: string;
-  created_at: number;
 }
 
-// what one approval gave one client: never wider than token_id, whose
-// removal removes it
-export interface OAuthGrantsTable {
-  id: string;
+export interface OauthGrants {
   client_id: string;
-  token_id: string;
-  scope: Scope;
-
-  // a JSON array of grant patterns; null for every imp and the host
-  imps: string | null;
-
-  // the resource its tokens are bound to, `<origin>/mcp`
-  resource: string;
   created_at: number;
+  id: string;
+  imps: string | null;
   last_used_at: number | null;
+  resource: string;
+  scope: Scope;
+  token_id: string;
 }
 
-// an access or refresh token; a spent refresh token stays until it expires,
-// so a second use of it is known for a replay
-interface OAuthTokensTable {
-  id: string;
-  grant_id: string;
-  kind: 'access' | 'refresh';
-
-  // SHA-256 of the secret, in hex
-  secret_hash: string;
+export interface OauthTokens {
   created_at: number;
   expires_at: number;
+  grant_id: string;
+  id: string;
+  kind: "access" | "refresh";
+  secret_hash: string;
   spent_at: number | null;
 }
 
-export interface DatabaseSchema {
-  images: ImagesTable;
-  imps: ImpsTable;
-  imp_cold_boots: ImpColdBootsTable;
-  broker_sessions: BrokerSessionsTable;
-  checkpoints: CheckpointsTable;
-  secrets: SecretsTable;
-  secret_file_removals: SecretFileRemovalsTable;
-  grants: GrantsTable;
-  broker_audit: BrokerAuditTable;
-  api_audit: ApiAuditTable;
-  tokens: TokensTable;
-  token_ssh_keys: TokenSshKeysTable;
-  networks: NetworksTable;
-  network_members: NetworkMembersTable;
-  imp_leases: ImpLeasesTable;
-  move_tickets: MoveTicketsTable;
-  move_sends: MoveSendsTable;
-  oauth_clients: OAuthClientsTable;
-  oauth_grants: OAuthGrantsTable;
-  oauth_tokens: OAuthTokensTable;
+export interface SecretFileRemovals {
+  created_at: number;
+  value_file: string;
+}
+
+export interface Secrets {
+  created_at: number;
+  generation: Generated<string>;
+  kind: string;
+  name: string;
+  oauth: string | null;
+  rules: string;
+  value_file: Generated<string>;
+}
+
+export interface Tokens {
+  created_at: number;
+  grantable: Generated<string>;
+  id: string;
+  imps: string | null;
+  name: string;
+  scope: Scope;
+  secret_hash: string;
+}
+
+export interface TokenSshKeys {
+  comment: string;
+  created_at: number;
+  fingerprint: string;
+  id: string;
+  public_key: string;
+  token_id: string;
+}
+
+export interface DB {
+  api_audit: ApiAudit;
+  broker_audit: BrokerAudit;
+  broker_sessions: BrokerSessions;
+  checkpoints: Checkpoints;
+  grants: Grants;
+  images: Images;
+  imp_cold_boots: ImpColdBoots;
+  imp_leases: ImpLeases;
+  imps: Imps;
+  move_sends: MoveSends;
+  move_tickets: MoveTickets;
+  network_members: NetworkMembers;
+  networks: Networks;
+  oauth_clients: OauthClients;
+  oauth_grants: OauthGrants;
+  oauth_tokens: OauthTokens;
+  secret_file_removals: SecretFileRemovals;
+  secrets: Secrets;
+  token_ssh_keys: TokenSshKeys;
+  tokens: Tokens;
 }

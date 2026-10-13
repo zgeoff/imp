@@ -1,7 +1,7 @@
 import type { ColdBoot, ColdBootCause } from '@imp/api';
 import type { Transaction } from 'kysely';
 import type { ImpDatabase } from './open-database';
-import type { DatabaseSchema } from './schema';
+import type { DB } from './schema';
 
 // An imp's last cold boots (docs/architecture/daemon.md#output-offsets): each
 // one ended every session generation before it, so a client that reconnects
@@ -105,7 +105,7 @@ export async function listColdBoots(db: ImpDatabase, impId: string): Promise<Col
 }
 
 async function writeBootRow(
-  trx: Transaction<DatabaseSchema>,
+  trx: Transaction<DB>,
   impId: string,
   boot: Readonly<BootRecord>,
 ): Promise<void> {

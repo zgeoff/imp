@@ -29,7 +29,7 @@ import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rule
 import { createKeyedMutex } from '../imps/keyed-mutex';
 import { runChecked, runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
-import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
+import { buildImagePaths, buildImagesDir, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
@@ -351,7 +351,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // reach the tree, whose setuid and capability files are live while it is
   // unpacked.
   const makeWorkDir = (): { work: string; root: string } => {
-    const images = join(deps.config.dataDir, 'images');
+    const images = buildImagesDir(deps.config.dataDir);
     const work = join(images, `.build-${Bun.randomUUIDv7()}`);
     const root = join(work, 'root');
 

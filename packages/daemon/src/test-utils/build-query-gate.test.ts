@@ -141,6 +141,30 @@ test('it stays armed past a select that does not name it', async () => {
   expect(Bun.peek.status(held)).toBe('pending');
 });
 
+test('it holds a select through the database it wraps', async () => {
+  const testDatabase = await createTestDatabase();
+
+  const gate = buildQueryGate('images');
+  const gated = gate.wrap(testDatabase.db);
+
+  gate.arm();
+
+  const held = gated.selectFrom('images').select('name').execute();
+
+  await gate.reached;
+
+  expect(Bun.peek.status(held)).toBe('pending');
+});
+
+test('it keeps the wrapped database’s write feed', async () => {
+  const testDatabase = await createTestDatabase();
+
+  const gate = buildQueryGate('images');
+  const gated = gate.wrap(testDatabase.db);
+
+  expect(gated.writes).toBe(testDatabase.db.writes);
+});
+
 test('it releases a held select when the test finishes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'query-gate-'));
 

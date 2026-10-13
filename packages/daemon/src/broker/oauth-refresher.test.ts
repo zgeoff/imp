@@ -2128,7 +2128,7 @@ test('it never writes an unsaved result for a secret deleted after the tick list
   });
 
   const refresher = createOAuthRefresher({
-    db: ctx.db.withPlugin(gate.plugin),
+    db: gate.wrap(ctx.db),
     files: ctx.files,
     log: () => {},
     resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
