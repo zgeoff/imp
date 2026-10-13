@@ -1149,3 +1149,130 @@ test('it reports an output variant that impd no longer sends under its tag', () 
     'message exec.server: no longer sends the variant type "exit"',
   ]);
 });
+
+test('it finds nothing between an intersection and itself', () => {
+  const schema = {
+    procedures: {
+      'imps.rename': {
+        input: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 10 },
+          ],
+        },
+        output: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 10 },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
+});
+
+test('it reports an input intersection whose one side narrows', () => {
+  const base = {
+    procedures: {
+      'imps.rename': {
+        input: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 10 },
+          ],
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.rename': {
+        input: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 5 },
+          ],
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'procedure imps.rename input: max length <= 10 → <= 5',
+  ]);
+});
+
+test('it reports a property that both sides of an output intersection name and one widens', () => {
+  const base = {
+    procedures: {
+      'imps.get': {
+        input: { type: 'object' },
+        output: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { name: { type: 'string', minLength: 1 } },
+              required: ['name'],
+            },
+            {
+              type: 'object',
+              properties: { name: { type: 'string', maxLength: 10 }, state: { type: 'string' } },
+              required: ['state'],
+            },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.get': {
+        input: { type: 'object' },
+        output: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { name: { type: 'string', minLength: 1 } },
+              required: ['name'],
+            },
+            {
+              type: 'object',
+              properties: { name: { type: 'string', maxLength: 64 }, state: { type: 'string' } },
+              required: ['state'],
+            },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'procedure imps.get output .name: max length <= 10 → <= 64',
+  ]);
+});

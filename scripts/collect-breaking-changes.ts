@@ -395,23 +395,147 @@ function mergeSchemas(siblings: SchemaObject, branch: Schema): Schema {
   return typeof branch === 'boolean' ? branch : { ...siblings, ...branch };
 }
 
-// An intersection passes when one of its parts alone does; failing that, the
-// first part's changes stand for it.
+// An intersection's parts merge into one schema where their keywords combine;
+// of parts that stay apart, one alone must pass, failing which the first one's
+// changes stand for it.
 function collectIntersectionChanges(
   narrow: SchemaObject,
   wide: SchemaObject,
   path: string,
   comparison: Comparison,
 ): string[] {
-  const siblings = buildWithout(narrow, ['allOf']);
-
-  const trials = (readSchemaList(narrow, 'allOf') ?? []).map((part) =>
-    collectChanges(mergeSchemas(siblings, part), wide, path, comparison),
+  const parts = [buildWithout(narrow, ['allOf']), ...(readSchemaList(narrow, 'allOf') ?? [])].map(
+    (part) => resolveRef(part, comparison.narrowRoot),
   );
 
+  if (parts.includes(false)) {
+    return [];
+  }
+
+  const groups = mergeIntersectionParts(parts.filter((part) => isSchemaObject(part)));
+
+  if (groups.length === 1) {
+    return collectChanges(groups[0] ?? true, wide, path, comparison);
+  }
+
+  const trials = groups.map((group) => collectChanges(group, wide, path, comparison));
   const [first = []] = trials;
 
   return trials.some((trial) => trial.length === 0) ? [] : first;
+}
+
+// each part folded into the first group whose keywords it combines with
+function mergeIntersectionParts(parts: readonly SchemaObject[]): readonly SchemaObject[] {
+  const groups: SchemaObject[] = [];
+
+  for (const part of parts) {
+    const index = groups.findIndex((group) => mergeIntersectionPair(group, part) !== undefined);
+    const merged = index === -1 ? undefined : mergeIntersectionPair(groups[index] ?? {}, part);
+
+    if (merged === undefined) {
+      groups.push(part);
+    } else {
+      groups[index] = merged;
+    }
+  }
+
+  return groups;
+}
+
+// one schema that takes exactly the values both take, or none when a keyword
+// conflicts in a way no one schema can state
+function mergeIntersectionPair(a: SchemaObject, b: SchemaObject): SchemaObject | undefined {
+  const merged: Record<string, unknown> = { ...a };
+
+  for (const [keyword, value] of Object.entries(b)) {
+    if (!(keyword in a)) {
+      merged[keyword] = value;
+      continue;
+    }
+
+    const combined = mergeKeyword(keyword, a[keyword], value);
+
+    if (combined === undefined) {
+      return undefined;
+    }
+
+    merged[keyword] = combined.value;
+  }
+
+  return merged;
+}
+
+const LOWER_KEYWORDS = new Set(['minimum', 'exclusiveMinimum', 'minLength', 'minItems']);
+const UPPER_KEYWORDS = new Set(['maximum', 'exclusiveMaximum', 'maxLength', 'maxItems']);
+
+function mergeKeyword(
+  keyword: string,
+  a: unknown,
+  b: unknown,
+): { readonly value: unknown } | undefined {
+  if (Bun.deepEquals(a, b, true) || ANNOTATIONS.has(keyword)) {
+    return { value: a };
+  }
+
+  if (typeof a === 'number' && typeof b === 'number') {
+    if (LOWER_KEYWORDS.has(keyword)) {
+      return { value: Math.max(a, b) };
+    }
+
+    if (UPPER_KEYWORDS.has(keyword)) {
+      return { value: Math.min(a, b) };
+    }
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (keyword === 'required') {
+      return { value: [...new Set([...a, ...b])] };
+    }
+
+    if (keyword === 'allOf') {
+      return { value: [...a, ...b] };
+    }
+  }
+
+  if (keyword === 'type') {
+    return mergeTypes({ type: a }, { type: b });
+  }
+
+  if (keyword === 'properties' && isSchemaObject(a) && isSchemaObject(b)) {
+    return { value: mergeProperties(a, b) };
+  }
+
+  return undefined;
+}
+
+// the types both sides take, where an integer is also a number
+function mergeTypes(a: SchemaObject, b: SchemaObject): { readonly value: unknown } | undefined {
+  const sides = [readTypes(a) ?? JSON_TYPES, readTypes(b) ?? JSON_TYPES];
+
+  const common = JSON_TYPES.filter((type) =>
+    sides.every((side) => side.includes(type) || (type === 'integer' && side.includes('number'))),
+  );
+
+  // a number on both sides already takes every integer
+  const types = common.includes('number') ? common.filter((type) => type !== 'integer') : common;
+
+  if (types.length === 0) {
+    return undefined;
+  }
+
+  return { value: types.length === 1 ? types[0] : types };
+}
+
+// a property both sides name takes what both its schemas take
+function mergeProperties(a: SchemaObject, b: SchemaObject): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...a };
+
+  for (const [key, schema] of Object.entries(b)) {
+    merged[key] =
+      key in a && !Bun.deepEquals(a[key], schema, true) ? { allOf: [a[key], schema] } : schema;
+  }
+
+  return merged;
 }
 
 function readValues(schema: Schema): unknown[] | undefined {
