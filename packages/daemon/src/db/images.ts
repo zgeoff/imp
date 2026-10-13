@@ -1,7 +1,7 @@
 import type { ImageSource } from '@imp/api';
 import type { Selectable } from 'kysely';
 import type { ImpDatabase } from './open-database';
-import type { DatabaseSchema } from './schema';
+import type { DB } from './schema';
 
 export interface ImageRecord {
   readonly id: string;
@@ -89,7 +89,7 @@ export async function removeImage(db: ImpDatabase, id: string): Promise<boolean>
   return result.numDeletedRows > 0n;
 }
 
-function toImageRecord(row: Readonly<Selectable<DatabaseSchema['images']>>): ImageRecord {
+function toImageRecord(row: Readonly<Selectable<DB['images']>>): ImageRecord {
   return {
     id: row.id,
     name: row.name,

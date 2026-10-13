@@ -4,7 +4,7 @@ import { emitImpWrite } from './imp-write-feed';
 import { updateImpHold } from './imps';
 import type { ImpRecord } from './imps';
 import type { ImpDatabase } from './open-database';
-import type { ImpLeasesTable } from './schema';
+import type { ImpLeases } from './schema';
 
 // the owner of a hold from before leases, and the label `imps.hold` writes;
 // neither blocks a user's sleep or stop (docs/guides/leases.md#holds)
@@ -197,7 +197,7 @@ async function removeEndedLeases(db: ImpDatabase, impId: string, at: number): Pr
     .execute();
 }
 
-function toLeaseRecord(row: Readonly<Selectable<ImpLeasesTable>>): LeaseRecord {
+function toLeaseRecord(row: Readonly<Selectable<ImpLeases>>): LeaseRecord {
   return {
     impId: row.imp_id,
     principal: row.principal,

@@ -1,8 +1,8 @@
 import { faker } from '@faker-js/faker';
 import type { Insertable } from 'kysely';
-import type { DatabaseSchema } from '../db/schema';
+import type { DB } from '../db/schema';
 
-type MoveTicketRow = Insertable<DatabaseSchema['move_tickets']>;
+type MoveTicketRow = Insertable<DB['move_tickets']>;
 
 // A move_tickets row as a target issues one: its stream not started, no
 // receipt, no commit and no warm slot; its stream window opens after its

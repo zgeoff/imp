@@ -38,6 +38,7 @@
     "@types/dns-packet": "catalog:",
     "@types/ssh2": "catalog:",
     "fast-check": "catalog:",
+    "kysely-codegen": "catalog:",
     "msw": "catalog:"
   }
 }

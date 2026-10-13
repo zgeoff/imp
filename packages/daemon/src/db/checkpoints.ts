@@ -2,7 +2,7 @@ import type { Checkpoint } from '@imp/api';
 import type { Selectable } from 'kysely';
 import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
-import type { DatabaseSchema } from './schema';
+import type { DB } from './schema';
 
 export interface CheckpointRecord {
   readonly id: string;
@@ -95,9 +95,7 @@ export async function removeCheckpoint(db: ImpDatabase, id: string): Promise<boo
   return true;
 }
 
-function toCheckpointRecord(
-  row: Readonly<Selectable<DatabaseSchema['checkpoints']>>,
-): CheckpointRecord {
+function toCheckpointRecord(row: Readonly<Selectable<DB['checkpoints']>>): CheckpointRecord {
   return {
     id: row.id,
     impId: row.imp_id,

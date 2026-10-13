@@ -3,7 +3,7 @@ import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import type { ImpDatabase } from './open-database';
-import type { TokenSshKeysTable, TokensTable } from './schema';
+import type { TokenSshKeys, Tokens } from './schema';
 
 // a secret a token may grant: its name, and its generation when the token
 // was made; a secret deleted and made again under the name is another one
@@ -202,7 +202,7 @@ async function writeSshKeyRow(
     .execute();
 }
 
-function toTokenRecord(row: Readonly<Selectable<TokensTable>>): TokenRecord {
+function toTokenRecord(row: Readonly<Selectable<Tokens>>): TokenRecord {
   const imps: unknown = row.imps === null ? null : JSON.parse(row.imps);
 
   return {
@@ -216,7 +216,7 @@ function toTokenRecord(row: Readonly<Selectable<TokensTable>>): TokenRecord {
   };
 }
 
-function toTokenSshKeyRecord(row: Readonly<Selectable<TokenSshKeysTable>>): TokenSshKeyRecord {
+function toTokenSshKeyRecord(row: Readonly<Selectable<TokenSshKeys>>): TokenSshKeyRecord {
   return {
     id: row.id,
     tokenId: row.token_id,

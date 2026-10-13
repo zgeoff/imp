@@ -13,9 +13,9 @@ import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
 import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
-import type { DatabaseSchema } from './schema';
+import type { DB } from './schema';
 
-type ImpRow = Selectable<DatabaseSchema['imps']>;
+type ImpRow = Selectable<DB['imps']>;
 
 export interface ImpRecord {
   readonly id: string;
@@ -359,7 +359,7 @@ export async function updateImpState(
   id: string,
   change: Readonly<ImpStateChange>,
 ): Promise<ImpRecord> {
-  const values: Updateable<DatabaseSchema['imps']> = { state: change.state };
+  const values: Updateable<DB['imps']> = { state: change.state };
 
   if (change.error !== undefined) {
     values.error = change.error;
@@ -395,7 +395,7 @@ export async function updateImpStateIf(
   expected: Readonly<{ state: ImpState; pid: number | null }>,
   change: Readonly<ImpStateChange>,
 ): Promise<ImpRecord | undefined> {
-  const values: Updateable<DatabaseSchema['imps']> = { state: change.state };
+  const values: Updateable<DB['imps']> = { state: change.state };
 
   if (change.error !== undefined) {
     values.error = change.error;

@@ -2,7 +2,7 @@ import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import type { ImpDatabase } from './open-database';
-import type { OAuthClientsTable, OAuthGrantsTable } from './schema';
+import type { OauthClients, OauthGrants } from './schema';
 
 // The public MCP route's OAuth rows (docs/guides/mcp.md#public-route)
 
@@ -342,7 +342,7 @@ async function writeTokens(
     .execute();
 }
 
-function toClientRecord(row: Readonly<Selectable<OAuthClientsTable>>): OAuthClientRecord {
+function toClientRecord(row: Readonly<Selectable<OauthClients>>): OAuthClientRecord {
   return {
     id: row.id,
     name: row.name,
@@ -351,7 +351,7 @@ function toClientRecord(row: Readonly<Selectable<OAuthClientsTable>>): OAuthClie
   };
 }
 
-function toGrantRecord(row: Readonly<Selectable<OAuthGrantsTable>>): OAuthGrantRecord {
+function toGrantRecord(row: Readonly<Selectable<OauthGrants>>): OAuthGrantRecord {
   const imps: unknown = row.imps === null ? null : JSON.parse(row.imps);
 
   return {

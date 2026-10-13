@@ -2,7 +2,7 @@ import type { ApiActor, ApiCall } from '@imp/api';
 import type { Selectable } from 'kysely';
 import { toLikePattern } from '../auth/imp-patterns';
 import type { ImpDatabase } from './open-database';
-import type { ApiAuditTable } from './schema';
+import type { ApiAudit } from './schema';
 
 // rows the API audit log keeps across every imp; older ones go as new ones come
 export const API_AUDIT_ROWS = 10_000;
@@ -66,7 +66,7 @@ export async function listApiCalls(
   return rows.map((row) => toApiCall(row));
 }
 
-function toApiCall(row: Readonly<Selectable<ApiAuditTable>>): ApiCall {
+function toApiCall(row: Readonly<Selectable<ApiAudit>>): ApiCall {
   const call: ApiCall = {
     at: new Date(row.at),
     procedure: row.procedure,

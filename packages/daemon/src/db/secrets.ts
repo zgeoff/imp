@@ -5,14 +5,14 @@ import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { parseStoredPolicy } from './egress';
 import type { ImpDatabase } from './open-database';
-import type { DatabaseSchema } from './schema';
+import type { DB } from './schema';
 import { readTokenGrantable } from './tokens';
 import type { GrantableSecret } from './tokens';
 
 // Secrets and grants: what the credential broker may add, and for which
 // imps. Values are not here; broker/secret-files.ts keeps them.
 
-export type SecretRow = Selectable<DatabaseSchema['secrets']>;
+export type SecretRow = Selectable<DB['secrets']>;
 
 export interface SecretRecord {
   readonly name: string;
