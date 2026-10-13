@@ -178,17 +178,18 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    the baseline. After a journey that failed, and before that reset, it reboots the instance with
    the run's settings (`scripts/dev.sh reboot`), since the journey may have left impd rebooted onto
    its own; an interrupted run skips that reboot, runs no more journeys, and fails the suite whose
-   journeys it skipped. A passing `scale` keeps its imps when `restart` runs after it, and
-   `restart`'s first reset takes them; a failed `scale`, or one with no `restart` after it, gets the
-   reboot and reset like any other suite. A journey whose process cannot start, or whose checks
-   throw, fails like one that exits non-zero, and the run goes on. A reset or reboot that fails
-   fails the suite, and the harness then makes the instance anew (the `--clean` reset below, then up
-   with the run's settings, privilege check, token and fixture images) before the next journey; if
-   that fails too, the run stops with the reason and fails. On the ZFS backend that reset also
-   empties the run's root dataset (below). It also fails a suite when the impd log since one of its
-   journeys started shows a boot-template fallback (the `chaos` suite may cause one). A suite passes
-   only when every journey passed, and its time runs from its start to its last reset. The loop is
-   `runSuites` in `test/e2e/lib/run-suites.ts`, which takes each step as a dependency;
+   journeys it skipped. A passing `scale` keeps its imps when `restart` runs after it, the harness
+   names scale's prefix to `restart` (`E2E_KEPT_PREFIXES`), which checks that the whole fleet is
+   there, and `restart`'s first reset takes them; a failed `scale`, or one with no `restart` after
+   it, gets the reboot and reset like any other suite. A journey whose process cannot start, or
+   whose checks throw, fails like one that exits non-zero, and the run goes on. A reset or reboot
+   that fails fails the suite, and the harness then makes the instance anew (the `--clean` reset
+   below, then up with the run's settings, privilege check, token and fixture images) before the
+   next journey; if that fails too, the run stops with the reason and fails. On the ZFS backend that
+   reset also empties the run's root dataset (below). It also fails a suite when the impd log since
+   one of its journeys started shows a boot-template fallback (the `chaos` suite may cause one). A
+   suite passes only when every journey passed, and its time runs from its start to its last reset.
+   The loop is `runSuites` in `test/e2e/lib/run-suites.ts`, which takes each step as a dependency;
    `run-suites.test.ts` checks the order of runs, reboots, resets and re-creations, between the
    journeys of one suite too.
 
@@ -218,11 +219,11 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    up anew and fails the suite, and since B's stop takes A off its network, the next journey first
    reboots onto the suite's settings again; one that cannot come back runs no more of the suite's
    journeys; one that will not stop fails the suite. An interrupt skips the fixture's reset and
-   still stops it, and `--keep` skips the reset only. A `receiving` imp on B, which `moves.abort`
-   does not end and impd will not remove (`MOVING`), fails B's reset, so B falls back to being made
-   anew; B keeps its data dir, and its impd drops at start only a staged imp whose stream was cut
-   short, so one that already holds a receipt fails the reset again and the suite runs no more
-   journeys.
+   still stops it, and `--keep` skips the reset only. A `receiving` imp on B whose source is gone
+   fails B's reset, because `moves.abort` does not end it and impd will not remove it (`MOVING`).
+   B's data dir stays between starts, so the fixture's start resets B once more, and when that reset
+   fails too it takes B down, empties its data dir (the `--clean` wipe below) and starts it from
+   nothing. Under `--keep` the start fails instead, so B keeps what the journeys left.
 
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`
@@ -230,18 +231,18 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    SIGINT or SIGTERM came, even one during the last reset or the cleanup (`checkRunPassed`); an
    interrupted run exits 130.
 
-The wipe of `--clean` and of a re-creation deletes the data dir as root, so `main.ts` wipes only a
-dir under `<repo>/.data/` or one that holds an `imp.xfs` (`resolveWipeTarget` in
-`test/e2e/lib/wipe-target.ts`). On the ZFS backend (`IMP_STORAGE_BACKEND=zfs`, as
-`scripts/zfs-host-test.sh` runs it) it first asks `readZfsOwner` in `test/e2e/lib/zfs-owner.ts`,
-wherever the dir sits, so a proven pool's root is emptied along with the data; a dir it cannot prove
-falls back to the two rules above. The proof: the owner file `imp-e2e-zfs-owner` that
-`zfs-host-test.sh` writes into it parses, its root is `IMP_ZFS_ROOT` and sits in its pool, its vdev
-sits beside the data dir, and `zpool status -P` lists that vdev in that pool. Then the wipe keeps
-the owner file, and `resetZfsRoot` destroys the root dataset with all its descendants
-(`zfs destroy -R`) and makes it again. `zpool` and `zfs` run in a privileged container of the host
-image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in command runner; no
-test runs them on a real pool.
+The wipe of `--clean`, of a re-creation and of a host B made from nothing deletes the data dir as
+root, so the harness wipes only a dir under `<repo>/.data/` or one that holds an `imp.xfs`
+(`resolveWipeTarget` in `test/e2e/lib/wipe-target.ts`). On the ZFS backend
+(`IMP_STORAGE_BACKEND=zfs`, as `scripts/zfs-host-test.sh` runs it) it first asks `readZfsOwner` in
+`test/e2e/lib/zfs-owner.ts`, wherever the dir sits, so a proven pool's root is emptied along with
+the data; a dir it cannot prove falls back to the two rules above. The proof: the owner file
+`imp-e2e-zfs-owner` that `zfs-host-test.sh` writes into it parses, its root is `IMP_ZFS_ROOT` and
+sits in its pool, its vdev sits beside the data dir, and `zpool status -P` lists that vdev in that
+pool. Then the wipe keeps the owner file, and `resetZfsRoot` destroys the root dataset with all its
+descendants (`zfs destroy -R`) and makes it again. `zpool` and `zfs` run in a privileged container
+of the host image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in command
+runner; no test runs them on a real pool.
 
 The baseline reset, `resetBaseline` in `test/e2e/lib/reset-baseline.ts`, takes impd's client
 (`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It first ends
@@ -355,10 +356,10 @@ sources, so a changed fixture builds anew.
 `scripts/dev.test.ts` sets each of the two `dev.sh` deadlines to 1 s, against an impd that never
 gets ready or never exits, beside a run where it does.
 
-`main.ts` sets `E2E_KEEP`, `E2E_ACCEPTANCE`, and `E2E_METRICS_FILE` for each suite process. It no
-longer sets `E2E_SUITES`: `scale` read it to keep its imps for `restart`, and that choice is now the
-harness's (step 5). Suites that reboot the instance pass impd settings through `process.env`, which
-`scripts/dev.sh` forwards from its allowlist.
+`main.ts` sets `E2E_KEEP`, `E2E_KEPT_PREFIXES`, `E2E_ACCEPTANCE`, and `E2E_METRICS_FILE` for each
+suite process. It no longer sets `E2E_SUITES`: `scale` read it to keep its imps for `restart`, and
+that choice is now the harness's (step 5). Suites that reboot the instance pass impd settings
+through `process.env`, which `scripts/dev.sh` forwards from its allowlist.
 
 Suites with extra needs:
 

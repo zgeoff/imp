@@ -298,6 +298,66 @@ test('#runSuites leaves scale’s imps for restart, whose reset takes them', asy
   expect(ctx.steps).toStrictEqual(['reset e2e-restart-,e2e-scale-', 'reset e2e-tailscale-']);
 });
 
+test('#runSuites tells restart that scale kept its imps for it, and no other journey', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['scale', 'restart', 'tailscale'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: () => null,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey, kept) => {
+      ctx.steps.push(`run ${journey} kept [${kept.join(',')}]`);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'run scale kept []',
+    'run restart kept [e2e-scale-]',
+    'reset e2e-restart-,e2e-scale-',
+    'run tailscale kept []',
+    'reset e2e-tailscale-',
+  ]);
+});
+
+test('#runSuites tells restart that no imps were kept for it after scale fails', async () => {
+  const ctx = setupTest();
+
+  await runSuites({
+    ...ctx.recorders,
+    names: ['scale', 'restart'],
+    prefixOf: (name) => `e2e-${name}-`,
+    journeysOf: (name) => [name],
+    keep: false,
+    settingsOf: () => null,
+    isInterrupted: () => false,
+    now: () => 0,
+    checkJourney: () => Promise.resolve(true),
+    runJourney: (journey, kept) => {
+      ctx.steps.push(`run ${journey} kept [${kept.join(',')}]`);
+
+      const exitCode = journey === 'scale' ? 1 : 0;
+
+      return Promise.resolve(exitCode);
+    },
+  });
+
+  expect(ctx.steps).toStrictEqual([
+    'run scale kept []',
+    'reboot',
+    'reset e2e-scale-',
+    'run restart kept []',
+    'reset e2e-restart-',
+  ]);
+});
+
 test('#runSuites reboots and resets after scale fails, so restart runs without its imps', async () => {
   const ctx = setupTest();
 

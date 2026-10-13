@@ -9,6 +9,7 @@ import {
   SUITES,
   SUITE_SETS,
   buildJourneyArgv,
+  buildKsmSettings,
   listJourneys,
   readSuitePrefix,
   readSuiteSettings,
@@ -57,6 +58,19 @@ test('#readSuiteSettings reads the settings a suite runs its journeys on', () =>
 
 test('#readSuiteSettings reads null for a suite on the run’s own settings', () => {
   expect(readSuiteSettings('templates', instance)).toBeNull();
+});
+
+test('#buildKsmSettings keeps the run’s settings on a host without KSM', () => {
+  expect(buildKsmSettings(false)).toBeNull();
+});
+
+test('#buildKsmSettings puts the instance on KSM, a one-guest budget and no idle sleeps on a host that runs KSM', () => {
+  expect(buildKsmSettings(true)).toStrictEqual({
+    IMP_KSM: '1',
+    IMP_RAM_BUDGET_MIB: '512',
+    IMP_BOOT_RESERVE_PERCENT: '20',
+    IMP_IDLE_TIMEOUT_S: '600',
+  });
 });
 
 test('#readSuiteSettings rejects a name that no suite has', () => {

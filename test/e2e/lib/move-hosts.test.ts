@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { BlockList } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildStubAnswerQueue } from '@imp/test-utils/build-stub-answer-queue';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { REPO_ROOT, instance } from './instance';
 import type { HostBFixtureDeps } from './move-hosts';
@@ -53,6 +54,15 @@ async function setupTest() {
       steps.push(`reset ${host.container} ${prefix}`);
 
       return Promise.resolve();
+    },
+    keep: false,
+    removeHost: (host) => {
+      steps.push(`remove ${host.container} ${host.dataDir}`);
+
+      return Promise.resolve();
+    },
+    log: (line) => {
+      steps.push(`log ${line.trim()}`);
     },
   };
 
@@ -193,6 +203,75 @@ test('#buildHostBFixture starts B on the move network once leftovers are gone, s
     `network ${instance.container}-mv 10.105.120.0/24 10.105.120.1`,
     `up ${instance.container}-mv-b 10.105.120.11`,
     `login http://10.105.120.11:7070 ${ctx.cliDir} stale=false`,
+    `reset ${instance.container}-mv-b e2e-mv-`,
+  ]);
+});
+
+test('#buildHostBFixture makes B from nothing and resets it again when its reset at start fails', async () => {
+  const ctx = await setupTest();
+
+  updateEnv('IMP_DEV_PORT_OFFSET', '1400');
+
+  // the refusal a receiving imp whose source is gone gets
+  const resets = buildStubAnswerQueue([
+    () => Promise.reject(new Error('e2e-mv-cold is moving')),
+    () => Promise.resolve(),
+  ]);
+
+  await buildHostBFixture({ tailnet: false }, 'e2e-mv-', {
+    ...ctx.deps,
+    resetHost: (host, prefix) => {
+      ctx.steps.push(`reset ${host.container} ${prefix}`);
+
+      return resets.next()();
+    },
+  }).start();
+
+  expect(ctx.steps).toStrictEqual([
+    'leftovers',
+    `network ${instance.container}-mv 10.105.120.0/24 10.105.120.1`,
+    `up ${instance.container}-mv-b 10.105.120.11`,
+    `login http://10.105.120.11:7070 ${ctx.cliDir} stale=false`,
+    `reset ${instance.container}-mv-b e2e-mv-`,
+    `log ${instance.container}-mv-b could not be reset, so it starts from nothing: e2e-mv-cold is moving`,
+    `remove ${instance.container}-mv-b ${instance.dataDir}-mv-b`,
+    `up ${instance.container}-mv-b 10.105.120.11`,
+    `login http://10.105.120.11:7070 ${ctx.cliDir} stale=false`,
+    `reset ${instance.container}-mv-b e2e-mv-`,
+  ]);
+});
+
+test('#buildHostBFixture rejects the start when B made from nothing still fails its reset', async () => {
+  const ctx = await setupTest();
+
+  const start = buildHostBFixture({ tailnet: false }, 'e2e-mv-', {
+    ...ctx.deps,
+    resetHost: () => Promise.reject(new Error('impd refused the removal')),
+  }).start();
+
+  expect(start).rejects.toThrowWithMessage(Error, 'impd refused the removal');
+});
+
+test('#buildHostBFixture keeps B’s data under --keep and rejects the start when its reset fails', async () => {
+  const ctx = await setupTest();
+
+  const start = buildHostBFixture({ tailnet: false }, 'e2e-mv-', {
+    ...ctx.deps,
+    keep: true,
+    resetHost: (host, prefix) => {
+      ctx.steps.push(`reset ${host.container} ${prefix}`);
+
+      return Promise.reject(new Error('e2e-mv-cold is moving'));
+    },
+  }).start();
+
+  expect(start).rejects.toThrowWithMessage(Error, 'e2e-mv-cold is moving');
+
+  expect(ctx.steps).toStrictEqual([
+    'leftovers',
+    `network ${instance.container}-mv 10.100.0.0/24 10.100.0.1`,
+    `up ${instance.container}-mv-b 10.100.0.11`,
+    `login http://10.100.0.11:7070 ${ctx.cliDir} stale=false`,
     `reset ${instance.container}-mv-b e2e-mv-`,
   ]);
 });

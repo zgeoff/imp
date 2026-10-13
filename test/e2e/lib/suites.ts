@@ -207,22 +207,14 @@ export const SUITES: readonly Suite[] = [
   },
   { name: 'memory', prefix: 'e2e-mem-', images: ['e2e-tiny'] },
 
-  // skips unless KSM runs on this host, as CI turns it on; impd cannot start
-  // with IMP_KSM elsewhere. One guest's memory as the budget, boots reserving
-  // 20 %, and no idle sleeps to hide a breach.
+  // skips unless KSM runs on this host, as CI turns it on; elsewhere impd
+  // cannot start with IMP_KSM, so the run's settings stay. One guest's memory
+  // as the budget, boots reserving 20 %, and no idle sleeps to hide a breach.
   {
     name: 'ksm',
     prefix: 'e2e-ksm-',
     images: ['e2e-tiny'],
-    settings: () =>
-      checkHostRunsKsm()
-        ? {
-            IMP_KSM: '1',
-            IMP_RAM_BUDGET_MIB: '512',
-            IMP_BOOT_RESERVE_PERCENT: '20',
-            IMP_IDLE_TIMEOUT_S: '600',
-          }
-        : {},
+    settings: () => buildKsmSettings(checkHostRunsKsm()),
   },
 
   // last: it reboots the instance with backups on, then off again
@@ -325,6 +317,20 @@ export function readSuiteSettings(
   }
 
   return suite.settings?.(target) ?? null;
+}
+
+// the ksm suite's settings, by whether KSM runs on this host
+export function buildKsmSettings(isKsmRunning: boolean): Readonly<Record<string, string>> | null {
+  if (!isKsmRunning) {
+    return null;
+  }
+
+  return {
+    IMP_KSM: '1',
+    IMP_RAM_BUDGET_MIB: '512',
+    IMP_BOOT_RESERVE_PERCENT: '20',
+    IMP_IDLE_TIMEOUT_S: '600',
+  };
 }
 
 // generous: a journey's own waits fail long before this

@@ -15,7 +15,7 @@ import { checkHealthReady, findImpdPid, runDevScript } from '../lib/instance';
 import { checkMemoryProof, startMemoryProof } from '../lib/memory-proof';
 import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
-import { listAwakeImps, readInventory } from '../lib/restart-inventory';
+import { buildKeptScaleFleet, listAwakeImps, readInventory } from '../lib/restart-inventory';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
@@ -80,6 +80,11 @@ test('it re-adopts running VMs across an impd restart, wakes a sleeper and resto
   const oldPid = await findImpdPid();
 
   console.log(`    ${String(beforeRestart.length)} imps before the restart`);
+
+  // scale's whole fleet when the harness kept it for this suite
+  expect(beforeRestart.map((entry) => entry.name)).toIncludeAllMembers(
+    buildKeptScaleFleet(config.keptPrefixes, config.scaleCount),
+  );
 
   const restarting = Date.now();
 
