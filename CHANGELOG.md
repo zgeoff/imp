@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/zgeoff/imp/compare/v1.0.1...v1.0.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **geo-743:** stop memory control leaking grows or missing reclaims ([#337](https://github.com/zgeoff/imp/issues/337)) ([92341f0](https://github.com/zgeoff/imp/commit/92341f05d6b580587acaef2d49b54547f06c6274))
+
 ## [1.0.1](https://github.com/zgeoff/imp/compare/v1.0.0...v1.0.1) (2026-10-13)
 
 ### Bug Fixes
