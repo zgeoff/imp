@@ -21,6 +21,41 @@ test('#runMigrations migrates an empty database to the last migration', async ()
   expect(ran.rows.map((row) => row.name)).toStrictEqual(Object.keys(MIGRATIONS).toSorted());
 });
 
+// A database records each migration by name, and a name it ran that this
+// impd lacks refuses the upgrade, so a released migration keeps its name
+test('#runMigrations keeps the name of each migration a released impd ran', () => {
+  expect(Object.keys(MIGRATIONS).toSorted()).toIncludeAllMembers([
+    '001_create_initial_schema',
+    '002_add_imp_http_port',
+    '003_add_broker',
+    '004_add_api_audit',
+    '005_add_disk_sizes',
+    '006_add_tokens',
+    '007_add_egress_allow',
+    '008_add_token_ssh_keys',
+    '009_add_imp_cpu',
+    '010_add_image_source',
+    '011_add_public_exposure',
+    '012_add_networks',
+    '013_add_imp_leases',
+    '014_add_moves',
+    '015_add_cold_boots',
+    '016_add_imp_jail_uid',
+    '017_add_move_slots',
+    '018_add_warm_moves',
+    '019_add_imp_max_memory',
+    '020_add_grantable_secrets',
+    '021_add_broker_sessions',
+    '022_add_mcp_oauth',
+    '023_add_secret_file_removals',
+    '024_add_imp_kind',
+    '025_add_api_audit_detail',
+    '026_add_secret_oauth',
+    '027_add_imp_backup',
+    '028_cascade_oauth_tokens',
+  ]);
+});
+
 test('#runMigrations refuses a database a newer impd migrated, naming both versions', async () => {
   const db = createUnmigratedDatabase();
 

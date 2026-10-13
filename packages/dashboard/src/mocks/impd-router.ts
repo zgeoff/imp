@@ -425,7 +425,7 @@ export const impdRouter = {
 
       const updated = await tokenCollection.update((query) => query.where({ name: token.name }), {
         data(row) {
-          row.grantable = grantable;
+          row.grantable = [...grantable];
           row.imageRefPrefix = imageRefPrefix;
         },
       });

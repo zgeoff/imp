@@ -285,7 +285,7 @@ export const MIGRATIONS: Record<string, Migration> = {
 
   // templates: images made from an imp's disk (#22), and the identity reset
   // an imp from one owes its first boot
-  '010_add_image_ref_prefix': {
+  '010_add_image_source': {
     async up(db: Kysely<NoTables>) {
       await db.schema
         .alterTable('images')
