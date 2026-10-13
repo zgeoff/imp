@@ -12,7 +12,7 @@ project=$(mktemp -d)
 trap 'rm -rf "$project"' EXIT
 
 cd "$project"
-npm init -y > /dev/null
+npm init -y >/dev/null
 npm pkg set type=module
 npm install --no-audit --no-fund --silent "$tarball"
 
@@ -35,7 +35,7 @@ console.log(`imported @zgeoff/imp-client ${client.CLIENT_VERSION}`);
 JS
 
 # the README's examples, against the published declarations only
-cat > example.ts <<'TS'
+cat >example.ts <<'TS'
 import { ExecError, createImpClient, isDefinedError, safe } from '@zgeoff/imp-client';
 import type { Imp } from '@zgeoff/imp-client';
 
@@ -75,7 +75,7 @@ export async function example(): Promise<Imp> {
 }
 TS
 
-cat > tsconfig.json <<'JSON'
+cat >tsconfig.json <<'JSON'
 {
   "compilerOptions": {
     "strict": true,

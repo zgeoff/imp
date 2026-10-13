@@ -87,9 +87,9 @@ fail() {
 # ones bootstrap.sh would load: the kernel loads others (nft_ct, xfs, the
 # socket diag modules) on demand when the container uses them.
 kernel_state() {
-  sysctl -a 2>/dev/null \
-    | grep -E '^(vm|kernel)\.' \
-    | grep -vE '^kernel\.(random\.|spl\.kmem\.|ns_last_pid|pty\.nr|sched_domain\.|perf_event_max_sample_rate|tainted)' || true
+  sysctl -a 2>/dev/null |
+    grep -E '^(vm|kernel)\.' |
+    grep -vE '^kernel\.(random\.|spl\.kmem\.|ns_last_pid|pty\.nr|sched_domain\.|perf_event_max_sample_rate|tainted)' || true
   awk '$1 ~ /^(kvm|kvm_intel|kvm_amd|tun|loop|zfs)$/ { print "module", $1 }' /proc/modules | sort
 }
 
@@ -108,8 +108,8 @@ teardown() {
       [ -e "$file" ] || continue
       for dev in $(losetup --list -n -O NAME -j "$file"); do losetup -d "$dev"; done
     done
-  ' teardown "$zfs_pool" "$loop_file" "$disk_empty" "$disk_ext4" \
-    || echo "test-bootstrap: WARNING: teardown in $container failed; check losetup -l" >&2
+  ' teardown "$zfs_pool" "$loop_file" "$disk_empty" "$disk_ext4" ||
+    echo "test-bootstrap: WARNING: teardown in $container failed; check losetup -l" >&2
   docker rm -f -v "$container" >/dev/null
   container=
 }
@@ -152,8 +152,8 @@ JSON
 CMD ["sh", "-c", "mkdir -p /var/lib/imp/tailscale && echo stub >/var/lib/imp/tailscale/tailscaled.state && exec sleep infinity"]
 EOF
   # the release before the proxy, as a stale :latest on a #75 host would be
-  printf 'FROM %s\nLABEL imp.host-contract="unprivileged"\n' "$image" \
-    | docker build -q -t imp-host-stub:stale - >/dev/null
+  printf 'FROM %s\nLABEL imp.host-contract="unprivileged"\n' "$image" |
+    docker build -q -t imp-host-stub:stale - >/dev/null
 fi
 # Not a real key: a marker the test looks for in the output.
 fake_key=fake-authkey-$$-$RANDOM
@@ -289,14 +289,14 @@ check_host_firewall_none() {
   log "[$distro] --host-firewall none"
   extra_args=(--host-firewall none)
   expect_exit 2 --check
-  grep -qF "would: remove imp-firewall.service and the inet imp_host table" <<<"$LAST_OUTPUT" \
-    || fail "[$distro] --check did not plan the firewall's removal"
+  grep -qF "would: remove imp-firewall.service and the inet imp_host table" <<<"$LAST_OUTPUT" ||
+    fail "[$distro] --check did not plan the firewall's removal"
   bootstrap --yes || fail "[$distro] the run with --host-firewall none failed"
   in_container test ! -e /etc/systemd/system/imp-firewall.service || fail "[$distro] imp-firewall.service is left"
   in_container test ! -e /etc/imp/firewall.nft || fail "[$distro] /etc/imp/firewall.nft is left"
   ! in_container nft list table inet imp_host >/dev/null 2>&1 || fail "[$distro] the inet imp_host table is left"
-  ! in_container nft list ruleset | grep -qE 'hook input .*policy drop' \
-    || fail "[$distro] an input chain with policy drop is left"
+  ! in_container nft list ruleset | grep -qE 'hook input .*policy drop' ||
+    fail "[$distro] an input chain with policy drop is left"
   in_container grep -qx IMP_HOST_FIREWALL=none /etc/imp/imp-host.env || fail "[$distro] the env file does not say none"
   wait_for_imp_host || fail "[$distro] imp-host is not running with --host-firewall none"
   log "[$distro] --host-firewall none again changes nothing"
@@ -335,12 +335,12 @@ check_ipv6_on() {
   [ -n "$subnet" ] || fail "[$distro] the env file has no IMP_HOST_SUBNET6"
   [ "$(env_value IMP_HOST_IPV6)" = on ] || fail "[$distro] the env file does not say IMP_HOST_IPV6=on"
   [ "$(env_value IMP_HOST_NETWORK)" = "--network imp-host" ] || fail "[$distro] IMP_HOST_NETWORK does not name imp-host"
-  [ "$(in_container docker network inspect -f '{{.EnableIPv6}} {{index .Options "com.docker.network.bridge.name"}}' imp-host)" = "true br-imphost" ] \
-    || fail "[$distro] the imp-host network is not IPv6 on br-imphost"
-  in_container docker network inspect -f '{{range .IPAM.Config}} {{.Subnet}}{{end}} ' imp-host | grep -qF " $subnet " \
-    || fail "[$distro] the imp-host network is not on $subnet"
-  [ "$(imp_host_networks)" = imp-host ] \
-    || fail "[$distro] the imp-host container is not on the imp-host network alone"
+  [ "$(in_container docker network inspect -f '{{.EnableIPv6}} {{index .Options "com.docker.network.bridge.name"}}' imp-host)" = "true br-imphost" ] ||
+    fail "[$distro] the imp-host network is not IPv6 on br-imphost"
+  in_container docker network inspect -f '{{range .IPAM.Config}} {{.Subnet}}{{end}} ' imp-host | grep -qF " $subnet " ||
+    fail "[$distro] the imp-host network is not on $subnet"
+  [ "$(imp_host_networks)" = imp-host ] ||
+    fail "[$distro] the imp-host container is not on the imp-host network alone"
   route=$(imp_host_ip6 route show default)
   [ -n "$route" ] || fail "[$distro] imp-host has no IPv6 default route"
   log "[$distro] imp-host's IPv6 default route: $route"
@@ -358,8 +358,8 @@ check_imp_egress6() {
   in_container ip -6 addr add "$target/128" dev imptarget nodad
   in_container docker exec imp-host imp rm "$name" >/dev/null 2>&1 || true
   in_container docker exec imp-host imp new "$name" --image ubuntu --memory 512m >/dev/null
-  in_container docker exec imp-host imp exec "$name" -- timeout 10 bash -c "exec 3<>/dev/tcp/$target/22" \
-    || fail "[$distro] the imp cannot reach $target:22 over IPv6"
+  in_container docker exec imp-host imp exec "$name" -- timeout 10 bash -c "exec 3<>/dev/tcp/$target/22" ||
+    fail "[$distro] the imp cannot reach $target:22 over IPv6"
   in_container docker exec imp-host imp rm "$name" >/dev/null
   in_container ip link del imptarget
 }
@@ -378,8 +378,8 @@ check_ipv6_cases() {
   in_container docker network create --ipv6 --subnet fd00:dead:beef::/64 \
     -o com.docker.network.bridge.name=br-imphost imp-host >/dev/null
   expect_exit 2 --check
-  grep -qF "would: recreate the imp-host network (its IPv6 subnet is fd00:dead:beef::/64, not $subnet)" <<<"$LAST_OUTPUT" \
-    || fail "[$distro] --check did not plan to recreate the network"
+  grep -qF "would: recreate the imp-host network (its IPv6 subnet is fd00:dead:beef::/64, not $subnet)" <<<"$LAST_OUTPUT" ||
+    fail "[$distro] --check did not plan to recreate the network"
   bootstrap --yes || fail "[$distro] the run that recreates the network failed"
   wait_for_imp_host || fail "[$distro] imp-host is not running on the recreated network"
   check_ipv6_on
@@ -393,8 +393,8 @@ check_ipv6_cases() {
   expect_exit 2 --check
   grep -qF "would: sysctl net/ipv6/conf/$fake/accept_ra=2" <<<"$LAST_OUTPUT" || fail "[$distro] --check did not plan accept_ra=2"
   bootstrap --yes || fail "[$distro] the accept_ra run failed"
-  in_container grep -qx "net/ipv6/conf/$fake/accept_ra = 2" /etc/sysctl.d/90-imp-ipv6.conf \
-    || fail "[$distro] the accept_ra file does not name $fake"
+  in_container grep -qx "net/ipv6/conf/$fake/accept_ra = 2" /etc/sysctl.d/90-imp-ipv6.conf ||
+    fail "[$distro] the accept_ra file does not name $fake"
   [ "$(in_container cat "/proc/sys/net/ipv6/conf/$fake/accept_ra")" = 2 ] || fail "[$distro] accept_ra is not 2"
   bootstrap --yes || fail "[$distro] the second accept_ra run failed"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] accept_ra is not idempotent"
@@ -412,8 +412,8 @@ check_ipv6_cases() {
   [ "$(env_value IMP_HOST_IPV6)" = off ] && [ -z "$(env_value IMP_HOST_NETWORK)" ] || fail "[$distro] the env file is not off"
   [ "$(env_value IMP_HOST_SUBNET6)" = "$subnet" ] || fail "[$distro] off dropped the subnet"
   wait_for_imp_host || fail "[$distro] imp-host is not running with --ipv6 off"
-  [ "$(imp_host_networks)" = bridge ] \
-    || fail "[$distro] imp-host is not on the default bridge"
+  [ "$(imp_host_networks)" = bridge ] ||
+    fail "[$distro] imp-host is not on the default bridge"
   extra_args=()
   bootstrap --yes || fail "[$distro] the second off run failed"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] off is not idempotent"
@@ -428,8 +428,8 @@ check_ipv6_cases() {
   in_container sysctl -qw "net/ipv6/conf/$fake/accept_ra=0"
   extra_args=(--ipv6 on)
   expect_exit 1 --check
-  grep -qF "the IPv6 default route on $fake comes from router adverts that a client other than the kernel takes" <<<"$LAST_OUTPUT" \
-    || fail "[$distro] no refusal for router adverts outside the kernel"
+  grep -qF "the IPv6 default route on $fake comes from router adverts that a client other than the kernel takes" <<<"$LAST_OUTPUT" ||
+    fail "[$distro] no refusal for router adverts outside the kernel"
   extra_args=(--ipv6 on --ra-handled)
   bootstrap --yes || fail "[$distro] the --ra-handled run failed"
   wait_for_imp_host || fail "[$distro] imp-host is not running after --ra-handled"
@@ -443,8 +443,8 @@ check_ipv6_cases() {
   make_old_host
   in_container sysctl -qw "net/ipv6/conf/$fake/accept_ra=0"
   bootstrap --yes || fail "[$distro] the re-run of an older host failed"
-  grep -qF "WARNING: the IPv6 default route on $fake comes from router adverts" <<<"$LAST_OUTPUT" \
-    || fail "[$distro] auto did not warn about the router adverts"
+  grep -qF "WARNING: the IPv6 default route on $fake comes from router adverts" <<<"$LAST_OUTPUT" ||
+    fail "[$distro] auto did not warn about the router adverts"
   [ "$(env_value IMP_HOST_IPV6)" = off ] || fail "[$distro] auto did not record off"
   wait_for_imp_host || fail "[$distro] imp-host is not running after the re-run"
   [ "$(imp_host_networks)" = bridge ] || fail "[$distro] imp-host left the default bridge"
@@ -534,16 +534,16 @@ run_distro() {
   if [ -n "$stub" ]; then
     ! grep -qF "$fake_key" <<<"$LAST_OUTPUT" || fail "[$distro] bootstrap.sh printed the Tailscale key"
     grep -q 'change: blank TAILSCALE_AUTHKEY' <<<"$LAST_OUTPUT" || fail "[$distro] the key was not blanked"
-    in_container grep -qx "TAILSCALE_AUTHKEY=" /etc/imp/imp-host.env \
-      || fail "[$distro] imp-host.env still holds a Tailscale key"
-    ! in_container docker container inspect -f '{{.Config.Env}}' imp-host | grep -qF "$fake_key" \
-      || fail "[$distro] the running imp-host still has the Tailscale key in its environment"
+    in_container grep -qx "TAILSCALE_AUTHKEY=" /etc/imp/imp-host.env ||
+      fail "[$distro] imp-host.env still holds a Tailscale key"
+    ! in_container docker container inspect -f '{{.Config.Env}}' imp-host | grep -qF "$fake_key" ||
+      fail "[$distro] the running imp-host still has the Tailscale key in its environment"
     grep -q "delete /mnt/archive/authkey now" <<<"$LAST_OUTPUT" || fail "[$distro] no reminder to delete the key file"
   fi
   wait_for_imp_host || fail "[$distro] the imp-host container is not running"
   in_container systemctl -q is-active imp-docker-proxy || fail "[$distro] imp-docker-proxy is not active"
-  ! in_container docker container inspect -f '{{range .Mounts}}{{.Source}} {{end}}' imp-host | grep -q docker.sock \
-    || fail "[$distro] imp-host mounts the host's docker.sock"
+  ! in_container docker container inspect -f '{{range .Mounts}}{{.Source}} {{end}}' imp-host | grep -q docker.sock ||
+    fail "[$distro] imp-host mounts the host's docker.sock"
   in_container systemctl -q is-active imp-firewall || fail "[$distro] imp-firewall is not active"
   in_container nft list table inet imp_host >/dev/null || fail "[$distro] the firewall table is missing"
   [ "$(in_container stat -c %a /etc/imp/imp-host.env)" = 600 ] || fail "[$distro] imp-host.env is not 0600"
@@ -591,8 +591,8 @@ run_device() {
   log "[$distro] --check sizes a loop file from the free space"
   storage_args=(--loop-file /var/auto.xfs)
   expect_exit 2 --check
-  grep -qE "GiB free on /; the loop file gets [0-9]+ GiB" <<<"$LAST_OUTPUT" \
-    || fail "[$distro] --check did not size the loop file"
+  grep -qE "GiB free on /; the loop file gets [0-9]+ GiB" <<<"$LAST_OUTPUT" ||
+    fail "[$distro] --check did not size the loop file"
 
   log "[$distro] --storage zfs --check on an empty device"
   storage_args=(--storage zfs --data-device "$empty")
@@ -606,10 +606,10 @@ run_device() {
   log "[$distro] --data-device on an empty device"
   storage_args=(--data-device "$empty")
   bootstrap --yes || fail "[$distro] the --data-device run failed"
-  grep -qF "ipv6: off (auto: the host has no global IPv6 default route)" <<<"$LAST_OUTPUT" \
-    || fail "[$distro] auto did not turn IPv6 off on a host without an IPv6 route"
-  in_container grep -qE '^UUID=[0-9a-f-]+ /var/lib/imp xfs defaults,nosuid,nofail 0 2$' /etc/fstab \
-    || fail "[$distro] /etc/fstab has no UUID entry for /var/lib/imp"
+  grep -qF "ipv6: off (auto: the host has no global IPv6 default route)" <<<"$LAST_OUTPUT" ||
+    fail "[$distro] auto did not turn IPv6 off on a host without an IPv6 route"
+  in_container grep -qE '^UUID=[0-9a-f-]+ /var/lib/imp xfs defaults,nosuid,nofail 0 2$' /etc/fstab ||
+    fail "[$distro] /etc/fstab has no UUID entry for /var/lib/imp"
   expect_exit 0 --check
 
   log "[$distro] --storage zfs refuses an XFS host whose mount is down"
@@ -633,8 +633,8 @@ run_zfs() {
 
   log "[$distro] zfs: first run"
   bootstrap --yes || fail "[$distro] the zfs run failed"
-  in_container zfs get -H -o value mountpoint "$zfs_pool/imp" | grep -qx legacy \
-    || fail "[$distro] $zfs_pool/imp is not mountpoint=legacy"
+  in_container zfs get -H -o value mountpoint "$zfs_pool/imp" | grep -qx legacy ||
+    fail "[$distro] $zfs_pool/imp is not mountpoint=legacy"
   in_container grep -qx 'IMP_STORAGE_BACKEND=zfs' /etc/imp/imp-host.env || fail "[$distro] the env file is not zfs"
   in_container grep -qx "IMP_ZFS_ROOT=$zfs_pool/imp" /etc/imp/imp-host.env || fail "[$distro] no IMP_ZFS_ROOT"
   wait_for_imp_host || fail "[$distro] the imp-host container is not running on zfs"

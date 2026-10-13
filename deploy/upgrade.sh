@@ -167,14 +167,17 @@ read_image() {
     echo "$IMP_HOST_IMAGE"
     return
   fi
-  { echo "$compose_image"; pinned_image; } | grep . | head -n 1 || echo "$release_image"
+  {
+    echo "$compose_image"
+    pinned_image
+  } | grep . | head -n 1 || echo "$release_image"
 }
 
 # the IMP_HOST_IMAGE that the Environment= lines of FILE... set, the last
 # one winning. A line may set several, each one in double quotes or not.
 environment_image() {
-  sed -n 's/^Environment=//p' "$@" 2>/dev/null | xargs -n 1 2>/dev/null \
-    | sed -n 's/^IMP_HOST_IMAGE=//p' | tail -n 1 || true
+  sed -n 's/^Environment=//p' "$@" 2>/dev/null | xargs -n 1 2>/dev/null |
+    sed -n 's/^IMP_HOST_IMAGE=//p' | tail -n 1 || true
 }
 
 # unit_image UNIT INSTALLED: the image a unit runs after the restart: the env
@@ -198,8 +201,8 @@ rewrite_file() {
   local path=$1
   shift
   backup=$path.bak-$(date +%Y%m%d-%H%M%S)
-  if ! { (umask 077 && cp "$path" "$backup") && chmod 600 "$backup" && cp -p "$path" "$path.new" \
-    && awk "$@" "$backup" >"$path.new" && mv "$path.new" "$path"; }; then
+  if ! { (umask 077 && cp "$path" "$backup") && chmod 600 "$backup" && cp -p "$path" "$path.new" &&
+    awk "$@" "$backup" >"$path.new" && mv "$path.new" "$path"; }; then
     rm -f "$path.new"
     echo "upgrade: cannot rewrite $path; nothing restarted, the host still runs $old" >&2
     exit 1
@@ -328,7 +331,7 @@ restart_host() {
     local services=(imp-host)
     ! grep -q '^  imp-docker-proxy:' "$compose_file" || services=(imp-docker-proxy imp-host)
     IMP_DOCKER_GID=${IMP_DOCKER_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || true)} \
-      IMP_HOST_IMAGE=$image docker compose -f "$compose_file" up -d "${services[@]}"
+    IMP_HOST_IMAGE=$image docker compose -f "$compose_file" up -d "${services[@]}"
   elif [ "$new_contract" = socket-proxy ]; then
     systemctl enable -q imp-docker-proxy
     systemctl restart imp-docker-proxy
@@ -350,7 +353,10 @@ wait_ready() {
 }
 
 for tool in docker curl jq; do
-  command -v "$tool" >/dev/null || { echo "upgrade: $tool is not installed" >&2; exit 1; }
+  command -v "$tool" >/dev/null || {
+    echo "upgrade: $tool is not installed" >&2
+    exit 1
+  }
 done
 
 if ! docker inspect "$container" >/dev/null 2>&1; then

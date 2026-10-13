@@ -13,10 +13,10 @@ ensure_storage() {
 storage_xfs() {
   if mountpoint -q "$DATA_DIR"; then
     check_xfs_reflink
-    grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab \
-      || warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
-    findmnt -n -o OPTIONS --mountpoint "$DATA_DIR" | tr ',' '\n' | grep -qx nosuid \
-      || warn "$DATA_DIR is mounted without nosuid; add nosuid to its /etc/fstab entry and run: mount -o remount,nosuid $DATA_DIR"
+    grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab ||
+      warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
+    findmnt -n -o OPTIONS --mountpoint "$DATA_DIR" | tr ',' '\n' | grep -qx nosuid ||
+      warn "$DATA_DIR is mounted without nosuid; add nosuid to its /etc/fstab entry and run: mount -o remount,nosuid $DATA_DIR"
   else
     local source
     if [ -n "$data_device" ]; then
@@ -43,10 +43,10 @@ mount_data() {
 }
 
 check_xfs_reflink() {
-  [ "$(findmnt -n -o FSTYPE --mountpoint "$DATA_DIR")" = xfs ] \
-    || die "$DATA_DIR is mounted but not XFS; imp needs XFS with reflink"
-  [[ $(xfs_info "$DATA_DIR") == *reflink=1* ]] \
-    || die "$DATA_DIR is XFS without reflink; recreate it with mkfs.xfs -m reflink=1"
+  [ "$(findmnt -n -o FSTYPE --mountpoint "$DATA_DIR")" = xfs ] ||
+    die "$DATA_DIR is mounted but not XFS; imp needs XFS with reflink"
+  [[ $(xfs_info "$DATA_DIR") == *reflink=1* ]] ||
+    die "$DATA_DIR is XFS without reflink; recreate it with mkfs.xfs -m reflink=1"
   log "$DATA_DIR is XFS with reflink"
 }
 
@@ -111,8 +111,8 @@ storage_zfs() {
     fstype=$(blkid -p -s TYPE -o value "$data_device" 2>/dev/null || true)
     case $fstype in
       zfs_member)
-        [ "$(blkid -p -s LABEL -o value "$data_device")" = "$zfs_pool" ] \
-          || die "$data_device belongs to another ZFS pool"
+        [ "$(blkid -p -s LABEL -o value "$data_device")" = "$zfs_pool" ] ||
+          die "$data_device belongs to another ZFS pool"
         change "zpool import $zfs_pool" zpool import "$zfs_pool"
         ;;
       "")
@@ -141,11 +141,11 @@ storage_zfs() {
 prepare_loop_file() {
   local dir avail_gib
   dir=$(dirname "$loop_file")
-  [ "$(findmnt -n -o TARGET --target "$dir")" = / ] \
-    || die "--loop-file must be on the root filesystem, which mounts before $DATA_DIR"
+  [ "$(findmnt -n -o TARGET --target "$dir")" = / ] ||
+    die "--loop-file must be on the root filesystem, which mounts before $DATA_DIR"
   if [ -e "$loop_file" ]; then
-    [ "$(blkid -p -s TYPE -o value "$loop_file" 2>/dev/null || true)" = xfs ] \
-      || die "$loop_file exists and is not XFS"
+    [ "$(blkid -p -s TYPE -o value "$loop_file" 2>/dev/null || true)" = xfs ] ||
+      die "$loop_file exists and is not XFS"
     log "$loop_file already holds XFS; reusing it"
     return
   fi
@@ -156,8 +156,8 @@ prepare_loop_file() {
   elif [ $((avail_gib - loop_size_gib)) -lt "$(loop_reserve_gib "$avail_gib")" ]; then
     warn "$loop_file is sparse: once full, ${loop_size_gib} GiB leaves under $(loop_reserve_gib "$avail_gib") GiB of the ${avail_gib} GiB free on / for the OS"
   fi
-  [ "$loop_size_gib" -ge "$LOOP_MIN_GIB" ] \
-    || die "a ${loop_size_gib} GiB loop file is too small (${avail_gib} GiB free on /); imp needs ${LOOP_MIN_GIB}"
+  [ "$loop_size_gib" -ge "$LOOP_MIN_GIB" ] ||
+    die "a ${loop_size_gib} GiB loop file is too small (${avail_gib} GiB free on /); imp needs ${LOOP_MIN_GIB}"
   change "create a ${loop_size_gib} GiB sparse XFS file $loop_file" make_loop_file
 }
 

@@ -53,7 +53,7 @@ for pin in docker-ce=DOCKER_CE_VERSION docker-ce-cli=DOCKER_CE_CLI_VERSION \
   containerd.io=CONTAINERD_VERSION docker-buildx-plugin=BUILDX_VERSION; do
   package=${pin%%=*} arg=${pin#*=}
   want=$(sed -n "s/^ARG $arg=//p" "$dockerfile")
-  got=$(in_image "dpkg-query -W -f '\${Version}' $package" 2> /dev/null || true)
+  got=$(in_image "dpkg-query -W -f '\${Version}' $package" 2>/dev/null || true)
   if [ -z "$want" ] || [ "$got" != "$want" ]; then
     fail "$package is ${got:-not installed}, want ${want:-the ARG $arg in $dockerfile}"
   fi

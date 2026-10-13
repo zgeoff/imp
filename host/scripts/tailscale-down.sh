@@ -16,6 +16,9 @@ alive() { ps -C tailscaled -o stat= | grep -qv '^Z'; }
 if alive; then
   timeout 30 tailscale --socket="$sock" logout 2>/dev/null || true
   pkill -x tailscaled || true
-  for _ in $(seq 50); do alive || break; sleep 0.1; done
+  for _ in $(seq 50); do
+    alive || break
+    sleep 0.1
+  done
 fi
 echo "tailscale-down: logged out, tailscaled stopped"

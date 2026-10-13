@@ -107,8 +107,8 @@ change() {
 # CONTENT may be secret: it goes through printf, a builtin, so not to argv.
 put_file() {
   local path=$1 perm=$2 content=$3
-  if [ -f "$path" ] && [ "$(stat -c %a "$path")" = "$perm" ] \
-    && [ "$(cat "$path")" = "$content" ]; then
+  if [ -f "$path" ] && [ "$(stat -c %a "$path")" = "$perm" ] &&
+    [ "$(cat "$path")" = "$content" ]; then
     return 1
   fi
   change "write $path (mode $perm)" write_file "$path" "$perm" "$content"

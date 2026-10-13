@@ -20,6 +20,13 @@ pre-commit:
       glob: '*.{ts,tsx}'
       run: node_modules/.bin/format-codemod --quiet {staged_files}
       stage_fixed: true
+    # the flags scripts/ci/shellcheck.sh checks with; needs shfmt on PATH, the
+    # version CI pins (3.13.1). Scripts without a .sh name (scripts/imp,
+    # host/entrypoint) are left to that check.
+    - name: shfmt
+      glob: '*.sh'
+      run: shfmt -w -i 2 -ci {staged_files}
+      stage_fixed: true
     # last so it scans what the fixers above re-staged; needs the gitleaks
     # binary on PATH (mise: `mise use -g gitleaks`)
     - name: gitleaks

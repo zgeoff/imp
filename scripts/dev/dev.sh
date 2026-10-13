@@ -78,7 +78,10 @@ data=${IMP_DEV_DATA:-$IMP_ROOT/.data/dev}
 publish=${IMP_DEV_PUBLISH:-1}
 api=http://localhost:$((7070 + offset))
 if [ "$publish" = 0 ]; then
-  [ -n "${IMP_DEV_IP:-}" ] || { echo "dev.sh: IMP_DEV_PUBLISH=0 needs IMP_DEV_IP" >&2; exit 1; }
+  [ -n "${IMP_DEV_IP:-}" ] || {
+    echo "dev.sh: IMP_DEV_PUBLISH=0 needs IMP_DEV_IP" >&2
+    exit 1
+  }
   api=http://$IMP_DEV_IP:7070
 fi
 
@@ -106,7 +109,10 @@ in_container() {
   abs=$(realpath -m "$1")
   case $abs in
     "$IMP_ROOT"/*) echo "/src/${abs#"$IMP_ROOT"/}" ;;
-    *) echo "dev.sh: $1 is not under $IMP_ROOT" >&2; return 1 ;;
+    *)
+      echo "dev.sh: $1 is not under $IMP_ROOT" >&2
+      return 1
+      ;;
   esac
 }
 
@@ -221,18 +227,27 @@ up() {
   local kernel system
   kernel=$(pick_kernel)
   system=${IMP_SYSTEM_DRIVE:-$IMP_BUILD/imp-system.squashfs}
-  [ -f "$kernel" ] || { echo "dev.sh: no kernel at $kernel" >&2; exit 1; }
+  [ -f "$kernel" ] || {
+    echo "dev.sh: no kernel at $kernel" >&2
+    exit 1
+  }
 
   if [ "${IMP_HOST_IMAGE_READY:-}" = 1 ]; then
-    docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 \
-      || { echo "dev.sh: IMP_HOST_IMAGE_READY=1 but there is no $IMP_HOST_IMAGE image" >&2; exit 1; }
+    docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 ||
+      {
+        echo "dev.sh: IMP_HOST_IMAGE_READY=1 but there is no $IMP_HOST_IMAGE image" >&2
+        exit 1
+      }
   else
     build_host_image
   fi
   if [ -z "${IMP_SYSTEM_DRIVE:-}" ]; then
     "$IMP_ROOT/scripts/release/build-system-drive.sh" >/dev/null
   fi
-  [ -f "$system" ] || { echo "dev.sh: no system drive at $system" >&2; exit 1; }
+  [ -f "$system" ] || {
+    echo "dev.sh: no system drive at $system" >&2
+    exit 1
+  }
 
   if is_running; then
     start_proxy keep
@@ -257,8 +272,11 @@ up() {
     fi
     [ -n "${IMP_DEV_BACKUP_ENV_FILE:-}" ] && env_file+=(--env-file "$IMP_DEV_BACKUP_ENV_FILE")
     if [ "${IMP_TAILNET_NAMES:-}" = 1 ]; then
-      write_tailnet_oauth_file "$data/tailnet-oauth.json" \
-        || { echo "dev.sh: IMP_TAILNET_NAMES=1 but 1Password has no OAuth client" >&2; exit 1; }
+      write_tailnet_oauth_file "$data/tailnet-oauth.json" ||
+        {
+          echo "dev.sh: IMP_TAILNET_NAMES=1 but 1Password has no OAuth client" >&2
+          exit 1
+        }
       tuning+=(-e IMP_TAILNET_OAUTH_FILE=/data/tailnet-oauth.json)
     fi
     for var in "${tuning_vars[@]}"; do
@@ -375,7 +393,10 @@ case ${1:-} in
     ;;
   logs) docker logs -f "$name" ;;
   restart)
-    is_running || { echo "dev.sh: $name is not running; use scripts/dev/dev.sh up" >&2; exit 1; }
+    is_running || {
+      echo "dev.sh: $name is not running; use scripts/dev/dev.sh up" >&2
+      exit 1
+    }
     # the proxy first: a changed proxy is replaced before impd comes back
     start_proxy
     # SIGHUP: impd exits without sleeping the VMs; the entrypoint restarts it.
@@ -386,7 +407,10 @@ case ${1:-} in
       docker exec "$name" kill -HUP "${pids[@]}"
       deadline=$((SECONDS + ${IMP_DEV_STOP_TIMEOUT_S:-30}))
       while docker exec "$name" kill -0 "${pids[@]}" 2>/dev/null; do
-        [ $SECONDS -lt $deadline ] || { echo "dev.sh: impd ${pids[*]} did not exit" >&2; exit 1; }
+        [ $SECONDS -lt $deadline ] || {
+          echo "dev.sh: impd ${pids[*]} did not exit" >&2
+          exit 1
+        }
         sleep 0.2
       done
     fi

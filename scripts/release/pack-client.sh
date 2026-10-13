@@ -31,7 +31,7 @@ jq --slurpfile workspace "$root/package.json" '
   | .files = ["dist"]
   | .sideEffects = false
   | .publishConfig = { access: "public" }
-' "$package/package.json" > "$stage/package.json"
+' "$package/package.json" >"$stage/package.json"
 
 if grep -Eq '"(catalog|workspace):' "$stage/package.json"; then
   echo "pack-client: the packed package.json still has a catalog: or workspace: version" >&2

@@ -58,8 +58,8 @@ ensure_firewall() {
 # goes; the platform's rules stay.
 remove_firewall() {
   local loaded=""
-  if [ -e /etc/systemd/system/imp-firewall.service ] || [ -e "$FIREWALL_FILE" ] \
-    || { command -v nft >/dev/null && nft list table inet imp_host >/dev/null 2>&1; }; then
+  if [ -e /etc/systemd/system/imp-firewall.service ] || [ -e "$FIREWALL_FILE" ] ||
+    { command -v nft >/dev/null && nft list table inet imp_host >/dev/null 2>&1; }; then
     loaded=1
   fi
   if [ -z "$loaded" ]; then
@@ -87,9 +87,9 @@ uninstall_firewall() {
   # Read first: under pipefail, grep -q quitting early fails nft with SIGPIPE.
   local rules
   rules=$(nft list ruleset 2>/dev/null || true)
-  if ! grep -q 'hook input' <<<"$rules" \
-    && ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } \
-    && ! systemctl -q is-active firewalld 2>/dev/null; then
+  if ! grep -q 'hook input' <<<"$rules" &&
+    ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } &&
+    ! systemctl -q is-active firewalld 2>/dev/null; then
     warn "the host now has no inbound firewall; the platform must give one (docs/architecture/host.md#the-host-firewall)"
   fi
 }
@@ -327,8 +327,8 @@ ra_userspace() {
   if [ -n "$network_file" ] && [ "$network_file" != n/a ]; then
     owner=systemd-networkd
     # networkd's IPv6AcceptRA defaults to off once forwarding is on; yes keeps it
-    if cat "$network_file" "$network_file.d"/*.conf 2>/dev/null \
-      | grep -qiE '^[[:space:]]*IPv6AcceptRA[[:space:]]*=[[:space:]]*(yes|true|on|1)[[:space:]]*$'; then
+    if cat "$network_file" "$network_file.d"/*.conf 2>/dev/null |
+      grep -qiE '^[[:space:]]*IPv6AcceptRA[[:space:]]*=[[:space:]]*(yes|true|on|1)[[:space:]]*$'; then
       log "router adverts: systemd-networkd takes them on $uplink, with IPv6AcceptRA=yes in $network_file"
       return
     fi

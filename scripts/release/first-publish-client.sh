@@ -9,12 +9,12 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 name=$(jq -r .name "$root/packages/client/package.json")
 
-npm whoami > /dev/null || {
+npm whoami >/dev/null || {
   echo "not logged in to npm: run npm login" >&2
   exit 1
 }
 
-if npm view "$name" version > /dev/null 2>&1; then
+if npm view "$name" version >/dev/null 2>&1; then
   echo "$name is on npm already: releases publish it (docs/runbooks/releasing.md)" >&2
   exit 1
 fi
@@ -23,7 +23,7 @@ tarball=$("$root/scripts/release/pack-client.sh")
 "$root/scripts/release/check-client-package.sh" "$tarball"
 npm publish "$tarball" --access public
 
-cat << DONE
+cat <<DONE
 
 Published $(basename "$tarball").
 
