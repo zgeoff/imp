@@ -595,12 +595,14 @@ function mergeKeyword(
   }
 
   if (Array.isArray(a) && Array.isArray(b)) {
+    const both: readonly unknown[] = [a, b].flat();
+
     if (keyword === 'required') {
-      return { value: [...new Set([...a, ...b])] };
+      return { value: [...new Set(both)] };
     }
 
     if (keyword === 'allOf') {
-      return { value: [...a, ...b] };
+      return { value: both };
     }
   }
 
