@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.4](https://github.com/zgeoff/imp/compare/v1.0.3...v1.0.4) (2026-10-13)
+
+### Bug Fixes
+
+- **geo-809:** intersect an intersection's enums in the break check
+  ([#351](https://github.com/zgeoff/imp/issues/351))
+  ([d11743e](https://github.com/zgeoff/imp/commit/d11743e9408c05e86ca5592ec5a6beafbe14e6f2))
+
 ## [1.0.3](https://github.com/zgeoff/imp/compare/v1.0.2...v1.0.3) (2026-10-13)
 
 ### Bug Fixes
