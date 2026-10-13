@@ -9,7 +9,6 @@ import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
 import { createImage } from '../db/images';
-import { subscribeImpWrites } from '../db/imp-write-feed';
 import { createImp, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { openDatabase } from '../db/open-database';
@@ -59,7 +58,7 @@ async function setupTest(options: SetupOptions) {
   // source's image there, between its two locks of the source; impd and the
   // test share this handle, and so its write feed
   const gate = buildQueryGate('base');
-  const db = opened.withPlugin(gate.plugin);
+  const db = gate.wrap(opened);
 
   // the stub VMM runs no jailer and builds no boot template; the resolver
   // binds its port on every address, so each impd takes a free one; a new
@@ -764,7 +763,7 @@ test('it leaves an imp that took a refused fork’s name before the fork’s cle
   // fork's cleanup.
   const queued: { row?: ImpRecord; removed?: Promise<void>; taker?: Promise<Imp> } = {};
 
-  const unwatch = subscribeImpWrites(ctx.db, (write) => {
+  const unwatch = ctx.db.writes.subscribe((write) => {
     unwatch();
 
     // a throw here fails the fork's insert, and with it the test
@@ -904,7 +903,7 @@ test('it draws a new id when a deleted checkpoint’s snapshot stays for a fork'
   await checkpoints.createCheckpoint('dev', 'v1');
 
   // the fork's disk file, written as its row lands and before its clone
-  const unwatch = subscribeImpWrites(ctx.db, (write) => {
+  const unwatch = ctx.db.writes.subscribe((write) => {
     unwatch();
 
     // a throw here fails the fork's insert, and with it the test

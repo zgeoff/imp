@@ -3,7 +3,7 @@ import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { ImpsSchema } from './imps-schema';
-import type { ImpDatabase } from './open-database';
+import type { ImpDatabase, ImpQueries } from './open-database';
 import type { TokenSshKeys, Tokens } from './schema';
 
 // a secret a token may grant: its name, and its generation when the token
@@ -81,7 +81,7 @@ export async function writeTokenRecord(
 export function updateTokenGrantable(
   db: ImpDatabase,
   id: string,
-  read: (trx: ImpDatabase) => Promise<GrantableSecret[]>,
+  read: (trx: ImpQueries) => Promise<GrantableSecret[]>,
 ): Promise<{ grantable: GrantableSecret[]; dropped: number } | null> {
   return db.transaction().execute(async (trx) => {
     const row = await trx
@@ -137,7 +137,7 @@ export function updateTokenGrantable(
 // the token's grantable list as the database holds it now, read in the
 // caller's transaction; null for no such token
 export async function readTokenGrantable(
-  db: ImpDatabase,
+  db: ImpQueries,
   id: string,
 ): Promise<GrantableSecret[] | null> {
   const row = await db

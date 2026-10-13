@@ -3,7 +3,7 @@ import { MAX_SSH_KEYS } from '@imp/api';
 import type { Scope, SshKey, Token } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
-import type { ImpDatabase } from '../db/open-database';
+import type { ImpDatabase, ImpQueries } from '../db/open-database';
 import { findSecret } from '../db/secrets';
 import {
   listTokenRecords,
@@ -437,7 +437,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 // secret and not to one made later under the name. Only a manage token for
 // some imps takes a list: a host-wide one grants anything already.
 async function readGrantable(
-  db: ImpDatabase,
+  db: ImpQueries,
   names: readonly string[],
   token: Readonly<Pick<NewToken, 'scope' | 'imps'>>,
 ): Promise<GrantableSecret[]> {

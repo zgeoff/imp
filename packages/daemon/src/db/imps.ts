@@ -11,8 +11,7 @@ import type {
 } from '@imp/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
-import { emitImpWrite } from './imp-write-feed';
-import type { ImpDatabase } from './open-database';
+import type { ImpDatabase, ImpQueries } from './open-database';
 import type { DB } from './schema';
 
 type ImpRow = Selectable<DB['imps']>;
@@ -143,7 +142,7 @@ export const JAIL_UIDS = { first: 900_000, count: 65_536 } as const;
 export const TEMPLATE_BUILD_UID = JAIL_UIDS.first - 1;
 
 // the lowest free uid of JAIL_UIDS; a destroyed imp's uid goes back
-async function allocateJailUid(db: ImpDatabase): Promise<number> {
+async function allocateJailUid(db: ImpQueries): Promise<number> {
   const rows = await db
     .selectFrom('imps')
     .select('jail_uid')
@@ -171,7 +170,7 @@ async function allocateJailUid(db: ImpDatabase): Promise<number> {
 // The slots imps hold, and those that a warm move's live ticket keeps for
 // the imp it brings (docs/architecture/moves.md#warm-moves): until the
 // commit, once its stream started, else until the stream's start window ends
-async function listTakenSlots(db: ImpDatabase, now: number): Promise<Set<number>> {
+async function listTakenSlots(db: ImpQueries, now: number): Promise<Set<number>> {
   const imps = await db.selectFrom('imps').select('slot').execute();
 
   const held = await db
@@ -188,7 +187,7 @@ async function listTakenSlots(db: ImpDatabase, now: number): Promise<Set<number>
 // The lowest slot no imp or ticket holds. Run it in the same transaction as
 // the insert that takes the slot; the unique index on `slot` backs that up.
 export async function allocateSlot(
-  db: ImpDatabase,
+  db: ImpQueries,
   slotCount: number,
   now: number = Date.now(),
 ): Promise<number> {
@@ -208,7 +207,7 @@ export async function allocateSlot(
 }
 
 // whether a warm move may keep `slot`: no imp and no live ticket holds it
-export async function isSlotFree(db: ImpDatabase, slot: number, now: number): Promise<boolean> {
+export async function isSlotFree(db: ImpQueries, slot: number, now: number): Promise<boolean> {
   const taken = await listTakenSlots(db, now);
 
   return !taken.has(slot);
@@ -226,13 +225,13 @@ export class SlotTakenError extends Error {
 export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
   const created = await writeImpRow(db, imp);
 
-  emitImpWrite(db, { kind: 'added', imp: created });
+  db.writes.publish({ kind: 'added', imp: created });
 
   return created;
 }
 
 // the insert alone; the caller emits once the row is committed
-async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
+async function writeImpRow(db: ImpQueries, imp: NewImp): Promise<ImpRecord> {
   const now = Date.now();
 
   const jailUid = await allocateJailUid(db);
@@ -319,7 +318,7 @@ export async function createImpInFreeSlot(
     return writeImpRow(trx, { ...imp, slot: slots.slot, ip: slots.findIp(slots.slot) });
   });
 
-  emitImpWrite(db, { kind: 'added', imp: created });
+  db.writes.publish({ kind: 'added', imp: created });
 
   return created;
 }
@@ -480,7 +479,7 @@ export async function updateImpSettings(
 
   const imp = toImpRecord(row);
 
-  emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
+  db.writes.publish({ kind: 'changed', imp, reason: 'updated' });
 
   return imp;
 }
@@ -517,7 +516,7 @@ export async function updateImpCommitted(
 
   const imp = toImpRecord(row);
 
-  emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
+  db.writes.publish({ kind: 'changed', imp, reason: 'updated' });
 
   return imp;
 }
@@ -550,7 +549,7 @@ export async function updateImpMove(
 
   const imp = toImpRecord(row);
 
-  emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
+  db.writes.publish({ kind: 'changed', imp, reason: 'updated' });
 
   return imp;
 }
@@ -578,7 +577,7 @@ export async function updateImpDisk(
 
   // the API shows the size, not a grow the guest owes
   if (before?.diskBytes !== sized.diskBytes) {
-    emitImpWrite(db, { kind: 'changed', imp: sized, reason: 'resized' });
+    db.writes.publish({ kind: 'changed', imp: sized, reason: 'resized' });
   }
 
   return sized;
@@ -590,7 +589,7 @@ const NO_END_MS = 8_640_000_000_000_000;
 // hold_until becomes the latest end of the imp's leases (db/leases.ts), so
 // the governor, the idle loop and the sleep checks read one field; run it
 // in the lease write's transaction
-export async function updateImpHold(db: ImpDatabase, id: string): Promise<ImpRecord> {
+export async function updateImpHold(db: ImpQueries, id: string): Promise<ImpRecord> {
   const row = await db
     .updateTable('imps')
     .set((eb) => ({
@@ -640,7 +639,7 @@ export async function updateImpExposure(
 
   const changed = toImpRecord(row);
 
-  emitImpWrite(db, { kind: 'changed', imp: changed, reason: 'exposed' });
+  db.writes.publish({ kind: 'changed', imp: changed, reason: 'exposed' });
 
   return changed;
 }
@@ -653,7 +652,7 @@ export async function removeImp(db: ImpDatabase, id: string): Promise<boolean> {
     return false;
   }
 
-  emitImpWrite(db, { kind: 'removed', imp: toImpRecord(row) });
+  db.writes.publish({ kind: 'removed', imp: toImpRecord(row) });
 
   return true;
 }
@@ -663,7 +662,7 @@ function emitChange(
   imp: Readonly<ImpRecord>,
   change: Readonly<ImpStateChange>,
 ): ImpRecord {
-  emitImpWrite(db, {
+  db.writes.publish({
     kind: 'changed',
     imp,
     reason: change.reason,

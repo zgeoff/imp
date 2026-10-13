@@ -2,7 +2,6 @@ import type { WarmHost } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { Broker } from '../broker/broker-service';
 import type { Config } from '../config';
-import { subscribeImpWrites } from '../db/imp-write-feed';
 import { claimTrustPending } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
@@ -94,7 +93,7 @@ export function createMoveService(deps: MoveServiceDeps): MoveService {
     }
   };
 
-  subscribeImpWrites(deps.db, (write) => {
+  deps.db.writes.subscribe((write) => {
     if (write.kind === 'changed' && write.reason === 'woke' && write.imp.isTrustPending) {
       void applyPendingTrust(write.imp);
     }

@@ -46,7 +46,7 @@ async function setupTest() {
 
   stack.defer(() => opened.destroy());
 
-  const db = opened.withPlugin(gate.plugin);
+  const db = gate.wrap(opened);
 
   // the stub VMM runs no jailer and builds no boot template; the resolver
   // binds its port on every address, so each impd takes a free one

@@ -5,7 +5,7 @@ import { sql } from 'kysely';
 import * as z from 'zod';
 import { buildConflictError } from '../api-errors';
 import type { DiskBudget } from '../storage/disk-budget';
-import type { ImpDatabase } from './open-database';
+import type { ImpQueries } from './open-database';
 
 // A consistent copy of impd's database, safe while impd runs
 // (docs/guides/operations.md#database-copy-and-restore).
@@ -28,7 +28,7 @@ const SizeRowSchema = z.object({ bytes: z.int().nonnegative() });
 
 // `VACUUM INTO` copies the database in one read transaction, so the copy is
 // whole whatever writes run meanwhile; the target must be absent or empty
-export async function writeConsistentCopy(db: ImpDatabase, path: string): Promise<void> {
+export async function writeConsistentCopy(db: ImpQueries, path: string): Promise<void> {
   await sql`VACUUM INTO ${path}`.execute(db);
 }
 
@@ -40,7 +40,7 @@ function buildDatabaseCopyPath(dataDir: string, name: string): string {
 // disk budget holds the database's size, as for a backup: DISK_FULL, with no
 // file made, past the reserve; CONFLICT when a copy by the name exists.
 export async function writeDatabaseCopy(
-  db: ImpDatabase,
+  db: ImpQueries,
   diskBudget: Pick<DiskBudget, 'withRoom'>,
   dataDir: string,
   name: string,
@@ -84,7 +84,7 @@ export async function writeDatabaseCopy(
 }
 
 // the pages the database holds, which a VACUUM INTO writes at most
-async function readDatabaseBytes(db: ImpDatabase): Promise<number> {
+async function readDatabaseBytes(db: ImpQueries): Promise<number> {
   const result = await sql<{
     bytes: number;
   }>`SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()`.execute(

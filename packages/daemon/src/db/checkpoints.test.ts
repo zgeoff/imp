@@ -12,7 +12,6 @@ import {
   toApiCheckpoint,
 } from './checkpoints';
 import { createImage } from './images';
-import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
 import { createImp, removeImp } from './imps';
 
@@ -67,7 +66,7 @@ test('#createCheckpoint emits one checkpointAdded', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -239,7 +238,7 @@ test('#removeCheckpoint emits one checkpointRemoved', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -262,7 +261,7 @@ test('#removeCheckpoint emits nothing for a checkpoint that does not exist', asy
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 

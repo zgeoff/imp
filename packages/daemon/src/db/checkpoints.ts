@@ -1,6 +1,5 @@
 import type { Checkpoint } from '@imp/api';
 import type { Selectable } from 'kysely';
-import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
 import type { DB } from './schema';
 
@@ -45,7 +44,7 @@ export async function createCheckpoint(
 
   const created = toCheckpointRecord(row);
 
-  emitImpWrite(db, { kind: 'checkpointAdded', checkpoint: created });
+  db.writes.publish({ kind: 'checkpointAdded', checkpoint: created });
 
   return created;
 }
@@ -90,7 +89,7 @@ export async function removeCheckpoint(db: ImpDatabase, id: string): Promise<boo
     return false;
   }
 
-  emitImpWrite(db, { kind: 'checkpointRemoved', checkpoint: toCheckpointRecord(row) });
+  db.writes.publish({ kind: 'checkpointRemoved', checkpoint: toCheckpointRecord(row) });
 
   return true;
 }

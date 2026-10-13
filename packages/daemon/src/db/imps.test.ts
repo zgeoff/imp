@@ -6,7 +6,6 @@ import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { createImage } from './images';
-import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
 import {
   JAIL_UIDS,
@@ -107,7 +106,7 @@ test('#createImp emits one ImpAdded', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -300,7 +299,7 @@ test('#allocateSlot gives concurrent creates distinct slots', async () => {
         const slot = await allocateSlot(trx, 16);
 
         return createImp(
-          trx,
+          Object.assign(trx, { writes: ctx.db.writes }),
           buildMockNewImp({ name, imageId: image.id, slot, ip: `10.66.0.${String(slot + 2)}` }),
         );
       }),
@@ -431,7 +430,7 @@ test('#createImpInFreeSlot emits one ImpAdded, once it commits', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -563,7 +562,7 @@ test('#updateImpState emits the change with its reason', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -715,7 +714,7 @@ test('#updateImpDisk emits ImpChanged resized for a new disk size', async () => 
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -733,7 +732,7 @@ test('#updateImpDisk emits nothing for a pending grow alone', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -774,7 +773,7 @@ test('#updateImpSettings emits ImpChanged updated', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 
@@ -912,7 +911,7 @@ test('#removeImp emits one ImpRemoved', async () => {
 
   const writes: ImpWrite[] = [];
 
-  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+  const unsubscribe = ctx.db.writes.subscribe((write) => {
     writes.push(write);
   });
 

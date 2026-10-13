@@ -11,7 +11,6 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
-import { subscribeImpWrites } from '../db/imp-write-feed';
 import { updateImpActivity } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
@@ -1022,7 +1021,7 @@ test('it goes on with a follow when the wake’s event comes before the wake let
 
   // a write after each of the imp's writes, the wake's among them: the
   // wake's event then reaches the follow while the wake still holds the imp
-  const unsubscribe = subscribeImpWrites(ctx.db, () => {
+  const unsubscribe = ctx.db.writes.subscribe(() => {
     void updateImpActivity(ctx.db, imp.id, new Date());
   });
 

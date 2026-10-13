@@ -1,9 +1,8 @@
 import type { ImpChangeReason } from '@imp/api';
 import type { Selectable } from 'kysely';
-import { emitImpWrite } from './imp-write-feed';
 import { updateImpHold } from './imps';
 import type { ImpRecord } from './imps';
-import type { ImpDatabase } from './open-database';
+import type { ImpDatabase, ImpQueries } from './open-database';
 import type { ImpLeases } from './schema';
 
 // the owner of a hold from before leases, and the label `imps.hold` writes;
@@ -106,7 +105,7 @@ export async function writeLease(
   });
 
   if (write.reason !== null) {
-    emitImpWrite(db, { kind: 'changed', imp, reason: write.reason });
+    db.writes.publish({ kind: 'changed', imp, reason: write.reason });
   }
 
   return imp;
@@ -143,7 +142,7 @@ export async function removeLeases(
   });
 
   if (write.reason !== null && (result.removed > 0 || write.isEmittedWhenNone === true)) {
-    emitImpWrite(db, {
+    db.writes.publish({
       kind: 'changed',
       imp: result.imp,
       reason: write.reason,
@@ -188,7 +187,7 @@ export async function writeMovedLeases(
   });
 }
 
-async function removeEndedLeases(db: ImpDatabase, impId: string, at: number): Promise<void> {
+async function removeEndedLeases(db: ImpQueries, impId: string, at: number): Promise<void> {
   await db
     .deleteFrom('imp_leases')
     .where('imp_id', '=', impId)

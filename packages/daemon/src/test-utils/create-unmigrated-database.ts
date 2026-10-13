@@ -2,8 +2,10 @@ import { Database } from 'bun:sqlite';
 import { onTestFinished } from 'bun:test';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 import { BunSqliteDriver } from '../db/bun-sqlite-driver';
+import type { ImpWrite } from '../db/imp-write-feed';
 import type { ImpDatabase } from '../db/open-database';
 import type { DB } from '../db/schema';
+import { createEventBus } from '../events/event-bus';
 
 // A database opened as openDatabase opens one, with no migration run: a
 // test migrates it to the point an older impd left it at. `:memory:` when
@@ -14,7 +16,7 @@ export function createUnmigratedDatabase(path = ':memory:'): ImpDatabase {
   sqlite.run('PRAGMA journal_mode = WAL;');
   sqlite.run('PRAGMA foreign_keys = ON;');
 
-  const db = new Kysely<DB>({
+  const builder = new Kysely<DB>({
     dialect: {
       createAdapter: () => new SqliteAdapter(),
       createDriver: () => new BunSqliteDriver(sqlite),
@@ -22,6 +24,8 @@ export function createUnmigratedDatabase(path = ':memory:'): ImpDatabase {
       createQueryCompiler: () => new SqliteQueryCompiler(),
     },
   });
+
+  const db = Object.assign(builder, { writes: createEventBus<ImpWrite>() });
 
   // kysely closes a driver only once a query started it, so the handle closes
   // here too

@@ -1,5 +1,6 @@
 import { onTestFinished } from 'bun:test';
 import type { KyselyPlugin } from 'kysely';
+import type { ImpDatabase } from '../db/open-database';
 
 // Holds the result of the first select that names `name` once armed, until
 // released: a build stops there between finding its rootfs and its row. The
@@ -39,6 +40,10 @@ export function buildQueryGate(name: string) {
 
   return {
     plugin,
+
+    // the database with the gate on its queries, publishing on the same feed
+    wrap: (db: ImpDatabase): ImpDatabase =>
+      Object.assign(db.withPlugin(plugin), { writes: db.writes }),
     arm: () => {
       state.armed = true;
     },

@@ -4,7 +4,7 @@ import type { BrokerRule, EgressPolicy, GrantNotCopied, OAuthConfig, SecretKind 
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { parseStoredPolicy } from './egress';
-import type { ImpDatabase } from './open-database';
+import type { ImpDatabase, ImpQueries } from './open-database';
 import type { DB } from './schema';
 import { readTokenGrantable } from './tokens';
 import type { GrantableSecret } from './tokens';
@@ -102,7 +102,7 @@ const RulesSchema = z.array(BrokerRuleSchema);
 
 // Insert a new secret with a new generation; null when the name is taken.
 export async function createSecret(
-  db: ImpDatabase,
+  db: ImpQueries,
   secret: Readonly<NewSecret>,
 ): Promise<SecretRecord | null> {
   const row = await db
@@ -212,7 +212,7 @@ export function upsertSecret(
   });
 }
 
-export async function findSecret(db: ImpDatabase, name: string): Promise<SecretRecord | undefined> {
+export async function findSecret(db: ImpQueries, name: string): Promise<SecretRecord | undefined> {
   const row = await db
     .selectFrom('secrets')
     .selectAll()
@@ -260,7 +260,7 @@ export function removeSecret(db: ImpDatabase, name: string): Promise<string | nu
   });
 }
 
-async function createFileRemoval(db: ImpDatabase, valueFile: string): Promise<void> {
+async function createFileRemoval(db: ImpQueries, valueFile: string): Promise<void> {
   await db
     .insertInto('secret_file_removals')
     .values({ value_file: valueFile, created_at: Date.now() })
@@ -337,7 +337,7 @@ export function removeCheckedGrant(
   });
 }
 
-export async function listGrantNames(db: ImpDatabase, impId: string): Promise<string[]> {
+export async function listGrantNames(db: ImpQueries, impId: string): Promise<string[]> {
   const rows = await useLiveGrants(db)
     .select('grants.secret_name')
     .where('grants.imp_id', '=', impId)
@@ -422,7 +422,7 @@ export function createForkGrants(
 }
 
 // every rule of every secret granted to the imp
-export async function listGrantedRules(db: ImpDatabase, impId: string): Promise<GrantedRule[]> {
+export async function listGrantedRules(db: ImpQueries, impId: string): Promise<GrantedRule[]> {
   const rows = await useLiveGrants(db)
     .select(['secrets.name', 'secrets.kind', 'secrets.rules', 'secrets.value_file'])
     .where('grants.imp_id', '=', impId)
@@ -471,7 +471,7 @@ export async function findBrokerPeer(
 // A host has one credential per imp: two would leave the header
 // ambiguous. The imp's other grant that covers one of the hosts, or null.
 async function findClash(
-  db: ImpDatabase,
+  db: ImpQueries,
   impId: string,
   secretName: string,
   rules: readonly BrokerRule[],
@@ -488,7 +488,7 @@ async function findClash(
 
 // Grants whose generation is the secret's now: only these give a credential.
 // A rebind drops the others in its transaction, so none should be left.
-function useLiveGrants(db: ImpDatabase) {
+function useLiveGrants(db: ImpQueries) {
   return db
     .selectFrom('grants')
     .innerJoin('secrets', (join) =>
@@ -501,7 +501,7 @@ function useLiveGrants(db: ImpDatabase) {
 // Read in the grant's transaction: the token may have been removed, or the
 // secret deleted or rebound, since the access check
 async function checkAuthority(
-  db: ImpDatabase,
+  db: ImpQueries,
   authority: Readonly<GrantAuthority> | null,
   secret: Readonly<SecretRecord> | undefined,
 ): Promise<'no-token' | 'not-grantable' | null> {
@@ -526,7 +526,7 @@ async function checkAuthority(
 
 // a grant made again takes the secret's generation now
 async function writeGrant(
-  db: ImpDatabase,
+  db: ImpQueries,
   impId: string,
   secret: Readonly<SecretRecord>,
 ): Promise<void> {
