@@ -80,29 +80,16 @@ jobs:
       - name: Bun Pin
         run: scripts/ci/check-bun-pin.sh
 
-      - name: Dead Code
-        run: bun run deadcode
-
-      - name: Format
-        run: bun run format:check
-
-      - name: Lint
-        run: bun run lint:full
-
-      - name: Doc links
-        run: bun run lint:docs
+      # the whole-tree gates: dead code, format, type-aware lint, doc links,
+      # types and every test, as package.json's check script lists them
+      - name: Check
+        run: bun run check
 
       # Some READMEs and docs/ pages fail the shared length or prose rules, so this step reports
       # its findings without failing the run.
       - name: Doc length and prose
         continue-on-error: true
         run: bash .claude/skills/docs-writing/scripts/check-length.sh --package README.md
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Test
-        run: bun test
 
       # an image build's disk hold against what it really takes, on a small
       # loop-mounted XFS of its own, as impd's data dir is; the tests skip

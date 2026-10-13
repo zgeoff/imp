@@ -73,6 +73,7 @@
   },
   "type": "module",
   "scripts": {
+    "check": "bun run deadcode && bun run format:check && bun run lint:full && bun run lint:docs && bun run typecheck && bun test",
     "audit": "bun audit --ignore=GHSA-86w9-cpqp-85rv --ignore=GHSA-vfj7-8cjw-p6xm",
     "build:cli": "./scripts/release/build-cli.sh",
     "build:dashboard": "bun run --cwd packages/dashboard build",

@@ -11,7 +11,9 @@ bun run test:dashboard            # the dashboard's component tests, in their ow
 bun run test:host                 # nft and iptables in namespaces; IMP_HOST_TESTS=required fails a skip
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
-bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, deploy/, test/
+bun run lint:shell                # shellcheck and shfmt over install.sh and the shell in scripts/, host/, kernel/, deploy/, test/, packages/
+actionlint && zizmor --config .github/zizmor.yml .github   # the workflows, as CI lints them
+hadolint host/Dockerfile images/base/Dockerfile
 bun run lint:docs                 # every relative link and anchor in the docs resolves
 (cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
 (cd agent && go tool -modfile=tools/go.mod golangci-lint run --build-tags root ./...)   # the lint CI runs
@@ -19,8 +21,12 @@ scripts/test-go.sh                # the agent's Go tests with -race; prints the 
 test/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
-`bun run lint:shell` needs shellcheck 0.11.0 on `PATH`, the version CI pins. Run the end-to-end
-harness against a real instance when a change touches the lifecycle, the agent or the host.
+`bun run check` runs the whole-tree gates of CI's `checks` job: dead code, format, the type-aware
+lint, doc links, types and every test. It needs more memory than a small host has, so run it on a
+large one, or leave it to CI. `bun run lint:shell` needs shellcheck 0.11.0 and shfmt 3.14.1 on
+`PATH`, the versions CI pins; the shellcheck job in `.github/workflows/ci.yml` pins actionlint,
+zizmor and hadolint too. Run the end-to-end harness against a real instance when a change touches
+the lifecycle, the agent or the host.
 
 ## End-to-end tests
 
@@ -225,8 +231,8 @@ run.
 
 Lefthook installs the hooks with `bun install`.
 
-- **pre-commit** fixes the staged files (oxlint, oxfmt, format-codemod), then runs gitleaks on them.
-  gitleaks must be on `PATH`.
+- **pre-commit** fixes the staged files (oxlint, oxfmt, format-codemod, and shfmt on staged `.sh`
+  files), then runs gitleaks on them. gitleaks and shfmt must be on `PATH`.
 - **commit-msg** runs commitlint: conventional commits, lowercase, a header of 72 characters or
   fewer.
 - **pre-push** runs one job at a time: `lint:docs` and shellcheck, then the shared baseline in
@@ -244,9 +250,9 @@ Lefthook installs the hooks with `bun install`.
 | Job          | Required | What it runs                                                                                                                                                                                                      |
 | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                                                                   |
-| `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint:full`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build.                                            |
+| `checks`     | yes      | `bun run audit`, the Bun pin check, `bun run check`, `test:pebble`, and the dashboard's tests and build.                                                                                                          |
 | `go`         | yes      | In `agent/`: `gofmt`, `go vet`, golangci-lint, govulncheck, deadcode, `scripts/test-go.sh`, then the suite again as root with the `root` build tag. Also `gofmt`, vet and lint on the Dockerfile difftest module. |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                                                                             |
+| `shellcheck` | yes      | `bun run lint:shell`, actionlint and zizmor over `.github/`, hadolint over both Dockerfiles, and the tests that shellcheck the shell production code holds as text.                                               |
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                                                                         |
 | `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                                                                  |
 | `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                                                                              |

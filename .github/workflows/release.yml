@@ -45,6 +45,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       push_tag: ${{ steps.version.outputs.push_tag }}
+      is_newest: ${{ steps.newest.outputs.is_newest }}
+      newest_tag: ${{ steps.newest.outputs.newest_tag }}
     steps:
       - name: Check tag
         if: inputs.tag != ''
@@ -54,6 +56,24 @@ jobs:
           if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "tag $TAG is not vX.Y.Z" >&2
             exit 1
+          fi
+
+      # Only the newest release moves the image's `latest`, the Homebrew
+      # formula and npm's `latest`, so a republish of an older one moves none
+      # of them. Looked up once, so the jobs that read it agree.
+      - name: Check newest
+        id: newest
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          echo "newest_tag=$newest" >> "$GITHUB_OUTPUT"
+          if [ "$TAG" = "$newest" ]; then
+            echo "is_newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
           fi
 
       # a republish builds the tag, never main's head
@@ -410,13 +430,13 @@ jobs:
       # whose release has no assets yet.
       - name: Tag latest
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           VERSION: ${{ needs.assets.outputs.version }}
+          IS_NEWEST: ${{ needs.assets.outputs.is_newest }}
+          NEWEST: ${{ needs.assets.outputs.newest_tag }}
         run: |
-          newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
-          if [ "$TAG" != "$newest" ]; then
-            echo "$TAG is not the newest release ($newest); latest stays"
+          if [ "$IS_NEWEST" != true ]; then
+            echo "$TAG is not the newest release ($NEWEST); latest stays"
             exit 0
           fi
           docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"
@@ -436,12 +456,12 @@ jobs:
       - name: Check newest
         id: newest
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
+          IS_NEWEST: ${{ needs.assets.outputs.is_newest }}
+          NEWEST: ${{ needs.assets.outputs.newest_tag }}
         run: |
-          newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
-          if [ "$TAG" != "$newest" ]; then
-            echo "$TAG is not the newest release ($newest); the formula stays"
+          if [ "$IS_NEWEST" != true ]; then
+            echo "$TAG is not the newest release ($NEWEST); the formula stays"
             echo "update=false" >> "$GITHUB_OUTPUT"
           else
             echo "update=true" >> "$GITHUB_OUTPUT"
@@ -528,9 +548,8 @@ jobs:
       - name: Plan
         id: plan
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
           VERSION: ${{ needs.assets.outputs.version }}
+          IS_NEWEST: ${{ needs.assets.outputs.is_newest }}
         run: |
           name=$(jq -r .name packages/client/package.json)
           if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
@@ -538,8 +557,7 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
-          if [ "$TAG" = "$newest" ]; then
+          if [ "$IS_NEWEST" = true ]; then
             echo "dist_tag=latest" >> "$GITHUB_OUTPUT"
           else
             echo "dist_tag=previous" >> "$GITHUB_OUTPUT"
