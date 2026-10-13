@@ -23,7 +23,6 @@ import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
-import { sql } from 'kysely';
 import { HttpResponse, http } from 'msw';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
@@ -44,6 +43,7 @@ import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { runSql } from '../test-utils/run-sql';
 import { startStubBrokerGuestSocket } from '../test-utils/start-stub-broker-guest-socket';
 import { startStubBrokerReplyTarget } from '../test-utils/start-stub-broker-reply-target';
 import { createBroker } from './broker-service';
@@ -920,7 +920,8 @@ test('it keeps the old value and makes no new file when a replace clashes', asyn
 test('it logs a grant change it could not apply rather than throw', async () => {
   const ctx = await setupTest();
 
-  await sql`ALTER TABLE grants RENAME TO grants_gone`.execute(ctx.db);
+  await runSql(ctx.db, 'ALTER TABLE grants RENAME TO grants_gone');
+
   await ctx.impd.broker.applyGrants();
 
   expect(ctx.logs).toContainEqual(expect.toStartWith('impd: broker: could not apply grants: '));
@@ -933,8 +934,11 @@ test('it logs an audit row it could not write and still answers the request', as
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
   await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-  await sql`CREATE TRIGGER fail_audit BEFORE INSERT ON broker_audit
-    BEGIN SELECT RAISE(ABORT, 'forced failure'); END`.execute(ctx.db);
+  await runSql(
+    ctx.db,
+    `CREATE TRIGGER fail_audit BEFORE INSERT ON broker_audit
+    BEGIN SELECT RAISE(ABORT, 'forced failure'); END`,
+  );
 
   server.use(http.get('https://api.github.com/user', () => HttpResponse.text('from upstream')));
 

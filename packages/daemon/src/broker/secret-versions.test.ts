@@ -9,7 +9,6 @@ import { invariant } from '@imp/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
-import { sql } from 'kysely';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -26,6 +25,7 @@ import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { runSql } from '../test-utils/run-sql';
 import { createBroker } from './broker-service';
 import { buildValueFile, createSecretFiles } from './secret-files';
 
@@ -487,8 +487,11 @@ test('it removes its new file and keeps the old value when a replace fails to co
 
   invariant(before);
 
-  await sql`CREATE TRIGGER fail_update BEFORE UPDATE ON secrets
-    BEGIN SELECT RAISE(ABORT, 'forced failure'); END`.execute(ctx.db);
+  await runSql(
+    ctx.db,
+    `CREATE TRIGGER fail_update BEFORE UPDATE ON secrets
+    BEGIN SELECT RAISE(ABORT, 'forced failure'); END`,
+  );
 
   const replaced = ctx.client.secrets.add({
     name: 'api',

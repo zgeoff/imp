@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
-import { sql } from 'kysely';
 import { loadConfig } from '../config';
+import { writeConsistentCopy } from '../db/database-copy';
 import { openDatabase } from '../db/open-database';
 import { findSecret, listFileRemovals } from '../db/secrets';
 import { createBroker } from './broker-service';
@@ -49,7 +49,8 @@ test('it keeps aside a value no row of an older database names', async () => {
   // the copy a restore would put back, taken before the later secret
   const copyPath = join(ctx.dataDir, 'older.sqlite');
 
-  await sql`VACUUM INTO ${copyPath}`.execute(ctx.db);
+  await writeConsistentCopy(ctx.db, copyPath);
+
   await first.addSecret({ name: 'late', kind: 'npm', value: 'npm_LATE' });
   await first.stop();
 
