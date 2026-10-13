@@ -27,8 +27,8 @@
 #
 # The run owns only what it creates: before it touches anything it refuses a
 # bench pool name that is taken, a bench.img or a data dir of either impd
-# already in the work dir, and an imp-zfs or imp-zfs-mv-b container that is
-# already there. Its cleanup releases
+# already in the work dir, and an imp-zfs or imp-zfs-mv-b container or an
+# imp-zfs-mv network that is already there. Its cleanup releases
 # only what it made: it destroys the pool only when `zpool status -P` shows
 # its vdev is this run's bench.img, and never removes a bench.img a pool
 # still uses. The work dir holds the results, so it stays, and a second run
@@ -69,6 +69,9 @@ for name in "$IMP_DEV_NAME" "$IMP_DEV_NAME-mv-b"; do
     fail "a container named $name already exists; refusing to touch it"
   fi
 done
+if docker network inspect "$IMP_DEV_NAME-mv" >/dev/null 2>&1; then
+  fail "a network named $IMP_DEV_NAME-mv already exists; refusing to touch it"
+fi
 
 mkdir -p "$work"
 # absolute, as zpool status -P prints the vdev

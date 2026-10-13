@@ -448,27 +448,27 @@ this checkout whatever its `-C` says.
   `checkpoints,sleep`), and writes `<dir>/summary.txt`; `<dir>` keeps the results and is made,
   parents included, when it does not exist. Before it touches anything it refuses a bench pool name
   that `zpool list` already shows, a `bench.img` (a symlink included), `data` or `data-mv-b` already
-  in the work dir, and an `imp-zfs` or `imp-zfs-mv-b` container that is already there; so a second
-  run in the same dir is refused. It claims `<dir>/data` and `<dir>/data-mv-b`, the moves suites' B,
-  with `mkdir`. It makes B's root dataset `<IMP_ZFS_ROOT>-mv-b` beside the instance's, which
-  `readHostBZfsRoot` in `test/e2e/lib/move-hosts.ts` gives B, and once the pool and both datasets
-  exist it writes an owner file `imp-e2e-zfs-owner` with each root into each data dir, which lets
-  `main.ts` make either instance anew (see the end-to-end harness). The e2e run goes in the
-  background, its output through `tee` into `<dir>/e2e.log`, so TERM (143) or INT (130) reaches the
-  trap at once and cleanup stops it first. Its EXIT cleanup releases only what the run made: once
-  the run started the instance, it removes a B the run left up, collects the impd log, stops the
-  instance and removes the move network, destroys the pool only when `zpool status -P` lists this
-  run's `bench.img` (the whole path), and removes that file only when no pool lists it and `zpool`
-  could say so. A pool that will not go keeps its file and fails the run.
-  `IMP_ZFS_MODULE_VERSION_FILE` is read as in `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a
-  copy of the script beside the real `lib.sh` and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh`
-  (`create-stub-repo-script.ts`), with stub `sudo`, the `zfs` stub, a `docker` that knows only the
-  containers a test lists, some of them once a marker file exists (`create-stub-instance-docker.ts`)
-  and the stateful `zpool` on `PATH`: the refusal for a missing module, a normal release with its
-  owner file, a work dir made with its parents, the pool, file, symlink, data dir and container
-  collisions, a failed `zpool create`, a failed destroy, a pool that still uses the file, a failed
-  `zpool` query, a work dir path with spaces, and SIGTERM during the held create and during an e2e
-  run that has B up.
+  in the work dir, an `imp-zfs` or `imp-zfs-mv-b` container, and an `imp-zfs-mv` network that is
+  already there; so a second run in the same dir is refused. It claims `<dir>/data` and
+  `<dir>/data-mv-b`, the moves suites' B, with `mkdir`. It makes B's root dataset
+  `<IMP_ZFS_ROOT>-mv-b` beside the instance's, which `readHostBZfsRoot` in
+  `test/e2e/lib/move-hosts.ts` gives B, and once the pool and both datasets exist it writes an owner
+  file `imp-e2e-zfs-owner` with each root into each data dir, which lets `main.ts` make either
+  instance anew (see the end-to-end harness). The e2e run goes in the background, its output through
+  `tee` into `<dir>/e2e.log`, so TERM (143) or INT (130) reaches the trap at once and cleanup stops
+  it first. Its EXIT cleanup releases only what the run made: once the run started the instance, it
+  removes a B the run left up, collects the impd log, stops the instance and removes the move
+  network, destroys the pool only when `zpool status -P` lists this run's `bench.img` (the whole
+  path), and removes that file only when no pool lists it and `zpool` could say so. A pool that will
+  not go keeps its file and fails the run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in
+  `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh`
+  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh` (`create-stub-repo-script.ts`), with stub
+  `sudo`, the `zfs` stub, a `docker` that knows only the containers a test lists, some of them once
+  a marker file exists (`create-stub-instance-docker.ts`) and the stateful `zpool` on `PATH`: the
+  refusal for a missing module, a normal release with its owner files, a work dir made with its
+  parents, the pool, file, symlink, data dir, container and network collisions, a failed
+  `zpool create`, a failed destroy, a pool that still uses the file, a failed `zpool` query, a work
+  dir path with spaces, and SIGTERM during the held create and during an e2e run that has B up.
 
 ## NixOS
 

@@ -92,6 +92,7 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
     'zpool list impbenchPID',
     'docker container inspect imp-zfs',
     'docker container inspect imp-zfs-mv-b',
+    'docker network inspect imp-zfs-mv',
     `sudo env PATH=${ctx.path} IMP_ZFS_TEST_DIR=${work}/unit ${ctx.dir}/root/scripts/test-zfs.sh`,
     'test-zfs.sh ',
     `sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
@@ -268,6 +269,7 @@ test('it never destroys a pool or stops an instance when its own pool create fai
     'zpool list impbenchPID',
     'docker container inspect imp-zfs',
     'docker container inspect imp-zfs-mv-b',
+    'docker network inspect imp-zfs-mv',
     `sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     'sudo zpool list -H -o name',
@@ -440,6 +442,40 @@ test('it refuses an imp-zfs-mv-b container that is already there and touches not
 
   expect(calls).toBe(
     'sudo zpool list impbenchPID\nzpool list impbenchPID\ndocker container inspect imp-zfs\ndocker container inspect imp-zfs-mv-b\n',
+  );
+
+  expect(existsSync(join(work, 'data'))).toBeFalse();
+});
+
+test('it refuses an imp-zfs-mv network that is already there and touches nothing', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+
+  // another run's move network answers inspect
+  createStubInstanceDocker(ctx.stubs, { containers: [], networks: ['imp-zfs-mv'] });
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    'zfs-host-test: a network named imp-zfs-mv already exists; refusing to touch it\n',
+  );
+
+  expect(calls).toBe(
+    'sudo zpool list impbenchPID\nzpool list impbenchPID\ndocker container inspect imp-zfs\ndocker container inspect imp-zfs-mv-b\ndocker network inspect imp-zfs-mv\n',
   );
 
   expect(existsSync(join(work, 'data'))).toBeFalse();
