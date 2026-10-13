@@ -1,6 +1,7 @@
 import type { ImpEvent, Service, ServiceDef, ServiceList, ServiceLog } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { AgentError } from '../agent-client/agent-connection';
+import type { AgentService, AgentServices, LogCursor } from '../agent-client/agent-protocol';
+import { isAgentError } from '../agent-client/is-agent-error';
 import {
   openServiceLogStream,
   sendServicesAdd,
@@ -8,13 +9,7 @@ import {
   sendServicesRemove,
   sendServicesRestart,
 } from '../agent-client/service-requests';
-import type {
-  AgentService,
-  AgentServices,
-  LogCursor,
-  ServiceLogChunk,
-  ServiceLogStream,
-} from '../agent-client/service-requests';
+import type { ServiceLogChunk, ServiceLogStream } from '../agent-client/service-requests';
 import {
   buildAgentOutdatedApiError,
   buildConflictError,
@@ -576,23 +571,19 @@ async function* readLogs(
 // The agent's error codes as the API's.
 function handleAgentError(service: string): (error: unknown) => never {
   return (error) => {
-    if (!(error instanceof AgentError)) {
-      throw error;
-    }
-
-    if (error.code === 'NO_SERVICE') {
+    if (isAgentError(error, 'NO_SERVICE')) {
       throw buildNotFoundError('service', service);
     }
 
-    if (error.code === 'SERVICE_EXISTS') {
+    if (isAgentError(error, 'SERVICE_EXISTS')) {
       throw buildConflictError('service', service);
     }
 
-    if (error.code === 'BAD_REQUEST') {
+    if (isAgentError(error, 'BAD_REQUEST')) {
       throw new ORPCError('BAD_REQUEST', { message: error.detail });
     }
 
-    if (error.code === 'AGENT_OUTDATED') {
+    if (isAgentError(error, 'AGENT_OUTDATED')) {
       throw buildAgentOutdatedApiError(error.message);
     }
 

@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { AgentSession } from '../agent-client/agent-requests';
+import type { AgentSession } from '../agent-client/agent-protocol';
 
 // A running session as an agent with output offsets lists it: detached, with
 // no exit. The name, process, size, start, generation and boot are

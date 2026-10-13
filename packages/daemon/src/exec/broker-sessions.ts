@@ -1,4 +1,4 @@
-import type { AgentSession } from '../agent-client/agent-requests';
+import type { AgentSession } from '../agent-client/agent-protocol';
 import type { ExecStream } from '../agent-client/exec-stream';
 import { isBrokerSession, writeBrokerSession } from '../db/broker-sessions';
 import type { ImpDatabase } from '../db/open-database';

@@ -35,7 +35,8 @@ const (
 
 func (t Type) String() string {
 	names := [...]string{"", "REQUEST", "RESPONSE", "STDIN", "STDIN_EOF", "RESIZE",
-		"SIGNAL", "STARTED", "STDOUT", "STDERR", "EXIT", "DETACHED", "STDOUT_EOF", "CONNECTION"}
+		"SIGNAL", "STARTED", "STDOUT", "STDERR", "EXIT", "DETACHED", "STDOUT_EOF", "CONNECTION",
+		"CURSOR"}
 	if int(t) < len(names) && names[t] != "" {
 		return names[t]
 	}

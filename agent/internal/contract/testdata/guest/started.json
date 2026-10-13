@@ -1,0 +1,28 @@
+{
+  "pid": 812,
+  "session": "build",
+  "created": true,
+  "kill_grace_ms": 5000,
+  "output": {
+    "boot_id": "6f1c2a9e-3b7d-4e58-9a10-2c4b8d7e5f31",
+    "execution_generation": "0123456789abcdef0123456789abcdef",
+    "buffer_start": 512,
+    "end": 9000,
+    "offset": 4096,
+    "prelude": 12,
+    "previous": {
+      "execution_generation": "fedcba9876543210fedcba9876543210",
+      "end": 2048,
+      "exit": {
+        "code": 1,
+        "signal": 0
+      }
+    },
+    "resume": {
+      "kind": "generation_changed",
+      "execution_generation": "0123456789abcdef0123456789abcdef",
+      "first_offset": 128
+    },
+    "log": true
+  }
+}

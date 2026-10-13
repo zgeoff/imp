@@ -6,12 +6,13 @@ import {
   hasFeature,
 } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
+import type { AgentActivity, AgentSession } from '../agent-client/agent-protocol';
 import { sendActivity, sendPing } from '../agent-client/agent-requests';
-import type { AgentActivity, AgentSession } from '../agent-client/agent-requests';
 import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import { isAgentError } from '../agent-client/is-agent-error';
 import { openAccept, openListener } from '../agent-client/listener-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
 import { buildBuilderError, buildInvalidStateError, isDiskFullError } from '../api-errors';
@@ -742,7 +743,7 @@ async function withColdBoots(
   try {
     stream = await opening;
   } catch (error) {
-    if (error instanceof AgentError && error.code === 'NO_SESSION' && isRecord(error.data)) {
+    if (isAgentError(error, 'NO_SESSION') && isRecord(error.data)) {
       const coldBoots = await listColdBoots(context.db, imp.id);
 
       throw new AgentError(error.code, error.detail, { ...error.data, coldBoots });

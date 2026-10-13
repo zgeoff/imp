@@ -1,0 +1,16 @@
+{
+  "CONNECTION": 13,
+  "CURSOR": 14,
+  "DETACHED": 11,
+  "EXIT": 10,
+  "REQUEST": 1,
+  "RESIZE": 5,
+  "RESPONSE": 2,
+  "SIGNAL": 6,
+  "STARTED": 7,
+  "STDERR": 9,
+  "STDIN": 3,
+  "STDIN_EOF": 4,
+  "STDOUT": 8,
+  "STDOUT_EOF": 12
+}

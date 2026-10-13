@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "INVALID_RESUME",
+    "message": "offset 9999 is past the end",
+    "data": {
+      "end": 9000,
+      "buffer_start": 512
+    }
+  }
+}

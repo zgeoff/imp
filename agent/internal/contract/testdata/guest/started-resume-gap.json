@@ -1,0 +1,26 @@
+{
+  "pid": 812,
+  "session": "build",
+  "output": {
+    "boot_id": "6f1c2a9e-3b7d-4e58-9a10-2c4b8d7e5f31",
+    "execution_generation": "0123456789abcdef0123456789abcdef",
+    "buffer_start": 512,
+    "end": 9000,
+    "offset": 4096,
+    "prelude": 12,
+    "previous": {
+      "execution_generation": "fedcba9876543210fedcba9876543210",
+      "end": 2048,
+      "exit": {
+        "code": 1,
+        "signal": 0
+      }
+    },
+    "resume": {
+      "kind": "gap",
+      "from": 4096,
+      "to": 8192
+    },
+    "log": true
+  }
+}

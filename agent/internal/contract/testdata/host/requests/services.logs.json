@@ -1,0 +1,7 @@
+{
+  "op": "services.logs",
+  "service": "web",
+  "lines": 200,
+  "follow": true,
+  "cursor": { "inode": 131074, "offset": 65536 }
+}

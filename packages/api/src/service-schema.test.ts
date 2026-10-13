@@ -67,6 +67,14 @@ test('#ServiceDefSchema accepts a full service file', () => {
   expect(result.data).toStrictEqual(payload);
 });
 
+test('#ServiceDefSchema reads, past the name its file gives, every field of the services.d file the agent reads (agent/internal/contract)', async () => {
+  const fixture: unknown = await Bun.file(
+    new URL('../../../agent/internal/contract/testdata/host/services-d.json', import.meta.url),
+  ).json();
+
+  expect(ServiceDefSchema.omit({ name: true }).parse(fixture)).toStrictEqual(fixture);
+});
+
 test('#ServiceDefSchema accepts a service file with only a name and argv', () => {
   const payload = { name: 'web', argv: ['node', 'server.js'] } as const;
 

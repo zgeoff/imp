@@ -1,0 +1,5 @@
+{
+  "op": "session.tap",
+  "session": "build",
+  "resume_from": { "execution_generation": "0123456789abcdef0123456789abcdef", "offset": 4096 }
+}

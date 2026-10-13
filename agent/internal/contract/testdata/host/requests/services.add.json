@@ -1,0 +1,12 @@
+{
+  "op": "services.add",
+  "def": {
+    "name": "web",
+    "argv": ["/usr/bin/web", "--port", "8080"],
+    "env": ["MODE=prod"],
+    "cwd": "/srv/web",
+    "user": "dev",
+    "restart": "on-failure"
+  },
+  "replace": true
+}

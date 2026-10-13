@@ -26,41 +26,55 @@ import (
 // bytes of every regular file in it, for the CLI's progress.
 const TotalRecord = "IMP.total"
 
+// Command is one `imp-agent tar` invocation as impd sends it: an op of
+// create or extract, its path, and for an extract the owner spec, if any.
+type Command struct {
+	Op    string
+	Path  string
+	Owner string
+}
+
+// ParseArgs reads the args after "tar"; anything outside the usage fails.
+func ParseArgs(args []string) (Command, error) {
+	switch {
+	case len(args) == 2 && args[0] == "create":
+		return Command{Op: "create", Path: args[1]}, nil
+	case len(args) == 2 && args[0] == "extract":
+		return Command{Op: "extract", Path: args[1]}, nil
+	case len(args) == 4 && args[0] == "extract" && args[1] == "--owner":
+		return Command{Op: "extract", Path: args[3], Owner: args[2]}, nil
+	default:
+		return Command{}, usageError()
+	}
+}
+
 // Run serves `imp-agent tar` with args after "tar".
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	cmd, err := ParseArgs(args)
+	if err != nil {
+		return err
+	}
 	// it runs in the container, where the host view is the user's root
 	image, err := imagecfg.Load(fsroot.Host)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	switch {
-	case len(args) == 2 && args[0] == "create":
-		path, err := resolve(args[1], image.User)
-		if err != nil {
-			return err
-		}
-		return Create(path, stdout, stderr)
-	case len(args) >= 2 && args[0] == "extract":
-		dest := args[len(args)-1]
-		var owner *Owner
-		switch {
-		case len(args) == 4 && args[1] == "--owner":
-			cred, _, err := proc.LookupUser(args[2])
-			if err != nil {
-				return fmt.Errorf("owner %q: %w", args[2], err)
-			}
-			owner = toOwner(cred)
-		case len(args) != 2:
-			return usageError()
-		}
-		path, err := resolve(dest, image.User)
-		if err != nil {
-			return err
-		}
-		return Extract(path, stdin, owner, stderr)
-	default:
-		return usageError()
+	path, err := resolve(cmd.Path, image.User)
+	if err != nil {
+		return err
 	}
+	if cmd.Op == "create" {
+		return Create(path, stdout, stderr)
+	}
+	var owner *Owner
+	if cmd.Owner != "" {
+		cred, _, err := proc.LookupUser(cmd.Owner)
+		if err != nil {
+			return fmt.Errorf("owner %q: %w", cmd.Owner, err)
+		}
+		owner = toOwner(cred)
+	}
+	return Extract(path, stdin, owner, stderr)
 }
 
 func usageError() error {

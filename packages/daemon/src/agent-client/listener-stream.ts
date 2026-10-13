@@ -1,20 +1,13 @@
-import * as z from 'zod';
+import type * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
+import { ConnectionSchema, ListenResponseSchema } from './agent-protocol';
+import type { AgentRequestSchemas } from './agent-protocol';
 import { readFrameWithin, requireNoAgentError } from './agent-requests';
 import { openRelayStream } from './dial-stream';
 import type { DialStream } from './dial-stream';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
-
-const ListenResponseSchema = z.object({
-  ok: z.literal(true),
-  path: z.string().optional(),
-  port: z.int().positive().optional(),
-  listener: z.string(),
-});
-
-const ConnectionSchema = z.object({ id: z.int().positive() });
 
 // the agent makes a directory and a socket, or starts a helper, then answers
 const ANSWER_TIMEOUT_MS = 10_000;
@@ -44,7 +37,12 @@ export interface GuestListener {
   readonly close: () => void;
 }
 
-function buildListenRequest(spec: ListenSpec): Readonly<Record<string, string>> {
+// agent.listen, or a listen for a socket or a port
+type AgentListenRequest = z.input<
+  typeof AgentRequestSchemas.bare | typeof AgentRequestSchemas.relay
+>;
+
+function buildListenRequest(spec: ListenSpec): AgentListenRequest {
   if (spec.network === 'ssh-agent') {
     return { op: 'agent.listen' };
   }

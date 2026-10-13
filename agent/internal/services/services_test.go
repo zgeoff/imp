@@ -94,7 +94,7 @@ func TestReadDefTakesTheNameFromTheFileAndFillsTheDefaults(t *testing.T) {
 			p := filepath.Join(t.TempDir(), tc.file)
 			assert.NilError(t, os.WriteFile(p, []byte(tc.body), 0o644))
 
-			got, err := readDef(fsroot.Host, p)
+			got, err := ReadDef(fsroot.Host, p)
 
 			assert.NilError(t, err)
 			assert.DeepEqual(t, got, tc.want)
@@ -117,7 +117,7 @@ func TestReadDefRejectsADefinitionTheSupervisorCannotRun(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "svc.json")
 			assert.NilError(t, os.WriteFile(p, []byte(tc.body), 0o644))
 
-			_, err := readDef(fsroot.Host, p)
+			_, err := ReadDef(fsroot.Host, p)
 
 			assert.Error(t, err, tc.want)
 		})
@@ -128,14 +128,14 @@ func TestReadDefRejectsAFileThatIsNotJSON(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "syntax.json")
 	assert.NilError(t, os.WriteFile(p, []byte(`{`), 0o644))
 
-	_, err := readDef(fsroot.Host, p)
+	_, err := ReadDef(fsroot.Host, p)
 
 	var syntax *json.SyntaxError
 	assert.Assert(t, errors.As(err, &syntax), "err = %v, want a JSON syntax error", err)
 }
 
 func TestReadDefReportsAMissingFileAsNotExist(t *testing.T) {
-	_, err := readDef(fsroot.Host, filepath.Join(t.TempDir(), "missing.json"))
+	_, err := ReadDef(fsroot.Host, filepath.Join(t.TempDir(), "missing.json"))
 
 	assert.ErrorIs(t, err, fs.ErrNotExist)
 }

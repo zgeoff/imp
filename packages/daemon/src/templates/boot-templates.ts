@@ -27,7 +27,7 @@ import type { TemplateBuildPlan } from '../vmm/template-vm';
 
 // The cmdline of every template: the agent parks for a claim, and nothing in
 // it names an imp (docs/architecture/boot-templates.md#make)
-const TEMPLATE_BOOT_ARGS = [...BASE_BOOT_ARGS, 'imp.template=1'].join(' ');
+export const TEMPLATE_BOOT_ARGS = [...BASE_BOOT_ARGS, 'imp.template=1'].join(' ');
 
 // The template VM's own tap: it is only ever opened by a build, one at a
 // time, and its guest configures no address. A restore names the imp's tap.

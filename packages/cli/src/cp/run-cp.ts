@@ -3,6 +3,7 @@ import { loadCliConfig } from '../cli-config';
 import type { CliConfig } from '../cli-config';
 import { printError } from '../run-action';
 import { UsageError } from '../usage-error';
+import { buildTarArgs } from './build-tar-args';
 import { createCopyProgress } from './copy-progress';
 import type { CopyProgress } from './copy-progress';
 import { createLocalExtractor } from './extract-local';
@@ -43,7 +44,7 @@ async function runUpload(
     config,
     name: plan.name,
     tool: 'tar',
-    args: ['extract', ...(owner === undefined ? [] : ['--owner', owner]), plan.guestPath],
+    args: buildTarArgs({ op: 'extract', path: plan.guestPath, owner }),
     onStdout: () => Promise.resolve(),
     onStderr: writeGuestStderr,
   });
@@ -72,7 +73,7 @@ async function runDownload(config: CliConfig, plan: CpPlan, progress: CopyProgre
     config,
     name: plan.name,
     tool: 'tar',
-    args: ['create', plan.guestPath],
+    args: buildTarArgs({ op: 'create', path: plan.guestPath }),
     onStdout: extractor.write,
     onStderr: writeGuestStderr,
   });

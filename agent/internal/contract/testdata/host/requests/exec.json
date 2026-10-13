@@ -1,0 +1,10 @@
+{
+  "op": "exec",
+  "argv": ["make", "-j4"],
+  "tty": true,
+  "cols": 120,
+  "rows": 40,
+  "session": "build",
+  "log": true,
+  "resume_from": { "execution_generation": "0123456789abcdef0123456789abcdef", "offset": 4096 }
+}

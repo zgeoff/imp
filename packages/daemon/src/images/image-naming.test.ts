@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
 test.each([
@@ -24,6 +25,20 @@ test('#buildImageRuntimeConfig maps the OCI config to the agent image config', (
   expect(
     buildImageRuntimeConfig({ Env: ['PATH=/bin'], WorkingDir: '/app', User: 'node', Cmd: ['x'] }),
   ).toStrictEqual({ env: ['PATH=/bin'], workdir: '/app', user: 'node' });
+});
+
+test('#buildImageRuntimeConfig builds the image.json the agent reads whole (agent/internal/contract)', () => {
+  const config = buildImageRuntimeConfig({
+    Env: ['PATH=/usr/local/bin:/usr/bin:/bin', 'LANG=C.UTF-8'],
+    WorkingDir: '/srv/app',
+    User: 'dev',
+  });
+
+  // as image-service writes it
+  const json = JSON.stringify(config);
+  const written: unknown = JSON.parse(json);
+
+  expect(written).toStrictEqual(readAgentFixture('host/image.json'));
 });
 
 test('#buildImageRuntimeConfig maps a missing OCI config to an empty agent image config', () => {
