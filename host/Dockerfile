@@ -73,6 +73,8 @@ RUN install -m 0755 -d /etc/apt/keyrings \
  && apt-get install -y --no-install-recommends "docker-ce-cli=${DOCKER_CLI_VERSION}" tailscale \
  && rm -rf /var/lib/apt/lists/*
 
+# the pipe feeds echo into `sha256sum -c`, where only the check can fail
+# hadolint ignore=DL4006
 RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \
  && echo "${FIRECRACKER_SHA256}  /tmp/firecracker.tgz" | sha256sum -c - \
  && tar -xzf /tmp/firecracker.tgz -C /tmp \
@@ -82,6 +84,8 @@ RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/f
 
 COPY --from=ksm-exec /out/ksm-exec /usr/local/bin/ksm-exec
 
+# the pipe feeds echo into `sha256sum -c`, where only the check can fail
+# hadolint ignore=DL4006
 RUN curl -fsSL -o /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2" \
  && echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c - \
  && bunzip2 -c /tmp/restic.bz2 >/usr/local/bin/restic \
@@ -170,6 +174,9 @@ ARG BUSYBOX_VERSION=1.37.0
 ARG BUSYBOX_SHA256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
 COPY host/busybox.config /tmp/busybox.config
 ARG JOBS=
+# the build runs in the source tree it unpacks, which no WORKDIR can name
+# before the download; the pipe feeds echo into `sha256sum -c`
+# hadolint ignore=DL3003,DL4006
 RUN m=/usr/include/x86_64-linux-musl \
  && ln -s /usr/include/linux /usr/include/asm-generic /usr/include/mtd "$m/" \
  && ln -s /usr/include/x86_64-linux-gnu/asm "$m/asm" \
