@@ -45,8 +45,6 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       push_tag: ${{ steps.version.outputs.push_tag }}
-      is_newest: ${{ steps.newest.outputs.is_newest }}
-      newest_tag: ${{ steps.newest.outputs.newest_tag }}
     steps:
       - name: Check tag
         if: inputs.tag != ''
@@ -56,24 +54,6 @@ jobs:
           if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "tag $TAG is not vX.Y.Z" >&2
             exit 1
-          fi
-
-      # Only the newest release moves the image's `latest`, the Homebrew
-      # formula and npm's `latest`, so a republish of an older one moves none
-      # of them. Looked up once, so the jobs that read it agree.
-      - name: Check newest
-        id: newest
-        if: inputs.tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
-          echo "newest_tag=$newest" >> "$GITHUB_OUTPUT"
-          if [ "$TAG" = "$newest" ]; then
-            echo "is_newest=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_newest=false" >> "$GITHUB_OUTPUT"
           fi
 
       # a republish builds the tag, never main's head
@@ -396,8 +376,37 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
+  # Whether the tag is the newest release: only the newest moves the image's
+  # `latest`, the Homebrew formula and npm's `latest`, so a republish of an
+  # older one moves none of them. Looked up once, after the images are pushed
+  # and before the first of those moves, so every job that reads it agrees.
+  newest:
+    needs: image
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      is_newest: ${{ steps.newest.outputs.is_newest }}
+      newest_tag: ${{ steps.newest.outputs.newest_tag }}
+    steps:
+      - name: Check newest
+        id: newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          echo "newest_tag=$newest" >> "$GITHUB_OUTPUT"
+          if [ "$TAG" = "$newest" ]; then
+            echo "is_newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
-    needs: [assets, image]
+    needs: [assets, image, newest]
     if: inputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -432,8 +441,8 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
           VERSION: ${{ needs.assets.outputs.version }}
-          IS_NEWEST: ${{ needs.assets.outputs.is_newest }}
-          NEWEST: ${{ needs.assets.outputs.newest_tag }}
+          IS_NEWEST: ${{ needs.newest.outputs.is_newest }}
+          NEWEST: ${{ needs.newest.outputs.newest_tag }}
         run: |
           if [ "$IS_NEWEST" != true ]; then
             echo "$TAG is not the newest release ($NEWEST); latest stays"
@@ -446,7 +455,7 @@ jobs:
   # Actions variable HOMEBREW_TAP naming it (docs/runbooks/releasing.md); without either,
   # the job is skipped. Only the newest release moves the formula.
   tap:
-    needs: [assets, publish]
+    needs: [assets, newest, publish]
     if: inputs.tag != '' && vars.RELEASE_APP_ID != '' && vars.HOMEBREW_TAP != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -457,8 +466,8 @@ jobs:
         id: newest
         env:
           TAG: ${{ inputs.tag }}
-          IS_NEWEST: ${{ needs.assets.outputs.is_newest }}
-          NEWEST: ${{ needs.assets.outputs.newest_tag }}
+          IS_NEWEST: ${{ needs.newest.outputs.is_newest }}
+          NEWEST: ${{ needs.newest.outputs.newest_tag }}
         run: |
           if [ "$IS_NEWEST" != true ]; then
             echo "$TAG is not the newest release ($NEWEST); the formula stays"
@@ -527,7 +536,7 @@ jobs:
   # npm is skipped, so a republish is safe. Building runs here, without the
   # OIDC token; npm-publish only uploads the checked tarball.
   npm-pack:
-    needs: [assets, publish]
+    needs: [assets, newest, publish]
     if: inputs.tag != '' && vars.NPM_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -549,7 +558,7 @@ jobs:
         id: plan
         env:
           VERSION: ${{ needs.assets.outputs.version }}
-          IS_NEWEST: ${{ needs.assets.outputs.is_newest }}
+          IS_NEWEST: ${{ needs.newest.outputs.is_newest }}
         run: |
           name=$(jq -r .name packages/client/package.json)
           if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then

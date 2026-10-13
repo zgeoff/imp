@@ -73,7 +73,6 @@
   },
   "type": "module",
   "scripts": {
-    "check": "bun run deadcode && bun run format:check && bun run lint:full && bun run lint:docs && bun run typecheck && bun test",
     "audit": "bun audit --ignore=GHSA-86w9-cpqp-85rv --ignore=GHSA-vfj7-8cjw-p6xm",
     "build:cli": "./scripts/release/build-cli.sh",
     "build:dashboard": "bun run --cwd packages/dashboard build",
@@ -87,6 +86,7 @@
     "render:db-schema": "bun packages/daemon/src/db/render-schema.ts",
     "lint:shell": "./scripts/ci/shellcheck.sh",
     "test": "bun test",
+    "check": "bun run deadcode && bun run format:check && bun run lint:full && bun run lint:docs && bun run typecheck && bun test",
     "test:host": "bun test ./packages/daemon/src/egress/egress-ruleset.host.test.ts ./host/scripts/setup-net.host.test.ts ./packages/daemon/src/test-utils/run-in-netns.host.test.ts ./packages/daemon/src/test-utils/build-stub-public-network.host.test.ts",
     "test:pebble": "bun scripts/dev/pull-pebble-images.ts && bun test ./packages/daemon/src/https/acme/acme-issuer.pebble.ts",
     "test:dashboard": "bun run --cwd packages/dashboard test",
