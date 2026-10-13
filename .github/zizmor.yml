@@ -7,7 +7,7 @@ rules:
   unpinned-uses:
     config:
       policies:
-        zgeoff/*: ref-pin
+        zgeoff/tools/.github/workflows/repo-sync.yml: ref-pin
         '*': hash-pin
   # the `uses: $/...` form this audit asks for fails actionlint 1.7.12, which
   # knows only `./...` for an action in this repository
