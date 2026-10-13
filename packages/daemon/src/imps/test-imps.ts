@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@imp/test-utils/wait-for'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -45,7 +45,7 @@ import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../st
 import type { ImpPaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { buildStubVmm } from '../test-utils/build-stub-vmm'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { KsmHostStats } from '../vmm/ksm';

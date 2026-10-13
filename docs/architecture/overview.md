@@ -122,6 +122,12 @@ and the imp boots cold.
 - **Events.** Every write to an imp or checkpoint row becomes an event on one in-process bus, in
   write order. The event stream, the proxy, the broker and the telemetry read it
   ([the API](./control/api.md#events-audit-and-telemetry)).
+- **Import direction.** The packages form a stack: the leaves at the bottom, then the API contract,
+  the published client, the MCP server, and the three apps (the CLI, the dashboard and impd) on top.
+  oxlint refuses an import that points up the stack or across to another app, type-only imports
+  included, so the order cannot drift. It also refuses a Node import in the contract or the client,
+  because the client runs in browsers and in Node alike; a query builder outside the daemon's
+  database module; and production code that imports test support.
 - **More than one host.** Each host is its own impd with its own data. A move takes an imp from one
   to another over the tailnet, with marks on both copies that keep exactly one live
   ([moves](./storage/moves.md)).
