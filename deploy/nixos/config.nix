@@ -15,7 +15,7 @@ let
   ownFirewall = cfg.hostFirewall == "own";
   ipv6 = cfg.ipv6.enable;
   # The docker run arguments, shared with deploy/imp-host.service and
-  # bootstrap.sh (scripts/render-imp-host.ts writes those two from it). A
+  # bootstrap.sh (scripts/render/render-imp-host.ts writes those two from it). A
   # $NAME word is env-file words in the unit, and an option here.
   hostArgs = lib.importJSON ../imp-host.args.json;
   # The network imp-host runs on with IPv6, and its bridge, which the

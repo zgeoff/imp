@@ -2,7 +2,7 @@
 # Measure wakes of an imp put to sleep right after a cold boot: the case a
 # host kernel before Linux 6.7 makes slow (docs/architecture/lifecycle/sleep-and-wake.md#young-guests).
 #
-#   scripts/bench-wake.sh [--cycles N] [--awake S] [--limit-ms MS] [--memory M]
+#   scripts/dev/bench-wake.sh [--cycles N] [--awake S] [--limit-ms MS] [--memory M]
 #
 # Each cycle stops and starts the imp, waits --awake seconds (default 0),
 # sleeps it and times `imp wake` as the client sees it, CLI start included.
@@ -35,7 +35,7 @@ while [ $# -gt 0 ]; do
   shift 2
 done
 
-imp_bin=${IMP_BIN:-$(dirname "$0")/imp}
+imp_bin=${IMP_BIN:-$(dirname "$0")/../imp}
 name=bench-wake-$$
 
 now_ms() {

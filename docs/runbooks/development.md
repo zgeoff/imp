@@ -15,7 +15,7 @@ bun run lint:shell                # shellcheck over install.sh, scripts/, host/,
 bun run lint:docs                 # every relative link and anchor in the docs resolves
 (cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
 scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
-scripts/test-e2e.sh --clean       # end to end, from a clean state
+test/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
 `bun run lint:shell` needs shellcheck 0.11.0 on `PATH`, the version CI pins. Run the end-to-end
@@ -23,7 +23,7 @@ harness against a real instance when a change touches the lifecycle, the agent o
 
 ## End-to-end tests
 
-`scripts/test-e2e.sh` brings up the dev instance (`scripts/dev.sh`), then runs each journey file of
+`test/test-e2e.sh` brings up the dev instance (`scripts/dev/dev.sh`), then runs each journey file of
 each suite in `test/e2e/suites/` as its own `bun test` process, and resets the suite's leftovers
 after each one. Every case drives impd through the `imp` CLI, the way a user would; the dashboard
 suite drives it through a browser. The suites run in this order:
@@ -75,11 +75,11 @@ suite drives it through a browser. The suites run in this order:
 | `backups`        | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                                                                                                                           |
 
 ```sh
-scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
-scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
-scripts/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
-scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
+test/test-e2e.sh                          # the acceptance set: every suite
+test/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
+test/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
+test/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
+test/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
 
 | Flag      | Effect                                                                                                                                  |
@@ -112,7 +112,7 @@ Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
 [per-imp names](../guides/tailscale.md#per-imp-names).
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
-`scripts/dev.sh`. These variables tune a run:
+`scripts/dev/dev.sh`. These variables tune a run:
 
 | Variable                | Default | Effect                                                   |
 | ----------------------- | ------- | -------------------------------------------------------- |
@@ -162,14 +162,14 @@ measure. A suite file also runs on its own against a running instance:
 
 ### Wake bench
 
-`scripts/bench-wake.sh` is a manual check, not part of the harness or CI. It times wakes of an imp
-put to sleep right after a cold boot, which a host kernel before Linux 6.7 makes slow
+`scripts/dev/bench-wake.sh` is a manual check, not part of the harness or CI. It times wakes of an
+imp put to sleep right after a cold boot, which a host kernel before Linux 6.7 makes slow
 ([young guests](../architecture/lifecycle/sleep-and-wake.md#young-guests)). It drives impd through
 the CLI only, so it runs against any host, and it fails when the median wake passes `--limit-ms`
 (default 500):
 
 ```sh
-scripts/bench-wake.sh --cycles 3       # IMP_URL and IMP_TOKEN, or the saved login
+scripts/dev/bench-wake.sh --cycles 3       # IMP_URL and IMP_TOKEN, or the saved login
 ```
 
 On the WSL2 dev box (host kernel 6.6.87), the median wake was 793 ms with impd's wait off
@@ -179,18 +179,18 @@ should be fast; record the host's `uname -r` with the result.
 ## Worktrees
 
 Each checkout of the repo, the main one or a git worktree, runs a dev instance of its own: give it
-an `IMP_DEV_NAME` and an `IMP_DEV_PORT_OFFSET`. Its host image is its own too. `scripts/dev.sh` tags
-it `imp-host:dev-<dir>-<hash>`, where `<dir>` is the checkout's directory name and `<hash>` the
+an `IMP_DEV_NAME` and an `IMP_DEV_PORT_OFFSET`. Its host image is its own too. `scripts/dev/dev.sh`
+tags it `imp-host:dev-<dir>-<hash>`, where `<dir>` is the checkout's directory name and `<hash>` the
 first 8 hex characters of the sha256 of its path without symlinks (`dev_image_tag` in
 `scripts/lib.sh`). One worktree's build never replaces the image under another's running instance or
 e2e run. `IMP_HOST_IMAGE` overrides the tag, as CI does.
 
 `dev.sh down` keeps the image, so the next `up` starts at once. Once a worktree is gone, its image
-stays behind. `scripts/dev.sh prune` removes the images whose checkout directory is gone and that no
-container uses, and the untagged images that rebuilds leave. It finds them by two labels: the
-checkout's path (`imp.worktree`) and the machine's `/etc/machine-id` (`imp.machine`), because Docker
-Desktop shares one daemon across WSL distros and devcontainers. Without a machine id, a build gets
-no `imp.machine` label, so no prune ever removes it, and prune itself stops with an error. It
+stays behind. `scripts/dev/dev.sh prune` removes the images whose checkout directory is gone and
+that no container uses, and the untagged images that rebuilds leave. It finds them by two labels:
+the checkout's path (`imp.worktree`) and the machine's `/etc/machine-id` (`imp.machine`), because
+Docker Desktop shares one daemon across WSL distros and devcontainers. Without a machine id, a build
+gets no `imp.machine` label, so no prune ever removes it, and prune itself stops with an error. It
 removes only the checkout's own tag, keeps every live checkout's image, and never touches an image
 without the labels. An image built under an `IMP_HOST_IMAGE` override keeps that tag, so prune
 leaves it; remove it by hand, as you would an `imp-host:<worktree>-dev` tag from the old workaround.
@@ -269,8 +269,8 @@ On `main`, the `release-please` job makes releases ([releasing](./releasing.md))
 The `fast` set runs in three groups (`FAST_GROUPS` in `test/e2e/lib/suites.ts`), one `e2e-group` job
 per group, each on its own runner. The `e2e` job is the required check: it fails when any group
 failed, was cancelled or was skipped. Each group boots real Firecracker guests on a standard
-`ubuntu-24.04` runner (4 cores, 16 GB), which exposes `/dev/kvm`. `scripts/check-kvm.sh` runs first,
-so a runner without KVM fails in seconds with the reason. The job then:
+`ubuntu-24.04` runner (4 cores, 16 GB), which exposes `/dev/kvm`. `scripts/ci/check-kvm.sh` runs
+first, so a runner without KVM fails in seconds with the reason. The job then:
 
 1. builds the guest kernel and the system drive from the `system-files` stage, with the release's
    GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/build.sh`,
@@ -279,16 +279,15 @@ so a runner without KVM fails in seconds with the reason. The job then:
    timeout is 25.
 2. builds the dev host image as `imp-host:dev` with a cache of its own (scope `imp-dev`). The `e2e`
    and `zfs` jobs in `ci.yml` set `IMP_HOST_IMAGE=imp-host:dev` and `IMP_HOST_IMAGE_READY=1`, so
-   `scripts/dev.sh` uses that image instead of building it again. Only group 1's run on `main`
+   `scripts/dev/dev.sh` uses that image instead of building it again. Only group 1's run on `main`
    writes these caches, so three writers never race; pull requests only read them. Steps 1 and 2 are
    the composite action `.github/actions/e2e-build`, which the `zfs` job uses too.
 3. restores the Playwright browser cache (`~/.cache/ms-playwright`), keyed on the Playwright version
    in `bun.lock`, which pins the Chromium build, in the group with the dashboard suite only. The
    dashboard suite installs that Chromium's headless shell when the cache misses.
-4. runs `scripts/test-e2e.sh --group N` with `E2E_RAM_BUDGET_MIB=4096`,
-   `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
-   key in CI, and a missed timing limit only warns. The host networking tests run in group 2 only
-   (`HOST_TESTS_GROUP`).
+4. runs `test/test-e2e.sh --group N` with `E2E_RAM_BUDGET_MIB=4096`, `IMP_DEFAULT_MEMORY_MIB=1024`
+   and the XFS file on the runner's `/mnt` disk. There is no Tailscale key in CI, and a missed
+   timing limit only warns. The host networking tests run in group 2 only (`HOST_TESTS_GROUP`).
 
 The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
 the lifecycle, checkpoints, disks, sleep and backups suites on a pool in a sparse file. The job
@@ -310,9 +309,9 @@ A new push to a pull request cancels its older run. On `main`, a run that has st
 a run still waiting behind it is cancelled when a newer push comes, so only the newest push runs
 next.
 
-`.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub --zfs` when a pull request
-or a push to `main` changes `deploy/` or the test
-([Bootstrap a server](../guides/install.md#test-it)). Its job is a required check.
+`.github/workflows/bootstrap.yml` runs `test/test-bootstrap.sh --stub --zfs` when a pull request or
+a push to `main` changes `deploy/` or the test ([Bootstrap a server](../guides/install.md#test-it)).
+Its job is a required check.
 
 `deploy/bootstrap.sh` is generated, so that a server downloads one file to install. Its sources are
 the parts in `deploy/bootstrap/`, the functions in `deploy/lib/host-env.sh` that `deploy/upgrade.sh`
@@ -321,8 +320,8 @@ and the NixOS module source as well, and the units and env template it installs.
 imp-docker-proxy, with the name and bridge of the IPv6 network and the pipeline that reads the
 host's addresses. After an edit to any of these, `bun run render:deploy` writes both units, the
 network lines of `deploy/lib/host-env.sh`, `bootstrap.sh`, and the privileges and network blocks of
-`deploy/compose.yaml`. `bun test` fails until it has (`scripts/render-imp-host.test.ts`), and so
-does a hand edit to `bootstrap.sh`. The NixOS module reads the arguments file itself.
+`deploy/compose.yaml`. `bun test` fails until it has (`scripts/render/render-imp-host.test.ts`), and
+so does a hand edit to `bootstrap.sh`. The NixOS module reads the arguments file itself.
 
 `.github/workflows/breaking-change.yml` fails a pull request that breaks the protocol between a
 client and impd without marking the change as breaking
@@ -339,9 +338,9 @@ first job compares the files the pull request changes against the workflow's pat
 match, the work jobs skip, and GitHub reports a job skipped by its condition as a success. A push to
 `main` keeps its own path filter.
 
-`.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
-system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:
-`gh workflow run reproducible.yml`.
+`.github/workflows/reproducible.yml` runs `scripts/release/check-reproducible.sh` (the guest kernel
+and the system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by
+hand: `gh workflow run reproducible.yml`.
 
 ## Branch rules
 

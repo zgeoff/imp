@@ -24,7 +24,7 @@ import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
 import { checkKsmHost, readKsmHostStats } from './vmm/ksm';
 
-// the whole stop, within the 120 s that scripts/dev.sh gives `docker stop`
+// the whole stop, within the 120 s that scripts/dev/dev.sh gives `docker stop`
 const STOP_DEADLINE_MS = 100_000;
 
 // at most per step before the sleep pass, which gets whatever is left

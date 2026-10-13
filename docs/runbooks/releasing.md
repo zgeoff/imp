@@ -68,7 +68,7 @@ These steps are done for `zgeoff/imp`. They are here for a new repository, or to
 
    ```sh
    npm login
-   scripts/first-publish-client.sh
+   scripts/release/first-publish-client.sh
    ```
 
    The script publishes the current version, then prints the last two steps: add the trusted
@@ -90,15 +90,15 @@ leaves the assets as the `release-assets` workflow artifact. Delete old `dryrun-
 package settings. To build without a push:
 
 ```sh
-scripts/build-release-assets.sh                                   # dist/ and dist/SHA256SUMS
-IMP_VERSION=$(jq -r .version package.json) host/build-release.sh
-host/check-release-image.sh "imp-host:$(jq -r .version package.json)" "$(jq -r .version package.json)" dist/SHA256SUMS
+scripts/release/build-release-assets.sh                                   # dist/ and dist/SHA256SUMS
+IMP_VERSION=$(jq -r .version package.json) scripts/release/build-release.sh
+scripts/release/check-release-image.sh "imp-host:$(jq -r .version package.json)" "$(jq -r .version package.json)" dist/SHA256SUMS
 ```
 
 To check the Homebrew formula by hand:
 
 ```sh
-scripts/build-formula.sh 1.2.3 dist/SHA256SUMS > /tmp/imp.rb && ruby -c /tmp/imp.rb
+scripts/release/build-formula.sh 1.2.3 dist/SHA256SUMS > /tmp/imp.rb && ruby -c /tmp/imp.rb
 brew install --formula /tmp/imp.rb && brew test imp     # on a machine with brew
 ```
 

@@ -17,7 +17,7 @@ function readNumber(name: string, fallback: number): number {
 // Harness knobs. The defaults are the acceptance sizes; lower them to run the
 // scale suite on a smaller machine.
 export const config = {
-  // impd tuning, passed through scripts/dev.sh
+  // impd tuning, passed through scripts/dev/dev.sh
   ramBudgetMib: readNumber('E2E_RAM_BUDGET_MIB', 6144),
   idleTimeoutS: readNumber('E2E_IDLE_TIMEOUT_S', 10),
 

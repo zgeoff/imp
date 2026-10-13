@@ -4,7 +4,7 @@
 # container runs as root with /dev/kvm passed in, so root opening the device
 # is enough.
 #
-#   scripts/check-kvm.sh
+#   scripts/ci/check-kvm.sh
 #
 # CI runs it before any build, so a runner without KVM fails in seconds with
 # the reason instead of deep inside the end-to-end harness.

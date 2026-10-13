@@ -2,10 +2,10 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildStubDevDocker } from './test-utils/build-stub-dev-docker';
-import { buildStubDevHostDocker } from './test-utils/build-stub-dev-host-docker';
-import { createStubBin } from './test-utils/create-stub-bin';
-import { runSourcedFunction } from './test-utils/run-sourced-function';
+import { buildStubDevDocker } from '../test-utils/build-stub-dev-docker';
+import { buildStubDevHostDocker } from '../test-utils/build-stub-dev-host-docker';
+import { createStubBin } from '../test-utils/create-stub-bin';
+import { runSourcedFunction } from '../test-utils/run-sourced-function';
 
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-dev-'));
@@ -79,7 +79,7 @@ test('it refuses a restart when the container is not running', () => {
   }).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: 'dev.sh: imp-dev is not running; use scripts/dev.sh up\n',
+    stderr: 'dev.sh: imp-dev is not running; use scripts/dev/dev.sh up\n',
   });
 });
 
@@ -310,8 +310,8 @@ test('it refuses up with IMP_HOST_IMAGE_READY=1 when there is no host image', ()
       IMP_DEV_DATA: join(ctx.dir, 'data'),
 
       // a file under the repo stands in for the kernel and the system drive
-      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
-      IMP_SYSTEM_DRIVE: new URL('../package.json', import.meta.url).pathname,
+      IMP_KERNEL: new URL('../../package.json', import.meta.url).pathname,
+      IMP_SYSTEM_DRIVE: new URL('../../package.json', import.meta.url).pathname,
       IMP_HOST_IMAGE: 'imp-host:dev-test',
       IMP_HOST_IMAGE_READY: '1',
     },
@@ -343,7 +343,7 @@ test('it refuses up without the system drive IMP_SYSTEM_DRIVE names', () => {
       IMP_DEV_DATA: join(ctx.dir, 'data'),
 
       // a file under the repo stands in for the kernel
-      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
+      IMP_KERNEL: new URL('../../package.json', import.meta.url).pathname,
       IMP_SYSTEM_DRIVE: join(ctx.dir, 'imp-system.squashfs'),
       IMP_HOST_IMAGE: 'imp-host:dev-test',
       IMP_HOST_IMAGE_READY: '1',
@@ -386,8 +386,8 @@ test('it refuses up with IMP_TAILNET_NAMES=1 when 1Password has no OAuth client'
       IMP_DEV_DATA: join(ctx.dir, 'data'),
 
       // a file under the repo stands in for the kernel and the system drive
-      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
-      IMP_SYSTEM_DRIVE: new URL('../package.json', import.meta.url).pathname,
+      IMP_KERNEL: new URL('../../package.json', import.meta.url).pathname,
+      IMP_SYSTEM_DRIVE: new URL('../../package.json', import.meta.url).pathname,
       IMP_HOST_IMAGE: 'imp-host:dev-test',
       IMP_HOST_IMAGE_READY: '1',
       IMP_DEV_TAILNET: '0',
@@ -436,8 +436,8 @@ test('it passes the Tailscale key to docker by name only in up, and never traces
       IMP_HOST_IMAGE_READY: '1',
 
       // a file under the repo stands in for the kernel and the system drive
-      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
-      IMP_SYSTEM_DRIVE: new URL('../package.json', import.meta.url).pathname,
+      IMP_KERNEL: new URL('../../package.json', import.meta.url).pathname,
+      IMP_SYSTEM_DRIVE: new URL('../../package.json', import.meta.url).pathname,
     },
   });
 
@@ -471,8 +471,8 @@ test('it refuses up with an IMP_ACME_CA_FILE outside the repo', () => {
       IMP_DEV_DATA: join(ctx.dir, 'data'),
 
       // a file under the repo stands in for the kernel and the system drive
-      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
-      IMP_SYSTEM_DRIVE: new URL('../package.json', import.meta.url).pathname,
+      IMP_KERNEL: new URL('../../package.json', import.meta.url).pathname,
+      IMP_SYSTEM_DRIVE: new URL('../../package.json', import.meta.url).pathname,
       IMP_HOST_IMAGE: 'imp-host:dev-test',
       IMP_HOST_IMAGE_READY: '1',
       IMP_DEV_TAILNET: '0',
@@ -487,7 +487,7 @@ test('it refuses up with an IMP_ACME_CA_FILE outside the repo', () => {
   }).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: `dev.sh: ${join(ctx.dir, 'pebble-ca.pem')} is not under ${new URL('..', import.meta.url).pathname.replace(/\/$/u, '')}\n`,
+    stderr: `dev.sh: ${join(ctx.dir, 'pebble-ca.pem')} is not under ${new URL('../..', import.meta.url).pathname.replace(/\/$/u, '')}\n`,
   });
 
   expect(readFileSync(docker.calls, 'utf8')).not.toInclude('docker run -d --name imp-dev ');
@@ -519,8 +519,8 @@ test('it fails up when the container stops before impd is ready, printing its lo
       IMP_DEV_DATA: join(ctx.dir, 'data'),
 
       // a file under the repo stands in for the kernel and the system drive
-      IMP_KERNEL: new URL('../package.json', import.meta.url).pathname,
-      IMP_SYSTEM_DRIVE: new URL('../package.json', import.meta.url).pathname,
+      IMP_KERNEL: new URL('../../package.json', import.meta.url).pathname,
+      IMP_SYSTEM_DRIVE: new URL('../../package.json', import.meta.url).pathname,
       IMP_HOST_IMAGE: 'imp-host:dev-test',
       IMP_HOST_IMAGE_READY: '1',
       IMP_DEV_TAILNET: '0',
@@ -562,7 +562,7 @@ test('it stops before it asks docker anything when there is no machine id', () =
 test('it removes the own tag of a gone checkout on this machine, then the leftovers', () => {
   const ctx = setupTest();
 
-  const lib = new URL('lib.sh', import.meta.url).pathname;
+  const lib = new URL('../lib.sh', import.meta.url).pathname;
 
   const gone = runSourcedFunction({
     script: lib,
@@ -612,7 +612,7 @@ test('it removes the own tag of a gone checkout on this machine, then the leftov
 test("it never removes a live checkout's image, another machine's, or an unmarked one", () => {
   const ctx = setupTest();
 
-  const lib = new URL('lib.sh', import.meta.url).pathname;
+  const lib = new URL('../lib.sh', import.meta.url).pathname;
 
   const live = runSourcedFunction({ script: lib, fn: 'dev_image_tag', args: [ctx.dir] });
 
@@ -678,7 +678,7 @@ test("it never removes a live checkout's image, another machine's, or an unmarke
 test('it keeps a gone checkout image it cannot remove, and says why', () => {
   const ctx = setupTest();
 
-  const lib = new URL('lib.sh', import.meta.url).pathname;
+  const lib = new URL('../lib.sh', import.meta.url).pathname;
 
   const stuck = runSourcedFunction({
     script: lib,

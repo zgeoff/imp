@@ -110,7 +110,7 @@ let
   # The default image is the tag for package.json's version. The cases below
   # stop a return to :latest and keep the default tied to package.json; the
   # release chain makes that image exist (release-please bumps package.json,
-  # release.yml pushes the tag, host/check-release-image.sh checks it).
+  # release.yml pushes the tag, scripts/release/check-release-image.sh checks it).
   releaseImage = "ghcr.io/zgeoff/imp-host:${(lib.importJSON (self + "/package.json")).version}";
   # the env words ($IMP_PUBLIC_PORTS) are options, empty here; the env file
   # carries IMP_HOST_ADDRESSES, so the module leaves out the unit's -e

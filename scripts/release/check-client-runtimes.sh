@@ -1,13 +1,13 @@
 #!/bin/bash
-# Smoke a packed @zgeoff/imp-client (scripts/pack-client.sh) as its users run
+# Smoke a packed @zgeoff/imp-client (scripts/release/pack-client.sh) as its users run
 # it: under Node, under Bun, and as a compiled Bun binary copied to an empty
 # directory. Each runs packages/client/smoke/smoke.ts against run-stub-impd.ts,
 # impd's own app with a fake agent, which runs from the workspace.
 #
-#   scripts/check-client-runtimes.sh build/npm/zgeoff-imp-client-X.Y.Z.tgz
+#   scripts/release/check-client-runtimes.sh build/npm/zgeoff-imp-client-X.Y.Z.tgz
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 tarball=$(realpath "$1")
 version=$(tar -xOzf "$tarball" package/package.json | jq -r .version)
 smoke=$root/packages/client/smoke/smoke.ts

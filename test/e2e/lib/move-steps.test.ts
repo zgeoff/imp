@@ -247,7 +247,7 @@ test('#parseNftSetAddresses reads a set without elements as none', () => {
 test('#startMoveSend marks the imp sending on the source host', async () => {
   const ctx = await setupTest();
 
-  // scripts/dev.sh token reads the host's token through docker exec
+  // scripts/dev/dev.sh token reads the host's token through docker exec
   const docker = createStubBin(ctx.dir, 'docker', `echo ${ctx.rootToken}`);
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);
@@ -270,7 +270,7 @@ test('#startMoveSend marks the imp sending on the source host', async () => {
 test('#startMoveSend rejects with the host’s error when the source refuses the move', async () => {
   const ctx = await setupTest();
 
-  // scripts/dev.sh token reads the host's token through docker exec
+  // scripts/dev/dev.sh token reads the host's token through docker exec
   const docker = createStubBin(ctx.dir, 'docker', `echo ${ctx.rootToken}`);
 
   updateEnv('PATH', `${docker.bin}:${process.env['PATH'] ?? ''}`);

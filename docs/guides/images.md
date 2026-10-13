@@ -194,13 +194,13 @@ host's services on the bridge among them. impd's refusal of a remote `ADD` does 
 Isolated builds, the default, close this ([isolated builds](#isolated-builds)).
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
-absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
-impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`,
-and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it. An image you built with
-plain `docker build` goes in with `imp image add <ref>` only under `IMP_BUILD_ISOLATION=host`
-([add an image](#add-an-image)). `images/examples/hello` starts FROM the published base by digest;
-to stack it on another base, edit that FROM line. An imp's own disk can be an image too: a
-[template](./templates.md) copies a set-up imp into new ones.
+absolute and must exist where impd runs; `scripts/dev/dev.sh` mounts the repo at its own path for
+this. impd packs the directory as the CLI would, `.dockerignore` included, into
+`<IMP_DATA_DIR>/uploads`, and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it.
+An image you built with plain `docker build` goes in with `imp image add <ref>` only under
+`IMP_BUILD_ISOLATION=host` ([add an image](#add-an-image)). `images/examples/hello` starts FROM the
+published base by digest; to stack it on another base, edit that FROM line. An imp's own disk can be
+an image too: a [template](./templates.md) copies a set-up imp into new ones.
 
 ## Isolated builds
 

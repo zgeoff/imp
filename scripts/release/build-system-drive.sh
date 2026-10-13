@@ -7,7 +7,7 @@
 # the release image, so the dev drive has the same bytes as the release one.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
-source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/../lib.sh"
 
 mkdir -p "$IMP_BUILD"
 docker buildx build -q -f "$IMP_ROOT/host/Dockerfile" --target system-drive \

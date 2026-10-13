@@ -4,7 +4,7 @@
 # so an upgrade whose kernel and agent did not change must keep both hashes.
 # Only these two files are reproducible; the host image digest is not.
 #
-#   host/check-reproducible.sh
+#   scripts/release/check-reproducible.sh
 #
 # Builds the system-files stage of host/Dockerfile three times and compares
 # the sha256 of vmlinux and imp-system.squashfs:
@@ -16,7 +16,7 @@
 # Two cold kernel builds: expect 5 to 20 minutes.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 builder=imp-reproducible-$$
 trap 'docker buildx rm "$builder" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT

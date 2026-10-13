@@ -1,12 +1,12 @@
 #!/bin/bash
-# Install a packed @zgeoff/imp-client (scripts/pack-client.sh) into an empty
+# Install a packed @zgeoff/imp-client (scripts/release/pack-client.sh) into an empty
 # project, as a user would, and check that it imports under plain Node, with
 # no Bun and no workspace, and that its types check in a strict project.
 #
-#   scripts/check-client-package.sh build/npm/zgeoff-imp-client-X.Y.Z.tgz
+#   scripts/release/check-client-package.sh build/npm/zgeoff-imp-client-X.Y.Z.tgz
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 tarball=$(realpath "$1")
 project=$(mktemp -d)
 trap 'rm -rf "$project"' EXIT

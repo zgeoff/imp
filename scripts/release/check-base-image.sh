@@ -5,7 +5,7 @@
 # agent comes from the system drive at boot, so a copy in the image would be
 # stale.
 #
-#   host/check-base-image.sh IMAGE
+#   scripts/release/check-base-image.sh IMAGE
 #
 # IMAGE must be in the local docker.
 set -euo pipefail
@@ -48,7 +48,7 @@ done
 
 # The Docker packages must be the versions images/base/Dockerfile pins, so
 # the licence notices it fetched match them.
-dockerfile=$(dirname "$0")/../images/base/Dockerfile
+dockerfile=$(dirname "$0")/../../images/base/Dockerfile
 for pin in docker-ce=DOCKER_CE_VERSION docker-ce-cli=DOCKER_CE_CLI_VERSION \
   containerd.io=CONTAINERD_VERSION docker-buildx-plugin=BUILDX_VERSION; do
   package=${pin%%=*} arg=${pin#*=}

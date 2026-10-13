@@ -2,17 +2,17 @@
 # Run impd in one long-lived dev host container (imp-dev), with its Docker
 # socket proxy beside it (imp-dev-docker-proxy), as the deploy runs them.
 #
-#   scripts/dev.sh up        build what is missing, start the container, wait for impd
-#   scripts/dev.sh down      stop the container (impd sleeps every imp first, so
+#   scripts/dev/dev.sh up        build what is missing, start the container, wait for impd
+#   scripts/dev/dev.sh down      stop the container (impd sleeps every imp first, so
 #                            memory survives) and its proxy, and remove them; data
 #                            stays in .data/dev
-#   scripts/dev.sh reboot    down, then up: imps come back asleep and wake on demand
-#   scripts/dev.sh logs      follow the container log
-#   scripts/dev.sh restart   restart impd (SIGHUP), and the proxy if it changed;
+#   scripts/dev/dev.sh reboot    down, then up: imps come back asleep and wake on demand
+#   scripts/dev/dev.sh logs      follow the container log
+#   scripts/dev/dev.sh restart   restart impd (SIGHUP), and the proxy if it changed;
 #                            running VMs survive and are re-adopted
-#   scripts/dev.sh shell     open a shell in the container
-#   scripts/dev.sh token     print the API token (for IMP_TOKEN)
-#   scripts/dev.sh prune     remove the dev host images of worktrees that are
+#   scripts/dev/dev.sh shell     open a shell in the container
+#   scripts/dev/dev.sh token     print the API token (for IMP_TOKEN)
+#   scripts/dev/dev.sh prune     remove the dev host images of worktrees that are
 #                            gone, and the untagged images rebuilds leave
 #
 # Env: IMP_DEV_NAME (default imp-dev) names the container; IMP_DEV_PORT_OFFSET
@@ -69,7 +69,7 @@
 #      wait for the old impd to exit on restart; the tests shorten both.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
-source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/../lib.sh"
 
 name=${IMP_DEV_NAME:-imp-dev}
 proxy=$name-docker-proxy
@@ -174,7 +174,7 @@ start_proxy() {
   fi
   if is_running "$proxy" && [ "$mode" = keep ]; then
     rm -f "$data/imp-docker-proxy.new"
-    echo "dev.sh: $proxy changed; scripts/dev.sh restart replaces it" >&2
+    echo "dev.sh: $proxy changed; scripts/dev/dev.sh restart replaces it" >&2
     return
   fi
 
@@ -230,7 +230,7 @@ up() {
     build_host_image
   fi
   if [ -z "${IMP_SYSTEM_DRIVE:-}" ]; then
-    "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
+    "$IMP_ROOT/scripts/release/build-system-drive.sh" >/dev/null
   fi
   [ -f "$system" ] || { echo "dev.sh: no system drive at $system" >&2; exit 1; }
 
@@ -309,7 +309,7 @@ up() {
     echo "dev.sh: started $name"
   fi
   wait_ready
-  echo "dev.sh: impd ready on $api (token: scripts/dev.sh token)"
+  echo "dev.sh: impd ready on $api (token: scripts/dev/dev.sh token)"
   echo "dev.sh: dashboard on $api/ui/ (bun run build:dashboard to build it)"
 }
 
@@ -375,7 +375,7 @@ case ${1:-} in
     ;;
   logs) docker logs -f "$name" ;;
   restart)
-    is_running || { echo "dev.sh: $name is not running; use scripts/dev.sh up" >&2; exit 1; }
+    is_running || { echo "dev.sh: $name is not running; use scripts/dev/dev.sh up" >&2; exit 1; }
     # the proxy first: a changed proxy is replaced before impd comes back
     start_proxy
     # SIGHUP: impd exits without sleeping the VMs; the entrypoint restarts it.

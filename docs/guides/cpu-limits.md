@@ -33,10 +33,10 @@ memory does. The kernel then kills the whole VM, and `imp ls --json` shows the s
 error `its memory limit killed firecracker`. See [cgroups](../architecture/isolation.md#cgroups).
 
 **NOTE:** impd enforces limits only when the host container runs in a private cgroup v2 namespace
-(`--cgroupns=private`, which `scripts/dev.sh`, `deploy/imp-host.service` and `deploy/compose.yaml`
-pass) and `setup-cgroups.sh` can remount its cgroupfs read-write. Without either, impd logs
-`CPU limits are kept, not applied`, stores the settings, `imp info` shows `limits OFF`, and
-`imp info --json` shows `cpu.limitsEnforced: false`. Jailed VMs cannot start then.
+(`--cgroupns=private`, which `scripts/dev/dev.sh`, `deploy/imp-host.service` and
+`deploy/compose.yaml` pass) and `setup-cgroups.sh` can remount its cgroupfs read-write. Without
+either, impd logs `CPU limits are kept, not applied`, stores the settings, `imp info` shows
+`limits OFF`, and `imp info --json` shows `cpu.limitsEnforced: false`. Jailed VMs cannot start then.
 
 ## Resource use
 

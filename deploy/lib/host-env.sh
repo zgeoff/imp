@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The functions that deploy/bootstrap.sh, deploy/upgrade.sh and the NixOS
 # module (deploy/nixos/) share. upgrade.sh, deploy/nixos/imp-host-env.sh and
-# deploy/nixos/config.nix source this file; scripts/render-imp-host.ts copies
+# deploy/nixos/config.nix source this file; scripts/render/render-imp-host.ts copies
 # it into bootstrap.sh, which runs from a single download. The image ships it
 # beside upgrade.sh, as /usr/local/share/imp/deploy/lib/host-env.sh.
 #

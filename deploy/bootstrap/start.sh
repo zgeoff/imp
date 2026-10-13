@@ -13,7 +13,7 @@
 # changes instead of making them.
 #
 # The script is self-contained, so it runs on a server without a checkout:
-# bun run render:deploy (scripts/render-imp-host.ts) writes it from the parts
+# bun run render:deploy (scripts/render/render-imp-host.ts) writes it from the parts
 # in deploy/bootstrap/, in the order BOOTSTRAP_PARTS there lists, with
 # deploy/lib/host-env.sh and the deploy files it installs:
 # deploy/imp-host.service, deploy/imp-docker-proxy.service and

@@ -5,13 +5,13 @@
 # (scripts/imp, host/entrypoint), or carries a `# shellcheck shell=` directive
 # (sourced libraries such as scripts/lib.sh).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # moby's contrib/check-config.sh, kept as upstream wrote it
 vendored=(kernel/check-config.sh)
 
 # deploy/bootstrap.sh's parts share its variables, so each is checked within
-# the whole: deploy/bootstrap.sh, which scripts/render-imp-host.ts writes
+# the whole: deploy/bootstrap.sh, which scripts/render/render-imp-host.ts writes
 parts=deploy/bootstrap/
 
 is_excluded() {

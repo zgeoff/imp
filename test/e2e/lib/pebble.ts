@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { PEBBLE_IMAGES } from '../../../scripts/pebble-images';
+import { PEBBLE_IMAGES } from '../../../scripts/dev/pebble-images';
 import { REPO_ROOT, instance, runChecked, runCommand } from './instance';
 import { waitFor } from './wait-for';
 
@@ -135,7 +135,7 @@ export function isPebbleRunning(): boolean {
   return inspect.stdout.toString().trim() === 'true';
 }
 
-// The env that scripts/dev.sh hands impd, so the dev instance joins the
+// The env that scripts/dev/dev.sh hands impd, so the dev instance joins the
 // stack's network and gets its certificate from Pebble. Only the https suite
 // sets it, and removes it when it ends.
 const PUBLIC_IP = '203.0.113.7';

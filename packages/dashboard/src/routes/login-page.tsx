@@ -47,7 +47,7 @@ export function LoginPage() {
         </label>
         <p className={styles['hint']}>
           The root token is in <code>/var/lib/imp/token</code> on the host, or{' '}
-          <code>scripts/dev.sh token</code> for a dev instance. A token from{' '}
+          <code>scripts/dev/dev.sh token</code> for a dev instance. A token from{' '}
           <code>imp token new</code> works too, with its scope.
         </p>
         {result !== undefined && result !== 'ok' && (

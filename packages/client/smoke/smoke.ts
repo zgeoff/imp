@@ -3,7 +3,7 @@ import { CLIENT_VERSION, ExecError, createImpClient, openExecSession } from '@zg
 import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
 
 // The client's smoke against run-stub-impd.ts, from the packed package under
-// Node, Bun and a compiled Bun binary (scripts/check-client-runtimes.sh).
+// Node, Bun and a compiled Bun binary (scripts/release/check-client-runtimes.sh).
 // Arguments: the expected version and run-stub-impd's JSON line.
 const [expectedVersion = '', impdJson = '{}'] = process.argv.slice(2);
 const impd = parseImpd(impdJson);

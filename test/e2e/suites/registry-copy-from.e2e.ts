@@ -36,7 +36,7 @@ async function setupTest() {
 
   const prefix = readSuitePrefix('registry');
 
-  // under the repo: scripts/dev.sh mounts it at the same path in the container
+  // under the repo: scripts/dev/dev.sh mounts it at the same path in the container
   const dir = await mkdtemp(join(REPO_ROOT, '.cache', 'e2e', 'registry-'));
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));

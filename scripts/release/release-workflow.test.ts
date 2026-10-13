@@ -4,9 +4,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
-import { buildStubRegistryDocker } from './test-utils/build-stub-registry-docker';
-import { createStubBin } from './test-utils/create-stub-bin';
-import { parseReleaseWorkflow } from './test-utils/parse-release-workflow';
+import { buildStubRegistryDocker } from '../test-utils/build-stub-registry-docker';
+import { createStubBin } from '../test-utils/create-stub-bin';
+import { parseReleaseWorkflow } from '../test-utils/parse-release-workflow';
 
 // The base job publishes imp-base, which other images pin by digest, so a published tag must
 // never move (docs/runbooks/releasing.md). The Plan step's tests run its shell as Actions does (bash -eo
@@ -21,6 +21,7 @@ function setupTest() {
   // the checked-out tree the Plan step reads, and the file Actions collects its outputs from
   mkdirSync(join(dir, 'tree', 'images', 'base'), { recursive: true });
   mkdirSync(join(dir, 'tree', 'host'));
+  mkdirSync(join(dir, 'tree', 'scripts', 'release'), { recursive: true });
   writeFileSync(join(dir, 'outputs'), '');
 
   return {
@@ -32,7 +33,7 @@ function setupTest() {
 
 test('it runs the base job after the smoke checks, with the image job permissions', () => {
   const jobs = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   expect(jobs.base.needs).toContain('smoke');
@@ -41,7 +42,7 @@ test('it runs the base job after the smoke checks, with the image job permission
 
 test('it checks out the tag being built in the base job', () => {
   const jobs = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   const checkout = jobs.base.steps.find(
@@ -54,7 +55,7 @@ test('it checks out the tag being built in the base job', () => {
 
 test('it labels the base image with the commit it builds', () => {
   const jobs = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   const build = jobs.base.steps.find((step) => step.run?.includes('docker buildx build') === true);
@@ -64,7 +65,7 @@ test('it labels the base image with the commit it builds', () => {
 
 test('it builds the base image for linux/amd64 only', () => {
   const jobs = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   const build = jobs.base.steps.find((step) => step.run?.includes('docker buildx build') === true);
@@ -75,7 +76,7 @@ test('it builds the base image for linux/amd64 only', () => {
 
 test('it plans before any build, and builds, checks, pushes and attests only on push', () => {
   const jobs = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   const after = jobs.base.steps.slice(jobs.base.steps.findIndex((step) => step.id === 'plan') + 1);
@@ -92,7 +93,40 @@ test('it pushes a tag the registry does not have', () => {
   const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
+
+  const docker = createStubBin(ctx.dir, 'docker', buildStubRegistryDocker({ kind: 'missing' }));
+
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
+
+  writeFileSync(
+    join(ctx.tree, 'images/base/Dockerfile'),
+    'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('action=push\n');
+});
+
+// a republished tag from before scripts/release/ keeps its check script in host/
+test('it pushes a missing tag of a tree that keeps its check script in host/', () => {
+  const ctx = setupTest();
+
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).base.steps.find((step) => step.id === 'plan')?.run;
 
   const docker = createStubBin(ctx.dir, 'docker', buildStubRegistryDocker({ kind: 'missing' }));
@@ -124,7 +158,7 @@ test('it leaves an attested existing tag alone, with a notice', () => {
   const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).base.steps.find((step) => step.id === 'plan')?.run;
 
   const digest = `sha256:${'0123456789abcdef'.repeat(4)}`;
@@ -138,7 +172,7 @@ test('it leaves an attested existing tag alone, with a notice', () => {
   const gh = createStubBin(ctx.dir, 'gh', 'exit 0');
 
   invariant(plan);
-  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+  writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
     join(ctx.tree, 'images/base/Dockerfile'),
@@ -172,7 +206,7 @@ test('it fails the job on an existing tag without an attestation, and plans noth
   const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).base.steps.find((step) => step.id === 'plan')?.run;
 
   const digest = `sha256:${'0123456789abcdef'.repeat(4)}`;
@@ -185,7 +219,7 @@ test('it fails the job on an existing tag without an attestation, and plans noth
 
   createStubBin(ctx.dir, 'gh', 'exit 1');
   invariant(plan);
-  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+  writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
     join(ctx.tree, 'images/base/Dockerfile'),
@@ -215,7 +249,7 @@ test('it fails the job on an existing tag whose digest is not a sha256', () => {
   const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).base.steps.find((step) => step.id === 'plan')?.run;
 
   const docker = createStubBin(
@@ -226,7 +260,7 @@ test('it fails the job on an existing tag whose digest is not a sha256', () => {
 
   createStubBin(ctx.dir, 'gh', 'exit 0');
   invariant(plan);
-  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+  writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
     join(ctx.tree, 'images/base/Dockerfile'),
@@ -256,7 +290,7 @@ test.each([
   const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).base.steps.find((step) => step.id === 'plan')?.run;
 
   const docker = createStubBin(
@@ -266,7 +300,7 @@ test.each([
   );
 
   invariant(plan);
-  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+  writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
     join(ctx.tree, 'images/base/Dockerfile'),
@@ -296,7 +330,7 @@ test('it skips a release from before imp-base without asking the registry', () =
   const ctx = setupTest();
 
   const plan = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).base.steps.find((step) => step.id === 'plan')?.run;
 
   const docker = createStubBin(ctx.dir, 'docker', buildStubRegistryDocker({ kind: 'missing' }));
@@ -326,7 +360,10 @@ test('it skips a release from before imp-base without asking the registry', () =
 });
 
 test('it tags imp-base latest nowhere in the workflow', () => {
-  const text = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const text = readFileSync(
+    new URL('../../.github/workflows/release.yml', import.meta.url),
+    'utf8',
+  );
 
   expect(
     text
@@ -338,7 +375,7 @@ test('it tags imp-base latest nowhere in the workflow', () => {
 
 test('it never holds a release up on the base job', () => {
   const jobs = parseReleaseWorkflow(
-    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   );
 
   expect(jobs.publish.needs).not.toContain('base');

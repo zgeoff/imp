@@ -4,22 +4,22 @@
 # The release workflow runs this; run it locally for the same set. Nothing
 # is pushed or published.
 #
-#   scripts/build-release-assets.sh [buildx args...]
+#   scripts/release/build-release-assets.sh [buildx args...]
 #
 # Extra args go to the `docker buildx build` of the kernel and the drive, for
 # example the --cache-from a CI runner needs to keep the kernel layer.
 #
 # The kernel and the drive are for x86_64 guests only, as is the host image
-# (host/build-release.sh): Firecracker and the guest kernel config are x86_64.
+# (scripts/release/build-release.sh): Firecracker and the guest kernel config are x86_64.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 dist=$root/dist
 
 rm -rf "$dist"
 mkdir -p "$dist"
 
-IMP_DIST=$dist "$root/scripts/build-cli.sh"
+IMP_DIST=$dist "$root/scripts/release/build-cli.sh"
 
 docker buildx build \
   -f "$root/host/Dockerfile" --target system-files --platform linux/amd64 \

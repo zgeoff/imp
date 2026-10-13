@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test';
 // needed a second pass for this 0.29.0 entry, with a `($)` and a `${BASE}` in one paragraph.
 test('it settles a release changelog in one oxfmt pass', () => {
   const oxfmt = [
-    new URL('../node_modules/.bin/oxfmt', import.meta.url).pathname,
+    new URL('../../node_modules/.bin/oxfmt', import.meta.url).pathname,
     '--stdin-filepath=CHANGELOG.md',
   ];
 

@@ -3,10 +3,10 @@
 # can only be set up for a package that exists, so the first version goes out
 # from the owner's machine; release.yml publishes every later one.
 #
-#   npm login && scripts/first-publish-client.sh
+#   npm login && scripts/release/first-publish-client.sh
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 name=$(jq -r .name "$root/packages/client/package.json")
 
 npm whoami > /dev/null || {
@@ -19,8 +19,8 @@ if npm view "$name" version > /dev/null 2>&1; then
   exit 1
 fi
 
-tarball=$("$root/scripts/pack-client.sh")
-"$root/scripts/check-client-package.sh" "$tarball"
+tarball=$("$root/scripts/release/pack-client.sh")
+"$root/scripts/release/check-client-package.sh" "$tarball"
 npm publish "$tarball" --access public
 
 cat << DONE

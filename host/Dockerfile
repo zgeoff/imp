@@ -8,7 +8,7 @@
 #
 #   docker build -f host/Dockerfile --target dev .   runtime + bun; impd runs
 #                                                    from the repo at /src
-#   host/build-release.sh                            the release image: impd,
+#   scripts/release/build-release.sh                            the release image: impd,
 #                                                    the CLI, the guest kernel
 #                                                    and the system drive baked in
 #
@@ -105,7 +105,7 @@ EXPOSE 7070 7080
 # CMD, not ENTRYPOINT: the build scripts run their own commands in this image.
 CMD ["/usr/local/bin/imp-entrypoint"]
 
-# --- dev: impd runs from the repo mounted at /src (scripts/dev.sh) ---
+# --- dev: impd runs from the repo mounted at /src (scripts/dev/dev.sh) ---
 FROM runtime AS dev
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
@@ -139,12 +139,12 @@ WORKDIR /k
 COPY kernel/version kernel/build.sh ./
 RUN ./build.sh --fetch && rm -f .build/linux-*.tar.xz
 COPY kernel/config-base kernel/docker.fragment kernel/make-vmlinux.sh ./
-# Empty JOBS means every core; host/check-reproducible.sh varies it.
+# Empty JOBS means every core; scripts/release/check-reproducible.sh varies it.
 ARG JOBS=
 RUN ./build.sh --in-builder && rm -rf /k/.build
 
 # --- agent: the static guest agent, imp-agentctl, and the system drive that
-# holds the agent. scripts/build-system-drive.sh builds the same stage for
+# holds the agent. scripts/release/build-system-drive.sh builds the same stage for
 # the dev instance. ---
 FROM golang:1.26.8-trixie@sha256:eae2aaa6add2936cbf350dd0d2628b363461542f0c4b3c0b558957e0f2997379 AS agent
 
@@ -210,12 +210,12 @@ RUN d=$(mktemp -d) && chmod 755 "$d" \
  && rm -rf "$d"
 
 # --- system-drive: the agent binaries and the drive, for `--output`
-# (scripts/build-system-drive.sh) ---
+# (scripts/release/build-system-drive.sh) ---
 FROM scratch AS system-drive
 COPY --from=agent /out/ /
 
 # --- system-files: the guest kernel and the system drive, for `--output`
-# (host/check-reproducible.sh, release assets) and the release image ---
+# (scripts/release/check-reproducible.sh, release assets) and the release image ---
 FROM scratch AS system-files
 COPY --from=kernel /k/out/vmlinux /
 COPY --from=agent /out/imp-system.squashfs /
@@ -255,7 +255,7 @@ RUN bun run --cwd packages/dashboard build
 
 # --- release: the runtime with everything baked in; nothing from the repo
 # is mounted. The default target. impd reports its package.json version;
-# IMP_VERSION only labels the image (host/build-release.sh sets it). ---
+# IMP_VERSION only labels the image (scripts/release/build-release.sh sets it). ---
 FROM runtime AS release
 
 ARG IMP_VERSION=unknown

@@ -28,7 +28,7 @@ IMP_HOST_IMAGE=${IMP_HOST_IMAGE:-$(dev_image_tag "$IMP_ROOT_PHYSICAL")}
 IMP_BUILD=${IMP_BUILD:-$IMP_ROOT/build}
 
 # build_host_image builds the host container image as $IMP_HOST_IMAGE, labelled
-# with this checkout's path and this machine's id, so `scripts/dev.sh prune`
+# with this checkout's path and this machine's id, so `scripts/dev/dev.sh prune`
 # can find it once the checkout is gone.
 build_host_image() {
   local machine labels=(--label "imp.worktree=$IMP_ROOT_PHYSICAL")

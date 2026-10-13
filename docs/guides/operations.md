@@ -7,11 +7,11 @@ dev instance from the [install guide](./install.md). On a server running the rel
 
 ## Restart without losing imps
 
-| Command                  | What happens to the imps                                                          |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| `scripts/dev.sh restart` | impd gets SIGHUP and exits; the VMs keep running and the new impd re-adopts them. |
-| `scripts/dev.sh down`    | impd sleeps every awake imp (up to 120 s), then the container goes away.          |
-| `scripts/dev.sh reboot`  | `down`, then `up`. Imps come back asleep and wake on demand.                      |
+| Command                      | What happens to the imps                                                          |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `scripts/dev/dev.sh restart` | impd gets SIGHUP and exits; the VMs keep running and the new impd re-adopts them. |
+| `scripts/dev/dev.sh down`    | impd sleeps every awake imp (up to 120 s), then the container goes away.          |
+| `scripts/dev/dev.sh reboot`  | `down`, then `up`. Imps come back asleep and wake on demand.                      |
 
 `up` and `restart` also compile the Docker socket proxy from the repo with the image's own `bun`,
 and replace the running proxy when its binary, privileges, env or image changed. `up` leaves a
@@ -288,18 +288,18 @@ What the restored database means at start:
 
 ## Logs
 
-- `scripts/dev.sh logs` follows impd. Every boot, sleep and wake logs a line with its time and a
+- `scripts/dev/dev.sh logs` follows impd. Every boot, sleep and wake logs a line with its time and a
   breakdown per step.
 - `docker logs imp-docker-proxy` (`<name>-docker-proxy` for a dev instance) shows each Docker call
   the proxy refused, with the rule ([the Docker socket](../architecture/host.md#the-docker-socket)).
 - Each imp's serial console and Firecracker log go to `/var/lib/imp/imps/<id>/run/firecracker.log`
-  in the container (`scripts/dev.sh shell`).
+  in the container (`scripts/dev/dev.sh shell`).
 - A service's output goes to `/var/log/imp/<name>.log` inside the imp. `imp logs <imp> <service>`
   prints it, and `-f` follows it ([services](./services.md)).
 
 ## Checks
 
-`scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each: the
+`test/test-e2e.sh --clean` drives a real instance through every feature, one suite each: the
 [development guide](../runbooks/development.md#end-to-end-tests) lists them, from the lifecycle and
 the scale test to the chaos suite and the backup restore drill. The development guide lists the
 other checks.
@@ -333,7 +333,7 @@ and either one ends the imp.
 
 | Symptom                                   | Cause and fix                                                                                                            |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `unauthorized` from the CLI               | Log in again: `imp login <url> --name <host>` with the token from `<IMP_DATA_DIR>/token` (`scripts/dev.sh token`).       |
+| `unauthorized` from the CLI               | Log in again: `imp login <url> --name <host>` with the token from `<IMP_DATA_DIR>/token` (`scripts/dev/dev.sh token`).   |
 | A wake logs `cold boot instead of a wake` | The snapshot cannot load on this host; the log and `imp ls` say why. Expected after some upgrades ([upgrade](#upgrade)). |
 | An imp never sleeps                       | Something keeps it active: an open connection in the guest, CPU above `IMP_IDLE_CPU_PERCENT`, or a hold.                 |
 | TLS downloads stall in a guest            | The uplink MTU is smaller than 1500. `dev.sh` sets `IMP_UPLINK_MTU`; set it by hand elsewhere.                           |

@@ -2,7 +2,7 @@
 # Fail when the host image's bun differs from the repo's bun: .bun-version,
 # packageManager in package.json, and the oven/bun tag in host/Dockerfile.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 file=$(tr -d '[:space:]' <.bun-version)
 manager=$(jq -r '.packageManager | sub("^bun@"; "")' package.json)

@@ -1,4 +1,4 @@
-# What the VM end-to-end jobs (e2e, zfs) build before scripts/dev.sh runs:
+# What the VM end-to-end jobs (e2e, zfs) build before scripts/dev/dev.sh runs:
 # the guest kernel and system drive into .cache/ci, and the dev host image
 # loaded as $IMP_HOST_IMAGE, which the jobs set (default imp-host:dev). Both
 # use the release's GitHub Actions caches; the kernel layer rebuilds only when
@@ -37,7 +37,7 @@ runs:
           --cache-from type=gha,scope=system-files "${cache_to[@]}" .
 
     # --load puts it in the image store; IMP_HOST_IMAGE_READY=1 then stops
-    # scripts/dev.sh from building it again without the GitHub cache
+    # scripts/dev/dev.sh from building it again without the GitHub cache
     - name: Build host image
       shell: bash
       env:

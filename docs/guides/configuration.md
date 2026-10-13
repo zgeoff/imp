@@ -73,7 +73,7 @@ error.
 | `IMP_DASHBOARD_DIR`             | none                                      | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                                                                                                                                      |
 
 A host on Linux 6.7 or later does not set a restored TSC back, so it can set
-`IMP_SLEEP_MIN_GUEST_UPTIME_MS=0`: `scripts/bench-wake.sh` with that setting confirms it, with a
+`IMP_SLEEP_MIN_GUEST_UPTIME_MS=0`: `scripts/dev/bench-wake.sh` with that setting confirms it, with a
 fast median wake ([young guests](../architecture/lifecycle/sleep-and-wake.md#young-guests)).
 
 [Sleep and wake](../architecture/lifecycle/ram-governor.md) explains the RAM and idle settings.
@@ -194,7 +194,7 @@ image's tag, and reads `IMP_BUILD_CONTEXT_MAX_MIB` as impd does
 
 ## Dev instance
 
-`scripts/dev.sh` runs one host container for development. It reads these on your machine:
+`scripts/dev/dev.sh` runs one host container for development. It reads these on your machine:
 
 | Variable               | Default                                        | Meaning                                                         |
 | ---------------------- | ---------------------------------------------- | --------------------------------------------------------------- |
@@ -265,7 +265,7 @@ users can read it. No command prints a token.
 
 ```sh
 imp login https://imp.example.ts.net             # asks for the token; saves the host "imp"
-scripts/dev.sh token | imp login http://localhost:7070 --name dev
+scripts/dev/dev.sh token | imp login http://localhost:7070 --name dev
 imp hosts                                         # the saved hosts; * marks the current one
 imp host use dev                                  # make another host current
 imp --host imp ls                                 # one call to a host other than the current
@@ -302,7 +302,8 @@ So a saved token never goes to the URL in `IMP_URL`, and `IMP_TOKEN` never goes 
 `IMP_HOST` is a CLI setting. The `IMP_HOST_IMAGE`, `IMP_HOST_ENV_FILE` and `IMP_HOST_DATA` variables
 are for the deploy files and have nothing to do with it.
 
-impd writes the token to `<IMP_DATA_DIR>/token` on first start; `scripts/dev.sh token` prints it.
+impd writes the token to `<IMP_DATA_DIR>/token` on first start; `scripts/dev/dev.sh token` prints
+it.
 
 ### Shell completions
 
@@ -325,5 +326,5 @@ firewall; `deploy/bootstrap.sh` reads it, and impd ignores it
 ([host contract](../architecture/host.md#the-host-firewall)). `IMP_HOST_IPV6` (`on` or `off`),
 `IMP_HOST_SUBNET6` and `IMP_HOST_NETWORK` put `imp-host` on a Docker network with IPv6; the unit and
 `bootstrap.sh` read them, and impd ignores them ([IPv6](./install.md#ipv6)). `IMP_VERSION` and
-`IMP_RELEASE_IMAGE` name the image `host/build-release.sh` builds. `KVER` and `KSHA256` pick the
-kernel source for `kernel/build.sh` ([kernel README](../../kernel/README.md)).
+`IMP_RELEASE_IMAGE` name the image `scripts/release/build-release.sh` builds. `KVER` and `KSHA256`
+pick the kernel source for `kernel/build.sh` ([kernel README](../../kernel/README.md)).

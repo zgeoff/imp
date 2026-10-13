@@ -1,5 +1,5 @@
 // Let's Encrypt's test CA and the DNS server it asks, pinned by digest. The
-// e2e Pebble stack runs them, and scripts/pull-pebble-images.ts pulls them
+// e2e Pebble stack runs them, and scripts/dev/pull-pebble-images.ts pulls them
 // before `bun run test:pebble`.
 export const PEBBLE_IMAGES = {
   pebble:

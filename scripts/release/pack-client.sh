@@ -2,7 +2,7 @@
 # Build @zgeoff/imp-client and pack the tarball npm publishes, in
 # build/npm/. Prints the tarball's path.
 #
-#   scripts/pack-client.sh
+#   scripts/release/pack-client.sh
 #
 # The workspace package.json points `exports` at src/, so the CLI and the
 # tests read the source with no build step. The packed manifest points at
@@ -10,7 +10,7 @@
 # version, which an npm install cannot resolve.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 package=$root/packages/client
 stage=$root/build/npm/imp-client
 

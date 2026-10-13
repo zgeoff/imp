@@ -3,11 +3,11 @@
 # report the expected version, and the guest kernel and the system drive in
 # it are the same bytes as the release assets.
 #
-#   host/check-release-image.sh IMAGE VERSION SHA256SUMS
+#   scripts/release/check-release-image.sh IMAGE VERSION SHA256SUMS
 #
 # VERSION is the release version without the v (0.4.0 for tag v0.4.0).
-# SHA256SUMS is the file scripts/build-release-assets.sh writes. IMAGE must
-# be in the local docker (host/build-release.sh loads it by default).
+# SHA256SUMS is the file scripts/release/build-release-assets.sh writes. IMAGE must
+# be in the local docker (scripts/release/build-release.sh loads it by default).
 set -euo pipefail
 
 if [ $# -ne 3 ]; then

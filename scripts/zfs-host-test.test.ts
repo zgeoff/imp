@@ -30,8 +30,10 @@ function setupTest() {
   });
 
   const scripts = join(dir, 'root', 'scripts');
+  const tests = join(dir, 'root', 'test');
 
-  mkdirSync(scripts, { recursive: true });
+  mkdirSync(join(scripts, 'dev'), { recursive: true });
+  mkdirSync(tests);
 
   for (const name of ['zfs-host-test.sh', 'lib.sh']) {
     copyFileSync(new URL(name, import.meta.url).pathname, join(scripts, name));
@@ -42,10 +44,9 @@ function setupTest() {
   const sudo = createStubBin(stubs, 'sudo', 'exec "$@"');
 
   createStubZfs(stubs);
-
-  for (const name of ['dev.sh', 'test-e2e.sh', 'test-zfs.sh']) {
-    createStubRepoScript(scripts, name, sudo.calls);
-  }
+  createStubRepoScript(join(scripts, 'dev'), 'dev.sh', sudo.calls);
+  createStubRepoScript(tests, 'test-e2e.sh', sudo.calls);
+  createStubRepoScript(scripts, 'test-zfs.sh', sudo.calls);
 
   // the script reads the loaded module's version before it does anything
   const moduleVersion = join(dir, 'zfs-version');
@@ -55,7 +56,7 @@ function setupTest() {
   return {
     dir,
     stubs,
-    scripts,
+    tests,
     moduleVersion,
     calls: sudo.calls,
     path: `${sudo.bin}:${process.env['PATH'] ?? ''}`,
@@ -396,7 +397,7 @@ test('it stops the suites, the instance and the pool when it gets SIGTERM during
   createStubZpool(ctx.stubs);
 
   // a run that holds the instance until something stops it
-  createStubRepoScript(ctx.scripts, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
+  createStubRepoScript(ctx.tests, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
 
   const proc = Bun.spawn([ctx.script], {
     stdout: 'ignore',

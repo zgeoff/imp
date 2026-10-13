@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGitFreeEnv, runGitChecked } from '../test/e2e/lib/git-env';
+import { createGitFreeEnv, runGitChecked } from '../../test/e2e/lib/git-env';
 
 // A git repository on `main` with no commit; each test commits the base and
 // the pull request's branch itself.

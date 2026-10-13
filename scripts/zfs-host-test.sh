@@ -13,7 +13,7 @@
 # a user with sudo and docker, on a host with KVM and the zfs module loaded
 # (sudo modprobe zfs). The module must be OpenZFS 2.x, the host image's
 # major version; a minor skew only warns. Needs the guest kernel and system
-# drive that scripts/dev.sh needs.
+# drive that scripts/dev/dev.sh needs.
 #
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file;
@@ -117,7 +117,7 @@ cleanup() {
   fi
   if [ -n "$started_instance" ]; then
     docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
-    "$IMP_ROOT/scripts/dev.sh" down || true
+    "$IMP_ROOT/scripts/dev/dev.sh" down || true
   fi
   if [ -n "$made_img" ]; then
     local use=0
@@ -196,7 +196,7 @@ report() {
 started_instance=1
 exec 3> >(tee "$work/e2e.log")
 tee_pid=$!
-"$IMP_ROOT/scripts/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" >&3 2>&1 &
+"$IMP_ROOT/test/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" >&3 2>&1 &
 child=$!
 set +e
 wait "$child"

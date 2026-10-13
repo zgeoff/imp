@@ -30,7 +30,7 @@ the dashboard opens it again after 2 s and refreshes every view.
 ## Log in
 
 The login page asks for a token once: the root token in `/var/lib/imp/token` on the host,
-`scripts/dev.sh token` for a dev instance, or a token from `imp token new`. impd answers with a
+`scripts/dev/dev.sh token` for a dev instance, or a token from `imp token new`. impd answers with a
 session cookie and the browser never keeps the token. The session acts with that token's scope and
 lasts 30 days. Log out clears it in that browser; removing the token ends its sessions, and a new
 root token ends every session. A tailnet member that an
@@ -67,7 +67,7 @@ then logs out. The `dashboard` suite of the
 Playwright's pinned Chromium and runs it; it is in the `fast` set CI runs:
 
 ```sh
-scripts/test-e2e.sh --only dashboard
+test/test-e2e.sh --only dashboard
 ```
 
 On its own, it reads `IMP_URL` (default: the dev instance at `7070 + IMP_DEV_PORT_OFFSET`) and

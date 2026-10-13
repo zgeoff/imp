@@ -4,7 +4,7 @@
 # it to the tap (docs/runbooks/releasing.md); `brew install zgeoff/tap/imp` then installs
 # the binary and its shell completions.
 #
-#   scripts/build-formula.sh <version> <path to SHA256SUMS>
+#   scripts/release/build-formula.sh <version> <path to SHA256SUMS>
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
