@@ -130,24 +130,18 @@ RUN apt-get update \
       build-essential bc bison flex libelf-dev libssl-dev python3 cpio kmod xz-utils curl \
  && rm -rf /var/lib/apt/lists/*
 
-# --- kernel: vmlinux from kernel/version and the config files only, so a
-# change anywhere else never reruns the long build. The paths match
-# kernel/build.sh (kernel/ at /k), so both builds give the same vmlinux. ---
+# --- kernel: vmlinux from kernel/build.sh, kernel/version and the config
+# files only, so a change anywhere else never reruns the long build. The
+# script runs here as in kernel/build.sh's own container (kernel/ at /k), so
+# both builds give the same vmlinux. ---
 FROM kernel-builder AS kernel
 WORKDIR /k
-COPY kernel/version ./
-RUN . ./version \
- && mkdir .build \
- && curl -fsSL --retry 3 -o linux.tar.xz "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz" \
- && echo "${KSHA256}  linux.tar.xz" | sha256sum -c - \
- && tar -xf linux.tar.xz -C .build \
- && rm linux.tar.xz
+COPY kernel/version kernel/build.sh ./
+RUN ./build.sh --fetch && rm -f .build/linux-*.tar.xz
 COPY kernel/config-base kernel/docker.fragment kernel/make-vmlinux.sh ./
 # Empty JOBS means every core; host/check-reproducible.sh varies it.
 ARG JOBS=
-RUN . ./version \
- && ./make-vmlinux.sh "/k/.build/linux-${KVER}" /k/.build/obj /k/out \
- && rm -rf /k/.build
+RUN ./build.sh --in-builder && rm -rf /k/.build
 
 # --- agent: the static guest agent, imp-agentctl, and the system drive that
 # holds the agent. scripts/build-system-drive.sh builds the same stage for

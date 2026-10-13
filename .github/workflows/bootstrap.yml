@@ -46,6 +46,7 @@ jobs:
           paths: |
             deploy/**
             scripts/test-bootstrap.sh
+            scripts/check-kvm.sh
             .github/workflows/bootstrap.yml
             .github/actions/paths-changed/**
 
@@ -64,9 +65,7 @@ jobs:
 
       # bootstrap.sh refuses a host without KVM; fail here first, and clearly
       - name: Check KVM
-        run: |
-          ls -l /dev/kvm
-          grep -cwE 'vmx|svm' /proc/cpuinfo
+        run: scripts/check-kvm.sh
 
       # the ZFS leg makes a pool from the container, with this kernel's
       # module; zfs.ko sits in linux-modules-extra on some runner kernels
