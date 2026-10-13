@@ -4,10 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
+import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
+import * as z from 'zod';
 import { createDiskBudget } from '../storage/disk-budget';
 import { buildMockHostIdentity } from '../test-utils/build-mock-host-identity';
 import { buildStubTemplateVm } from '../test-utils/build-stub-template-vm';
-import { buildTemplateKey, createBootTemplates } from './boot-templates';
+import { TEMPLATE_BOOT_ARGS, buildTemplateKey, createBootTemplates } from './boot-templates';
 import type { BootTemplateDeps } from './boot-templates';
 
 // a template store's host: a data dir, the template VM, a disk budget, the
@@ -68,6 +70,13 @@ async function setupTest() {
     },
   };
 }
+
+test('#TEMPLATE_BOOT_ARGS is the cmdline the agent reads as a template (agent/internal/contract)', () => {
+  expect(TEMPLATE_BOOT_ARGS).toBe(
+    z.object({ template_boot_args: z.string() }).parse(readAgentFixture('host/cmdline.json'))
+      .template_boot_args,
+  );
+});
 
 test('#buildTemplateKey changes with each thing a restore inherits', () => {
   const identity = buildMockHostIdentity();

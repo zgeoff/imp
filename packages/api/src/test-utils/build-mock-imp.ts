@@ -24,6 +24,12 @@ export function buildMockImp(overrides: ImpOverrides = {}): Imp {
   const leases: NonNullable<Imp['leases']> = { leases: [], otherCount: 0 };
   const cpu: NonNullable<Imp['cpu']> = { limit: null, weight: 100 };
 
+  const inner: NonNullable<Imp['inner']> = {
+    up: true,
+    restarts: faker.number.int({ min: 0, max: 10 }),
+    lastError: faker.lorem.sentence(),
+  };
+
   const resources: NonNullable<Imp['resources']> = {
     wakeCount: faker.number.int({ min: 0, max: 1000 }),
     awakeMs: faker.number.int({ min: 0, max: 86_400_000 }),
@@ -60,6 +66,7 @@ export function buildMockImp(overrides: ImpOverrides = {}): Imp {
     sessions: faker.number.int({ min: 0, max: 8 }),
     coldBootReason: faker.lorem.sentence(),
     agentSilentSince: lastActiveAt,
+    inner,
     outdated: [],
     cpu,
     resources,
@@ -72,6 +79,7 @@ export function buildMockImp(overrides: ImpOverrides = {}): Imp {
     diskUsage: { ...diskUsage, ...overrides.diskUsage },
     public: { ...publicExposure, ...overrides.public },
     leases: { ...leases, ...overrides.leases },
+    inner: { ...inner, ...overrides.inner },
     cpu: { ...cpu, ...overrides.cpu },
     resources: { ...resources, ...overrides.resources },
   };

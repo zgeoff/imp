@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from 'node:fs';
 import * as z from 'zod';
-import { ServicesListSchema } from '../agent-client/service-requests';
+import { ServicesListSchema } from '../agent-client/agent-protocol';
 import { SeenSessionSchema } from '../sessions/session-cache';
 import type { ImpPaths } from '../storage/data-layout';
 import { writeFileDurably, writeRenamed } from '../storage/write-file-durably';

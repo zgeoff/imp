@@ -5,6 +5,7 @@ import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { createIdleLoop } from '@imp/daemon/src/idle/idle-loop';
 import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
@@ -143,6 +144,9 @@ export async function startImpdHost(
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 
+  // main.ts runs it on a ticker; a test runs one pass when it needs one
+  const idle = createIdleLoop({ config, db, imps: impd.imps, log: () => {} });
+
   return {
     url: `http://127.0.0.1:${String(app.server.port)}`,
     rootToken,
@@ -150,6 +154,7 @@ export async function startImpdHost(
     db,
     ksm,
     sendRequest,
+    runIdleCheck: idle.runCheck,
 
     // the root token's client, in process
     client: createImpClient({ url: 'http://impd.test', token: rootToken, fetch: sendRequest }),

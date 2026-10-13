@@ -28,6 +28,21 @@ has a size cap, and larger data goes as several frames. The kinds of request fal
 The protocol's reference is the code: the frame types and the request and error shapes are in the
 `proto` package and the agent client.
 
+## Contract tests
+
+Tests on both sides hold the protocol to JSON fixtures in the agent's `contract` package, so a field
+that one side adds alone fails a test before it reaches a guest. The agent's Go tests write one
+fixture for each message the agent sends, set every field of every type in at least one of them, and
+list the frame types, the error codes and the limits impd copies. impd's tests parse each of those
+fixtures with the schemas it reads them through, and fail when a schema drops a field or reads one
+that no fixture sets. In the other direction, the fixtures hold one request for each op, the kernel
+command line, the image config and the tar tool's arguments as impd builds them. impd's tests check
+that it builds each one, and the Go tests check that the agent decodes each one with no field left
+over and every field set.
+
+`go test ./internal/contract -run GuestFixtures -write`, run from `agent/`, writes the agent's
+fixtures again; a change to impd's side edits its fixtures by hand.
+
 ## Flow control
 
 A stream relies on the connection itself. The agent writes output as fast as the connection takes

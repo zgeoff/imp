@@ -5,12 +5,24 @@ import type {
   ResumeResult,
   SessionOutput,
 } from '@imp/api';
-import * as z from 'zod';
+import type * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
-import { AgentBootIdSchema, AgentGenerationSchema, AgentSessionNameSchema } from './agent-ids';
 import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';
-import { AgentExitSchema, readFrameWithin, requireNoAgentError } from './agent-requests';
+import {
+  AgentExitSchema,
+  DetachedSchema,
+  InvalidResumeDataSchema,
+  NoSessionDataSchema,
+  StartedSchema,
+} from './agent-protocol';
+import type {
+  AgentPreviousSchema,
+  AgentRequestSchemas,
+  AgentResumeSchema,
+  AgentStarted,
+} from './agent-protocol';
+import { readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
 export interface AgentExecRequest {
@@ -103,55 +115,6 @@ export interface ExecStream {
 // a hung agent must not leave the exec, and the activity count it holds,
 // pending for good
 const EXEC_START_TIMEOUT_MS = 10_000;
-const OffsetSchema = z.int().nonnegative();
-
-const AgentPreviousSchema = z.object({
-  execution_generation: AgentGenerationSchema,
-  end: OffsetSchema,
-  exit: AgentExitSchema,
-});
-
-const AgentResumeSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('exact') }),
-  z.object({ kind: z.literal('gap'), from: OffsetSchema, to: OffsetSchema }),
-  z.object({
-    kind: z.literal('generation_changed'),
-    execution_generation: AgentGenerationSchema,
-    first_offset: OffsetSchema,
-  }),
-]);
-
-const AgentOutputSchema = z.object({
-  boot_id: AgentBootIdSchema,
-  execution_generation: AgentGenerationSchema,
-  buffer_start: OffsetSchema,
-  end: OffsetSchema,
-  offset: OffsetSchema,
-  prelude: OffsetSchema,
-  previous: AgentPreviousSchema.optional(),
-  resume: AgentResumeSchema.optional(),
-
-  // set for a session started with log, by an agent with session logs
-  log: z.boolean().optional(),
-});
-
-const StartedSchema = z.object({
-  pid: z.int(),
-  session: AgentSessionNameSchema.optional(),
-  created: z.boolean().optional(),
-  kill_grace_ms: z.int().optional(),
-
-  // an agent from before output offsets leaves it out
-  output: AgentOutputSchema.optional(),
-});
-
-const NoSessionDataSchema = z.object({
-  boot_id: AgentBootIdSchema,
-  previous: AgentPreviousSchema.optional(),
-});
-
-const InvalidResumeDataSchema = z.object({ end: OffsetSchema, buffer_start: OffsetSchema });
-const DetachedSchema = z.object({ reason: z.string() });
 
 // Opens an exec connection and waits for STARTED. Throws AgentError
 // (EXEC_FAILED) when the process cannot start.
@@ -227,14 +190,21 @@ export function openAttachStream(
   ).catch(handleUnknownOp('sessions'));
 }
 
+// the requests that start an exec stream
+type AgentStreamRequest = z.input<
+  | typeof AgentRequestSchemas.exec
+  | typeof AgentRequestSchemas.tap
+  | typeof AgentRequestSchemas.attach
+>;
+
 async function openStream(
   vsockPath: string,
-  request: Readonly<Record<string, unknown>>,
+  request: Readonly<AgentStreamRequest>,
   startTimeoutMs: number,
 ): Promise<ExecStream> {
   const connection = await openAgentConnection(vsockPath);
 
-  let started: z.infer<typeof StartedSchema>;
+  let started: AgentStarted;
 
   try {
     connection.sendJson(FRAME_TYPES.request, request);
@@ -316,7 +286,7 @@ function toAgentResumeFrom(resumeFrom: Readonly<ResumeFrom>) {
 }
 
 // a session from an agent without offsets replays as before
-function toSessionOutput(started: z.infer<typeof StartedSchema>): SessionOutput | null {
+function toSessionOutput(started: AgentStarted): SessionOutput | null {
   if (started.session === undefined) {
     return null;
   }

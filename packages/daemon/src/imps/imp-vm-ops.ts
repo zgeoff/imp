@@ -3,8 +3,8 @@ import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ColdBootCause, ImpEventDetail } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity } from '../agent-client/agent-requests';
+import { isAgentError } from '../agent-client/is-agent-error';
 import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError } from '../api-errors';
 import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
@@ -136,6 +136,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     if (change.state !== 'running') {
       context.sessions.forget(imp.id);
+      context.inners.forget(imp.id);
     }
 
     // the VM is gone, and the generations its sessions ran with it
@@ -758,7 +759,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       await setGrowPending(imp, true);
 
-      if (error instanceof AgentError && error.code === 'AGENT_OUTDATED') {
+      if (isAgentError(error, 'AGENT_OUTDATED')) {
         throw buildAgentOutdatedApiError(
           "the disk grew, but the imp's agent is too old to grow its filesystem while it runs; its next boot does (stop and start the imp)",
         );

@@ -11,6 +11,7 @@ import {
   utimes,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { TAR_TOTAL_RECORD } from '@imp/api';
 import tar from 'tar-stream';
 import type { Header } from 'tar-stream';
 import * as z from 'zod';
@@ -29,7 +30,7 @@ export interface LocalExtractor {
 }
 
 // the PAX record `imp-agent tar create` puts on its first entry
-const TotalSchema = z.object({ 'IMP.total': z.coerce.number().int().nonnegative() });
+const TotalSchema = z.object({ [TAR_TOTAL_RECORD]: z.coerce.number().int().nonnegative() });
 
 interface PendingDir {
   readonly path: string;
@@ -307,7 +308,7 @@ export function createLocalExtractor(
         const total = TotalSchema.safeParse(header.pax);
 
         if (total.success) {
-          progress.setTotal(total.data['IMP.total']);
+          progress.setTotal(total.data[TAR_TOTAL_RECORD]);
         }
       }
 

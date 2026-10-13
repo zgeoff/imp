@@ -2,6 +2,8 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
+import * as z from 'zod';
 import { sendPing } from '../agent-client/agent-requests';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
@@ -106,6 +108,33 @@ test('#buildBootArgs asks for an identity reset on the first boot of a template 
       jail: null,
     }),
   ).toEndWith(' imp.dns=1.1.1.1 imp.reset_identity=1');
+});
+
+test('#buildBootArgs builds the cmdline the agent reads whole (agent/internal/contract)', () => {
+  const prefix6 = parsePrefix64('fd12:3456:789a::/64');
+  const subnet = parseSubnet('10.66.0.0/16');
+  const address = deriveSlotAddress(3, { subnet, portBase: 20_000, prefix6 });
+
+  expect(
+    buildBootArgs({
+      firecrackerBin: 'firecracker',
+      kernelPath: '/k',
+      systemDrivePath: '/s',
+      paths: buildImpPaths('/var/lib/imp', 'imp_01hx'),
+      address,
+      impId: 'imp_01hx',
+      hostname: 'web',
+      vcpus: 2,
+      memoryMib: 1024,
+      maxMemoryMib: 4096,
+      dns: ['10.66.0.13', '1.1.1.1'],
+      cgroup: null,
+      isIdentityReset: true,
+      jail: null,
+    }),
+  ).toBe(
+    z.object({ boot_args: z.string() }).parse(readAgentFixture('host/cmdline.json')).boot_args,
+  );
 });
 
 test('#buildBootArgs names the /128 and the gateway fe80::1 with IPv6', () => {

@@ -16,6 +16,7 @@ import {
   formatHttps,
   formatIdentity,
   formatImages,
+  formatImpInfo,
   formatImps,
   formatSessions,
   formatSshKey,
@@ -104,6 +105,66 @@ test('#formatImps notes why an imp boots cold and what it predates', () => {
     'receiving; outdated: agent',
     'image builder',
   ]);
+});
+
+test('#formatImps notes an inner container that is down, and none that is up', () => {
+  // an imp with none of the fields a note reads
+  const {
+    move,
+    agentSilentSince,
+    public: exposure,
+    coldBootReason,
+    outdated,
+    inner,
+    ...imp
+  } = buildMockImp({ state: 'running', kind: 'user' });
+
+  const rows = formatImps([
+    { ...imp, name: 'down', inner: { up: false, restarts: 3 } },
+    { ...imp, name: 'up', inner: { up: true, restarts: 0 } },
+    { ...imp, name: 'unknown' },
+  ]).split('\n');
+
+  const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')).trimEnd());
+
+  expect(notes).toStrictEqual(['NOTE', 'container down', '', '']);
+});
+
+test('#formatImpInfo shows an awake imp’s container with its restarts and last error', () => {
+  const imp = buildMockImp({
+    name: 'web',
+    state: 'running',
+    image: 'base',
+    ip: '10.66.0.6',
+    url: 'http://web.imp.test',
+    inner: { up: false, restarts: 3, lastError: 'start inner init: exit status 1' },
+  });
+
+  const { move, agentSilentSince, public: exposure, coldBootReason, outdated, ...quiet } = imp;
+
+  expect(formatImpInfo({ ...quiet, kind: 'user' }).split('\n')).toStrictEqual([
+    'name        web',
+    'state       running',
+    'image       base',
+    'ip          10.66.0.6',
+    'url         http://web.imp.test',
+    'container   down',
+    'restarts    3',
+    'last error  start inner init: exit status 1',
+    'note        container down',
+  ]);
+});
+
+test('#formatImpInfo shows the container unknown for an awake imp whose agent has not answered', () => {
+  const { inner, ...imp } = buildMockImp({ state: 'running' });
+
+  expect(formatImpInfo(imp).split('\n')).toContain('container   unknown');
+});
+
+test('#formatImpInfo shows the container not running for a sleeping imp', () => {
+  const { inner, ...imp } = buildMockImp({ state: 'sleeping' });
+
+  expect(formatImpInfo(imp).split('\n')).toContain('container   not running');
 });
 
 test('#formatImps counts sessions, and shows - when impd has not seen them', () => {

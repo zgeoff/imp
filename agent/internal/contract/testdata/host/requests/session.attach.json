@@ -1,0 +1,7 @@
+{
+  "op": "session.attach",
+  "session": "build",
+  "cols": 120,
+  "rows": 40,
+  "resume_from": { "execution_generation": "0123456789abcdef0123456789abcdef", "offset": 4096 }
+}

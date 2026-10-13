@@ -2,10 +2,12 @@ import * as z from 'zod';
 import { ExecutionGenerationSchema } from './session-output-schema';
 
 // The agent checks the same rule (agent/internal/session).
+export const SESSION_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
 export const SessionNameSchema = z
   .string()
   .regex(
-    /^[a-z0-9][a-z0-9-]{0,31}$/,
+    SESSION_NAME_PATTERN,
     'must be a lowercase letter or digit followed by up to 31 lowercase letters, digits or hyphens',
   );
 

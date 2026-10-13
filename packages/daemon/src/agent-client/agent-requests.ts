@@ -1,91 +1,21 @@
-import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
-import { AgentBootIdSchema, AgentGenerationSchema, AgentSessionNameSchema } from './agent-ids';
 import { handleUnknownOp } from './agent-outdated';
+import {
+  ActivityResponseSchema,
+  AgentErrorResponseSchema,
+  OkResponseSchema,
+  PingResponseSchema,
+} from './agent-protocol';
+import type { AgentActivity, AgentPing, AgentRequest } from './agent-protocol';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 import type { AgentFrame } from './frame-codec';
-
-const AgentErrorResponseSchema = z.object({
-  error: z.object({ code: z.string(), message: z.string(), data: z.unknown().optional() }),
-});
 
 // a claim flushes the disk and reseeds the CRNG: well under a second
 const CLAIM_TIMEOUT_MS = 5000;
 
-const PingResponseSchema = z.object({
-  ok: z.literal(true),
-  version: z.string(),
-
-  // an agent that cannot read its clock leaves it out
-  uptime_ms: z.number().optional(),
-
-  // set on a boot that asked for an identity reset (docs/guides/templates.md#identity)
-  identity_reset: z.enum(['ok', 'failed']).optional(),
-
-  // an agent parked in a boot template, waiting for its claim
-  stage: z.literal('template').optional(),
-
-  // the guest's boot_id; an agent from before output offsets leaves it out
-  boot_id: z.string().optional(),
-});
-
-export const OkResponseSchema = z.object({ ok: z.literal(true) });
-
 // the agent's own 10 s wait for the new size, and the resize after it
 const GROW_TIMEOUT_MS = 20_000;
-
-export const AgentExitSchema = z.object({ code: z.int(), signal: z.int() }).readonly();
-
-// a session as the agent lists it; impd adds when it saw the list
-export const AgentSessionObjectSchema = z.object({
-  name: AgentSessionNameSchema,
-  pid: z.int(),
-  argv: z.array(z.string()).readonly(),
-  state: z.enum(['running', 'exited']),
-  attached: z.boolean(),
-  cols: z.int(),
-  rows: z.int(),
-  started_unix_ms: z.int(),
-  exit: AgentExitSchema.optional(),
-
-  // an agent from before output offsets leaves these out
-  execution_generation: AgentGenerationSchema.optional(),
-  boot_id: AgentBootIdSchema.optional(),
-  end: z.int().nonnegative().optional(),
-
-  // a session started with log, which impd taps; left out by an agent from
-  // before session logs, and for other sessions
-  log: z.boolean().optional(),
-});
-
-const AgentSessionSchema = AgentSessionObjectSchema.readonly();
-
-const ActivityResponseSchema = z.object({
-  tcp_established: z.int().nonnegative(),
-  exec_sessions: z.int().nonnegative(),
-  load1: z.number(),
-
-  // an agent from before sessions leaves it out. A session that does not
-  // parse is dropped, not the whole answer, which the watchdog reads as a
-  // sign of life.
-  sessions: z
-    .array(z.unknown())
-    .default([])
-    .transform((list): readonly AgentSession[] => list.flatMap((entry) => readAgentSession(entry))),
-});
-
-function readAgentSession(entry: unknown): AgentSession[] {
-  const parsed = AgentSessionSchema.safeParse(entry);
-
-  return parsed.success ? [parsed.data] : [];
-}
-
-export type AgentPing = z.infer<typeof PingResponseSchema>;
-
-export type AgentActivity = z.infer<typeof ActivityResponseSchema>;
-
-export type AgentSession = z.infer<typeof AgentSessionSchema>;
 
 // throws AgentError when the frame is a RESPONSE carrying an `error`
 export function requireNoAgentError(frame: AgentFrame): void {
@@ -105,7 +35,7 @@ export function requireNoAgentError(frame: AgentFrame): void {
 // One unary request: REQUEST out, one RESPONSE back, then the agent closes.
 export async function sendAgentRequest(
   vsockPath: string,
-  request: Readonly<Record<string, unknown>>,
+  request: Readonly<AgentRequest>,
   timeoutMs = 5000,
 ): Promise<unknown> {
   const connection = await openAgentConnection(vsockPath, timeoutMs);
@@ -116,7 +46,7 @@ export async function sendAgentRequest(
     const frame = await readFrameWithin(connection, timeoutMs);
 
     if (frame?.type !== FRAME_TYPES.response) {
-      throw new Error(`agent ${String(request['op'])}: no response`);
+      throw new Error(`agent ${request.op}: no response`);
     }
 
     requireNoAgentError(frame);

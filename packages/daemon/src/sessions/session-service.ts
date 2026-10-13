@@ -1,6 +1,6 @@
 import type { Session, SessionLog, SessionLogRead } from '@imp/api';
-import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity, sendSessionKill } from '../agent-client/agent-requests';
+import { isAgentError } from '../agent-client/is-agent-error';
 import { buildAgentOutdatedApiError, buildNotFoundError } from '../api-errors';
 import { updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -105,11 +105,11 @@ export function createSessionService(parts: SessionServiceParts): SessionService
 
         await sendSessionKill(context.findPaths(imp.id).vsockSocket, session).catch(
           (error: unknown) => {
-            if (error instanceof AgentError && error.code === 'NO_SESSION') {
+            if (isAgentError(error, 'NO_SESSION')) {
               throw buildNotFoundError('session', session);
             }
 
-            if (error instanceof AgentError && error.code === 'AGENT_OUTDATED') {
+            if (isAgentError(error, 'AGENT_OUTDATED')) {
               throw buildAgentOutdatedApiError(error.message);
             }
 

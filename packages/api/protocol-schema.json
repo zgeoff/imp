@@ -332,6 +332,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
           "outdated": {
             "readOnly": true,
             "type": "array",
@@ -710,6 +731,27 @@
             "agentSilentSince": {
               "type": "string",
               "format": "date-time"
+            },
+            "inner": {
+              "type": "object",
+              "properties": {
+                "up": {
+                  "type": "boolean"
+                },
+                "restarts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "lastError": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "up",
+                "restarts"
+              ],
+              "additionalProperties": false
             },
             "outdated": {
               "readOnly": true,
@@ -1092,6 +1134,27 @@
           "agentSilentSince": {
             "type": "string",
             "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
           },
           "outdated": {
             "readOnly": true,
@@ -1494,6 +1557,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
           "outdated": {
             "readOnly": true,
             "type": "array",
@@ -1877,6 +1961,27 @@
           "agentSilentSince": {
             "type": "string",
             "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
           },
           "outdated": {
             "readOnly": true,
@@ -2262,6 +2367,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
           "outdated": {
             "readOnly": true,
             "type": "array",
@@ -2645,6 +2771,27 @@
           "agentSilentSince": {
             "type": "string",
             "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
           },
           "outdated": {
             "readOnly": true,
@@ -3033,6 +3180,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
           "outdated": {
             "readOnly": true,
             "type": "array",
@@ -3419,6 +3587,27 @@
           "agentSilentSince": {
             "type": "string",
             "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
           },
           "outdated": {
             "readOnly": true,
@@ -4068,6 +4257,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
           "outdated": {
             "readOnly": true,
             "type": "array",
@@ -4457,6 +4667,27 @@
           "agentSilentSince": {
             "type": "string",
             "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
           },
           "outdated": {
             "readOnly": true,
@@ -4893,6 +5124,27 @@
           "agentSilentSince": {
             "type": "string",
             "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
           },
           "outdated": {
             "readOnly": true,
@@ -6427,6 +6679,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
           "outdated": {
             "readOnly": true,
             "type": "array",
@@ -7018,6 +7291,27 @@
                 "agentSilentSince": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "inner": {
+                  "type": "object",
+                  "properties": {
+                    "up": {
+                      "type": "boolean"
+                    },
+                    "restarts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lastError": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "up",
+                    "restarts"
+                  ],
+                  "additionalProperties": false
                 },
                 "outdated": {
                   "readOnly": true,
@@ -9992,6 +10286,27 @@
                     "type": "string",
                     "format": "date-time"
                   },
+                  "inner": {
+                    "type": "object",
+                    "properties": {
+                      "up": {
+                        "type": "boolean"
+                      },
+                      "restarts": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "lastError": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "up",
+                      "restarts"
+                    ],
+                    "additionalProperties": false
+                  },
                   "outdated": {
                     "readOnly": true,
                     "type": "array",
@@ -10400,6 +10715,27 @@
                   "agentSilentSince": {
                     "type": "string",
                     "format": "date-time"
+                  },
+                  "inner": {
+                    "type": "object",
+                    "properties": {
+                      "up": {
+                        "type": "boolean"
+                      },
+                      "restarts": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "lastError": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "up",
+                      "restarts"
+                    ],
+                    "additionalProperties": false
                   },
                   "outdated": {
                     "readOnly": true,
@@ -10831,6 +11167,27 @@
                   "agentSilentSince": {
                     "type": "string",
                     "format": "date-time"
+                  },
+                  "inner": {
+                    "type": "object",
+                    "properties": {
+                      "up": {
+                        "type": "boolean"
+                      },
+                      "restarts": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "lastError": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "up",
+                      "restarts"
+                    ],
+                    "additionalProperties": false
                   },
                   "outdated": {
                     "readOnly": true,

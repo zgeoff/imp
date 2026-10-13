@@ -56,6 +56,8 @@ export {
   ExecClientMessageSchema,
   ExecServerMessageSchema,
   ExecStartMessageSchema,
+  KILL_GRACE_MAX_MS,
+  TAR_TOTAL_RECORD,
   decodeExecFrame,
   encodeExecFrame,
 } from './exec-protocol';
@@ -188,6 +190,8 @@ export type {
 } from './secret-schema';
 
 export {
+  SERVICE_LOG_MAX_LINES,
+  SERVICE_NAME_PATTERN,
   ServiceDefSchema,
   ServiceListSchema,
   ServiceLogSchema,
@@ -198,7 +202,13 @@ export {
 } from './service-schema';
 
 export type { Service, ServiceDef, ServiceList, ServiceLog } from './service-schema';
-export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
+
+export {
+  SESSION_NAME_PATTERN,
+  SessionExitSchema,
+  SessionNameSchema,
+  SessionSchema,
+} from './session-schema';
 
 export {
   COLD_BOOT_CAUSES,

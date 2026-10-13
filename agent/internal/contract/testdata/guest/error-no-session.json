@@ -1,0 +1,17 @@
+{
+  "error": {
+    "code": "NO_SESSION",
+    "message": "no session build",
+    "data": {
+      "boot_id": "6f1c2a9e-3b7d-4e58-9a10-2c4b8d7e5f31",
+      "previous": {
+        "execution_generation": "fedcba9876543210fedcba9876543210",
+        "end": 2048,
+        "exit": {
+          "code": 1,
+          "signal": 0
+        }
+      }
+    }
+  }
+}

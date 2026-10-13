@@ -35,8 +35,8 @@ const MaxSessions = 16
 // SIGKILL.
 const killGrace = 2 * time.Second
 
-// namePattern is the session name rule; the host checks the same one.
-var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+// NamePattern is the session name rule; the host checks the same one.
+var NamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 type Manager struct {
 	launcher *launch.Launcher
@@ -203,7 +203,7 @@ func (m *Manager) attach(req proto.Request, v *viewer) (*session, *proto.Error) 
 // already, or a resume names its generation, which exited but whose EXIT
 // no viewer got yet; session.attach only finds it.
 func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
-	if !namePattern.MatchString(req.Session) {
+	if !NamePattern.MatchString(req.Session) {
 		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("bad session name %q", req.Session)}
 	}
 	if req.Op == proto.OpSessionAttach {

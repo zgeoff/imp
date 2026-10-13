@@ -14,14 +14,14 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
-// nameRule is the rule for a service added through the API: the name is a
+// NameRule is the rule for a service added through the API: the name is a
 // file name in services.d and in the log dir. impd checks the same rule.
-var nameRule = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var NameRule = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // checkName keeps a name to the rule, so no op reaches a path outside
 // services.d or the log dir
 func checkName(name string) error {
-	if !nameRule.MatchString(name) {
+	if !NameRule.MatchString(name) {
 		return badRequest("name " + name + ": want a lowercase letter or digit, then up to 62 of a-z 0-9 -")
 	}
 	return nil
@@ -112,7 +112,7 @@ func (s *Supervisor) Restart(name string) error {
 	if svc != nil && svc.path != "" {
 		path = svc.path
 	}
-	def, err := readDef(s.fsys, path)
+	def, err := ReadDef(s.fsys, path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist) && svc != nil:
 		def, path = svc.def, svc.path

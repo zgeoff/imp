@@ -46,6 +46,7 @@ import {
   SecretValueSchema,
 } from './secret-schema';
 import {
+  SERVICE_LOG_MAX_LINES,
   ServiceDefSchema,
   ServiceListSchema,
   ServiceLogSchema,
@@ -462,7 +463,7 @@ export const impContract = {
         z.object({
           name: NameSchema,
           service: ServiceNameSchema.optional(),
-          lines: z.int().min(0).max(100_000).optional(),
+          lines: z.int().min(0).max(SERVICE_LOG_MAX_LINES).optional(),
           follow: z.boolean().optional(),
         }),
       )

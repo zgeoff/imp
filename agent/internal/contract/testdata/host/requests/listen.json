@@ -1,0 +1,1 @@
+{ "op": "listen", "network": "unix", "address": "/run/user/1000/app.sock" }

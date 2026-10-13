@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "INNER_DOWN",
+    "message": "the inner container is down"
+  }
+}

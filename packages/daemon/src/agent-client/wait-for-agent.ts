@@ -1,6 +1,6 @@
 import { readErrorMessage } from '../read-error-message';
+import type { AgentPing } from './agent-protocol';
 import { sendPing } from './agent-requests';
-import type { AgentPing } from './agent-requests';
 
 export interface WaitOptions {
   readonly deadlineMs: number;

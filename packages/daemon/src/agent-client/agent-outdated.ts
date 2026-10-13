@@ -1,4 +1,5 @@
 import { AgentError } from './agent-connection';
+import { isAgentError } from './is-agent-error';
 
 interface Feature {
   readonly since: readonly [number, number];
@@ -79,7 +80,7 @@ export function hasFeature(agentVersion: string | undefined, feature: AgentFeatu
 // an agent from before a feature answers its op with UNKNOWN_OP
 export function handleUnknownOp(feature: AgentFeature): (error: unknown) => never {
   return (error) => {
-    if (error instanceof AgentError && error.code === 'UNKNOWN_OP') {
+    if (isAgentError(error, 'UNKNOWN_OP')) {
       throw buildAgentOutdatedError(feature);
     }
 

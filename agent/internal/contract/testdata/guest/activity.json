@@ -1,0 +1,25 @@
+{
+  "tcp_established": 2,
+  "exec_sessions": 1,
+  "load1": 0.25,
+  "sessions": [
+    {
+      "name": "build",
+      "pid": 812,
+      "argv": ["make", "-j4"],
+      "state": "exited",
+      "attached": true,
+      "cols": 120,
+      "rows": 40,
+      "started_unix_ms": 1760000000000,
+      "exit": {
+        "code": 137,
+        "signal": 9
+      },
+      "execution_generation": "0123456789abcdef0123456789abcdef",
+      "boot_id": "6f1c2a9e-3b7d-4e58-9a10-2c4b8d7e5f31",
+      "end": 9000,
+      "log": true
+    }
+  ]
+}

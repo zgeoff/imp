@@ -41,6 +41,10 @@ export const EXEC_TOOLS = ['tar'] as const;
 
 export type ExecTool = (typeof EXEC_TOOLS)[number];
 
+// the PAX record `imp-agent tar create` puts on its first entry: the bytes of
+// every regular file in the archive, for the CLI's progress
+export const TAR_TOTAL_RECORD = 'IMP.total';
+
 // What must hold before impd starts the command, or it refuses with
 // PRECONDITION_FAILED: `broker`, the broker's variables and CA bundle
 // (docs/guides/connectors.md#requiring-the-broker).
@@ -60,7 +64,7 @@ export const EXEC_MAX_STDIN_FRAME_BYTES = 65_536;
 export const EXEC_STDOUT_WINDOW_BYTES = 1_048_576;
 
 // the agent waits for the group at most this long before its SIGKILL
-const KILL_GRACE_MAX_MS = 60_000;
+export const KILL_GRACE_MAX_MS = 60_000;
 
 export const ExecStartMessageSchema = z
   .object({

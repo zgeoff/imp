@@ -1,0 +1,9 @@
+{
+  "op": "exec.outer",
+  "argv": ["/bin/sh", "-c", "uname -a"],
+  "env": ["MODE=prod"],
+  "cwd": "/srv",
+  "tty": false,
+  "user": "root",
+  "kill_grace_ms": 5000
+}

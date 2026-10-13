@@ -1,62 +1,14 @@
-import * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
-import {
-  AgentExitSchema,
-  OkResponseSchema,
-  readFrameWithin,
-  requireNoAgentError,
-  sendAgentRequest,
-} from './agent-requests';
+import { LogCursorSchema, OkResponseSchema, ServicesListSchema } from './agent-protocol';
+import type { AgentServiceDef, AgentServices, LogCursor } from './agent-protocol';
+import { readFrameWithin, requireNoAgentError, sendAgentRequest } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
 // The agent's services ops (docs/architecture/protocol.md#servicesadd-servicesremove-servicesrestart). Each
 // throws AgentError NO_SERVICE for a name it does not have, and
 // AGENT_OUTDATED for an agent from before them.
-
-const AgentServiceDefSchema = z
-  .object({
-    name: z.string().optional(),
-    argv: z.array(z.string()).readonly(),
-    env: z.array(z.string()).readonly().optional(),
-    cwd: z.string().optional(),
-    user: z.string().optional(),
-    restart: z.enum(['always', 'on-failure', 'never']).optional(),
-    source: z.enum(['image', 'api']).optional(),
-  })
-  .readonly();
-
-const AgentServiceSchema = z
-  .object({
-    name: z.string(),
-    state: z.enum(['starting', 'running', 'backoff', 'stopped', 'exited']),
-    pid: z.int().optional(),
-    restarts: z.int().nonnegative(),
-    last_exit: AgentExitSchema.optional(),
-
-    // an agent from before the services API leaves these out
-    def: AgentServiceDefSchema.optional(),
-    root: z.boolean().optional(),
-  })
-  .readonly();
-
-export const ServicesListSchema = z.object({
-  services: z.array(AgentServiceSchema).readonly(),
-  image_user: z.string().optional(),
-});
-
-// a place in a service's log: the file, by inode, and the offset after the
-// last byte sent
-const LogCursorSchema = z.object({ inode: z.int().nonnegative(), offset: z.int().nonnegative() });
-
-export type LogCursor = z.infer<typeof LogCursorSchema>;
-
-export type AgentServices = z.infer<typeof ServicesListSchema>;
-
-export type AgentServiceDef = z.infer<typeof AgentServiceDefSchema>;
-
-export type AgentService = z.infer<typeof AgentServiceSchema>;
 
 // a stop waits up to 5 s for SIGTERM before SIGKILL, then the start
 const STOP_TIMEOUT_MS = 15_000;

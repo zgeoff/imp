@@ -1,0 +1,17 @@
+{
+  "op": "claim",
+  "claim": {
+    "id": "imp_01hx",
+    "hostname": "web",
+    "ip": "10.66.0.6/30",
+    "gw": "10.66.0.5",
+    "ip6": "fd00:66::6/128",
+    "gw6": "fe80::1",
+    "dns": ["10.66.0.5"],
+    "mac": "06:00:0a:42:00:06",
+    "disk_bytes": 34359738368,
+    "unix_ms": 1760000000000,
+    "seed": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "reset_identity": true
+  }
+}

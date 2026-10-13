@@ -1,0 +1,5 @@
+{
+  "env": ["PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8"],
+  "workdir": "/srv/app",
+  "user": "dev"
+}

@@ -43,6 +43,24 @@ test('it leaves out a hold that has ended', () => {
   expect(buildImpNotes(imp, now)).toStrictEqual([]);
 });
 
+test('it says the inner container of an imp is down, after how many restarts and why', () => {
+  const imp = buildMockImp({
+    name: 'web',
+    state: 'running',
+    inner: { up: false, restarts: 3, lastError: 'start inner init: exit status 1' },
+  });
+
+  expect(buildImpNotes(imp, Date.parse('2026-10-02T12:00:00Z'))).toStrictEqual([
+    { tone: 'error', text: 'container down after 3 restarts: start inner init: exit status 1' },
+  ]);
+});
+
+test('it gives an imp whose inner container is up no note for it', () => {
+  const imp = buildMockImp({ name: 'web', state: 'running', inner: { up: true, restarts: 2 } });
+
+  expect(buildImpNotes(imp, Date.parse('2026-10-02T12:00:00Z'))).toStrictEqual([]);
+});
+
 test('it says since when the agent of an imp stopped answering', () => {
   const now = Date.parse('2026-10-02T12:00:00Z');
   const imp = buildMockImp({ name: 'web', agentSilentSince: new Date(now - 120_000) });

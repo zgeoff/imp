@@ -1,12 +1,12 @@
 import type { Socket } from 'node:net';
 import * as z from 'zod';
+import type { AgentService } from '../agent-client/agent-protocol';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
   encodeFrame,
   encodeJsonFrame,
 } from '../agent-client/frame-codec';
-import type { AgentService } from '../agent-client/service-requests';
 import { startStubAgent } from './start-stub-agent';
 
 // the user the image runs its services as, which a current agent reports

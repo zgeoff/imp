@@ -1,6 +1,6 @@
 import * as z from 'zod';
-import { AgentSessionObjectSchema } from '../agent-client/agent-requests';
-import type { AgentSession } from '../agent-client/agent-requests';
+import { AgentSessionObjectSchema } from '../agent-client/agent-protocol';
+import type { AgentSession } from '../agent-client/agent-protocol';
 
 // a session as impd last saw it: `observed_unix_ms` is when, so its `end`
 // is a lower bound as of then; left out by an impd from before offsets

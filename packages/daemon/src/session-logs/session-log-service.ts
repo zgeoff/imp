@@ -1,11 +1,11 @@
 import type { PreviousGeneration, ResumeFrom, SessionLog, SessionLogRead } from '@imp/api';
 import { PreviousGenerationSchema } from '@imp/api';
 import * as z from 'zod';
-import { AgentError } from '../agent-client/agent-connection';
 import { isAgentLogIdentity } from '../agent-client/agent-ids';
-import type { AgentSession } from '../agent-client/agent-requests';
+import type { AgentSession } from '../agent-client/agent-protocol';
 import { openTapStream } from '../agent-client/exec-stream';
 import type { ExecStream } from '../agent-client/exec-stream';
+import { isAgentError } from '../agent-client/is-agent-error';
 import { isDiskFullError } from '../api-errors';
 import { readErrorMessage } from '../read-error-message';
 import {
@@ -632,7 +632,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
       removeSlot(entry.key, opening);
 
-      if (error instanceof AgentError && ['NO_SESSION', 'BAD_REQUEST'].includes(error.code)) {
+      if (isAgentError(error, 'NO_SESSION', 'BAD_REQUEST')) {
         await writeGoneEnd(entry, error.data);
 
         return;

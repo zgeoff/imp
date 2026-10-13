@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "version": "0.18.0",
+  "uptime_ms": 5321,
+  "identity_reset": "ok",
+  "stage": "template",
+  "inner": {
+    "up": false,
+    "restarts": 3,
+    "last_error": "start inner init: exit status 1"
+  },
+  "boot_id": "6f1c2a9e-3b7d-4e58-9a10-2c4b8d7e5f31"
+}

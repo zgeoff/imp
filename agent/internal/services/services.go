@@ -165,7 +165,7 @@ func (s *Supervisor) startAll() error {
 		}
 	}
 	for _, p := range paths {
-		def, err := readDef(s.fsys, p)
+		def, err := ReadDef(s.fsys, p)
 		if err != nil {
 			log.Printf("services: %s: %v", p, err)
 			continue
@@ -175,7 +175,9 @@ func (s *Supervisor) startAll() error {
 	return nil
 }
 
-func readDef(fsys fsroot.FS, path string) (Def, error) {
+// ReadDef reads one services.d file: the file name is the service name, and
+// a file without source "api" came with the image.
+func ReadDef(fsys fsroot.FS, path string) (Def, error) {
 	var d Def
 	b, err := fsys.ReadFile(path)
 	if err != nil {

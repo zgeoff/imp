@@ -42,6 +42,11 @@ test('it builds a default imp', () => {
     sessions: expect.any(Number) as unknown,
     coldBootReason: expect.any(String) as unknown,
     agentSilentSince: expect.toBeValidDate() as unknown,
+    inner: {
+      up: true,
+      restarts: expect.any(Number) as unknown,
+      lastError: expect.any(String) as unknown,
+    },
     outdated: [],
     cpu: { limit: null, weight: 100 },
     resources: { wakeCount: expect.any(Number) as unknown, awakeMs: expect.any(Number) as unknown },
@@ -57,6 +62,7 @@ test('it applies overrides on top of the defaults', () => {
     name: 'dev-b',
     state: 'sleeping',
     vcpus: 2,
+    inner: { up: false },
     cpu: { limit: 1.5 },
   });
 
@@ -95,6 +101,11 @@ test('it applies overrides on top of the defaults', () => {
     sessions: expect.any(Number) as unknown,
     coldBootReason: expect.any(String) as unknown,
     agentSilentSince: expect.toBeValidDate() as unknown,
+    inner: {
+      up: false,
+      restarts: expect.any(Number) as unknown,
+      lastError: expect.any(String) as unknown,
+    },
     outdated: [],
     cpu: { limit: 1.5, weight: 100 },
     resources: { wakeCount: expect.any(Number) as unknown, awakeMs: expect.any(Number) as unknown },
