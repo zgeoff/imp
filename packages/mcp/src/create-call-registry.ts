@@ -16,6 +16,7 @@ export interface CallRegistry {
   readonly isRunning: (id: RequestId) => boolean;
 
   // `done` settles once the call has ended
+  // oxlint-disable-next-line prefer-readonly-parameter-types -- a call's live abort controller
   readonly add: (id: RequestId, call: Readonly<Call>) => void;
   readonly remove: (id: RequestId) => void;
 

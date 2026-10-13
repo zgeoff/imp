@@ -13,6 +13,7 @@ export interface LegacySession {
 }
 
 interface SessionState extends LegacySession {
+  // oxlint-disable-next-line no-deprecated -- create-imp-server.ts says why it is the low-level Server
   readonly server: Server;
   readonly drain: () => Promise<void>;
   lastUsedAt: number;
@@ -39,6 +40,8 @@ interface LegacySessionsOptions {
 
   // between SSE comments, so no idle timeout ends a long call's stream
   readonly keepaliveMs: number;
+
+  // oxlint-disable-next-line no-deprecated -- create-imp-server.ts says why it is the low-level Server
   readonly createServer: (owner: Readonly<SessionOwner>, calls: Readonly<CallRegistry>) => Server;
 }
 

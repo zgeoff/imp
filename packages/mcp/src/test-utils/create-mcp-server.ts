@@ -28,6 +28,8 @@ interface TestMcpServer {
 // carries its own caller, as each HTTP request does.
 export function createMcpServer(options: Readonly<ImpServerOptions>): TestMcpServer {
   const calls = createCallRegistry();
+
+  // oxlint-disable-next-line no-deprecated -- create-imp-server.ts says why it is the low-level Server
   const state: { server: Server | null } = { server: null };
 
   const replies = new Map<RequestId, MessageContext['reply']>();

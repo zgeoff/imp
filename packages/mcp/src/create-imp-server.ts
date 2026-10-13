@@ -38,6 +38,9 @@ export interface ImpServerOptions {
   readonly printError?: (message: string, error: unknown) => void;
 }
 
+// oxlint-disable-next-line no-deprecated -- the low-level Server lets tools/list filter by caller and a fallback answer unknown methods
+type ImpServer = Server;
+
 // imp's tools as an MCP server on the SDK. `caller` opened the connection: its
 // guard is in the instructions, and it calls for a request that carries no
 // caller of its own (createCallerAuth). `calls` holds the calls in flight.
@@ -45,7 +48,7 @@ export function createImpServer(
   options: Readonly<ImpServerOptions>,
   caller: Readonly<McpCaller>,
   calls: Readonly<CallRegistry>,
-): Server {
+): ImpServer {
   const tools = new Map<string, Tool>(TOOLS.map((tool) => [tool.definition.name, tool]));
 
   const progressIntervalMs = options.progressIntervalMs ?? PROGRESS_INTERVAL_MS;
@@ -54,6 +57,7 @@ export function createImpServer(
   const after = options.after ?? runAfter;
   const printError = options.printError ?? console.error;
 
+  // oxlint-disable-next-line no-deprecated -- the ImpServer type above says why
   const server = new Server(
     { name: 'imp', title: 'imp', version: options.version },
     {
@@ -83,6 +87,7 @@ export function createImpServer(
 
   // never throws for a failed tool call, which is an isError result; a bug
   // is an internal error
+  // oxlint-disable-next-line prefer-readonly-parameter-types -- the SDK's parsed request, which the handler only reads
   const runToolCall = async (request: CallToolRequest, ctx: ServerContext) => {
     const id = ctx.mcpReq.id;
     const tool = tools.get(request.params.name);

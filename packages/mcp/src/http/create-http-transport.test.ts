@@ -846,9 +846,15 @@ test('it sends keepalive comments on the stream of a call still running', async 
 
   const first = await reader.read();
 
+  const bytes: unknown = first.value;
+
   ctx.gate.release();
 
-  expect(new TextDecoder().decode(first.value)).toBe(': keepalive\n\n');
+  if (!(bytes instanceof Uint8Array)) {
+    throw new TypeError('the stream sent no bytes');
+  }
+
+  expect(new TextDecoder().decode(bytes)).toBe(': keepalive\n\n');
 });
 
 test('it refuses a POST from a client that takes no event stream with 406', async () => {
@@ -2344,7 +2350,7 @@ test('it waits at close for a 2026-07-28 create whose request the client aborted
 
   abort.abort();
 
-  await expect(call).rejects.toThrow();
+  await expect(call).toReject();
 
   const closing = transport.close();
 

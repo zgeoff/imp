@@ -50,7 +50,7 @@ export interface HttpTransport {
 
 interface Exchange {
   readonly authInfo: AuthInfo;
-  readonly ended: PromiseWithResolvers<void> | null;
+  readonly ended: Readonly<PromiseWithResolvers<void>> | null;
 
   // true once the SDK has handed the call to its handler
   started: boolean;
@@ -133,7 +133,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
   // call the SDK has not started once it had its chance, such as one its
   // schema refuses, never ran and has ended.
   const waitForExchangeStart = async (
-    exchange: Exchange,
+    exchange: Readonly<Exchange>,
     response: Response,
   ): Promise<Response> => {
     if (exchange.ended === null) {
