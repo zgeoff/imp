@@ -18,7 +18,7 @@ interface StubGuest {
 
   // the balloon statistics a read reports while they lag the guest, as
   // Firecracker's do between polls; null reports the guest as it is now
-  staleStats: { totalMib: number; availableMib: number } | null;
+  staleStats: { readonly totalMib: number; readonly availableMib: number } | null;
 }
 
 // virtio-mem plugs and unplugs whole 2 MiB blocks
