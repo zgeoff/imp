@@ -17,7 +17,12 @@ import {
   runCommand,
   runDevScript,
 } from './lib/instance';
-import { buildHostBFixture, readMoveOptions, removeMoveLeftovers } from './lib/move-hosts';
+import {
+  buildHostBFixture,
+  buildHostBFixtureDeps,
+  readMoveOptions,
+  removeMoveLeftovers,
+} from './lib/move-hosts';
 import type { HostBFixture } from './lib/move-hosts';
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
@@ -339,12 +344,12 @@ function formatSection(section: Section): string {
 
 // a host-B fixture as its suite runs it: B's options, and the suite's prefix
 // for B's reset
-function readHostBFixture(fixture: string): HostBFixture {
+function readHostBFixture(fixture: string, keep: boolean): HostBFixture {
   for (const suite of SUITES) {
     const name = suite.fixtures?.find((candidate) => candidate === fixture);
 
     if (name !== undefined) {
-      return buildHostBFixture(readMoveOptions(name), suite.prefix);
+      return buildHostBFixture(readMoveOptions(name), suite.prefix, buildHostBFixtureDeps(keep));
     }
   }
 
@@ -503,9 +508,9 @@ async function main(): Promise<number> {
       rebootOnto: (settings) => runDevScript('reboot', instance, settings),
       reboot: () => runDevScript('reboot'),
       fixturesOf: (name) => SUITES.find((suite) => suite.name === name)?.fixtures ?? [],
-      startFixture: (fixture) => readHostBFixture(fixture).start(),
-      resetFixture: (fixture) => readHostBFixture(fixture).reset(),
-      stopFixture: (fixture) => readHostBFixture(fixture).stop(),
+      startFixture: (fixture) => readHostBFixture(fixture, args.keep).start(),
+      resetFixture: (fixture) => readHostBFixture(fixture, args.keep).reset(),
+      stopFixture: (fixture) => readHostBFixture(fixture, args.keep).stop(),
 
       // a fresh instance: the container and data dir go, and come back
       // with the run's settings, baseline and images

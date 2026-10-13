@@ -55,6 +55,7 @@ async function setupTest() {
 
       return Promise.resolve();
     },
+    keep: false,
     removeHost: (host) => {
       steps.push(`remove ${host.container} ${host.dataDir}`);
 
@@ -249,6 +250,30 @@ test('#buildHostBFixture rejects the start when B made from nothing still fails 
   }).start();
 
   expect(start).rejects.toThrowWithMessage(Error, 'impd refused the removal');
+});
+
+test('#buildHostBFixture keeps B’s data under --keep and rejects the start when its reset fails', async () => {
+  const ctx = await setupTest();
+
+  const start = buildHostBFixture({ tailnet: false }, 'e2e-mv-', {
+    ...ctx.deps,
+    keep: true,
+    resetHost: (host, prefix) => {
+      ctx.steps.push(`reset ${host.container} ${prefix}`);
+
+      return Promise.reject(new Error('e2e-mv-cold is moving'));
+    },
+  }).start();
+
+  expect(start).rejects.toThrowWithMessage(Error, 'e2e-mv-cold is moving');
+
+  expect(ctx.steps).toStrictEqual([
+    'leftovers',
+    `network ${instance.container}-mv 10.100.0.0/24 10.100.0.1`,
+    `up ${instance.container}-mv-b 10.100.0.11`,
+    `login http://10.100.0.11:7070 ${ctx.cliDir} stale=false`,
+    `reset ${instance.container}-mv-b e2e-mv-`,
+  ]);
 });
 
 test('#buildHostBFixture resets B for the suite’s prefix', async () => {

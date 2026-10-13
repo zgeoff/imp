@@ -223,7 +223,7 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    fails B's reset, because `moves.abort` does not end it and impd will not remove it (`MOVING`).
    B's data dir stays between starts, so the fixture's start resets B once more, and when that reset
    fails too it takes B down, empties its data dir (the `--clean` wipe below) and starts it from
-   nothing.
+   nothing. Under `--keep` the start fails instead, so B keeps what the journeys left.
 
 6. Unless `--keep`, or the instance could not be made anew, removes every `e2e-` imp and image, then
    writes `.cache/e2e/results.json`, merging the metrics suites append to `.cache/e2e/metrics.jsonl`

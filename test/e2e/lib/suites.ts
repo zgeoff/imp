@@ -214,15 +214,7 @@ export const SUITES: readonly Suite[] = [
     name: 'ksm',
     prefix: 'e2e-ksm-',
     images: ['e2e-tiny'],
-    settings: () =>
-      checkHostRunsKsm()
-        ? {
-            IMP_KSM: '1',
-            IMP_RAM_BUDGET_MIB: '512',
-            IMP_BOOT_RESERVE_PERCENT: '20',
-            IMP_IDLE_TIMEOUT_S: '600',
-          }
-        : null,
+    settings: () => buildKsmSettings(checkHostRunsKsm()),
   },
 
   // last: it reboots the instance with backups on, then off again
@@ -325,6 +317,20 @@ export function readSuiteSettings(
   }
 
   return suite.settings?.(target) ?? null;
+}
+
+// the ksm suite's settings, by whether KSM runs on this host
+export function buildKsmSettings(isKsmRunning: boolean): Readonly<Record<string, string>> | null {
+  if (!isKsmRunning) {
+    return null;
+  }
+
+  return {
+    IMP_KSM: '1',
+    IMP_RAM_BUDGET_MIB: '512',
+    IMP_BOOT_RESERVE_PERCENT: '20',
+    IMP_IDLE_TIMEOUT_S: '600',
+  };
 }
 
 // generous: a journey's own waits fail long before this

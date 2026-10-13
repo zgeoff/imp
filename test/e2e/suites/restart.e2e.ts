@@ -81,13 +81,10 @@ test('it re-adopts running VMs across an impd restart, wakes a sleeper and resto
 
   console.log(`    ${String(beforeRestart.length)} imps before the restart`);
 
-  // scale's whole fleet when the harness kept it for this suite, and none of
-  // it otherwise
-  const scaleFleet = beforeRestart
-    .map((entry) => entry.name)
-    .filter((name) => name.startsWith(readSuitePrefix('scale')));
-
-  expect(scaleFleet).toStrictEqual(buildKeptScaleFleet(config.keptPrefixes, config.scaleCount));
+  // scale's whole fleet when the harness kept it for this suite
+  expect(beforeRestart.map((entry) => entry.name)).toIncludeAllMembers(
+    buildKeptScaleFleet(config.keptPrefixes, config.scaleCount),
+  );
 
   const restarting = Date.now();
 

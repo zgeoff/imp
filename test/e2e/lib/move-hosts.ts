@@ -232,14 +232,17 @@ export interface HostBFixtureDeps {
   // the baseline reset on B for the prefix
   readonly resetHost: (host: Readonly<DevInstance>, prefix: string) => Promise<void>;
 
-  // B down and its data dir emptied, so its next start makes it from nothing
+  // B down and its data dir emptied, so its next start makes it from nothing;
+  // never under --keep (`keep`), which keeps what the journeys left
   readonly removeHost: (host: Readonly<DevInstance>) => Promise<void>;
+  readonly keep: boolean;
   readonly log: (line: string) => void;
 }
 
-function buildHostBFixtureDeps(): HostBFixtureDeps {
+export function buildHostBFixtureDeps(keep: boolean): HostBFixtureDeps {
   return {
     cliDir: buildNames().cliDir,
+    keep,
     removeLeftovers: removeMoveLeftovers,
     createNetwork: async (name, network) => {
       await runChecked([
@@ -286,7 +289,7 @@ function buildHostBFixtureDeps(): HostBFixtureDeps {
 export function buildHostBFixture(
   options: Readonly<MoveHostsOptions>,
   prefix: string,
-  deps: Readonly<HostBFixtureDeps> = buildHostBFixtureDeps(),
+  deps: Readonly<HostBFixtureDeps>,
 ): HostBFixture {
   const names = buildNames();
   const b = buildHostB(options);
@@ -315,6 +318,10 @@ export function buildHostBFixture(
       try {
         await reset();
       } catch (error) {
+        if (deps.keep) {
+          throw error;
+        }
+
         const reason = error instanceof Error ? error.message : String(error);
 
         deps.log(`    ${b.container} could not be reset, so it starts from nothing: ${reason}`);
