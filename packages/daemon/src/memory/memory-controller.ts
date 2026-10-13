@@ -231,7 +231,9 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     state.lowerTo = null;
 
-    deps.log(`impd: ${imp.name}: memory low, grew to ${String(imp.memoryMib + pluggedMib)} MiB`);
+    deps.log(
+      `impd: ${imp.name}: memory low (${String(memory.availableMib)} of ${String(memory.totalMib)} MiB free), grew to ${String(imp.memoryMib + pluggedMib)} MiB`,
+    );
   };
 
   // an unplug toward the spare size; the guest gets there in its own time,

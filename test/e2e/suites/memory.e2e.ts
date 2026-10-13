@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { invariant } from '@imp/test-utils/invariant';
-import { readBalloonAvailableMib } from '../lib/balloon-stats';
+import { readBalloonStats } from '../lib/balloon-stats';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { readMemAvailableMib, readMemTotalMib, readPluggedMib } from '../lib/guest-memory';
@@ -102,6 +102,8 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
   // 300 MiB in use at 30 MiB a second, too soon for the minute-long idle
   // shrink. It crosses the grow mark only near its end, so the memory stays
   // in use until the grow lands, then goes
+  const secondFillStarted = new Date();
+
   await runShellInImp(
     name,
     'i=0; while [ $i -lt 10 ]; do dd if=/dev/zero of=/mnt/fill/$i bs=1M count=30 2>/dev/null; i=$((i+1)); sleep 1; done',
@@ -123,6 +125,32 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
 
   writeMetric('memory_grow_after_fill_ms', Math.round(performance.now() - growStarted));
 
+  // Once the balloon statistics count what the guest holds, a tick that read
+  // them from before the grow has run: one step covers this fill, so a
+  // second grow is one those older statistics asked for
+  await waitFor(
+    `the balloon statistics of ${name} to show the grow`,
+    async () => {
+      const stats = await readBalloonStats(row.id);
+      const totalMib = await readMemTotalMib(name);
+
+      if (Math.abs(stats.totalMib - totalMib) > 2) {
+        throw new Error(
+          `${String(stats.totalMib)} MiB in the statistics, the guest has ${String(totalMib)}`,
+        );
+      }
+    },
+    { timeoutMs: 10_000, intervalMs: 200 },
+  );
+
+  const secondFillLog = await readImpdLogSince(secondFillStarted);
+
+  const grows = secondFillLog
+    .split('\n')
+    .filter((line) => line.includes(`${name}: memory low`) && line.includes('grew to'));
+
+  expect(grows).toHaveLength(1);
+
   await runShellInImp(name, 'rm -f /mnt/fill/*');
 
   const pluggedBeforeSleep = await readPluggedMib(name);
@@ -133,11 +161,11 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
   await waitFor(
     `the balloon statistics of ${name} to show the freed memory`,
     async () => {
-      const availableMib = await readBalloonAvailableMib(row.id);
+      const stats = await readBalloonStats(row.id);
 
-      if (availableMib < availableInGuest - 64) {
+      if (stats.availableMib < availableInGuest - 64) {
         throw new Error(
-          `${String(availableMib)} MiB available, the guest has ${String(availableInGuest)}`,
+          `${String(stats.availableMib)} MiB available, the guest has ${String(availableInGuest)}`,
         );
       }
     },
