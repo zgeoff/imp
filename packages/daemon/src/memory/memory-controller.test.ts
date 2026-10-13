@@ -306,7 +306,7 @@ test('it grows a guest again once its balloon statistics count the grow and it i
   expect(ctx.guests.requests).toStrictEqual([256, 512]);
 });
 
-test('it grows a guest again once its balloon statistics miss a grow for 3 s', async () => {
+test('it grows a guest again once its balloon statistics miss a landed grow for 3 s', async () => {
   const ctx = setupTest();
 
   const imp = buildMockElasticImp({
@@ -327,11 +327,91 @@ test('it grows a guest again once its balloon statistics miss a grow for 3 s', a
 
   await controller.runTick();
 
+  ctx.advance(500);
+
+  await controller.runTick();
+
   ctx.advance(2999);
 
   await controller.runTick();
 
   ctx.advance(1);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 512]);
+});
+
+test('it holds the next grow for 3 s from when the plug lands, not from a slow admission', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  // the governor makes room for the grow by sleeping other imps
+  const controller = createMemoryController({
+    ...ctx.deps,
+    admitGrow: () => {
+      ctx.advance(3000);
+
+      return Promise.resolve(true);
+    },
+    readRamMib: () => 400,
+  });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it counts a grow after a missed one on top of it', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  ctx.advance(3000);
+
+  await controller.runTick();
+
+  // the statistics count the first grow only, and still show the guest low
+  guest.staleStats = { totalMib: 768, availableMib: 22 };
+
+  ctx.advance(500);
 
   await controller.runTick();
 

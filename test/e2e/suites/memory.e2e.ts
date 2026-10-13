@@ -143,14 +143,6 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
     { timeoutMs: 10_000, intervalMs: 200 },
   );
 
-  const secondFillLog = await readImpdLogSince(secondFillStarted);
-
-  const grows = secondFillLog
-    .split('\n')
-    .filter((line) => line.includes(`${name}: memory low`) && line.includes('grew to'));
-
-  expect(grows).toHaveLength(1);
-
   await runShellInImp(name, 'rm -f /mnt/fill/*');
 
   const pluggedBeforeSleep = await readPluggedMib(name);
@@ -172,6 +164,15 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
     { timeoutMs: 10_000, intervalMs: 200 },
   );
 
+  // a poll or more after the statistics counted the grow, so a tick that
+  // read them from before it has logged its grow by now
+  const secondFillLog = await readImpdLogSince(secondFillStarted);
+
+  const grows = secondFillLog
+    .split('\n')
+    .filter((line) => line.includes(`${name}: memory low`) && line.includes('grew to'));
+
+  expect(grows).toHaveLength(1);
   expect(pluggedBeforeSleep).toBeGreaterThanOrEqual(256);
 
   await runImp('hold', name, '0');

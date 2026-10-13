@@ -24,8 +24,8 @@ const RECLAIM_TIME_LIMIT_MS = 1000;
 const STALL_MS = 2000;
 
 // The balloon statistics count a plug at their next poll, 1 s at most after
-// it lands (configure-vm.ts); a grow they still miss after this long no
-// longer holds back the next one.
+// it lands (configure-vm.ts); a grow they still miss this long after a tick
+// saw it land no longer holds back the next one.
 const GROW_UNCOUNTED_MS = 3000;
 
 export interface ElasticImp {
@@ -84,10 +84,10 @@ interface ImpState {
   // a plug or an unplug under way: where it stood, and since when
   change: { pluggedMib: number; since: number } | null;
 
-  // after a grow, the total the balloon statistics reach once they count it:
-  // until then they show the guest from before the plug, still low, and the
-  // next grow waits for them or for `until`
-  uncountedGrow: { totalMib: number; until: number } | null;
+  // after a grow, the total the balloon statistics reach once they count it;
+  // the next grow waits for them, or for `until`, set once a tick sees the
+  // plug land (docs/architecture/lifecycle/elastic-memory.md#the-controller)
+  uncountedGrow: { totalMib: number; until: number | null } | null;
 
   // a stopped plug is logged once, until the guest's size moves again
   stalledAtMib: number | null;
@@ -177,7 +177,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
       await deps.vms.requestPluggedMib(imp.paths, mib);
     });
 
-  const growImp = async (imp: ElasticImp, memory: Readonly<GuestMemory>, time: number) => {
+  const growImp = async (imp: ElasticImp, memory: Readonly<GuestMemory>) => {
     const state = readState(imp, memory);
 
     const capMib = Math.min(
@@ -242,10 +242,15 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     state.lowerTo = null;
 
-    // the guest's struct pages for the step may come out of what it counts
+    // Statistics that missed an earlier grow past its hold miss it here too,
+    // so this step counts on top of that one. The guest's struct pages for
+    // the step may come out of what it counts.
     state.uncountedGrow = {
-      totalMib: memory.totalMib + stepMib - findStructPageMib(stepMib),
-      until: time + GROW_UNCOUNTED_MS,
+      totalMib:
+        Math.max(memory.totalMib, state.uncountedGrow?.totalMib ?? 0) +
+        stepMib -
+        findStructPageMib(stepMib),
+      until: null,
     };
 
     deps.log(
@@ -266,6 +271,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     }
 
     state.lowerTo = targetMib;
+    state.uncountedGrow = null;
 
     deps.log(
       `impd: ${imp.name}: memory to spare, shrinking to ${String(imp.memoryMib + targetMib)} MiB`,
@@ -338,18 +344,24 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     applyLowerLimit(imp, memory);
 
-    if (
-      state.uncountedGrow !== null &&
-      (memory.totalMib >= state.uncountedGrow.totalMib || time >= state.uncountedGrow.until)
-    ) {
-      state.uncountedGrow = null;
+    if (state.uncountedGrow !== null) {
+      state.uncountedGrow.until ??= time + GROW_UNCOUNTED_MS;
+
+      if (memory.totalMib >= state.uncountedGrow.totalMib) {
+        state.uncountedGrow = null;
+      }
     }
+
+    // past `until` the total stays until the statistics count it, for the
+    // next grow to count on
+    const held = state.uncountedGrow;
+    const isGrowHeld = held !== null && held.until !== null && time < held.until;
 
     if (memory.availableMib < findLowMib(memory.totalMib)) {
       state.spareSince = null;
 
-      if (time >= state.growAfter && state.uncountedGrow === null) {
-        await growImp(imp, memory, time);
+      if (time >= state.growAfter && !isGrowHeld) {
+        await growImp(imp, memory);
       }
 
       return;
@@ -421,6 +433,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
           if (state !== undefined && afterMib < before.pluggedMib) {
             state.lowerTo = afterMib;
+            state.uncountedGrow = null;
           }
 
           // a plug under way gives nothing back

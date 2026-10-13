@@ -35,7 +35,8 @@ the balloon's statistics.
   A grow it refuses leaves the guest at its size, with its own OOM killer. The statistics refresh on
   a poll, so for a while after a plug they still show the guest from before it, low as it was. The
   controller therefore grows a guest again only once its statistics count the last step, or once
-  they have missed it for a few polls, so one need costs one step.
+  they have missed it for a few polls after the plug landed, so one need costs one step. A grow made
+  after such a miss waits for the statistics to count both steps.
 - **Shrink.** A guest that could give back a step for a while unplugs to its spare size: the least
   size that leaves it a grow step clear of its grow mark. A fixed headroom would undo itself,
   because in a large guest the grow mark passes it and the next tick would grow the guest again.
