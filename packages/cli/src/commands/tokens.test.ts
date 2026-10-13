@@ -264,6 +264,25 @@ test.each([
     ['token', 'set', 'agent', '--grantable', 'Not A Name'],
     'imp: --grantable takes secret names, such as gh,npm; not Not A Name\n',
   ],
+  [
+    ['token', 'new', 'nixie', '--scope', 'manage', '--image-ref-prefix', 'ghcr.io/zgeoff/nixie-'],
+    'imp: --image-ref-prefix needs --scope manage and --imps\n',
+  ],
+  [
+    [
+      'token',
+      'new',
+      'nixie',
+      '--scope',
+      'manage',
+      '--imps',
+      'nixie-*',
+      '--image-ref-prefix',
+      'zgeoff/nixie-',
+    ],
+    'imp: --image-ref-prefix takes a registry host and the start of a path, such as ghcr.io/org/app-; not zgeoff/nixie-\n',
+  ],
+  [['token', 'set', 'agent'], 'imp: give --grantable, --image-ref-prefix or both\n'],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
   const result = await runCli({
     args,
@@ -283,6 +302,26 @@ test.each([
     ['token', 'set', 'agent', '--grantable', 'gh'],
     'tokenUpdate',
     'is older than 0.34.0 and would not know tokens.update',
+  ],
+  [
+    [
+      'token',
+      'new',
+      'nixie',
+      '--scope',
+      'manage',
+      '--imps',
+      'nixie-*',
+      '--image-ref-prefix',
+      'ghcr.io/zgeoff/nixie-',
+    ],
+    'tokenImageAdd',
+    'has no token image adds and would drop --image-ref-prefix and make a token that adds no image',
+  ],
+  [
+    ['token', 'set', 'nixie', '--image-ref-prefix', 'ghcr.io/zgeoff/nixie-'],
+    'tokenImageAdd',
+    'has no token image adds and would not change the image ref prefix',
   ],
 ])(
   'it makes no call past the feature check for %p on an impd from before %s',
@@ -367,6 +406,7 @@ test('it creates a grantable token on an impd with the feature', async () => {
       imps: ['agent-*'],
       sshKeys: [],
       grantable: ['gh'],
+      imageRefPrefix: null,
       createdAt: expect.toBeValidDate() as unknown,
     },
   ]);
@@ -391,6 +431,7 @@ test('it sends the grantable list on token set to an impd with tokens.update', a
     imps: ['agent-*'],
     sshKeys: [],
     grantable: ['gh'],
+    imageRefPrefix: null,
     createdAt: expect.any(String) as unknown,
   });
 });
@@ -420,8 +461,84 @@ test('it clears the grantable list on token set with an empty --grantable', asyn
     imps: ['agent-*'],
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: expect.any(String) as unknown,
   });
+});
+
+test('it creates a token with an image ref prefix and shows it in token ls', async () => {
+  const ctx = await setupTest();
+
+  await runCli({
+    args: [
+      'token',
+      'new',
+      'nixie',
+      '--scope',
+      'manage',
+      '--imps',
+      'nixie-*',
+      '--image-ref-prefix',
+      'ghcr.io/zgeoff/nixie-',
+    ],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  const listed = await runCli({
+    args: ['token', 'ls'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  expect(listed.stdout.split('\n').map((line) => line.trimEnd())).toStrictEqual([
+    'NAME   SCOPE   IMPS     GRANTABLE  IMAGE REF PREFIX       SSH KEYS  CREATED',
+    expect.stringMatching(
+      /^nixie {2}manage {2}nixie-\* {2}- {10}ghcr\.io\/zgeoff\/nixie- {2}0 {9}\S+$/u,
+    ),
+    '',
+  ]);
+});
+
+test('it gives a token an image ref prefix on token set', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.tokens.create({ name: 'nixie', scope: 'manage', imps: ['nixie-*'] });
+
+  const result = await runCli({
+    args: ['token', 'set', 'nixie', '--image-ref-prefix', 'ghcr.io/zgeoff/nixie-', '--json'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  const printed: unknown = JSON.parse(result.stdout);
+
+  expect(printed).toStrictEqual({
+    name: 'nixie',
+    scope: 'manage',
+    imps: ['nixie-*'],
+    sshKeys: [],
+    grantable: [],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+    createdAt: expect.any(String) as unknown,
+  });
+});
+
+test('it takes a token’s image ref prefix away on token set with an empty --image-ref-prefix', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.tokens.create({
+    name: 'nixie',
+    scope: 'manage',
+    imps: ['nixie-*'],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+  });
+
+  await runCli({
+    args: ['token', 'set', 'nixie', '--image-ref-prefix', ''],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+  });
+
+  const tokens = await ctx.client.tokens.list();
+
+  expect(tokens.map((token) => token.imageRefPrefix)).toStrictEqual([null]);
 });
 
 test('it names a token it cannot find on token key ls', async () => {

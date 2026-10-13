@@ -65,6 +65,7 @@ test('it accepts the system info of a host with every part turned on', () => {
       grantableTokens: true,
       secretRebind: true,
       tokenUpdate: true,
+      tokenImageAdd: true,
       databaseCopy: true,
       imageBuildStream: true,
       imageOpStream: true,

@@ -12,6 +12,7 @@ export function buildMockTokenRecord(overrides: Partial<TokenRecord> = {}): Toke
     scope: 'manage',
     imps: null,
     grantable: [],
+    imageRefPrefix: null,
     createdAt: faker.date.past(),
     ...overrides,
   };

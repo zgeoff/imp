@@ -294,6 +294,7 @@ test('it answers a create with the token and a secret in the token format', asyn
       imps: ['dev-*'],
       sshKeys: [],
       grantable: [],
+      imageRefPrefix: null,
       createdAt: expect.any(Date) as unknown,
     },
   });
@@ -326,6 +327,7 @@ test('it tells a token who it is', async () => {
     scope: 'exec',
     imps: ['dev-*'],
     grantable: [],
+    imageRefPrefix: null,
   });
 });
 

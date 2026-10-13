@@ -253,6 +253,26 @@ test('#runMigrations lets a token grant no secret in the grantable migration', a
   expect(token.grantable).toBe('[]');
 });
 
+test('#runMigrations lets an existing token add no image in the image ref prefix migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '028_cascade_oauth_tokens');
+
+  // a row as an impd at 028 wrote it
+  await sql`INSERT INTO tokens (id, name, secret_hash, scope, imps, grantable, created_at)
+    VALUES ('t', 'ci', 'hash', 'manage', '["dev-*"]', '[]', 0)`.execute(db);
+
+  await runMigrations(db);
+
+  const token = await db
+    .selectFrom('tokens')
+    .select('image_ref_prefix')
+    .where('id', '=', 't')
+    .executeTakeFirstOrThrow();
+
+  expect(token.image_ref_prefix).toBeNull();
+});
+
 test('#runMigrations leaves the broker reading the old value file in the grantable migration', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'imp-migrate-'));
 

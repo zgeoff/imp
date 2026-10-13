@@ -390,6 +390,9 @@ export const impdRouter = {
       const imps = input.imps ?? null;
       const sshKeys = requireDistinctKeys((input.sshKeys ?? []).map((line) => readSshKey(line)));
       const grantable = readGrantable(input.grantable ?? [], { scope: input.scope, imps });
+      const imageRefPrefix = input.imageRefPrefix ?? null;
+
+      requireImageScope(imageRefPrefix, { scope: input.scope, imps });
 
       const row = await tokenCollection.create({
         name: input.name,
@@ -397,6 +400,7 @@ export const impdRouter = {
         imps,
         ...(sshKeys.length > 0 && { sshKeys }),
         ...(grantable.length > 0 && { grantable }),
+        imageRefPrefix,
         createdAt: new Date(),
       });
 
@@ -409,11 +413,20 @@ export const impdRouter = {
         throw buildNotFoundError('token', options.input.name);
       }
 
-      const grantable = readGrantable(options.input.grantable, token);
+      const input = options.input;
+
+      const grantable =
+        input.grantable === undefined ? token.grantable : readGrantable(input.grantable, token);
+
+      const imageRefPrefix =
+        input.imageRefPrefix === undefined ? token.imageRefPrefix : input.imageRefPrefix;
+
+      requireImageScope(imageRefPrefix, token);
 
       const updated = await tokenCollection.update((query) => query.where({ name: token.name }), {
         data(row) {
           row.grantable = grantable;
+          row.imageRefPrefix = imageRefPrefix;
         },
       });
 
@@ -731,6 +744,18 @@ function readGrantable(
   });
 }
 
+// impd's requireImageScope (packages/daemon auth/token-store.ts)
+function requireImageScope(
+  imageRefPrefix: string | null,
+  token: Readonly<Pick<Token, 'scope' | 'imps'>>,
+): void {
+  if (imageRefPrefix !== null && (token.imps === null || token.scope !== 'manage')) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: 'a token that may add images needs scope manage and imp patterns',
+    });
+  }
+}
+
 // impd's key entry: a parsed key that no token holds yet
 // impd's buildKeyEntries (packages/daemon auth/token-store.ts): one key
 // given twice in a list is a CONFLICT
@@ -807,6 +832,7 @@ function toCaller(session: Readonly<ImpdSession>): Caller {
     scope: session.scope,
     imps: session.imps,
     grantable: session.grantable.map((name) => ({ name, generation: '1' })),
+    imageRefPrefix: session.imageRefPrefix,
     tokenId: session.name,
     grantId: null,
     expiresAt: session.expiresAt.getTime(),

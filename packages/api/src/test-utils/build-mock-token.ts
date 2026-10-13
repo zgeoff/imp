@@ -1,7 +1,8 @@
 import { faker } from '@faker-js/faker';
 import type { Token } from '../schemas/token-schema';
 
-// A manage token on every imp, with no SSH keys and nothing it may grant.
+// A manage token on every imp, with no SSH keys, nothing it may grant
+// and no images it may add.
 // The date counts back from faker's reference date, which the preload fixes.
 export function buildMockToken(overrides: Partial<Token> = {}): Token {
   return {
@@ -10,6 +11,7 @@ export function buildMockToken(overrides: Partial<Token> = {}): Token {
     imps: null,
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: faker.date.past(),
     ...overrides,
   };

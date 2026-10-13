@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@imp/api';
+import { ImageRefPrefixSchema, ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@imp/api';
 import type { Scope } from '@imp/api';
 import { defineCommand } from '../define-command';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
@@ -75,6 +75,25 @@ function requireGrantScope(scope: Scope, imps: readonly string[] | undefined): v
   }
 }
 
+// --image-ref-prefix ghcr.io/org/app-: the start of the image refs the
+// token may add under its imps (docs/guides/tokens.md#adding-images)
+function parseImageRefPrefix(text: string): string {
+  const parsed = ImageRefPrefixSchema.safeParse(text);
+
+  if (!parsed.success) {
+    throw new UsageError(
+      `--image-ref-prefix takes a registry host and the start of a path, such as ghcr.io/org/app-; not ${text}`,
+    );
+  }
+
+  return parsed.data;
+}
+
+// `token set --image-ref-prefix`: as parseImageRefPrefix; '' takes it away
+function parseImageRefPrefixUpdate(text: string): string | null {
+  return text.trim() === '' ? null : parseImageRefPrefix(text);
+}
+
 // The key lines of a public key file, such as ~/.ssh/id_ed25519.pub. A
 // private key is refused before it leaves this machine.
 function readKeyFile(path: string): string[] {
@@ -125,6 +144,11 @@ const newCommand = defineCommand({
       description:
         "secrets it may grant to its imps and revoke, such as 'gh,npm' (comma-separated; needs manage and --imps)",
     },
+    'image-ref-prefix': {
+      type: 'string',
+      description:
+        "let it add images under its imps from refs that start with this and are pinned by digest, such as 'ghcr.io/org/app-' (needs manage and --imps)",
+    },
     'ssh-key': {
       type: 'string',
       description: 'a public key file whose keys log in over ssh as this token',
@@ -136,6 +160,20 @@ const newCommand = defineCommand({
       const scope = parseScope(context.args.scope);
       const imps = parseImpPatterns(context.args.imps);
       const grantable = parseGrantable(context.args.grantable);
+      const prefixArg = context.args['image-ref-prefix'];
+      const imageRefPrefix = prefixArg === undefined ? undefined : parseImageRefPrefix(prefixArg);
+
+      if (imageRefPrefix !== undefined) {
+        if (scope !== 'manage' || imps === undefined) {
+          throw new UsageError('--image-ref-prefix needs --scope manage and --imps');
+        }
+
+        await requireFeature(
+          client,
+          'tokenImageAdd',
+          'drop --image-ref-prefix and make a token that adds no image',
+        );
+      }
 
       if (grantable !== undefined) {
         requireGrantScope(scope, imps);
@@ -156,6 +194,7 @@ const newCommand = defineCommand({
         ...(imps !== undefined && { imps }),
         ...(sshKeys !== undefined && { sshKeys }),
         ...(grantable !== undefined && { grantable }),
+        ...(imageRefPrefix !== undefined && { imageRefPrefix }),
       });
 
       if (context.args.json === true) {
@@ -173,7 +212,7 @@ const setCommand = defineCommand({
   meta: {
     name: 'set',
     description:
-      "Change a token's grantable secrets; its secret stays, and a secret taken off loses its grants on the token's imps",
+      "Change a token's grantable secrets or its image ref prefix; its secret stays, and a secret taken off loses its grants on the token's imps",
   },
   args: {
     name: tokenArg,
@@ -181,17 +220,39 @@ const setCommand = defineCommand({
       type: 'string',
       description:
         "the whole new list, such as 'gh,npm' (comma-separated; '' for none; non-empty needs a manage token with imps)",
-      required: true,
+    },
+    'image-ref-prefix': {
+      type: 'string',
+      description:
+        "the start of the pinned refs it may add images from, such as 'ghcr.io/org/app-' ('' for none; needs a manage token with imps)",
     },
     json: jsonArg,
   },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const grantable = parseGrantableUpdate(context.args.grantable);
+      const grantableArg = context.args.grantable;
+      const prefixArg = context.args['image-ref-prefix'];
 
-      await requireFeature(client, 'tokenUpdate', 'not know tokens.update');
+      if (grantableArg === undefined && prefixArg === undefined) {
+        throw new UsageError('give --grantable, --image-ref-prefix or both');
+      }
 
-      const token = await client.tokens.update({ name: context.args.name, grantable });
+      const grantable = grantableArg === undefined ? undefined : parseGrantableUpdate(grantableArg);
+
+      const imageRefPrefix =
+        prefixArg === undefined ? undefined : parseImageRefPrefixUpdate(prefixArg);
+
+      // an older impd needs `grantable` on every update, and would drop the
+      // prefix unread
+      await (imageRefPrefix === undefined
+        ? requireFeature(client, 'tokenUpdate', 'not know tokens.update')
+        : requireFeature(client, 'tokenImageAdd', 'not change the image ref prefix'));
+
+      const token = await client.tokens.update({
+        name: context.args.name,
+        ...(grantable !== undefined && { grantable }),
+        ...(imageRefPrefix !== undefined && { imageRefPrefix }),
+      });
 
       console.log(formatOutput(token, context.args.json, (shown) => formatTokens([shown])));
     }),
@@ -200,7 +261,8 @@ const setCommand = defineCommand({
 const lsCommand = defineCommand({
   meta: {
     name: 'ls',
-    description: 'List tokens: their scopes, imps and grantable secrets, never their secrets',
+    description:
+      'List tokens: their scopes, imps, grantable secrets and image ref prefixes, never their secrets',
   },
   args: { json: jsonArg },
   run: (context) =>

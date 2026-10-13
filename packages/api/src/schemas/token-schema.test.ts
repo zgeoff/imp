@@ -3,6 +3,7 @@ import {
   GrantableSchema,
   GrantableUpdateSchema,
   IdentitySchema,
+  ImageRefPrefixSchema,
   ImpPatternSchema,
   ScopeSchema,
   SshKeySchema,
@@ -100,6 +101,33 @@ test('#GrantableUpdateSchema rejects a secret named twice', () => {
   });
 });
 
+test.each([
+  ['a registry host and a path start', 'ghcr.io/zgeoff/nixie-'],
+  ['a whole repository', 'ghcr.io/zgeoff/nixie-sandbox'],
+  ['a registry host with a port', 'registry.test:5000/team/'],
+  ['localhost', 'localhost/app'],
+])('#ImageRefPrefixSchema accepts %s', (_label, source) => {
+  expect(ImageRefPrefixSchema.safeParse(source).data).toBe(source);
+});
+
+test.each([
+  ['a bare path, which docker reads as Docker Hub', 'zgeoff/nixie-'],
+  ['a registry host alone', 'ghcr.io/'],
+  ['a tag', 'ghcr.io/zgeoff/nixie:1'],
+  ['a digest', 'ghcr.io/zgeoff/nixie@sha256:'],
+  ['an upper-case host', 'GHCR.io/zgeoff/nixie-'],
+])('#ImageRefPrefixSchema rejects %s', (_label, source) => {
+  const result = ImageRefPrefixSchema.safeParse(source);
+
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'invalid_format' });
+});
+
+test('#ImageRefPrefixSchema rejects a source over 200 characters', () => {
+  const result = ImageRefPrefixSchema.safeParse(`ghcr.io/${'a'.repeat(200)}`);
+
+  expect(result.error?.issues).toPartiallyContain({ path: [], code: 'too_big' });
+});
+
 test('#SshPublicKeySchema trims the whitespace around a key line', () => {
   expect(SshPublicKeySchema.safeParse('  ssh-ed25519 AAAAC3Nza dev@laptop\n').data).toBe(
     'ssh-ed25519 AAAAC3Nza dev@laptop',
@@ -137,6 +165,7 @@ test('#TokenSchema accepts a token limited to some imps', () => {
     imps: ['ci-*'],
     sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'ci@runner' }],
     grantable: ['github-token'],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   } as const;
 
@@ -145,7 +174,7 @@ test('#TokenSchema accepts a token limited to some imps', () => {
   expect(result.data).toStrictEqual(payload);
 });
 
-test('#TokenSchema defaults grantable to an empty list for an older impd', () => {
+test('#TokenSchema defaults grantable and the image ref prefix to none for an older impd', () => {
   const result = TokenSchema.safeParse({
     name: 'ci',
     scope: 'exec',
@@ -160,6 +189,7 @@ test('#TokenSchema defaults grantable to an empty list for an older impd', () =>
     imps: null,
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: new Date('2026-01-02T03:04:05.000Z'),
   });
 });
@@ -239,6 +269,7 @@ test('#IdentitySchema accepts a tailnet identity', () => {
     scope: 'manage',
     imps: null,
     grantable: ['github-token'],
+    imageRefPrefix: null,
   } as const;
 
   const result = IdentitySchema.safeParse(payload);
@@ -246,7 +277,7 @@ test('#IdentitySchema accepts a tailnet identity', () => {
   expect(result.data).toStrictEqual(payload);
 });
 
-test('#IdentitySchema defaults grantable to an empty list', () => {
+test('#IdentitySchema defaults grantable and the image ref prefix to none', () => {
   const result = IdentitySchema.safeParse({
     kind: 'token',
     name: 'ci',
@@ -260,6 +291,7 @@ test('#IdentitySchema defaults grantable to an empty list', () => {
     scope: 'read',
     imps: ['ci-*'],
     grantable: [],
+    imageRefPrefix: null,
   });
 });
 

@@ -227,6 +227,7 @@ test('it serves system.info from config and the database', async () => {
       leases: true,
       grantableTokens: true,
       tokenUpdate: true,
+      tokenImageAdd: true,
       secretRebind: true,
       databaseCopy: true,
       imageBuildStream: true,

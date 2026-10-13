@@ -686,6 +686,7 @@ test('it lets the old bearer read the new list after an update', async () => {
     scope: 'manage',
     imps: ['dev-*'],
     grantable: ['gh', 'npm'],
+    imageRefPrefix: null,
   });
 });
 
@@ -733,6 +734,7 @@ test('it keeps the updated list for the old bearer after a restart', async () =>
     scope: 'manage',
     imps: ['dev-*'],
     grantable: ['gh', 'npm'],
+    imageRefPrefix: null,
   });
 });
 

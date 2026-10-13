@@ -208,6 +208,7 @@ export interface Tokens {
   created_at: number;
   grantable: Generated<string>;
   id: string;
+  image_ref_prefix: string | null;
   imps: string | null;
   name: string;
   scope: Scope;

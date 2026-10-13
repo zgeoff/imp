@@ -13,6 +13,7 @@ test('it builds a default identity', () => {
     scope: 'manage',
     imps: null,
     grantable: [],
+    imageRefPrefix: null,
   });
 
   expect(parsed).toStrictEqual(identity);
@@ -27,5 +28,6 @@ test('it applies overrides on top of the defaults', () => {
     scope: 'read',
     imps: ['ci-*'],
     grantable: [],
+    imageRefPrefix: null,
   });
 });

@@ -62,6 +62,10 @@ const SystemFeaturesSchema = z.object({
   // tokens.update, which changes a token's grantable list
   tokenUpdate: z.boolean().optional(),
 
+  // tokens.create and tokens.update take `imageRefPrefix`, which an older
+  // impd drops unread, and tokens.update takes a call without `grantable`
+  tokenImageAdd: z.boolean().optional(),
+
   // system.copyDatabase; from 0.30.0
   databaseCopy: z.boolean().optional(),
 

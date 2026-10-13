@@ -33,6 +33,17 @@ export const GrantableUpdateSchema = z
 // (docs/guides/tokens.md#granting-secrets): exact names, no two the same
 export const GrantableSchema = GrantableUpdateSchema.min(1);
 
+// The start every image ref a token adds must have, such as ghcr.io/org/app-
+// (docs/guides/tokens.md#adding-images). The host needs a dot, a port or to
+// be localhost, or docker would read the ref as one on Docker Hub.
+export const ImageRefPrefixSchema = z
+  .string()
+  .max(200)
+  .regex(
+    /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\/[a-z0-9][a-z0-9._/-]*$/,
+    'must be a registry host and the start of a path, such as ghcr.io/org/app-',
+  );
+
 // An SSH public key line, as in a `.pub` file: `<type> <base64> [comment]`
 export const SshPublicKeySchema = z.string().trim().min(1).max(16_384);
 
@@ -59,6 +70,10 @@ export const TokenSchema = z.object({
 
   // the secrets it may grant to its imps; an older impd sends none
   grantable: z.array(SecretNameSchema).readonly().default([]),
+
+  // the ref start of the images it may add under its imp patterns; null
+  // for none, and from an older impd, which sends none
+  imageRefPrefix: ImageRefPrefixSchema.nullable().default(null),
   createdAt: z.date(),
 });
 
@@ -72,6 +87,7 @@ export const IdentitySchema = z.object({
   scope: ScopeSchema,
   imps: z.array(ImpPatternSchema).readonly().nullable(),
   grantable: z.array(SecretNameSchema).readonly().default([]),
+  imageRefPrefix: ImageRefPrefixSchema.nullable().default(null),
 });
 
 export type Identity = z.infer<typeof IdentitySchema>;

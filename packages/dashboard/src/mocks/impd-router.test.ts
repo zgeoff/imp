@@ -505,8 +505,24 @@ test('#tokens.list lists the tokens without their secrets', async () => {
   const listed = await client.tokens.list();
 
   expect(listed).toStrictEqual([
-    { name: 'admin', scope: 'manage', imps: null, sshKeys: [], grantable: [], createdAt },
-    { name: 'ci', scope: 'exec', imps: null, sshKeys: [], grantable: [], createdAt },
+    {
+      name: 'admin',
+      scope: 'manage',
+      imps: null,
+      sshKeys: [],
+      grantable: [],
+      imageRefPrefix: null,
+      createdAt,
+    },
+    {
+      name: 'ci',
+      scope: 'exec',
+      imps: null,
+      sshKeys: [],
+      grantable: [],
+      imageRefPrefix: null,
+      createdAt,
+    },
   ]);
 });
 
@@ -629,6 +645,7 @@ test('#tokens.whoami answers the identity of the session', async () => {
     scope: 'exec',
     imps: ['dev-*'],
     grantable: [],
+    imageRefPrefix: null,
   });
 });
 
@@ -1628,6 +1645,34 @@ test('#tokens.update rejects a grantable secret the host does not have with NOT_
   expect(client.tokens.update({ name: 'ci', grantable: ['npm'] })).rejects.toMatchObject({
     code: 'NOT_FOUND',
     data: { kind: 'secret', name: 'npm' },
+  });
+});
+
+test('#tokens.update gives a token an image ref prefix and keeps its grantable list', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  await tokenCollection.create({ name: 'nixie', imps: ['nixie-*'], grantable: ['npm'] });
+
+  const updated = await client.tokens.update({
+    name: 'nixie',
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+  });
+
+  expect(updated).toMatchObject({ grantable: ['npm'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' });
+});
+
+test('#tokens.create rejects an image ref prefix for a token of every imp with BAD_REQUEST', async () => {
+  const client = createImpClient({ url: IMPD_ORIGIN });
+
+  await createDashboardSession();
+
+  expect(
+    client.tokens.create({ name: 'ci', scope: 'manage', imageRefPrefix: 'ghcr.io/zgeoff/ci-' }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'a token that may add images needs scope manage and imp patterns',
   });
 });
 

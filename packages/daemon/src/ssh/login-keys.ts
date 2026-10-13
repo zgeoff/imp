@@ -52,6 +52,7 @@ function buildFileCaller(key: Readonly<AuthorizedKey>): Caller {
     scope: 'manage',
     imps: null,
     grantable: [],
+    imageRefPrefix: null,
     tokenId: null,
     grantId: null,
     expiresAt: null,

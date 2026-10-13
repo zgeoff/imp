@@ -13,6 +13,7 @@ test('it builds a default token', () => {
     imps: null,
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: expect.toBeValidDate() as unknown,
   });
 
@@ -28,6 +29,7 @@ test('it applies overrides on top of the defaults', () => {
     imps: ['ci-*'],
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: expect.toBeValidDate() as unknown,
   });
 });

@@ -13,6 +13,7 @@ export function buildMockCaller(overrides: Partial<Caller> = {}): Caller {
     scope: 'manage',
     imps: null,
     grantable: [],
+    imageRefPrefix: null,
     tokenId,
     grantId: null,
     expiresAt: null,

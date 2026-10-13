@@ -65,6 +65,7 @@ import {
   GrantableSchema,
   GrantableUpdateSchema,
   IdentitySchema,
+  ImageRefPrefixSchema,
   ImpPatternSchema,
   MAX_SSH_KEYS,
   ScopeSchema,
@@ -651,15 +652,34 @@ export const impContract = {
 
           // existing secrets it may grant to its imps; needs manage and imps
           grantable: GrantableSchema.optional(),
+
+          // the ref start of the images it may add under its imp patterns,
+          // pinned by digest (docs/guides/tokens.md#adding-images); needs
+          // manage and imps
+          imageRefPrefix: ImageRefPrefixSchema.optional(),
         }),
       )
       .output(z.object({ token: TokenSchema, secret: z.string() })),
 
-    // sets its grantable list; the token's secret and the rest stay
-    // (docs/guides/tokens.md#change-the-list). BAD_REQUEST for a list without
-    // manage and imps; NOT_FOUND for the token or a secret.
+    // sets its grantable list, its image ref prefix (null for none), or both;
+    // the rest stays (docs/guides/tokens.md#change-the-list). BAD_REQUEST for
+    // either without manage and imps; NOT_FOUND for the token or a secret.
     update: base
-      .input(z.object({ name: NameSchema, grantable: GrantableUpdateSchema }))
+      .input(
+        z
+          .object({
+            name: NameSchema,
+            grantable: GrantableUpdateSchema.optional(),
+
+            // an older impd needs `grantable`: check features.tokenImageAdd
+            // before leaving it out
+            imageRefPrefix: ImageRefPrefixSchema.nullable().optional(),
+          })
+          .refine(
+            (input) => input.grantable !== undefined || input.imageRefPrefix !== undefined,
+            'must set grantable, imageRefPrefix or both',
+          ),
+      )
       .output(TokenSchema),
 
     // ends its dashboard sessions, event streams, sockets and ssh logins too;

@@ -168,7 +168,15 @@ export type { Session } from './schemas/session-schema';
 export { SESSION_LOG_READ_MAX_BYTES } from './schemas/session-log-schema';
 export type { SessionLog, SessionLogRead } from './schemas/session-log-schema';
 export { SYSTEM_FEATURES, SystemInfoSchema } from './schemas/system-info-schema';
-export { ImpPatternSchema, MAX_SSH_KEYS, ScopeSchema, TokenSchema } from './schemas/token-schema';
+
+export {
+  ImageRefPrefixSchema,
+  ImpPatternSchema,
+  MAX_SSH_KEYS,
+  ScopeSchema,
+  TokenSchema,
+} from './schemas/token-schema';
+
 export type { Identity, Scope, SshKey, Token } from './schemas/token-schema';
 export { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema } from './schemas/oauth-schema';
 export type { OAuthApproval, OAuthClient, OAuthGrant } from './schemas/oauth-schema';

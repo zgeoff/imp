@@ -127,6 +127,7 @@ export function findTailnetCaller(
     scope: rule.scope,
     imps: rule.imps ?? null,
     grantable: [],
+    imageRefPrefix: null,
     tokenId: null,
     grantId: null,
     expiresAt: null,
