@@ -2,10 +2,10 @@
 
 ## [1.0.1](https://github.com/zgeoff/imp/compare/v1.0.0...v1.0.1) (2026-10-13)
 
-
 ### Bug Fixes
 
-* **geo-729:** grow a guest once per need ([#333](https://github.com/zgeoff/imp/issues/333)) ([59a5398](https://github.com/zgeoff/imp/commit/59a5398abe60fa3cebeb1d0d3430a94f0d02686d))
+- **geo-729:** grow a guest once per need ([#333](https://github.com/zgeoff/imp/issues/333))
+  ([59a5398](https://github.com/zgeoff/imp/commit/59a5398abe60fa3cebeb1d0d3430a94f0d02686d))
 
 ## [1.0.0](https://github.com/zgeoff/imp/compare/v0.42.0...v1.0.0) (2026-10-12)
 
