@@ -126,6 +126,17 @@ export const ImpSchema = z.object({
   // a running imp whose agent stopped answering: since when, once the
   // watchdog reports it
   agentSilentSince: z.date().optional(),
+
+  // the inner container, where every process runs, as the agent last said:
+  // set only while the imp is awake and its agent (0.14.0 or later) answers;
+  // restarts counts its init's deaths, lastError the last failed start
+  inner: z
+    .object({
+      up: z.boolean(),
+      restarts: z.int().nonnegative(),
+      lastError: z.string().optional(),
+    })
+    .optional(),
   outdated: z.array(OutdatedPartSchema).readonly().optional(),
 
   // cores the VM may use (null: no limit) and its share under contention,

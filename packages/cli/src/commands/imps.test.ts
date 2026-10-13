@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createImage } from '@imp/daemon/src/db/images';
 import { createImp, findImpByName, updateImpMove } from '@imp/daemon/src/db/imps';
-import { buildImagePaths } from '@imp/daemon/src/storage/data-layout';
+import { buildImagePaths, buildImpPaths } from '@imp/daemon/src/storage/data-layout';
 import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildMockNewImp } from '@imp/daemon/src/test-utils/build-mock-new-imp';
+import { startStubInnerAgent } from '@imp/daemon/src/test-utils/start-stub-inner-agent';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { writeHostConfig } from '../host-store';
@@ -680,6 +681,39 @@ test('#ls lists the current host alone without --all', async () => {
     stderr: '',
     code: 0,
   });
+});
+
+test('#ls marks an awake imp whose inner container is down', async () => {
+  const ctx = await setupTest();
+  const box = await startImpdHost(ctx.stack, { env: {} });
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(box.db, image);
+
+  const imp = await box.client.imps.create({ name: 'web' });
+
+  // its agent answers, with the container down after three restarts
+  await startStubInnerAgent(buildImpPaths(box.dataDir, imp.id).vsockSocket, {
+    inner: { up: false, restarts: 3, last_error: 'start inner init: exit status 1' },
+    stack: ctx.stack,
+  });
+
+  await box.runIdleCheck();
+
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: box.rootToken } },
+  });
+
+  const listed = await runCli({ args: ['ls'], env: ctx.home });
+
+  const row = listed.stdout.split('\n').find((line) => line.startsWith('web '));
+
+  expect(listed.code).toBe(0);
+  expect(row).toInclude('container down');
 });
 
 test('#ls passes through as sent a host field that a newer impd adds to its imps', async () => {

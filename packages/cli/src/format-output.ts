@@ -164,6 +164,11 @@ function formatNote(imp: Imp): string {
     notes.push(`agent silent since ${imp.agentSilentSince.toISOString()}`);
   }
 
+  // the agent answers, but nothing of the imp's own runs (imp info has why)
+  if (imp.inner?.up === false) {
+    notes.push('container down');
+  }
+
   if (imp.public !== undefined) {
     const auth = imp.public.auth === 'none' ? '' : ` (${imp.public.auth})`;
 
@@ -219,6 +224,41 @@ export function formatExposeResult(result: ExposeResult): string {
 
 export function formatImp(imp: Imp): string {
   return formatImps([imp]);
+}
+
+// `imp info <name>`: one imp, a field a line, with its inner container's
+// state, restarts and last error
+export function formatImpInfo(imp: Imp): string {
+  const inner = imp.inner;
+  const note = formatNote(imp);
+
+  const lines = [
+    ['name', imp.name],
+    ['state', imp.state],
+    ['image', imp.image],
+    ['ip', imp.ip],
+    ['url', imp.url],
+    ['container', formatContainer(imp)],
+    ...(inner === undefined ? [] : [['restarts', String(inner.restarts)]]),
+    ...(inner?.lastError === undefined ? [] : [['last error', inner.lastError]]),
+    ...(note === '' ? [] : [['note', note]]),
+  ];
+
+  return lines.map(([label = '', value = '']) => `${label.padEnd(12)}${value}`).join('\n');
+}
+
+// the inner container, where the imp's processes run: known only while the
+// imp is awake and its agent answers
+function formatContainer(imp: Imp): string {
+  if (imp.state !== 'running') {
+    return 'not running';
+  }
+
+  if (imp.inner === undefined) {
+    return 'unknown';
+  }
+
+  return imp.inner.up ? 'up' : 'down';
 }
 
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {

@@ -29,6 +29,15 @@ export function buildImpNotes(imp: Imp, nowMs: number): ImpNote[] {
     });
   }
 
+  if (imp.inner?.up === false) {
+    const restarts =
+      imp.inner.restarts === 1 ? '1 restart' : `${String(imp.inner.restarts)} restarts`;
+
+    const why = imp.inner.lastError === undefined ? '' : `: ${imp.inner.lastError}`;
+
+    notes.push({ tone: 'error', text: `container down after ${restarts}${why}` });
+  }
+
   if (imp.coldBootReason !== undefined) {
     const text =
       imp.state === 'sleeping'

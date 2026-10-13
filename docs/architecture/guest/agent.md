@@ -53,9 +53,11 @@ The container exists so that user processes cannot take the agent down by accide
 init dies, every process in the container dies with it, and the agent starts the container again
 with a growing delay. TCP ports and files on the user disk stay. A container that keeps dying soon
 after its start is a bad start, and after several in a short window the agent gives up until the
-next boot, reports the container down in its ping, and fails each spawn with `INNER_DOWN`. After an
-`rm -rf /` the container stays up with nothing to run, and a checkpoint restore brings the files
-back.
+next boot, reports the container down in its ping, and fails each spawn with `INNER_DOWN`. impd
+keeps the latest ping's report in memory for each awake imp, from the ping it sends beside each idle
+check, so `imp ls` marks an imp whose container is down and `imp info <name>` shows its restarts and
+last error. After an `rm -rf /` the container stays up with nothing to run, and a checkpoint restore
+brings the files back.
 
 The agent reads and writes user files only by resolving each path inside the inner root, so a
 symlink planted in the user's files cannot lead out, and it opens only regular files without

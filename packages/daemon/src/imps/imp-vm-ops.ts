@@ -136,6 +136,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     if (change.state !== 'running') {
       context.sessions.forget(imp.id);
+      context.inners.forget(imp.id);
     }
 
     // the VM is gone, and the generations its sessions ran with it

@@ -50,6 +50,8 @@ import type { ActivityTracker } from './activity-tracker';
 import { createMergeFlags } from './check-merge-flag';
 import type { MergeFlags } from './check-merge-flag';
 import { growFilesystem } from './imp-disk';
+import { createInnerCache } from './inner-cache';
+import type { InnerCache } from './inner-cache';
 import { createResourceSampler } from './resource-sampler';
 import type { ResourceSampler } from './resource-sampler';
 
@@ -197,6 +199,7 @@ export interface ImpContext {
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
+  readonly inners: InnerCache;
   readonly sessionLogs: SessionLogs;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
@@ -278,6 +281,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     identity: deps.identity,
     tracker: createActivityTracker(),
     sessions: createSessionCache(),
+    inners: createInnerCache(),
     sessionLogs: createSessionLogs({
       limits: deps.config.sessionLog,
       requireRoom: diskBudget.requireRoom,

@@ -9,6 +9,7 @@ import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
 import { startStubAgent } from '../test-utils/start-stub-agent';
+import { startStubInnerAgent } from '../test-utils/start-stub-inner-agent';
 import { createImpTest, waitForOutcome } from './test-imps';
 import type { ImpTestOptions } from './test-imps';
 
@@ -800,4 +801,107 @@ test('it logs again for an imp made again under the id of one destroyed, as on a
   await waitFor(() => {
     expect(existsSync(`${paths.sessionLogsDir}/${'c'.repeat(32)}/meta.json`)).toBeTrue();
   });
+});
+
+test('it shows the inner container of an awake imp as its agent last reported it', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await startStubInnerAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    inner: { up: false, restarts: 3, last_error: 'start inner init: exit status 1' },
+    stack: ctx.stack,
+  });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  await ctx.imps.readActivity(record);
+
+  const shown = await ctx.imps.toApi(record);
+
+  expect(shown.inner).toStrictEqual({
+    up: false,
+    restarts: 3,
+    lastError: 'start inner init: exit status 1',
+  });
+});
+
+test('it shows no inner container once the agent stops answering', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubInnerAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    inner: { up: false, restarts: 3 },
+    stack: ctx.stack,
+  });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  await ctx.imps.readActivity(record);
+
+  agent.close();
+
+  const answer = await ctx.imps.readActivity(record);
+  const shown = await ctx.imps.toApi(record);
+
+  expect(answer).toBeNull();
+  expect(shown).not.toContainKey('inner');
+});
+
+test('it shows no inner container from before a sleep once the imp wakes', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubInnerAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    inner: { up: false, restarts: 3 },
+    stack: ctx.stack,
+  });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  await ctx.imps.readActivity(record);
+
+  // the sleep and the wake ask the agent nothing it answers
+  agent.close();
+
+  await ctx.imps.sleepImp('dev');
+
+  const awake = await ctx.imps.wakeImp('dev');
+
+  expect(awake.state).toBe('running');
+  expect(awake).not.toContainKey('inner');
+});
+
+test('it shows no inner container for an agent from before 0.14.0', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await startStubAgent(
+    buildImpPaths(ctx.dataDir, imp.id).vsockSocket,
+    (socket, request) => {
+      const isPing = JSON.stringify(decodeJsonPayload(request)).includes('"ping"');
+
+      const answer = isPing
+        ? { ok: true, version: '0.13.0' }
+        : { tcp_established: 0, exec_sessions: 0, load1: 0 };
+
+      socket.end(encodeJsonFrame(FRAME_TYPES.response, answer));
+    },
+    { stack: ctx.stack },
+  );
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  await ctx.imps.readActivity(record);
+
+  const shown = await ctx.imps.toApi(record);
+
+  expect(shown).not.toContainKey('inner');
 });

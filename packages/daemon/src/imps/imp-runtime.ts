@@ -6,7 +6,7 @@ import {
   hasFeature,
 } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
-import type { AgentActivity, AgentSession } from '../agent-client/agent-protocol';
+import type { AgentActivity, AgentInner, AgentSession } from '../agent-client/agent-protocol';
 import { sendActivity, sendPing } from '../agent-client/agent-requests';
 import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
@@ -169,6 +169,9 @@ interface ImpRuntimeParts {
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
 }
+
+// the idle loop's ping beside its activity call, as short as that call's
+const INNER_PING_TIMEOUT_MS = 1000;
 
 export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const context = parts.context;
@@ -513,14 +516,25 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       openStream(name, kind, (paths) => openAccept(paths.vsockSocket, listener, connection)),
 
     readActivity: async (imp) => {
+      const vsockPath = context.findPaths(imp.id).vsockSocket;
+
       try {
-        const activity = await sendActivity(context.findPaths(imp.id).vsockSocket);
+        // the ping for the inner container; an agent that answers the
+        // activity but not it leaves the container unknown
+        const [activity, ping] = await Promise.all([
+          sendActivity(vsockPath),
+          sendPing(vsockPath, INNER_PING_TIMEOUT_MS).catch(() => null),
+        ]);
 
         context.sessions.record(imp.id, toSeenSessions(activity.sessions, new Date()));
         context.sessionLogs.observe(findSessionLogImp(context.findPaths, imp), activity.sessions);
 
+        updateInner(context, imp.id, ping?.inner);
+
         return activity;
       } catch {
+        context.inners.forget(imp.id);
+
         return null;
       }
     },
@@ -782,6 +796,17 @@ async function buildNotAwakeError(context: ImpContext, imp: ImpRecord): Promise<
     message: error.message,
     data: { ...error.data, coldBoots },
   });
+}
+
+// an agent from before 0.14.0 reports no inner container
+function updateInner(context: ImpContext, impId: string, inner: AgentInner | undefined): void {
+  if (inner === undefined) {
+    context.inners.forget(impId);
+
+    return;
+  }
+
+  context.inners.record(impId, inner);
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

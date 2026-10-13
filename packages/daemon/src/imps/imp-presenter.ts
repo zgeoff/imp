@@ -161,6 +161,17 @@ export function createImpPresenter(
       api.agentSilentSince = silentSince;
     }
 
+    // forgotten once the agent stops answering or the VM stops running
+    const inner = imp.state === 'running' ? context.inners.read(imp.id) : undefined;
+
+    if (inner !== undefined) {
+      api.inner = {
+        up: inner.up,
+        restarts: inner.restarts,
+        ...(inner.last_error !== undefined && { lastError: inner.last_error }),
+      };
+    }
+
     const shown = { ...api, ...readBootStatus(imp, paths, context.identity) };
 
     presentedLeases.set(shown, leases);

@@ -1,14 +1,32 @@
 import type { SystemInfo } from '@imp/api';
 import { defineCommand } from '../define-command';
-import { formatBootStatus, formatHttps, formatJson } from '../format-output';
+import { formatBootStatus, formatHttps, formatImpInfo, formatJson } from '../format-output';
 import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
 export const infoCommand = defineCommand({
-  meta: { name: 'info', description: 'Show impd version, RAM budget and counts' },
-  args: { json: jsonArg },
+  meta: {
+    name: 'info',
+    description: 'Show impd version, RAM budget and counts, or one imp with its container',
+  },
+  args: {
+    name: { type: 'positional', description: 'an imp to show instead of impd', required: false },
+    json: jsonArg,
+  },
   run: (context) =>
     runAction(context.host, async (client) => {
+      const name = context.args.name;
+
+      if (name !== undefined) {
+        const imp = await client.imps.get({ name });
+
+        const shown = context.args.json === true ? formatJson(imp) : formatImpInfo(imp);
+
+        console.log(shown);
+
+        return;
+      }
+
       const info = await client.system.info();
 
       if (context.args.json === true) {
