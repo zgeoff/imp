@@ -257,23 +257,20 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
   };
 
   // A failed request may still have landed, its answer lost: the requested
-  // size says. One that did not gives back the reservation and the limit; an
-  // unreadable guest keeps the reservation until the governor lets it lapse.
+  // size says, and an unreadable guest counts as one where it did. One that
+  // did not gives back the reservation and the limit.
   const sendPlug = async (imp: ElasticImp, memory: Readonly<GuestMemory>, pluggedMib: number) => {
     try {
       await deps.vms.requestPluggedMib(imp.paths, pluggedMib);
     } catch (error) {
       const seen = await deps.vms.readGuestMemory(imp.paths).catch(() => null);
 
-      if (seen?.requestedMib === pluggedMib) {
+      if (seen === null || seen.requestedMib === pluggedMib) {
         return;
       }
 
-      if (seen !== null) {
-        deps.releaseGrow(imp.id);
-        deps.limit.setGuestMib(imp.id, imp.memoryMib + memory.pluggedMib);
-      }
-
+      deps.releaseGrow(imp.id);
+      deps.limit.setGuestMib(imp.id, imp.memoryMib + memory.pluggedMib);
       throw error;
     }
   };

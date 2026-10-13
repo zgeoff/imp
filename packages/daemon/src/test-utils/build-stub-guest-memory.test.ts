@@ -132,6 +132,32 @@ test('it applies a request whose answer it loses', async () => {
   expect(memory.requestedMib).toBe(256);
 });
 
+test('it rejects the set number of reads after a request as the runner does a timeout', async () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), { lostReadsAfterRequest: 1 });
+
+  await stub.vms.requestPluggedMib(buildImpPaths('/data', 'dev'), 256);
+
+  expect(stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'))).rejects.toThrowWithMessage(
+    Error,
+    'firecracker GET /hotplug/memory: no answer within 1000 ms',
+  );
+});
+
+test('it answers reads again once the lost ones are past', async () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), { lostReadsAfterRequest: 1 });
+
+  await stub.vms.requestPluggedMib(buildImpPaths('/data', 'dev'), 256);
+  await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev')).catch(() => {});
+
+  const memory = await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+
+  expect(memory.pluggedMib).toBe(256);
+});
+
 test('it records each requested size', async () => {
   const stub = buildStubGuestMemory();
 

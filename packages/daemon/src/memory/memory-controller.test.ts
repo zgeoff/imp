@@ -1267,6 +1267,37 @@ test('it grows a guest once after a plug that Firecracker applied but never answ
   expect(ctx.guests.requests).toStrictEqual([256]);
 });
 
+test('it grows a guest once after a lost plug answer when the guest cannot be read back', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    isAnswerLost: true,
+    lostReadsAfterRequest: 1,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+  expect(ctx.releases).toStrictEqual([]);
+});
+
 test('it gives back the reservation and the limit of a plug that Firecracker refused', async () => {
   const ctx = setupTest();
 

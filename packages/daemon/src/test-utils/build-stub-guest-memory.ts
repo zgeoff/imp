@@ -24,6 +24,10 @@ interface StubGuest {
   // Firecracker applies it after impd's wait for the answer ran out
   isAnswerLost: boolean;
 
+  // how many reads after each request get no answer, as from a VM whose API
+  // is still busy with that request
+  lostReadsAfterRequest: number;
+
   // the balloon statistics a read reports while they lag the guest, as
   // Firecracker's do between polls; null reports the guest as it is now
   staleStats: { readonly totalMib: number; readonly availableMib: number } | null;
@@ -39,6 +43,9 @@ export function buildStubGuestMemory() {
   const guests = new Map<string, StubGuest>();
 
   const requests: number[] = [];
+
+  // reads still to reject, per imp dir, since the last request
+  const lostReads = new Map<string, number>();
 
   const readGuest = (paths: Pick<ImpPaths, 'dir'>): Promise<StubGuest> => {
     const guest = guests.get(paths.dir);
@@ -62,6 +69,7 @@ export function buildStubGuestMemory() {
         isSlow: false,
         pluggedOnReads: [],
         isAnswerLost: false,
+        lostReadsAfterRequest: 0,
         staleStats: null,
         ...guest,
       };
@@ -73,6 +81,13 @@ export function buildStubGuestMemory() {
     vms: {
       readGuestMemory: async (paths: Pick<ImpPaths, 'dir'>): Promise<GuestMemory> => {
         const guest = await readGuest(paths);
+
+        const lost = lostReads.get(paths.dir) ?? 0;
+
+        if (lost > 0) {
+          lostReads.set(paths.dir, lost - 1);
+          throw new Error('firecracker GET /hotplug/memory: no answer within 1000 ms');
+        }
 
         const scriptedMib = guest.pluggedOnReads.shift();
 
@@ -108,6 +123,7 @@ export function buildStubGuestMemory() {
         guest.requestedMib = mib;
 
         requests.push(mib);
+        lostReads.set(paths.dir, guest.lostReadsAfterRequest);
 
         if (guest.isAnswerLost) {
           throw new Error('firecracker PATCH /hotplug/memory: no answer within 1000 ms');
