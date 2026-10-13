@@ -657,7 +657,10 @@ function collectValueChanges(
 
   const verb = comparison.direction === 'toServer' ? 'no longer accepts' : 'may now be';
 
+  // a listed value that the narrow side's other keywords refuse, as an
+  // intersection's merge may leave, was never taken
   return (readValues(narrow) ?? [])
+    .filter((value) => isValueAccepted(narrow, value, comparison.narrowRoot))
     .filter((value) => !isValueAccepted(wide, value, comparison.wideRoot))
     .map((value) => formatChange(path, `${verb} ${formatValue(value)}`));
 }

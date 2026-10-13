@@ -1337,6 +1337,36 @@ test('it finds nothing between an intersection of two recursive schemas and itse
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
+test('it passes an input enum value that the other part of the intersection refused', () => {
+  const base = {
+    procedures: {
+      'imps.tag': {
+        input: { allOf: [{ type: 'string', maxLength: 1 }, { enum: ['a', 'long'] }] },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.tag': {
+        input: { type: 'string', maxLength: 1 },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([]);
+});
+
 test('it passes a changed input property that a closed part of the intersection refused', () => {
   const base = {
     procedures: {
