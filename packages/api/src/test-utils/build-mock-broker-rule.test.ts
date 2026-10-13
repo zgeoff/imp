@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { BrokerRuleSchema } from '../secret-schema';
+import { BrokerRuleSchema } from '../schemas/secret-schema';
 import { buildMockBrokerRule } from './build-mock-broker-rule';
 
 test('it builds a default broker rule', () => {

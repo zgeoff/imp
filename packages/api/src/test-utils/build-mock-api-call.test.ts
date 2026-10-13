@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ApiCallSchema } from '../api-call-schema';
+import { ApiCallSchema } from '../schemas/api-call-schema';
 import { buildMockApiCall } from './build-mock-api-call';
 
 test('it builds a default api call', () => {

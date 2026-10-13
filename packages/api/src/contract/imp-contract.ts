@@ -1,22 +1,21 @@
 import { eventIterator, oc } from '@orpc/contract';
 import * as z from 'zod';
-import { ApiCallSchema } from './api-call-schema';
+import { DockerfilePathSchema, ImageOpEventSchema } from '../protocols/image-build-protocol';
+import { ApiCallSchema } from '../schemas/api-call-schema';
 import {
   BackupCheckSubsetSchema,
   BackupRestoreSchema,
   BackupRunSchema,
   BackupStatusSchema,
-} from './backup-schema';
-import { CheckpointSchema } from './checkpoint-schema';
-import { EgressPolicySchema } from './egress-schema';
-import { ImpEventSchema } from './event-schema';
-import { ExposeInputSchema, ExposeResultSchema } from './exposure-schema';
-import { DockerfilePathSchema, ImageOpEventSchema } from './image-build-protocol';
-import { ImageRefSchema } from './image-ref-schema';
-import { ImageSchema } from './image-schema';
-import { IMP_ERRORS } from './imp-errors';
-import { ForkResultSchema, ImpSchema } from './imp-schema';
-import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
+} from '../schemas/backup-schema';
+import { CheckpointSchema } from '../schemas/checkpoint-schema';
+import { EgressPolicySchema } from '../schemas/egress-schema';
+import { ImpEventSchema } from '../schemas/event-schema';
+import { ExposeInputSchema, ExposeResultSchema } from '../schemas/exposure-schema';
+import { ImageRefSchema } from '../schemas/image-ref-schema';
+import { ImageSchema } from '../schemas/image-schema';
+import { ForkResultSchema, ImpSchema } from '../schemas/imp-schema';
+import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from '../schemas/lease-schema';
 import {
   MovePlanSchema,
   MoveStatusSchema,
@@ -24,9 +23,9 @@ import {
   PeerUrlSchema,
   WarmHostSchema,
   WarmMoveSchema,
-} from './move-schema';
-import { NameSchema } from './name-schema';
-import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
+} from '../schemas/move-schema';
+import { NameSchema } from '../schemas/name-schema';
+import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from '../schemas/network-schema';
 import {
   ApprovalCodeSchema,
   GrantPatternSchema,
@@ -34,7 +33,7 @@ import {
   OAuthClientSchema,
   OAuthGrantSchema,
   RedirectUrisSchema,
-} from './oauth-schema';
+} from '../schemas/oauth-schema';
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
@@ -44,24 +43,24 @@ import {
   SecretNameSchema,
   SecretSchema,
   SecretValueSchema,
-} from './secret-schema';
+} from '../schemas/secret-schema';
 import {
   SERVICE_LOG_MAX_LINES,
   ServiceDefSchema,
   ServiceListSchema,
   ServiceLogSchema,
   ServiceNameSchema,
-} from './service-schema';
+} from '../schemas/service-schema';
 import {
   SessionLogDeleteInputSchema,
   SessionLogListInputSchema,
   SessionLogReadInputSchema,
   SessionLogReadSchema,
   SessionLogSchema,
-} from './session-log-schema';
-import { SessionNameSchema, SessionSchema } from './session-schema';
-import { DatabaseCopySchema, StorageGcSchema } from './storage-schema';
-import { SystemInfoSchema } from './system-info-schema';
+} from '../schemas/session-log-schema';
+import { SessionNameSchema, SessionSchema } from '../schemas/session-schema';
+import { DatabaseCopySchema, StorageGcSchema } from '../schemas/storage-schema';
+import { SystemInfoSchema } from '../schemas/system-info-schema';
 import {
   GrantableSchema,
   GrantableUpdateSchema,
@@ -72,7 +71,8 @@ import {
   SshKeySchema,
   SshPublicKeySchema,
   TokenSchema,
-} from './token-schema';
+} from '../schemas/token-schema';
+import { IMP_ERRORS } from './imp-errors';
 
 const base = oc.errors(IMP_ERRORS);
 const NameInputSchema = z.object({ name: NameSchema });

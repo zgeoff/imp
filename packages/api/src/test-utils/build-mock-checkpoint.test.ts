@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { CheckpointSchema } from '../checkpoint-schema';
+import { CheckpointSchema } from '../schemas/checkpoint-schema';
 import { buildMockCheckpoint } from './build-mock-checkpoint';
 
 test('it builds a default checkpoint', () => {

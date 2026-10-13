@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { SystemInfoSchema } from '../system-info-schema';
+import { SystemInfoSchema } from '../schemas/system-info-schema';
 import { buildMockSystemInfo } from './build-mock-system-info';
 
 test('it builds a default system info', () => {

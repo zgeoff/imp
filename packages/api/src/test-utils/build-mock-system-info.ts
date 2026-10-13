@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { SystemInfo } from '../system-info-schema';
+import type { SystemInfo } from '../schemas/system-info-schema';
 
 // the parts an override merges into their defaults; every other key replaces
 type MergedKey =

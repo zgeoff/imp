@@ -1,7 +1,7 @@
 import * as z from 'zod';
-import { NameSchema } from './name-schema';
-import { ResumeFromSchema, SessionOutputSchema } from './session-output-schema';
-import { SessionNameSchema } from './session-schema';
+import { NameSchema } from '../schemas/name-schema';
+import { ResumeFromSchema, SessionOutputSchema } from '../schemas/session-output-schema';
+import { SessionNameSchema } from '../schemas/session-schema';
 
 // `/exec` WebSocket: text messages are JSON control (the schemas below);
 // binary messages are one channel byte then raw bytes, never base64'd. The

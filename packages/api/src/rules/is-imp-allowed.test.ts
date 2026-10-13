@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { isImpAllowed } from './imp-patterns';
+import { isImpAllowed } from './is-imp-allowed';
 
 test.each([
   [null, 'anything', true],

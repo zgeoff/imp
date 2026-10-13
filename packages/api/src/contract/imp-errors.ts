@@ -1,9 +1,9 @@
 import * as z from 'zod';
+import { ImpStateSchema } from '../schemas/imp-schema';
+import { LeaseSummarySchema } from '../schemas/lease-schema';
+import { NameSchema } from '../schemas/name-schema';
+import { ColdBootsSchema, InvalidResumeDataSchema } from '../schemas/session-output-schema';
 import { defineErrors } from './define-errors';
-import { ImpStateSchema } from './imp-schema';
-import { LeaseSummarySchema } from './lease-schema';
-import { NameSchema } from './name-schema';
-import { ColdBootsSchema, InvalidResumeDataSchema } from './session-output-schema';
 
 const ResourceKindSchema = z.enum([
   'imp',

@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { Checkpoint } from '../checkpoint-schema';
+import type { Checkpoint } from '../schemas/checkpoint-schema';
 
 // A labelled checkpoint with its size, as a current impd lists it. The date
 // counts back from faker's reference date, which the preload fixes.

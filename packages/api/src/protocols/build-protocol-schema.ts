@@ -1,6 +1,8 @@
 import { getEventIteratorSchemaDetails, isContractProcedure } from '@orpc/contract';
 import type { AnySchema } from '@orpc/contract';
 import * as z from 'zod';
+import { impContract } from '../contract/imp-contract';
+import { IMP_ERRORS } from '../contract/imp-errors';
 import {
   EXEC_CHANNELS,
   EXEC_CLOSE_RESTARTING,
@@ -20,8 +22,6 @@ import {
   ImageBuildQuerySchema,
   ImageBuildResultSchema,
 } from './image-build-protocol';
-import { impContract } from './imp-contract';
-import { IMP_ERRORS } from './imp-errors';
 import {
   TUNNEL_CLOSE_LOST,
   TUNNEL_CLOSE_NORMAL,

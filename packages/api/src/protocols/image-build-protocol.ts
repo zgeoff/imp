@@ -1,6 +1,6 @@
 import * as z from 'zod';
-import { ImageSchema } from './image-schema';
-import { NameSchema } from './name-schema';
+import { ImageSchema } from '../schemas/image-schema';
+import { NameSchema } from '../schemas/name-schema';
 
 // `POST /images/build?name=<image>[&dockerfile=<path>]`: the body is the
 // build context as a tar, streamed; the answer is the image, or an error with

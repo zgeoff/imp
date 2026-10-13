@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { IMAGE_BUILD_PATH } from '../../../packages/api/src/image-build-protocol';
+import { IMAGE_BUILD_PATH } from '../../../packages/api/src/protocols/image-build-protocol';
 
 // A build context directory `<root>/<name>` holding this Dockerfile; returns
 // its path. Other files go in beside it.

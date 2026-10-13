@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { Imp } from '../imp-schema';
+import type { Imp } from '../schemas/imp-schema';
 
 type Nested<T> = T extends Date | readonly unknown[] | null ? T : T extends object ? Partial<T> : T;
 

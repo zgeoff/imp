@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { ImageBuildProgress } from '../image-build-protocol';
+import type { ImageBuildProgress } from '../protocols/image-build-protocol';
 
 // A progress event of a streamed image call: a pull that has run for some
 // time.

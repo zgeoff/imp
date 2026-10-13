@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { ApiCall } from '../api-call-schema';
+import type { ApiCall } from '../schemas/api-call-schema';
 
 // A named token's call on an imp that succeeded, with no detail. The date
 // counts back from faker's reference date, which the preload fixes.

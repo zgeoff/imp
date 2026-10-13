@@ -1,7 +1,7 @@
 import type {
   MessageDirection,
   ProtocolSchema,
-} from '../../packages/api/src/build-protocol-schema';
+} from '../../packages/api/src/protocols/build-protocol-schema';
 
 type Schema = boolean | Readonly<Record<string, unknown>>;
 
