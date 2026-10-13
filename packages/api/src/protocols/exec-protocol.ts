@@ -28,7 +28,7 @@ export const EXEC_CHANNELS = {
 
 export type ExecChannel = (typeof EXEC_CHANNELS)[keyof typeof EXEC_CHANNELS];
 
-export interface ExecFrame {
+interface ExecFrame {
   readonly channel: ExecChannel;
   readonly data: Uint8Array;
 }
@@ -37,7 +37,7 @@ const DimensionSchema = z.int().min(1).max(65_535);
 
 // A tool runs from the system drive as root, with argv as its arguments:
 // `tar` is `imp-agent tar`, the guest end of `imp cp`.
-export const EXEC_TOOLS = ['tar'] as const;
+const EXEC_TOOLS = ['tar'] as const;
 
 export type ExecTool = (typeof EXEC_TOOLS)[number];
 

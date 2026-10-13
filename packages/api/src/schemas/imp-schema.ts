@@ -156,8 +156,6 @@ export type Imp = z.infer<typeof ImpSchema>;
 // or the secret was gone (docs/guides/connectors.md#secrets-and-grants)
 export const GrantNotCopiedReasonSchema = z.enum(['not-grantable', 'clash', 'no-secret']);
 
-export type GrantNotCopiedReason = z.infer<typeof GrantNotCopiedReasonSchema>;
-
 export const GrantNotCopiedSchema = z.object({
   secret: SecretNameSchema,
   reason: GrantNotCopiedReasonSchema,

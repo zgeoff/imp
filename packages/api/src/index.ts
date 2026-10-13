@@ -1,28 +1,10 @@
-export { ApiActorSchema, ApiCallSchema } from './schemas/api-call-schema';
 export type { ApiActor, ApiCall } from './schemas/api-call-schema';
-
-export {
-  BackupPointSchema,
-  BackupRestoreSchema,
-  BackupRunSchema,
-  BackupStatusSchema,
-} from './schemas/backup-schema';
-
-export type { BackupPoint, BackupRestore, BackupRun, BackupStatus } from './schemas/backup-schema';
+export type { BackupRestore, BackupRun, BackupStatus } from './schemas/backup-schema';
 export { CheckpointSchema } from './schemas/checkpoint-schema';
-
-export {
-  LeaseLabelSchema,
-  LeaseOwnerSchema,
-  LeaseSchema,
-  LeaseSummarySchema,
-  LeaseTtlSchema,
-} from './schemas/lease-schema';
-
+export { LeaseLabelSchema } from './schemas/lease-schema';
 export type { Lease, LeaseSummary } from './schemas/lease-schema';
 
 export {
-  DockerfilePathSchema,
   IMAGE_BUILD_PATH,
   IMAGE_BUILD_STREAM_TYPE,
   ImageBuildErrorSchema,
@@ -52,7 +34,6 @@ export {
   EXEC_STDOUT_WINDOW_BYTES,
   EXEC_REQUIREMENTS,
   EXEC_TICKET_PARAM,
-  EXEC_TOOLS,
   ExecAttachMessageSchema,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
@@ -67,37 +48,16 @@ export type {
   DetachReason,
   ExecChannel,
   ExecClientMessage,
-  ExecFrame,
   ExecRequirement,
   ExecServerMessage,
   ExecTool,
 } from './protocols/exec-protocol';
 
-export {
-  BasicUserSchema,
-  ExposeInputSchema,
-  ExposeResultSchema,
-  ExposureSchema,
-  PublicAuthSchema,
-} from './schemas/exposure-schema';
-
-export type { ExposeResult, Exposure, PublicAuth } from './schemas/exposure-schema';
-
-export {
-  EgressAllowEntrySchema,
-  EgressModeSchema,
-  EgressPolicySchema,
-} from './schemas/egress-schema';
-
+export { PublicAuthSchema } from './schemas/exposure-schema';
+export type { ExposeResult, PublicAuth } from './schemas/exposure-schema';
+export { EgressModeSchema, EgressPolicySchema } from './schemas/egress-schema';
 export type { EgressMode, EgressPolicy } from './schemas/egress-schema';
-
-export {
-  EVENT_VERSION,
-  ImpChangeReasonSchema,
-  ImpEventDetailSchema,
-  ImpEventSchema,
-} from './schemas/event-schema';
-
+export { EVENT_VERSION, ImpEventSchema } from './schemas/event-schema';
 export type { ImpChangeReason, ImpEvent, ImpEventDetail } from './schemas/event-schema';
 
 export {
@@ -118,20 +78,7 @@ export type {
   TunnelServerMessage,
 } from './protocols/tunnel-protocol';
 
-export {
-  DatabaseCopySchema,
-  DroppedStorageSchema,
-  OrphanStorageSchema,
-  StorageGcSchema,
-} from './schemas/storage-schema';
-
-export type {
-  DatabaseCopy,
-  DroppedStorage,
-  OrphanStorage,
-  StorageGc,
-} from './schemas/storage-schema';
-
+export type { DroppedStorage, OrphanStorage, StorageGc } from './schemas/storage-schema';
 export { ImageRefSchema } from './schemas/image-ref-schema';
 export { ImageSchema, ImageSourceSchema } from './schemas/image-schema';
 export type { Image, ImageSource } from './schemas/image-schema';
@@ -146,20 +93,11 @@ export type { ImpContract } from './contract/imp-contract';
 export { IMP_ERRORS } from './contract/imp-errors';
 export type { ForbiddenReason } from './contract/imp-errors';
 export { isImpAllowed } from './rules/is-imp-allowed';
-
-export {
-  ForkResultSchema,
-  GrantNotCopiedReasonSchema,
-  GrantNotCopiedSchema,
-  ImpKindSchema,
-  ImpSchema,
-  ImpStateSchema,
-} from './schemas/imp-schema';
+export { ImpSchema, ImpStateSchema } from './schemas/imp-schema';
 
 export type {
   ForkResult,
   GrantNotCopied,
-  GrantNotCopiedReason,
   Imp,
   ImpKind,
   ImpState,
@@ -168,16 +106,7 @@ export type {
 
 export { CONSOLE_SHELL } from './protocols/login-shell';
 export { MCP_PATH } from './protocols/mcp-path';
-
-export {
-  MovePlanSchema,
-  MoveStateSchema,
-  MoveStatusSchema,
-  MoveTicketSchema,
-  WarmHostSchema,
-  WarmMoveSchema,
-  PeerUrlSchema,
-} from './schemas/move-schema';
+export { WarmHostSchema, WarmMoveSchema } from './schemas/move-schema';
 
 export type {
   MovePlan,
@@ -189,18 +118,13 @@ export type {
 } from './schemas/move-schema';
 
 export { NameSchema } from './schemas/name-schema';
-export { NetworkJoinSchema, NetworkSchema } from './schemas/network-schema';
 export type { Network, NetworkJoin } from './schemas/network-schema';
 
 export {
-  AuditEntrySchema,
-  BrokerHostSchema,
   BrokerRuleSchema,
   OAuthConfigSchema,
   SecretKindSchema,
   SecretNameSchema,
-  SecretSchema,
-  SecretValueSchema,
 } from './schemas/secret-schema';
 
 export type {
@@ -215,36 +139,18 @@ export type {
 export {
   SERVICE_LOG_MAX_LINES,
   SERVICE_NAME_PATTERN,
-  ServiceDefSchema,
-  ServiceListSchema,
-  ServiceLogSchema,
-  ServiceNameSchema,
   ServiceRestartSchema,
-  ServiceSchema,
-  ServiceStateSchema,
 } from './schemas/service-schema';
 
 export type { Service, ServiceDef, ServiceList, ServiceLog } from './schemas/service-schema';
+export { SESSION_NAME_PATTERN, SessionNameSchema } from './schemas/session-schema';
 
 export {
-  SESSION_NAME_PATTERN,
-  SessionExitSchema,
-  SessionNameSchema,
-  SessionSchema,
-} from './schemas/session-schema';
-
-export {
-  COLD_BOOT_CAUSES,
   ColdBootCauseSchema,
-  ColdBootSchema,
-  ColdBootsSchema,
   ExecutionGenerationSchema,
   InvalidResumeDataSchema,
   NoSessionDataSchema,
   PreviousGenerationSchema,
-  ResumeFromSchema,
-  ResumeResultSchema,
-  SessionOutputSchema,
 } from './schemas/session-output-schema';
 
 export type {
@@ -259,41 +165,12 @@ export type {
 } from './schemas/session-output-schema';
 
 export type { Session } from './schemas/session-schema';
-
-export {
-  SESSION_LOG_READ_MAX_BYTES,
-  SessionLogDeleteInputSchema,
-  SessionLogListInputSchema,
-  SessionLogReadInputSchema,
-  SessionLogReadSchema,
-  SessionLogSchema,
-} from './schemas/session-log-schema';
-
+export { SESSION_LOG_READ_MAX_BYTES } from './schemas/session-log-schema';
 export type { SessionLog, SessionLogRead } from './schemas/session-log-schema';
 export { SYSTEM_FEATURES, SystemInfoSchema } from './schemas/system-info-schema';
-
-export {
-  IdentitySchema,
-  ImpPatternSchema,
-  MAX_SSH_KEYS,
-  ScopeSchema,
-  SshKeySchema,
-  SshPublicKeySchema,
-  TokenSchema,
-} from './schemas/token-schema';
-
+export { ImpPatternSchema, MAX_SSH_KEYS, ScopeSchema, TokenSchema } from './schemas/token-schema';
 export type { Identity, Scope, SshKey, Token } from './schemas/token-schema';
-
-export {
-  ApprovalCodeSchema,
-  GrantPatternSchema,
-  OAuthApprovalSchema,
-  OAuthClientSchema,
-  OAuthGrantSchema,
-  RedirectUriSchema,
-  RedirectUrisSchema,
-} from './schemas/oauth-schema';
-
+export { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema } from './schemas/oauth-schema';
 export type { OAuthApproval, OAuthClient, OAuthGrant } from './schemas/oauth-schema';
-export type { SystemFeatures, SystemInfo } from './schemas/system-info-schema';
+export type { SystemInfo } from './schemas/system-info-schema';
 export { hasScope } from './rules/has-scope';

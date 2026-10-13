@@ -205,7 +205,7 @@ export const SystemInfoSchema = z.object({
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;
 
-export type SystemFeatures = z.infer<typeof SystemFeaturesSchema>;
+type SystemFeatures = z.infer<typeof SystemFeaturesSchema>;
 
 // every feature SystemFeaturesSchema names, each on: what the current impd
 // says it can do, so adding a feature means editing only the schema
