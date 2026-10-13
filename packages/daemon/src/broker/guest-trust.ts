@@ -5,6 +5,7 @@ import type { StartTimer } from '../process/clock';
 import { buildExitError } from '../process/run-command';
 import { startRealTimer } from '../process/start-real-timer';
 import { readErrorMessage } from '../read-error-message';
+import installScript from './install-broker-ca.sh' with { type: 'text' };
 
 // How a guest trusts the broker: an exec builds the CA bundle in the guest
 // once per boot, before the first exec that gets the broker's variables.
@@ -67,36 +68,14 @@ export function buildInstallInput(caPem: string): string {
   return `${caPem.trim()}\n${ROOTS_MARKER}\n${rootCertificates.join('\n')}\n`;
 }
 
-// The script that builds the bundle in the guest: the guest's own roots
-// (CAs it added included) plus the broker CA. It leaves the file alone when
-// it already holds that, so a wake does not write to the disk.
-export function buildInstallScript(
+// The install's argv: install-broker-ca.sh, which builds the bundle in the
+// guest from the guest's own roots (CAs it added included) and the broker CA.
+// Each path goes to the script as an argument, never into its text.
+export function buildInstallArgv(
   target = GUEST_BUNDLE_PATH,
   rootPaths: readonly string[] = GUEST_ROOT_PATHS,
-): string {
-  const input = `${target}.in`;
-  const next = `${target}.tmp`;
-
-  return [
-    'set -e',
-    `mkdir -p "$(dirname '${target}')"`,
-    `cat > '${input}'`,
-    'roots=',
-    `for f in ${rootPaths.map((path) => `'${path}'`).join(' ')}; do`,
-    '  if [ -s "$f" ]; then roots=$f; break; fi',
-    'done',
-    '{',
-    `  if [ -n "$roots" ]; then cat "$roots"; else sed '1,/^${ROOTS_MARKER}$/d' '${input}'; fi`,
-    '  echo',
-    `  sed '/^${ROOTS_MARKER}$/,$d' '${input}'`,
-    `} > '${next}'`,
-    `rm -f '${input}'`,
-    `if [ -f '${target}' ] && [ "$(cat '${next}')" = "$(cat '${target}')" ]; then`,
-    `  rm -f '${next}'`,
-    'else',
-    `  mv '${next}' '${target}'`,
-    'fi',
-  ].join('\n');
+): string[] {
+  return ['/bin/sh', '-c', installScript, 'install-broker-ca', target, ROOTS_MARKER, ...rootPaths];
 }
 
 export interface TrustedImp {
@@ -258,7 +237,7 @@ export async function runBundleInstall(
   const startTimer = options.startTimer ?? startRealTimer;
 
   const stream = await openExecStream(vsockPath, {
-    argv: ['/bin/sh', '-c', buildInstallScript()],
+    argv: buildInstallArgv(),
     tty: false,
     user: '0',
   });

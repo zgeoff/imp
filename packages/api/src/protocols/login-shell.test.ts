@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runShellcheck } from '@imp/test-utils/run-shellcheck';
 import { CONSOLE_SHELL, buildConsoleShell } from './login-shell';
 
 function setupTest() {
@@ -134,3 +135,10 @@ test('#CONSOLE_SHELL reads /etc/passwd and falls back to bash, then sh', () => {
     ].join('\n'),
   );
 });
+
+test.skipIf(Bun.which('shellcheck') === null)(
+  '#CONSOLE_SHELL passes shellcheck as POSIX sh',
+  () => {
+    expect(runShellcheck(CONSOLE_SHELL, 'sh')).toStrictEqual({ exitCode: 0, output: '' });
+  },
+);

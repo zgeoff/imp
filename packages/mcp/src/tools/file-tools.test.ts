@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runShellcheck } from '@imp/test-utils/run-shellcheck';
 import { WRITE_SCRIPT } from './file-tools';
 
 // The write script runs under this host's /bin/sh, as a guest's runs it; the
@@ -182,4 +183,8 @@ test('it reads all the content of a write it refuses for a symlink it cannot res
     code: 1,
     stderr: `cannot resolve the symlink ${link}\n`,
   });
+});
+
+test.skipIf(Bun.which('shellcheck') === null)('it passes shellcheck as POSIX sh', () => {
+  expect(runShellcheck(WRITE_SCRIPT, 'sh')).toStrictEqual({ exitCode: 0, output: '' });
 });
