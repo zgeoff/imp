@@ -1,3 +1,4 @@
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createStubBin } from './create-stub-bin';
 import type { StubBin } from './create-stub-bin';
@@ -16,61 +17,24 @@ export interface ZpoolStubOptions {
   readonly queries?: 'fail';
 }
 
-// A zpool that keeps its pools as `<name> <vdev>` lines in <dir>/pools, so
-// list, status -P and destroy see what create made. It logs each call to the
-// shared stub log, like createStubBin.
+// A zpool (run-stub-zpool.sh) that keeps its pools in <dir>/pools, so list,
+// status -P and destroy see what create made; options go in files beside it.
+// It logs each call to the shared stub log, like createStubBin.
 export function createStubZpool(stubs: string, options: Readonly<ZpoolStubOptions> = {}): StubBin {
-  let onCreate = ':';
+  const held = typeof options.create === 'object' ? options.create : undefined;
+  let create = options.create === 'fails' ? 'fails' : '';
 
-  if (options.create === 'fails') {
-    onCreate = 'echo "pool already exists" >&2; exit 1';
-  } else if (options.create !== undefined) {
-    onCreate = String.raw`: >'${options.create.startedMarker}'
-    held=0
-    while [ ! -e '${options.create.release}' ]; do
-      [ "$held" -lt 600 ] || { echo "no release within 30 s" >&2; exit 1; }
-      held=$((held + 1))
-      sleep 0.05
-    done`;
+  if (held !== undefined) {
+    create = 'held';
   }
 
-  const onDestroy = { fails: 'exit 1', ignored: 'exit 0', none: ':' }[options.destroy ?? 'none'];
-  const onQuery = options.queries === 'fail' ? '[ ! -s "$pools" ] || exit 1' : ':';
+  mkdirSync(stubs, { recursive: true });
+  writeFileSync(join(stubs, 'zpool.create'), `${create}\n`);
+  writeFileSync(join(stubs, 'zpool.create-started'), `${held?.startedMarker ?? ''}\n`);
+  writeFileSync(join(stubs, 'zpool.create-release'), `${held?.release ?? ''}\n`);
+  writeFileSync(join(stubs, 'zpool.destroy'), `${options.destroy ?? ''}\n`);
+  writeFileSync(join(stubs, 'zpool.queries'), `${options.queries ?? ''}\n`);
+  copyFileSync(join(import.meta.dir, 'run-stub-zpool.sh'), join(stubs, 'zpool.sh'));
 
-  return createStubBin(
-    stubs,
-    'zpool',
-    String.raw`pools='${join(stubs, 'pools')}'
-touch "$pools"
-# the last two arguments: a create's pool and vdev, a destroy's pool
-for arg; do prev=$last; last=$arg; done
-case "$1" in
-  list)
-    if [ "$2" = -H ]; then
-      ${onQuery}
-      while read -r pool _; do printf '%s\n' "$pool"; done <"$pools"
-    else
-      grep -q "^$2 " "$pools"
-    fi ;;
-  create)
-    ${onCreate}
-    printf '%s %s\n' "$prev" "$last" >>"$pools" ;;
-  status)
-    ${onQuery}
-    want=$3
-    if [ -n "$want" ] && ! grep -q "^$want " "$pools"; then
-      echo "cannot open '$want': no such pool" >&2
-      exit 1
-    fi
-    while read -r pool file; do
-      if [ -z "$want" ] || [ "$pool" = "$want" ]; then
-        printf '  pool: %s\n\t  %s  ONLINE  0 0 0\n' "$pool" "$file"
-      fi
-    done <"$pools" ;;
-  destroy)
-    ${onDestroy}
-    grep -v "^$last " "$pools" >"$pools.next" || true
-    mv "$pools.next" "$pools" ;;
-esac`,
-  );
+  return createStubBin(stubs, 'zpool', '. "$(dirname "$STUB_CALLS")/zpool.sh"');
 }

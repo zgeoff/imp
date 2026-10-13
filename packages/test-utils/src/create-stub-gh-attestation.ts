@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface StubGhAttestationOptions {
@@ -17,26 +17,19 @@ export interface StubGhAttestation {
   readonly readCalls: () => readonly string[];
 }
 
-// A `gh` for an install script's provenance check: `auth status` and
-// `attestation …` succeed or fail as configured, every other command
-// succeeds, and each call's arguments are recorded beside the script.
+// A `gh` for an install script's provenance check (run-stub-gh-attestation.sh):
+// `auth status` and `attestation …` succeed or fail as configured, every other
+// command succeeds, and each call's arguments are recorded beside the script.
 export function createStubGhAttestation(options: StubGhAttestationOptions): StubGhAttestation {
   const log = join(options.bin, 'gh.calls');
+  const authStatus = options.loggedIn ? '0\n' : '1\n';
+  const attestation = options.verifies ? '0\n' : '1\n';
 
   writeFileSync(log, '');
-
-  writeFileSync(
-    join(options.bin, 'gh'),
-    [
-      '#!/bin/sh',
-      `echo "$*" >> '${log}'`,
-      `[ "$1 $2" = "auth status" ] && exit ${options.loggedIn ? '0' : '1'}`,
-      `[ "$1" = attestation ] && exit ${options.verifies ? '0' : '1'}`,
-      'exit 0',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
+  writeFileSync(join(options.bin, 'gh.auth-status'), authStatus);
+  writeFileSync(join(options.bin, 'gh.attestation'), attestation);
+  copyFileSync(join(import.meta.dir, 'run-stub-gh-attestation.sh'), join(options.bin, 'gh'));
+  chmodSync(join(options.bin, 'gh'), 0o755);
 
   return {
     readCalls: () =>

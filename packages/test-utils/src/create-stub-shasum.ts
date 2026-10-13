@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface StubShasumOptions {
@@ -11,9 +11,9 @@ export interface StubShasum {
   readonly readCalls: () => readonly string[];
 }
 
-// macOS's `shasum -a 256 <file>`, answered by this machine's sha256sum by its
-// full path, for a PATH without sha256sum; each call's arguments are recorded
-// beside the script.
+// macOS's `shasum -a 256 <file>` (run-stub-shasum.sh), answered by this
+// machine's sha256sum by its full path, for a PATH without sha256sum; each
+// call's arguments are recorded beside the script.
 export function createStubShasum(options: StubShasumOptions): StubShasum {
   const sha256sum = Bun.which('sha256sum', { PATH: process.env['PATH'] ?? '' });
 
@@ -24,18 +24,9 @@ export function createStubShasum(options: StubShasumOptions): StubShasum {
   const log = join(options.bin, 'shasum.calls');
 
   writeFileSync(log, '');
-
-  writeFileSync(
-    join(options.bin, 'shasum'),
-    [
-      '#!/bin/sh',
-      `echo "$*" >> '${log}'`,
-      '[ "$1 $2" = "-a 256" ] || exit 1',
-      `exec '${sha256sum}' "$3"`,
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
+  writeFileSync(join(options.bin, 'shasum.sha256sum'), `${sha256sum}\n`);
+  copyFileSync(join(import.meta.dir, 'run-stub-shasum.sh'), join(options.bin, 'shasum'));
+  chmodSync(join(options.bin, 'shasum'), 0o755);
 
   return {
     readCalls: () =>
