@@ -312,7 +312,9 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         };
       }
 
-      // unplugging idle elastic guests costs no imp its memory: it comes first
+      // Unplugging idle elastic guests costs no imp its memory: it comes
+      // first. Usage is measured again even when it reports nothing freed, as
+      // an unplug it did not ask for may have ended meanwhile.
       if (!reclaim.isDone && deps.reclaim !== undefined) {
         reclaim.isDone = true;
 
@@ -320,8 +322,9 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
         if (freedMib > 0) {
           deps.log(`impd: governor: unplugged ${String(freedMib)} MiB from idle imps (${reason})`);
-          continue;
         }
+
+        continue;
       }
 
       const time = now();

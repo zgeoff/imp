@@ -590,6 +590,29 @@ test('it counts a grow as reserved until the grower measures it', async () => {
   expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 260, headroomMib: 0 });
 });
 
+test('it sleeps no imp when an unplug the reclaim did not count made room', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['old', 'x'],
+    awake: [{ id: 'old', rssMib: 700 }],
+  });
+
+  // the guest's earlier unplug ends while the reclaim runs, which counts none of it
+  const governor = createRamGovernor({
+    ...host.deps,
+    log: () => {},
+    reclaim: () => {
+      host.applyChange({ kind: 'rss', id: 'old', mib: 300 }, governor);
+
+      return Promise.resolve(0);
+    },
+  });
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 500, memoryMib: 600 });
+
+  expect(host.sleepCalls).toStrictEqual([]);
+});
+
 test('it puts back the wake reservation that a released grow counted in', async () => {
   const host = buildStubGovernedHost({
     budgetMib: 2000,
