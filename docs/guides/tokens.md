@@ -43,7 +43,8 @@ such as `dev-*`. Such a token:
   ([outer exec](../architecture/guest/agent.md#execs-and-services)). A grant hands a host secret to
   an imp, so a `dev-*` token could otherwise grant itself any secret; a network reaches every imp on
   it. It cannot pass `--net` to `imp new` either. A token made with a list of secrets may grant
-  those ([granting secrets](#granting-secrets)), and no others.
+  those ([granting secrets](#granting-secrets)), and no others. A token given an image ref prefix
+  may add images under its own names ([adding images](#adding-images)), and build none.
 
 A token with patterns still sees host-wide totals. `system.info` shows the RAM budget, use and
 reserve, the RAM that sleeping imps hold (`ramSleepingMib`), the count of imps, awake and in all,
@@ -63,6 +64,7 @@ imp token new ci --scope exec --imps 'dev-*'   # prints the secret once, on stdo
 imp token ls                                   # names, scopes, imps, grantable secrets, SSH keys
 imp token whoami                               # who impd takes this CLI for
 imp token set agent --grantable 'gh,npm'       # change the secrets it may grant
+imp token set nixie --image-ref-prefix ghcr.io/zgeoff/nixie-   # let it add its images
 imp token rm ci
 ```
 
@@ -143,10 +145,11 @@ imp token set agent --grantable ''              # no list
 ```
 
 The API call is `tokens.update` with `name` and `grantable`: the whole new list, 0 to 32 secret
-names, no two the same. It answers with the token, never its secret. It refuses what `tokens.create`
-refuses: `BAD_REQUEST` for a non-empty list on a token without `manage` or with no patterns, and
-`NOT_FOUND` for a missing token or secret. It needs the same caller as a host-wide grant, so a token
-with patterns gets `FORBIDDEN`, whatever its own list.
+names, no two the same. The same call takes `imageRefPrefix` ([adding images](#adding-images)), and
+a call with only one of the two leaves the other as it is. It answers with the token, never its
+secret. It refuses what `tokens.create` refuses: `BAD_REQUEST` for a non-empty list on a token
+without `manage` or with no patterns, and `NOT_FOUND` for a missing token or secret. It needs the
+same caller as a host-wide grant, so a token with patterns gets `FORBIDDEN`, whatever its own list.
 
 Each secret on the new list takes its generation now, as on a new token. A secret the list already
 named but that a rebind changed since is covered again.
@@ -162,6 +165,41 @@ checked before the change and run after it cannot use a secret taken off. The au
 
 An impd older than 0.34.0 has no `tokens.update`. `imp token set` checks that `system.info()` has
 `features.tokenUpdate` first.
+
+## Adding images
+
+A `manage` token with imp patterns can be given an image ref prefix. It may then add images from a
+registry itself, so a service that runs its guests on impd adds its released images at start,
+without the host owner adding each one first:
+
+```sh
+imp token new nixie --scope manage --imps 'nixie-*' --image-ref-prefix ghcr.io/zgeoff/nixie-
+imp token set nixie --image-ref-prefix ''   # take the permission away
+```
+
+The token adds an image only when all of these hold, and each other add is `FORBIDDEN`:
+
+- The image's name is within its patterns, so `nixie-sandbox` and never `base`. The call must name
+  the image.
+- The ref starts with the prefix, so `ghcr.io/zgeoff/nixie-sandbox@sha256:<digest>` and never an
+  image from another repository or registry.
+- The ref is pinned by its `sha256` digest. A tag can move to other content after the token's owner
+  checked it, and a digest cannot.
+- The add is from a ref. A template from an imp's disk, a build and `images.delete` stay host-wide.
+
+The prefix is a registry host with a dot, a port or `localhost`, then the start of a path. A bare
+path such as `zgeoff/nixie-` fails with `BAD_REQUEST`, because docker would read it as a repository
+on Docker Hub. The prefix is the host owner's choice when they make the token or change it with
+`imp token set`, never the token's: a token with patterns cannot call `tokens.update`. A prefix on a
+token without `manage`, or with no patterns, fails with `BAD_REQUEST`. `imp token ls` and
+`imp token whoami` show it. A name the token adds again points at the new image, as for any add, and
+imps made before keep theirs.
+
+The API takes `imageRefPrefix` on `tokens.create` and `tokens.update`, where `null` takes it away.
+`images.add` and `images.addStream` from the token run the checks above before they pull anything.
+An OAuth grant never adds an image, whatever its token may. An impd older than this feature drops
+`imageRefPrefix` unread, so `imp token new` and `imp token set` check that `system.info()` has
+`features.tokenImageAdd` first.
 
 ## Each way in
 

@@ -557,6 +557,7 @@ test('it names the list to the token that holds it', async () => {
     scope: 'manage',
     imps: ['dev-*'],
     grantable: ['gh', 'npm'],
+    imageRefPrefix: null,
   });
 });
 

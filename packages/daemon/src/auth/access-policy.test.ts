@@ -107,6 +107,76 @@ test('#checkAccess refuses a caller with patterns an imp outside them', async ()
   });
 });
 
+test('#checkAccess lets a caller with an image ref prefix add a pinned ref under it', async () => {
+  const refusal = await checkAccess(
+    findAccess('images.add'),
+    buildMockCaller({ imps: ['nixie-*'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' }),
+    { ref: `ghcr.io/zgeoff/nixie-x@sha256:${'e'.repeat(64)}`, name: 'nixie-x' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toBeNull();
+});
+
+test('#checkAccess lets a host-wide caller add a tag-only ref from any registry', async () => {
+  const refusal = await checkAccess(
+    findAccess('images.add'),
+    buildMockCaller(),
+    { ref: 'docker.io/library/busybox:1.37', name: 'box' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toBeNull();
+});
+
+test('#checkAccess refuses a ref with a digest of another kind than sha256', async () => {
+  const caller = buildMockCaller({ imps: ['nixie-*'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' });
+
+  const refusal = await checkAccess(
+    findAccess('images.addStream'),
+    caller,
+    { ref: `ghcr.io/zgeoff/nixie-x@sha512:${'e'.repeat(128)}`, name: 'nixie-x' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may add only an image ref pinned by digest, such as ghcr.io/zgeoff/nixie-app@sha256:…`,
+    reason: null,
+  });
+});
+
+test('#checkAccess refuses a ref under the prefix that is no image ref', async () => {
+  const caller = buildMockCaller({ imps: ['nixie-*'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' });
+
+  const refusal = await checkAccess(
+    findAccess('images.add'),
+    caller,
+    { ref: `ghcr.io/zgeoff/nixie-@@sha256:${'e'.repeat(64)}`, name: 'nixie-x' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} may add only an image from a valid ref`,
+    reason: null,
+  });
+});
+
+test('#checkAccess refuses a caller with an image ref prefix a build', async () => {
+  const caller = buildMockCaller({ imps: ['nixie-*'], imageRefPrefix: 'ghcr.io/zgeoff/nixie-' });
+
+  const refusal = await checkAccess(
+    findAccess('images.build'),
+    caller,
+    { contextDir: '/srv/nixie', name: 'nixie-x' },
+    () => Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} is limited to some imps; this call is host-wide`,
+    reason: null,
+  });
+});
+
 test('#checkAccess makes a caller with patterns name the imp it creates', async () => {
   const caller = buildMockCaller({ imps: ['dev-*'] });
 

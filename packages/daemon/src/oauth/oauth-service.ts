@@ -972,6 +972,9 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
         // the approver's own list: a grant then meets every refusal its
         // token would, such as no fork; grants of secrets stay refused
         grantable: approver.grantable,
+
+        // an MCP client adds no image, whatever its token may
+        imageRefPrefix: null,
         tokenId: approver.tokenId,
         grantId: grant.id,
         expiresAt: approver.expiresAt,

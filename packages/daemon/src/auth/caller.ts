@@ -19,6 +19,11 @@ export interface Caller {
   // a token. Non-empty marks a token able to grant.
   readonly grantable: readonly GrantableSecret[];
 
+  // the start every image ref it adds must have, under its imp patterns
+  // (docs/guides/tokens.md#adding-images); null for a caller that adds no
+  // image that way, which a host-wide caller does not need
+  readonly imageRefPrefix: string | null;
+
   // the token behind it, so deleting the token ends what it opened; null
   // for an ssh key or a tailnet identity
   readonly tokenId: string | null;
@@ -55,6 +60,7 @@ export function toIdentity(caller: Readonly<Caller>): Identity {
     scope: caller.scope,
     imps: caller.imps,
     grantable: caller.grantable.map((secret) => secret.name),
+    imageRefPrefix: caller.imageRefPrefix,
   };
 }
 

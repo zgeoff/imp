@@ -477,22 +477,30 @@ test('#formatTokens lists tokens with their scope and imps, and * for every imp'
       imps: ['dev-*', 'ci-*'],
       sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
       grantable: ['gh', 'npm'],
+      imageRefPrefix: 'ghcr.io/org/ci-',
       createdAt,
     }),
-    buildMockToken({ name: 'ops', scope: 'manage', imps: null, grantable: [], createdAt }),
+    buildMockToken({
+      name: 'ops',
+      scope: 'manage',
+      imps: null,
+      grantable: [],
+      imageRefPrefix: null,
+      createdAt,
+    }),
   ]);
 
   expect(text.split('\n').map((line) => line.trimEnd())).toStrictEqual([
-    'NAME  SCOPE   IMPS        GRANTABLE  SSH KEYS  CREATED',
-    'ci    manage  dev-*,ci-*  gh,npm     1         2026-10-02T00:00:00.000Z',
-    'ops   manage  *           -          0         2026-10-02T00:00:00.000Z',
+    'NAME  SCOPE   IMPS        GRANTABLE  IMAGE REF PREFIX  SSH KEYS  CREATED',
+    'ci    manage  dev-*,ci-*  gh,npm     ghcr.io/org/ci-   1         2026-10-02T00:00:00.000Z',
+    'ops   manage  *           -          -                 0         2026-10-02T00:00:00.000Z',
   ]);
 });
 
-test('#formatTokens lists a token from an impd that sends no grantable list', () => {
+test('#formatTokens lists a token from an impd that sends no grantable list or prefix', () => {
   const createdAt = new Date('2026-10-02T00:00:00Z');
 
-  const { grantable, ...older } = buildMockToken({
+  const { grantable, imageRefPrefix, ...older } = buildMockToken({
     name: 'ci',
     scope: 'exec',
     imps: null,
@@ -503,8 +511,8 @@ test('#formatTokens lists a token from an impd that sends no grantable list', ()
   const text = formatTokens([older]);
 
   expect(text.split('\n').map((line) => line.trimEnd())).toStrictEqual([
-    'NAME  SCOPE  IMPS  GRANTABLE  SSH KEYS  CREATED',
-    'ci    exec   *     -          0         2026-10-02T00:00:00.000Z',
+    'NAME  SCOPE  IMPS  GRANTABLE  IMAGE REF PREFIX  SSH KEYS  CREATED',
+    'ci    exec   *     -          -                 0         2026-10-02T00:00:00.000Z',
   ]);
 });
 
@@ -546,6 +554,21 @@ test('#formatIdentity names the imp patterns and the secrets the caller may gran
   });
 
   expect(formatIdentity(identity)).toBe('token agent: manage on agent-*; may grant gh,npm');
+});
+
+test('#formatIdentity names the image ref prefix the caller may add images from', () => {
+  const identity = buildMockIdentity({
+    kind: 'token',
+    name: 'nixie',
+    scope: 'manage',
+    imps: ['nixie-*'],
+    grantable: [],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+  });
+
+  expect(formatIdentity(identity)).toBe(
+    'token nixie: manage on nixie-*; may add images from ghcr.io/zgeoff/nixie-',
+  );
 });
 
 test('#formatIdentity names a caller from an impd that sends no grantable list', () => {

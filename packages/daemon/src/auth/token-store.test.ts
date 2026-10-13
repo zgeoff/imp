@@ -50,6 +50,7 @@ test('#authenticate takes the root token as root, with every scope and every imp
     scope: 'manage',
     imps: null,
     grantable: [],
+    imageRefPrefix: null,
     tokenId: ROOT_TOKEN_ID,
     grantId: null,
     expiresAt: null,
@@ -96,6 +97,7 @@ test('#create gives the token and its secret once, as imp_<id>.<secret>', async 
       scope: 'exec',
       imps: ['dev-*'],
       grantable: [],
+      imageRefPrefix: null,
       sshKeys: [],
       createdAt: new Date(1_800_000_000_000),
     },
@@ -120,6 +122,7 @@ test('#authenticate takes a made token’s secret after a restart', async () => 
     scope: 'exec',
     imps: ['dev-*'],
     grantable: [],
+    imageRefPrefix: null,
     tokenId,
     grantId: null,
     expiresAt: null,
@@ -143,6 +146,7 @@ test('#list lists a made token after a restart', async () => {
       imps: ['dev-*'],
       sshKeys: [],
       grantable: [],
+      imageRefPrefix: null,
       createdAt: new Date(1_800_000_000_000),
     },
   ]);
@@ -382,6 +386,7 @@ test('#findSshKey logs a bound key in as its token, after a restart', async () =
       scope: 'exec',
       imps: ['dev-*'],
       grantable: [],
+      imageRefPrefix: null,
       tokenId,
       grantId: null,
       expiresAt: null,
@@ -424,6 +429,7 @@ test('#load skips a stored key that no longer parses, and keeps its token', asyn
       scope: record.scope,
       imps: record.imps,
       grantable: [],
+      imageRefPrefix: null,
       sshKeys: [],
       createdAt: record.createdAt,
     },
@@ -770,7 +776,7 @@ test('#loadTokenStore offers no change to a token’s scope or imps in place', a
   expect(Object.keys(tokens)).toIncludeSameMembers([
     'list',
     'create',
-    'updateGrantable',
+    'update',
     'remove',
     'addKey',
     'removeKey',
@@ -829,6 +835,64 @@ test('#authenticate gives a made token’s grantable list, after a restart', asy
   expect(restarted.authenticate(made.secret)?.grantable).toStrictEqual([
     { name: 'gh', generation: gh.generation },
   ]);
+});
+
+test('#authenticate gives a made token’s image ref prefix, after a restart', async () => {
+  const ctx = await setupTest();
+  const before = await ctx.load('root-secret');
+
+  const made = await before.create({
+    name: 'nixie',
+    scope: 'manage',
+    imps: ['nixie-*'],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+  });
+
+  const restarted = await ctx.load('root-secret');
+
+  expect(restarted.authenticate(made.secret)?.imageRefPrefix).toBe('ghcr.io/zgeoff/nixie-');
+});
+
+test('#update takes a token’s image ref prefix away and keeps its grantable list', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+
+  await createSecret(ctx.db, { name: 'gh', kind: 'github', rules: [], valueFile: 'gh' });
+
+  const gh = await findSecret(ctx.db, 'gh');
+
+  const made = await tokens.create({
+    name: 'nixie',
+    scope: 'manage',
+    imps: ['nixie-*'],
+    grantable: ['gh'],
+    imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
+  });
+
+  await tokens.update('nixie', { imageRefPrefix: null });
+
+  const restarted = await ctx.load('root-secret');
+
+  invariant(gh);
+
+  expect(restarted.authenticate(made.secret)).toMatchObject({
+    grantable: [{ name: 'gh', generation: gh.generation }],
+    imageRefPrefix: null,
+  });
+});
+
+test('#update refuses an image ref prefix for a token below manage', async () => {
+  const ctx = await setupTest();
+  const tokens = await ctx.load('root-secret');
+
+  await tokens.create({ name: 'viewer', scope: 'exec', imps: ['nixie-*'] });
+
+  expect(
+    tokens.update('viewer', { imageRefPrefix: 'ghcr.io/zgeoff/nixie-' }),
+  ).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+    message: 'a token that may add images needs scope manage and imp patterns',
+  });
 });
 
 test('#list shows a grantable list by name, after a restart', async () => {
@@ -910,7 +974,7 @@ test('#create refuses a grantable list naming a secret that does not exist', asy
   ).rejects.toMatchObject({ code: 'NOT_FOUND', data: { kind: 'secret', name: 'nope' } });
 });
 
-test('#updateGrantable binds a new list to each secret’s generation now', async () => {
+test('#update binds a new list to each secret’s generation now', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret', () => 1_800_000_000_000);
 
@@ -919,7 +983,7 @@ test('#updateGrantable binds a new list to each secret’s generation now', asyn
 
   await tokens.create({ name: 'agent', scope: 'manage', imps: ['dev-*'], grantable: ['gh'] });
 
-  const updated = await tokens.updateGrantable('agent', ['npm']);
+  const updated = await tokens.update('agent', { grantable: ['npm'] });
 
   expect(updated).toStrictEqual({
     token: {
@@ -927,6 +991,7 @@ test('#updateGrantable binds a new list to each secret’s generation now', asyn
       scope: 'manage',
       imps: ['dev-*'],
       grantable: ['npm'],
+      imageRefPrefix: null,
       sshKeys: [],
       createdAt: new Date(1_800_000_000_000),
     },
@@ -934,7 +999,7 @@ test('#updateGrantable binds a new list to each secret’s generation now', asyn
   });
 });
 
-test('#updateGrantable gives the token’s next caller the new list', async () => {
+test('#update gives the token’s next caller the new list', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret');
 
@@ -943,7 +1008,7 @@ test('#updateGrantable gives the token’s next caller the new list', async () =
   const npm = await findSecret(ctx.db, 'npm');
   const made = await tokens.create({ name: 'agent', scope: 'manage', imps: ['dev-*'] });
 
-  await tokens.updateGrantable('agent', ['npm']);
+  await tokens.update('agent', { grantable: ['npm'] });
 
   invariant(npm);
 
@@ -952,17 +1017,17 @@ test('#updateGrantable gives the token’s next caller the new list', async () =
   ]);
 });
 
-test('#updateGrantable refuses a name no token has', async () => {
+test('#update refuses a name no token has', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret');
 
-  expect(tokens.updateGrantable('nobody', [])).rejects.toMatchObject({
+  expect(tokens.update('nobody', { grantable: [] })).rejects.toMatchObject({
     code: 'NOT_FOUND',
     message: 'token nobody not found',
   });
 });
 
-test('#updateGrantable refuses a token removed from the database since it was loaded', async () => {
+test('#update refuses a token removed from the database since it was loaded', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret');
   const made = await tokens.create({ name: 'agent', scope: 'manage', imps: ['dev-*'] });
@@ -971,25 +1036,25 @@ test('#updateGrantable refuses a token removed from the database since it was lo
 
   await removeTokenRecord(ctx.db, tokenId);
 
-  expect(tokens.updateGrantable('agent', [])).rejects.toMatchObject({
+  expect(tokens.update('agent', { grantable: [] })).rejects.toMatchObject({
     code: 'NOT_FOUND',
     message: 'token agent not found',
   });
 });
 
-test('#updateGrantable refuses a secret that does not exist', async () => {
+test('#update refuses a secret that does not exist', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret');
 
   await tokens.create({ name: 'agent', scope: 'manage', imps: ['dev-*'] });
 
-  expect(tokens.updateGrantable('agent', ['nope'])).rejects.toMatchObject({
+  expect(tokens.update('agent', { grantable: ['nope'] })).rejects.toMatchObject({
     code: 'NOT_FOUND',
     data: { kind: 'secret', name: 'nope' },
   });
 });
 
-test('#updateGrantable refuses a list for a host-wide token', async () => {
+test('#update refuses a list for a host-wide token', async () => {
   const ctx = await setupTest();
   const tokens = await ctx.load('root-secret');
 
@@ -997,7 +1062,7 @@ test('#updateGrantable refuses a list for a host-wide token', async () => {
 
   await tokens.create({ name: 'host', scope: 'manage', imps: null });
 
-  expect(tokens.updateGrantable('host', ['gh'])).rejects.toMatchObject({
+  expect(tokens.update('host', { grantable: ['gh'] })).rejects.toMatchObject({
     code: 'BAD_REQUEST',
     message: 'a token that may grant secrets needs scope manage and imp patterns',
   });

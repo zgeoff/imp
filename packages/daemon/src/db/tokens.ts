@@ -20,7 +20,17 @@ export interface TokenRecord {
   readonly scope: Scope;
   readonly imps: readonly string[] | null;
   readonly grantable: readonly GrantableSecret[];
+
+  // the start every image ref it adds must have; null when it adds none
+  readonly imageRefPrefix: string | null;
   readonly createdAt: Date;
+}
+
+// what a tokens.update changes; a field left out stays as it is
+export interface TokenChange {
+  // builds the new grantable list in the write
+  readonly readGrantable?: (trx: ImpQueries) => Promise<GrantableSecret[]>;
+  readonly imageRefPrefix?: string | null;
 }
 
 // an SSH key bound to a token
@@ -65,6 +75,7 @@ export async function writeTokenRecord(
         scope: token.scope,
         imps: token.imps === null ? null : JSON.stringify(token.imps),
         grantable: JSON.stringify(token.grantable),
+        image_ref_prefix: token.imageRefPrefix,
         created_at: token.createdAt.getTime(),
       })
       .execute();
@@ -75,18 +86,22 @@ export async function writeTokenRecord(
   });
 }
 
-// The list `read` builds in the write, so its generations are one snapshot,
-// and the end of each left-off secret's grants on the token's imps, whoever
-// made them, as a rebind drops them. Null for no such token.
-export function updateTokenGrantable(
+// The change in one write, so a new list's generations are one snapshot; a
+// secret left off loses its grants on the token's imps, whoever made them,
+// as a rebind drops them. Null for no such token.
+export function updateTokenRecord(
   db: ImpDatabase,
   id: string,
-  read: (trx: ImpQueries) => Promise<GrantableSecret[]>,
-): Promise<{ grantable: GrantableSecret[]; dropped: number } | null> {
+  change: Readonly<TokenChange>,
+): Promise<{
+  grantable: GrantableSecret[];
+  imageRefPrefix: string | null;
+  dropped: number;
+} | null> {
   return db.transaction().execute(async (trx) => {
     const row = await trx
       .selectFrom('tokens')
-      .select(['imps', 'grantable'])
+      .select(['imps', 'grantable', 'image_ref_prefix'])
       .where('id', '=', id)
       .executeTakeFirst();
 
@@ -94,26 +109,27 @@ export function updateTokenGrantable(
       return null;
     }
 
-    const grantable = await read(trx);
+    const old = GrantableSchema.parse(JSON.parse(row.grantable));
+    const grantable = change.readGrantable === undefined ? old : await change.readGrantable(trx);
+
+    const imageRefPrefix =
+      change.imageRefPrefix === undefined ? row.image_ref_prefix : change.imageRefPrefix;
 
     await trx
       .updateTable('tokens')
-      .set({ grantable: JSON.stringify(grantable) })
+      .set({ grantable: JSON.stringify(grantable), image_ref_prefix: imageRefPrefix })
       .where('id', '=', id)
       .execute();
 
     const kept = new Set(grantable.map((secret) => secret.name));
 
-    const removed = GrantableSchema.parse(JSON.parse(row.grantable))
-      .map((secret) => secret.name)
-      .filter((name) => !kept.has(name));
-
+    const removed = old.map((secret) => secret.name).filter((name) => !kept.has(name));
     const imps: unknown = row.imps === null ? null : JSON.parse(row.imps);
     const patterns = ImpsSchema.parse(imps);
 
     // a host-wide token holds no list, so it has nothing to drop
     if (removed.length === 0 || patterns === null) {
-      return { grantable, dropped: 0 };
+      return { grantable, imageRefPrefix, dropped: 0 };
     }
 
     const rows = await trx.selectFrom('imps').select(['id', 'name']).execute();
@@ -121,7 +137,7 @@ export function updateTokenGrantable(
     const impIds = rows.filter((imp) => isImpAllowed(patterns, imp.name)).map((imp) => imp.id);
 
     if (impIds.length === 0) {
-      return { grantable, dropped: 0 };
+      return { grantable, imageRefPrefix, dropped: 0 };
     }
 
     const dropped = await trx
@@ -130,7 +146,7 @@ export function updateTokenGrantable(
       .where('imp_id', 'in', impIds)
       .executeTakeFirst();
 
-    return { grantable, dropped: Number(dropped.numDeletedRows) };
+    return { grantable, imageRefPrefix, dropped: Number(dropped.numDeletedRows) };
   });
 }
 
@@ -211,6 +227,7 @@ function toTokenRecord(row: Readonly<Selectable<Tokens>>): TokenRecord {
     scope: row.scope,
     imps: ImpsSchema.parse(imps),
     grantable: GrantableSchema.parse(JSON.parse(row.grantable)),
+    imageRefPrefix: row.image_ref_prefix,
     createdAt: new Date(row.created_at),
   };
 }

@@ -506,19 +506,22 @@ export function formatNetworks(networks: readonly Network[]): string {
 }
 
 // a token or an identity as any impd answers: one from before grantable
-// lists leaves the field out, and the client applies no schema default
-type WithOptionalGrantable<T> = Omit<T, 'grantable'> & {
+// lists or image ref prefixes leaves the field out, and the client applies
+// no schema default
+type WithOptionalGrantable<T> = Omit<T, 'grantable' | 'imageRefPrefix'> & {
   readonly grantable?: readonly string[] | undefined;
+  readonly imageRefPrefix?: string | null | undefined;
 };
 
 export function formatTokens(tokens: readonly WithOptionalGrantable<Token>[]): string {
   return formatTable(
-    ['NAME', 'SCOPE', 'IMPS', 'GRANTABLE', 'SSH KEYS', 'CREATED'],
+    ['NAME', 'SCOPE', 'IMPS', 'GRANTABLE', 'IMAGE REF PREFIX', 'SSH KEYS', 'CREATED'],
     tokens.map((token) => [
       token.name,
       token.scope,
       token.imps === null ? '*' : token.imps.join(','),
       formatGrantable(token, '-'),
+      token.imageRefPrefix ?? '-',
       String(token.sshKeys.length),
       token.createdAt.toISOString(),
     ]),
@@ -572,8 +575,10 @@ export function formatIdentity(identity: WithOptionalGrantable<Identity>): strin
   const imps = identity.imps === null ? 'every imp' : identity.imps.join(',');
   const names = formatGrantable(identity, '');
   const grants = names === '' ? '' : `; may grant ${names}`;
+  const prefix = identity.imageRefPrefix ?? null;
+  const images = prefix === null ? '' : `; may add images from ${prefix}`;
 
-  return `${identity.kind} ${identity.name}: ${identity.scope} on ${imps}${grants}`;
+  return `${identity.kind} ${identity.name}: ${identity.scope} on ${imps}${grants}${images}`;
 }
 
 // the secrets it may grant, comma-separated, or `none`

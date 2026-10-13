@@ -11,6 +11,7 @@ test('it builds a default token record', () => {
     scope: 'manage',
     imps: null,
     grantable: [],
+    imageRefPrefix: null,
     createdAt: expect.toBeValidDate(),
   });
 
@@ -26,6 +27,7 @@ test('it applies overrides on top of the defaults', () => {
     scope: 'exec',
     imps: ['dev-*'],
     grantable: [{ name: 'gh', generation: 'gen-gh' }],
+    imageRefPrefix: 'ghcr.io/org/app-',
     createdAt: new Date(1_800_000_000_000),
   });
 
@@ -36,6 +38,7 @@ test('it applies overrides on top of the defaults', () => {
     scope: 'exec',
     imps: ['dev-*'],
     grantable: [{ name: 'gh', generation: 'gen-gh' }],
+    imageRefPrefix: 'ghcr.io/org/app-',
     createdAt: new Date(1_800_000_000_000),
   });
 });

@@ -11,6 +11,7 @@ test('#tokenCollection creates a default manage token for every imp with its sec
     imps: null,
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: expect.toBeValidDate(),
     secret: expect.toSatisfy((value: string) => /^imp_[\w-]{16}\.[\w-]{43}$/.test(value)),
   });
@@ -29,6 +30,7 @@ test('#tokenCollection applies overrides on top of the defaults', async () => {
     imps: ['dev-*'],
     sshKeys: [],
     grantable: [],
+    imageRefPrefix: null,
     createdAt: expect.toBeValidDate(),
     secret: expect.toBeString(),
   });

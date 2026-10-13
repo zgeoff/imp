@@ -39,9 +39,27 @@ test('it offers no token procedure beyond the known ones', () => {
   ]);
 });
 
-test('it lets a token update change only its grantable list', () => {
+test('it lets a token update change only its grantable list and its image ref prefix', () => {
   expect(Object.keys(impContract.tokens.update['~orpc'].inputSchema?.shape ?? {})).toStrictEqual([
     'name',
     'grantable',
+    'imageRefPrefix',
   ]);
+});
+
+test('it refuses a token update that changes nothing', () => {
+  const result = impContract.tokens.update['~orpc'].inputSchema?.safeParse({ name: 'ci' });
+
+  expect(result?.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must set grantable, imageRefPrefix or both',
+  });
+});
+
+test('it takes a token update that only clears the image ref prefix', () => {
+  const input = { name: 'ci', imageRefPrefix: null };
+
+  expect(impContract.tokens.update['~orpc'].inputSchema?.safeParse(input).data).toStrictEqual(
+    input,
+  );
 });

@@ -93,6 +93,7 @@ function readSession(request: Request): ImpdSession | null {
     scope: token.scope,
     imps: token.imps,
     grantable: token.grantable,
+    imageRefPrefix: token.imageRefPrefix,
     expiresAt: session.expiresAt,
   };
 }

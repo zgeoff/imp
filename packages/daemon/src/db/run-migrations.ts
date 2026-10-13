@@ -781,6 +781,19 @@ export const MIGRATIONS: Record<string, Migration> = {
       });
     },
   },
+
+  // tokens that add their own images (GEO-498)
+  '029_add_token_image_ref_prefix': {
+    async up(db: Kysely<NoTables>) {
+      await db.schema
+        .alterTable('tokens')
+
+        // the start every image ref the token adds must have, such as
+        // ghcr.io/org/app-; null for a token that adds no image
+        .addColumn('image_ref_prefix', 'text')
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

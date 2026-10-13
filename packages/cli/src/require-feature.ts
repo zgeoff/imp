@@ -13,6 +13,7 @@ const FEATURES = {
   oauthSecrets: 'has no oauth secrets',
   secretUpstream: 'has no secret upstreams',
   backupOptOut: 'has no backup opt-out',
+  tokenImageAdd: 'has no token image adds',
 } as const;
 
 type Feature = keyof typeof FEATURES;

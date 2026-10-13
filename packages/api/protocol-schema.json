@@ -12086,6 +12086,9 @@
               "tokenUpdate": {
                 "type": "boolean"
               },
+              "tokenImageAdd": {
+                "type": "boolean"
+              },
               "databaseCopy": {
                 "type": "boolean"
               },
@@ -12735,6 +12738,19 @@
                 "pattern": "^[a-z][a-z0-9-]{0,30}$"
               }
             },
+            "imageRefPrefix": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200,
+                  "pattern": "^(?:[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\\/[a-z0-9][a-z0-9._/-]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "createdAt": {
               "type": "string",
               "format": "date-time"
@@ -12746,6 +12762,7 @@
             "imps",
             "sshKeys",
             "grantable",
+            "imageRefPrefix",
             "createdAt"
           ],
           "additionalProperties": false
@@ -12796,6 +12813,11 @@
               "type": "string",
               "pattern": "^[a-z][a-z0-9-]{0,30}$"
             }
+          },
+          "imageRefPrefix": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^(?:[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\\/[a-z0-9][a-z0-9._/-]*$"
           }
         },
         "required": [
@@ -12869,6 +12891,19 @@
                   "pattern": "^[a-z][a-z0-9-]{0,30}$"
                 }
               },
+              "imageRefPrefix": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200,
+                    "pattern": "^(?:[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\\/[a-z0-9][a-z0-9._/-]*$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "createdAt": {
                 "type": "string",
                 "format": "date-time"
@@ -12880,6 +12915,7 @@
               "imps",
               "sshKeys",
               "grantable",
+              "imageRefPrefix",
               "createdAt"
             ],
             "additionalProperties": false
@@ -12911,11 +12947,22 @@
               "type": "string",
               "pattern": "^[a-z][a-z0-9-]{0,30}$"
             }
+          },
+          "imageRefPrefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^(?:[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\\/[a-z0-9][a-z0-9._/-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "name",
-          "grantable"
+          "name"
         ]
       },
       "output": {
@@ -12981,6 +13028,19 @@
               "pattern": "^[a-z][a-z0-9-]{0,30}$"
             }
           },
+          "imageRefPrefix": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^(?:[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\\/[a-z0-9][a-z0-9._/-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -12992,6 +13052,7 @@
           "imps",
           "sshKeys",
           "grantable",
+          "imageRefPrefix",
           "createdAt"
         ],
         "additionalProperties": false
@@ -13132,6 +13193,19 @@
               "type": "string",
               "pattern": "^[a-z][a-z0-9-]{0,30}$"
             }
+          },
+          "imageRefPrefix": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^(?:[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\\/[a-z0-9][a-z0-9._/-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -13139,7 +13213,8 @@
           "name",
           "scope",
           "imps",
-          "grantable"
+          "grantable",
+          "imageRefPrefix"
         ],
         "additionalProperties": false
       },

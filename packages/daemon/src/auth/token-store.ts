@@ -10,7 +10,7 @@ import {
   listTokenSshKeyRecords,
   removeTokenRecord,
   removeTokenSshKeyRecord,
-  updateTokenGrantable,
+  updateTokenRecord,
   writeTokenRecord,
   writeTokenSshKeyRecord,
 } from '../db/tokens';
@@ -41,6 +41,17 @@ interface NewToken {
 
   // existing secrets it may grant to its imps; none when left out
   readonly grantable?: readonly string[];
+
+  // the start of the image refs it may add under its patterns; none when
+  // left out
+  readonly imageRefPrefix?: string;
+}
+
+// what an update changes; a field left out stays, and a null prefix takes
+// the image add away
+interface TokenUpdate {
+  readonly grantable?: readonly string[];
+  readonly imageRefPrefix?: string | null;
 }
 
 // A key bound to a token, as the SSH gateway sees it. A login with it runs
@@ -66,16 +77,16 @@ export interface TokenStore {
   readonly list: () => Token[];
 
   // the token, and its secret: the only time impd has it. BAD_REQUEST for
-  // a grantable list without manage and imps; NOT_FOUND for a name no
-  // secret has.
+  // a grantable list or an image ref prefix without manage and imps;
+  // NOT_FOUND for a name no secret has.
   readonly create: (token: Readonly<NewToken>) => Promise<{ token: Token; secret: string }>;
 
-  // a new grantable list at each secret's generation now; the secret hash
-  // stays. Ends the grants of a secret left off on the token's imps.
-  // NOT_FOUND for the token or a secret; BAD_REQUEST as create.
-  readonly updateGrantable: (
+  // a new grantable list at each secret's generation now, a new image ref
+  // prefix, or both; a secret left off loses its grants on the token's
+  // imps. NOT_FOUND for the token or a secret; BAD_REQUEST as create.
+  readonly update: (
     name: string,
-    grantable: readonly string[],
+    change: Readonly<TokenUpdate>,
   ) => Promise<{ token: Token; droppedGrants: number }>;
 
   // NOT_FOUND for an unknown name; CONFLICT while authorized_keys lists one
@@ -150,6 +161,9 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     scope: 'manage',
     imps: null,
     grantable: [],
+
+    // it adds any image as a host-wide caller
+    imageRefPrefix: null,
     tokenId: ROOT_TOKEN_ID,
     grantId: null,
     expiresAt: null,
@@ -246,6 +260,10 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 
       const grantable = await readGrantable(deps.db, token.grantable ?? [], token);
 
+      const imageRefPrefix = token.imageRefPrefix ?? null;
+
+      requireImageScope(imageRefPrefix, token);
+
       const record: TokenRecord = {
         id,
         name: token.name,
@@ -253,6 +271,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
         scope: token.scope,
         imps: token.imps,
         grantable,
+        imageRefPrefix,
         createdAt: new Date(deps.now()),
       };
 
@@ -270,12 +289,18 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 
       return { token: toFullToken(record), secret: `${SECRET_PREFIX}${id}.${secret}` };
     },
-    updateGrantable: async (name, names) => {
+    update: async (name, change) => {
       const record = requireByName(name);
+      const names = change.grantable;
 
-      const written = await updateTokenGrantable(deps.db, record.id, (trx) =>
-        readGrantable(trx, names, record),
-      );
+      if (change.imageRefPrefix !== undefined) {
+        requireImageScope(change.imageRefPrefix, record);
+      }
+
+      const written = await updateTokenRecord(deps.db, record.id, {
+        ...(names !== undefined && { readGrantable: (trx) => readGrantable(trx, names, record) }),
+        ...(change.imageRefPrefix !== undefined && { imageRefPrefix: change.imageRefPrefix }),
+      });
 
       // removed since requireByName
       if (written === null) {
@@ -284,7 +309,11 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 
       // a new record, not an edit: a caller built from the old one keeps
       // its view, and every request builds its caller again from this one
-      const updated: TokenRecord = { ...record, grantable: written.grantable };
+      const updated: TokenRecord = {
+        ...record,
+        grantable: written.grantable,
+        imageRefPrefix: written.imageRefPrefix,
+      };
 
       byId.set(record.id, updated);
 
@@ -466,6 +495,19 @@ async function readGrantable(
   return grantable;
 }
 
+// Only a manage token for some imps takes an image ref prefix: a host-wide
+// one adds any image already, and an add needs manage
+function requireImageScope(
+  imageRefPrefix: string | null,
+  token: Readonly<Pick<NewToken, 'scope' | 'imps'>>,
+): void {
+  if (imageRefPrefix !== null && (token.imps === null || token.scope !== 'manage')) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: 'a token that may add images needs scope manage and imp patterns',
+    });
+  }
+}
+
 // each line as a key entry; CONFLICT for the same key twice
 function buildKeyEntries(lines: readonly string[], build: (line: string) => KeyEntry): KeyEntry[] {
   const entries = lines.map((line) => build(line));
@@ -514,6 +556,7 @@ function toToken(record: Readonly<TokenRecord>): Omit<Token, 'sshKeys'> {
     scope: record.scope,
     imps: record.imps,
     grantable: record.grantable.map((secret) => secret.name),
+    imageRefPrefix: record.imageRefPrefix,
     createdAt: record.createdAt,
   };
 }
@@ -533,6 +576,7 @@ function toCaller(record: Readonly<TokenRecord>): Caller {
     scope: record.scope,
     imps: record.imps,
     grantable: record.grantable,
+    imageRefPrefix: record.imageRefPrefix,
     tokenId: record.id,
     grantId: null,
     expiresAt: null,

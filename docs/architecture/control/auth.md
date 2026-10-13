@@ -44,7 +44,10 @@ pattern that covers the new name too. Some calls are host-wide whatever their in
 they touch is shared: tokens, secrets and grants, networks, backups and the receiving side of a
 move. A scoped token can be given a list of secrets it may grant to its own imps, so an agent can
 set up an imp without host-wide reach. Such a token may not fork or move an imp, because a fork
-copies grants and a move carries them.
+copies grants and a move carries them. A scoped token can also be given an image ref prefix, so a
+service adds its own released images: the access check then takes an image add whose name is within
+the token's patterns and whose ref starts with the prefix and is pinned by digest, since a tag can
+move after the owner trusted it.
 
 ## The dashboard session
 
