@@ -74,7 +74,7 @@ test('it frees a key whose task throws before it returns a promise', async () =>
 test('it lists the keys with a run in flight', async () => {
   const flight = createSingleFlight<number>();
 
-  flight.run('a', () => new Promise(() => {}));
+  void flight.run('a', () => new Promise(() => {}));
 
   await flight.run('b', () => Promise.resolve(1));
 

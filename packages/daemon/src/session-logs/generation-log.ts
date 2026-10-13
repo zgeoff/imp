@@ -251,7 +251,7 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
   const writes = createKeyedMutex();
 
   const runInOrder = <T>(task: () => Promise<T>, fallback: T): Promise<T> =>
-    writes.runExclusive(META_FILE, async () => (state.abandoned ? fallback : await task()));
+    writes.runExclusive(META_FILE, () => (state.abandoned ? Promise.resolve(fallback) : task()));
 
   const readEnd = (): number => readLogBounds(meta.segments, meta.origin).logEnd;
 

@@ -25,7 +25,7 @@ export function setupLogging(write: (line: string) => void = writeStdout): void 
 
 // "<LEVEL> <category> [imp=<name> ]<message>\n": the level, the category
 // joined with dots, and the imp the line is about, if any.
-function renderLogLine(record: LogRecord): string {
+function renderLogLine(record: Readonly<LogRecord>): string {
   const imp = record.properties['imp'];
   const about = typeof imp === 'string' ? `imp=${imp} ` : '';
 
