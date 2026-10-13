@@ -177,15 +177,15 @@ test('it lets a nixie-* token add nixie-x from a pinned ref under its prefix', a
     imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
   });
 
-  const image = await ctx.buildClient(made.secret).images.add({ ref, name: 'nixie-x' });
+  const image: unknown = await ctx.buildClient(made.secret).images.add({ ref, name: 'nixie-x' });
 
   expect(image).toStrictEqual({
     id: expect.any(String) as unknown,
     name: 'nixie-x',
     ref,
-    digest: expect.toStartWith('sha256:'),
+    digest: expect.toStartWith('sha256:') as unknown,
     source: 'oci',
-    createdAt: expect.toBeValidDate(),
+    createdAt: expect.toBeValidDate() as unknown,
     sizeBytes: expect.any(Number) as unknown,
   });
 });
