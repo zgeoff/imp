@@ -27,15 +27,18 @@ compares the file at the pull request's merge base with the file at its head, by
   required field, a tighter bound, a dropped enum value, or a field impd no longer reads breaks a
   client.
 - What impd sends must still make sense to an older client. A field that may now be missing, a
-  changed type, or a looser bound breaks a client. A new field, a new value of an enum, and a new
-  variant of a tagged union do not, because a client passes over what it does not know.
+  changed type, a looser bound, or a variant of a tagged union that impd stops sending breaks a
+  client. A new field, a new value of an enum, and a new variant of a tagged union do not, because a
+  client passes over what it does not know. The union's tag is its discriminator: the property each
+  variant fixes to its own value, such as `type`.
 - A removed procedure, message, error code or constant, a changed error status, and a procedure that
   changes between one answer and an event stream all break a client.
 
 The check compares the protocol rather than the client's TypeScript declarations because the outcome
 to protect is a client that can still talk to impd. A type diff would flag a renamed export that
 breaks no request, and it would miss a tighter bound, which a TypeScript type does not show. The
-check cannot see a zod refinement, which JSON Schema cannot express.
+check cannot see a zod refinement, or what a transform in an output returns, because JSON Schema
+cannot express either.
 
 To mark a change, put a `!` after the type, as in `feat(#412)!: drop imps.get`, or add a
 `BREAKING CHANGE: <what breaks>` footer to a commit message. The repository squash-merges, and

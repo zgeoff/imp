@@ -56,6 +56,9 @@ interface Comparison {
 
   // the `$ref` pairs already under comparison, which a recursive schema meets again
   readonly seen: ReadonlySet<string>;
+
+  // the discriminator of the unions at a path, found from both sides' options
+  readonly unionTags?: { readonly path: string; readonly keys: readonly string[] };
 }
 
 // The changes from base to head that break a client of the other version, by
@@ -319,14 +322,34 @@ function collectObjectChanges(
   comparison: Comparison,
 ): string[] {
   const narrowBranches = readBranches(narrow);
+  const wideBranches = readBranches(wide);
 
-  // a union: each of its options must pass
+  // a union: each of its options must pass, against the discriminator both
+  // sides share; impd must still send every variant it sent
   if (narrowBranches !== undefined) {
     const siblings = buildWithout(narrow, ['anyOf', 'oneOf']);
 
-    return narrowBranches.flatMap((branch) =>
-      collectChanges(mergeSchemas(siblings, branch), wide, path, comparison),
-    );
+    const keys =
+      wideBranches === undefined
+        ? []
+        : findTagKeys([
+            resolveBranches(narrowBranches, comparison.narrowRoot),
+            resolveBranches(wideBranches, comparison.wideRoot),
+          ]);
+
+    const dropped =
+      comparison.direction === 'toClient' && wideBranches !== undefined
+        ? collectDroppedVariants(narrowBranches, wideBranches, keys, path, comparison)
+        : [];
+
+    const inner = { ...comparison, unionTags: { path, keys } };
+
+    return [
+      ...dropped,
+      ...narrowBranches.flatMap((branch) =>
+        collectChanges(mergeSchemas(siblings, branch), wide, path, inner),
+      ),
+    ];
   }
 
   if (readSchemaList(narrow, 'allOf') !== undefined) {
@@ -336,8 +359,6 @@ function collectObjectChanges(
   if (readValues(narrow) !== undefined) {
     return collectValueChanges(narrow, wide, path, comparison);
   }
-
-  const wideBranches = readBranches(wide);
 
   if (wideBranches !== undefined) {
     return collectUnionChanges(narrow, wide, wideBranches, path, comparison);
@@ -457,12 +478,20 @@ function collectUnionChanges(
 
   // A variant whose tag no option shares is a new one, which a client passes
   // over; impd still reads every variant it read before.
+  const tagKeys =
+    comparison.unionTags?.path === path
+      ? comparison.unionTags.keys
+      : findTagKeys([[narrow], resolveBranches(branches, comparison.wideRoot)]);
+
   const sameTag = branches.filter(
-    (branch) => !hasOtherTag(narrow, resolveRef(branch, comparison.wideRoot)),
+    (branch) => !hasOtherTag(narrow, resolveRef(branch, comparison.wideRoot), tagKeys),
   );
 
   if (sameTag.length === 0) {
-    const removed = formatChange(path, `no longer accepts the variant ${formatTag(narrow)}`);
+    const removed = formatChange(
+      path,
+      `no longer accepts the variant ${formatTag(narrow, tagKeys)}`,
+    );
 
     return comparison.direction === 'toServer' ? [...siblingChanges, removed] : siblingChanges;
   }
@@ -473,19 +502,76 @@ function collectUnionChanges(
   return [...siblingChanges, ...closest];
 }
 
-// whether a property both sides fix to a closed set, such as a discriminated
-// union's `type`, takes no value in common: then they are different variants
-function hasOtherTag(narrow: SchemaObject, wide: Schema): boolean {
-  if (typeof wide !== 'object') {
+// What impd sends must keep every variant an older client waits for: a base
+// variant whose tag no head variant carries is no longer sent.
+function collectDroppedVariants(
+  narrowBranches: readonly Schema[],
+  wideBranches: readonly Schema[],
+  tagKeys: readonly string[],
+  path: string,
+  comparison: Comparison,
+): string[] {
+  if (tagKeys.length === 0) {
+    return [];
+  }
+
+  const narrowObjects = resolveBranches(narrowBranches, comparison.narrowRoot);
+
+  return resolveBranches(wideBranches, comparison.wideRoot)
+    .filter((branch) => narrowObjects.every((other) => hasOtherTag(other, branch, tagKeys)))
+    .map((branch) =>
+      formatChange(path, `no longer sends the variant ${formatTag(branch, tagKeys)}`),
+    );
+}
+
+function resolveBranches(branches: readonly Schema[], root: Schema): readonly SchemaObject[] {
+  return branches
+    .map((branch) => resolveRef(branch, root))
+    .filter((branch) => isSchemaObject(branch));
+}
+
+// A union's discriminator: the properties every option on both sides fixes
+// to one value, on which the options of one side differ. A version field
+// that every option fixes alike tells no option apart, though it changes.
+function findTagKeys(sides: readonly (readonly SchemaObject[])[]): readonly string[] {
+  const options = sides.flat();
+  const [first] = options;
+
+  if (first === undefined) {
+    return [];
+  }
+
+  return Object.keys(readSchemaMap(first, 'properties')).filter(
+    (key) =>
+      options.every((option) => readTag(option, key) !== undefined) &&
+      sides.some(
+        (side) => new Set(side.map((option) => JSON.stringify(readTag(option, key)))).size > 1,
+      ),
+  );
+}
+
+// the one value a schema fixes a property to
+function readTag(schema: SchemaObject, key: string): unknown {
+  const property = readSchemaMap(schema, 'properties')[key];
+  const values = property === undefined ? undefined : readValues(property);
+
+  return values?.length === 1 ? values[0] : undefined;
+}
+
+// whether the two take no value in common on a discriminator: then they are
+// different variants
+function hasOtherTag(narrow: SchemaObject, wide: Schema, tagKeys: readonly string[]): boolean {
+  if (!isSchemaObject(wide)) {
     return false;
   }
 
   const narrowProperties = readSchemaMap(narrow, 'properties');
   const wideProperties = readSchemaMap(wide, 'properties');
 
-  return Object.entries(narrowProperties).some(([key, schema]) => {
-    const narrowValues = readValues(schema);
+  return tagKeys.some((key) => {
+    const narrowProperty = narrowProperties[key];
     const wideProperty = wideProperties[key];
+    const narrowValues = narrowProperty === undefined ? undefined : readValues(narrowProperty);
     const wideValues = wideProperty === undefined ? undefined : readValues(wideProperty);
 
     return (
@@ -496,12 +582,13 @@ function hasOtherTag(narrow: SchemaObject, wide: Schema): boolean {
   });
 }
 
-// the first property fixed to a closed set, as `type "stdout_ack"`
-function formatTag(schema: SchemaObject): string {
+// the discriminator's value, as `type "stdout_ack"`
+function formatTag(schema: SchemaObject, tagKeys: readonly string[]): string {
   const properties = readSchemaMap(schema, 'properties');
 
-  for (const [key, property] of Object.entries(properties)) {
-    const values = readValues(property);
+  for (const key of tagKeys) {
+    const property = properties[key];
+    const values = property === undefined ? undefined : readValues(property);
 
     if (values !== undefined) {
       return `${key} ${formatValues(values)}`;

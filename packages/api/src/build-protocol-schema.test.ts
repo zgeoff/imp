@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildProtocolSchema } from './build-protocol-schema';
+import { ProtocolSchemaSchema, buildProtocolSchema } from './build-protocol-schema';
 
 test('it renders a procedure under its RPC path as JSON Schema', () => {
   expect(buildProtocolSchema().procedures['imps.destroy']).toMatchInlineSnapshot(`
@@ -82,5 +82,30 @@ test('it lists the wire constants', () => {
     EXEC_PATH: '/exec',
     TUNNEL_PATH: '/tunnel',
     IMAGE_BUILD_PATH: '/images/build',
+  });
+});
+
+test('it builds a schema that its own parser accepts', () => {
+  const schema = buildProtocolSchema();
+
+  expect(ProtocolSchemaSchema.parse(schema)).toStrictEqual(schema);
+});
+
+test('it parses a protocol schema with no entries', () => {
+  const payload = { procedures: {}, messages: {}, errors: {}, constants: {} };
+
+  expect(ProtocolSchemaSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
+test('it rejects a message with an unknown direction', () => {
+  const result = ProtocolSchemaSchema.safeParse({
+    procedures: {},
+    messages: { 'exec.client': { direction: 'sideways', schema: {} } },
+    errors: {},
+    constants: {},
+  });
+
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['messages', 'exec.client', 'direction'],
   });
 });

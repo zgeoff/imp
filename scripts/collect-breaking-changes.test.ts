@@ -959,3 +959,193 @@ test('it reports a record whose values narrow', () => {
     'procedure imps.update input .env{}: max length <= 4096 → <= 1024',
   ]);
 });
+
+test('it reports a changed field of an output variant whose enum also changes', () => {
+  const base = {
+    procedures: {},
+    messages: {
+      'imageBuild.event': {
+        direction: 'toClient' as const,
+        schema: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: {
+                type: { type: 'string', const: 'progress' },
+                phase: { type: 'string', enum: ['upload', 'build'] },
+                elapsedMs: { type: 'number' },
+              },
+              required: ['type', 'phase', 'elapsedMs'],
+            },
+            {
+              type: 'object',
+              properties: { type: { type: 'string', const: 'error' }, code: { type: 'string' } },
+              required: ['type', 'code'],
+            },
+          ],
+        },
+      },
+    },
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {},
+    messages: {
+      'imageBuild.event': {
+        direction: 'toClient' as const,
+        schema: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: {
+                type: { type: 'string', const: 'progress' },
+                phase: { type: 'string', enum: ['download'] },
+                elapsedMs: { type: 'string' },
+              },
+              required: ['type', 'phase', 'elapsedMs'],
+            },
+            {
+              type: 'object',
+              properties: { type: { type: 'string', const: 'error' }, code: { type: 'string' } },
+              required: ['type', 'code'],
+            },
+          ],
+        },
+      },
+    },
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'message imageBuild.event .elapsedMs: type number → string',
+  ]);
+});
+
+test('it reports a changed field of an output variant when a shared version field moves', () => {
+  const base = {
+    procedures: {},
+    messages: {
+      'events.stream': {
+        direction: 'toClient' as const,
+        schema: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: {
+                v: { type: 'number', const: 1 },
+                ev: { type: 'string', const: 'ImpAdded' },
+                name: { type: 'string' },
+              },
+              required: ['v', 'ev', 'name'],
+            },
+            {
+              type: 'object',
+              properties: {
+                v: { type: 'number', const: 1 },
+                ev: { type: 'string', const: 'ImpRemoved' },
+              },
+              required: ['v', 'ev'],
+            },
+          ],
+        },
+      },
+    },
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {},
+    messages: {
+      'events.stream': {
+        direction: 'toClient' as const,
+        schema: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: {
+                v: { type: 'number', const: 2 },
+                ev: { type: 'string', const: 'ImpAdded' },
+                name: { type: 'string' },
+              },
+              required: ['v', 'ev'],
+            },
+            {
+              type: 'object',
+              properties: {
+                v: { type: 'number', const: 2 },
+                ev: { type: 'string', const: 'ImpRemoved' },
+              },
+              required: ['v', 'ev'],
+            },
+          ],
+        },
+      },
+    },
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'message events.stream .name: may now be missing',
+  ]);
+});
+
+test('it reports an output variant that impd no longer sends under its tag', () => {
+  const base = {
+    procedures: {},
+    messages: {
+      'exec.server': {
+        direction: 'toClient' as const,
+        schema: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: { type: { type: 'string', const: 'started' } },
+              required: ['type'],
+            },
+            {
+              type: 'object',
+              properties: { type: { type: 'string', const: 'exit' }, code: { type: 'integer' } },
+              required: ['type', 'code'],
+            },
+          ],
+        },
+      },
+    },
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {},
+    messages: {
+      'exec.server': {
+        direction: 'toClient' as const,
+        schema: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: { type: { type: 'string', const: 'started' } },
+              required: ['type'],
+            },
+            {
+              type: 'object',
+              properties: { type: { type: 'string', const: 'exited' }, code: { type: 'integer' } },
+              required: ['type', 'code'],
+            },
+          ],
+        },
+      },
+    },
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'message exec.server: no longer sends the variant type "exit"',
+  ]);
+});

@@ -34,36 +34,52 @@ import {
   TunnelServerMessageSchema,
 } from './tunnel-protocol';
 
-type JsonSchema = Readonly<Record<string, unknown>>;
+const JsonSchemaSchema = z.record(z.string(), z.unknown()).readonly();
+
+type JsonSchema = z.infer<typeof JsonSchemaSchema>;
 
 // `toServer`: a client sends it and impd reads it; `toClient`: the reverse
-export type MessageDirection = 'toServer' | 'toClient';
+const MessageDirectionSchema = z.enum(['toServer', 'toClient']);
 
-export interface ProtocolSchema {
-  readonly procedures: Readonly<Record<string, ProcedureSchema>>;
-  readonly messages: Readonly<Record<string, MessageSchema>>;
-  readonly errors: Readonly<Record<string, ErrorSchema>>;
-  readonly constants: Readonly<Record<string, unknown>>;
-}
+export type MessageDirection = z.infer<typeof MessageDirectionSchema>;
 
-interface ProcedureSchema {
-  readonly input: JsonSchema;
-  readonly output: JsonSchema;
+const ProcedureSchemaSchema = z
+  .object({
+    input: JsonSchemaSchema,
+    output: JsonSchemaSchema,
 
-  // an event iterator, whose output is the schema of each event
-  readonly stream: boolean;
-}
+    // an event iterator, whose output is the schema of each event
+    stream: z.boolean(),
+  })
+  .readonly();
 
-interface MessageSchema {
-  readonly direction: MessageDirection;
-  readonly schema: JsonSchema;
-}
+const MessageSchemaSchema = z
+  .object({ direction: MessageDirectionSchema, schema: JsonSchemaSchema })
+  .readonly();
 
-interface ErrorSchema {
-  // null for a common oRPC code, whose status oRPC fixes
-  readonly status: number | null;
-  readonly data: JsonSchema;
-}
+const ErrorSchemaSchema = z
+  .object({
+    // null for a common oRPC code, whose status oRPC fixes
+    status: z.number().nullable(),
+    data: JsonSchemaSchema,
+  })
+  .readonly();
+
+// the shape of packages/api/protocol-schema.json, which the check reads back
+export const ProtocolSchemaSchema = z
+  .object({
+    procedures: z.record(z.string(), ProcedureSchemaSchema).readonly(),
+    messages: z.record(z.string(), MessageSchemaSchema).readonly(),
+    errors: z.record(z.string(), ErrorSchemaSchema).readonly(),
+    constants: z.record(z.string(), z.unknown()).readonly(),
+  })
+  .readonly();
+
+export type ProtocolSchema = z.infer<typeof ProtocolSchemaSchema>;
+
+type ProcedureSchema = z.infer<typeof ProcedureSchemaSchema>;
+
+type MessageSchema = z.infer<typeof MessageSchemaSchema>;
 
 // What a client and impd agree on, as JSON Schema, for the breaking-change
 // check: docs/runbooks/releasing.md#breaking-changes.

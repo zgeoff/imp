@@ -2,6 +2,7 @@
 // docs/runbooks/releasing.md#breaking-changes describes. Reads BASE_SHA,
 // HEAD_SHA, PR_NUMBER, PR_TITLE and PR_BODY, and runs git in the working dir.
 import * as z from 'zod';
+import { ProtocolSchemaSchema } from '../packages/api/src/build-protocol-schema';
 import type { ProtocolSchema } from '../packages/api/src/build-protocol-schema';
 import { collectBreakingChanges } from './collect-breaking-changes';
 import { isMarkedBreaking } from './is-marked-breaking';
@@ -13,25 +14,6 @@ const EnvSchema = z.object({
   PR_NUMBER: z.coerce.number().int().positive(),
   PR_TITLE: z.string(),
   PR_BODY: z.string().default(''),
-});
-
-const JsonSchemaSchema = z.record(z.string(), z.unknown());
-const DirectionSchema = z.enum(['toServer', 'toClient']);
-
-const ProcedureSchema = z.object({
-  input: JsonSchemaSchema,
-  output: JsonSchemaSchema,
-  stream: z.boolean(),
-});
-
-const MessageSchema = z.object({ direction: DirectionSchema, schema: JsonSchemaSchema });
-const ErrorSchema = z.object({ status: z.number().nullable(), data: JsonSchemaSchema });
-
-const ProtocolSchemaSchema = z.object({
-  procedures: z.record(z.string(), ProcedureSchema),
-  messages: z.record(z.string(), MessageSchema),
-  errors: z.record(z.string(), ErrorSchema),
-  constants: z.record(z.string(), z.unknown()),
 });
 
 function main(): void {
