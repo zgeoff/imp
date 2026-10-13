@@ -205,10 +205,8 @@ export const SystemInfoSchema = z.object({
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;
 
-type SystemFeatures = z.infer<typeof SystemFeaturesSchema>;
-
 // every feature SystemFeaturesSchema names, each on: what the current impd
 // says it can do, so adding a feature means editing only the schema
-export const SYSTEM_FEATURES = Object.fromEntries(
-  SystemFeaturesSchema.keyof().options.map((name) => [name, true]),
-) as { readonly [Name in keyof Required<SystemFeatures>]: true };
+export const SYSTEM_FEATURES = SystemFeaturesSchema.required().parse(
+  Object.fromEntries(SystemFeaturesSchema.keyof().options.map((name) => [name, true])),
+);

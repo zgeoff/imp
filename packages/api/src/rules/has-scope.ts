@@ -1,13 +1,9 @@
 import { ScopeSchema } from '../schemas/token-schema';
 import type { Scope } from '../schemas/token-schema';
 
-// Scopes nest: manage includes exec, and exec includes read. impd checks every
-// call with it, and the MCP server lists only the tools a token's scope holds.
+// Scopes nest: manage includes exec, and exec includes read. ScopeSchema lists
+// them in that order, so a scope's rank is its index. impd checks every call
+// with it, and the MCP server lists only the tools a token's scope holds.
 export function hasScope(granted: Scope, needed: Scope): boolean {
-  return SCOPE_RANK[granted] >= SCOPE_RANK[needed];
+  return ScopeSchema.options.indexOf(granted) >= ScopeSchema.options.indexOf(needed);
 }
-
-// ScopeSchema lists the scopes in nesting order, so a scope's rank is its index
-const SCOPE_RANK = Object.fromEntries(
-  ScopeSchema.options.map((scope, rank) => [scope, rank]),
-) as Readonly<Record<Scope, number>>;
