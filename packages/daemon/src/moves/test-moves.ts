@@ -1,8 +1,8 @@
 import { onTestFinished } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import type { MoveStatus } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@imp/test-utils/invariant'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
+import { waitFor } from '@imp/test-utils/wait-for'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
 import { createImage } from '../db/images';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import type { ImpTest, ImpTestOptions } from '../imps/test-imps';

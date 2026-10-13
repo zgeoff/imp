@@ -173,7 +173,12 @@
       }
     },
     {
-      // the database boundary: only db and test support build queries, so
+      // stage 1 import rules, one override per package. A later override
+      // replaces an earlier one's no-restricted-imports, so each block carries
+      // every pattern its files need, and type-only imports count. No pattern
+      // uses a `!` negation: oxlint lets an import that one negation matches
+      // past every pattern of the rule. This block covers a package that has
+      // no block of its own yet: only db and test support build queries, so
       // every other module goes through db's repositories
       "files": ["packages/**"],
       "rules": {
@@ -191,7 +196,444 @@
       }
     },
     {
-      "files": ["packages/daemon/src/db/**", "packages/daemon/src/test-utils/**"],
+      // the platform helpers: imports no @imp/* package
+      "files": ["packages/shared/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": [
+                  "@imp/local-tar",
+                  "@imp/local-tar/**",
+                  "@imp/api",
+                  "@imp/api/**",
+                  "@zgeoff/imp-client",
+                  "@zgeoff/imp-client/**",
+                  "@imp/mcp",
+                  "@imp/mcp/**",
+                  "@imp/cli",
+                  "@imp/cli/**",
+                  "@imp/daemon",
+                  "@imp/daemon/**",
+                  "@imp/dashboard",
+                  "@imp/dashboard/**"
+                ],
+                "message": "@imp/shared imports no @imp/* package."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // a leaf: imports only @imp/shared
+      "files": ["packages/local-tar/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": [
+                  "@imp/api",
+                  "@imp/api/**",
+                  "@zgeoff/imp-client",
+                  "@zgeoff/imp-client/**",
+                  "@imp/mcp",
+                  "@imp/mcp/**",
+                  "@imp/cli",
+                  "@imp/cli/**",
+                  "@imp/daemon",
+                  "@imp/daemon/**",
+                  "@imp/dashboard",
+                  "@imp/dashboard/**"
+                ],
+                "message": "@imp/local-tar is a leaf: it may import only @imp/shared."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // the contract: imports only @imp/shared
+      "files": ["packages/api/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": [
+                  "@imp/local-tar",
+                  "@imp/local-tar/**",
+                  "@zgeoff/imp-client",
+                  "@zgeoff/imp-client/**",
+                  "@imp/mcp",
+                  "@imp/mcp/**",
+                  "@imp/cli",
+                  "@imp/cli/**",
+                  "@imp/daemon",
+                  "@imp/daemon/**",
+                  "@imp/dashboard",
+                  "@imp/dashboard/**"
+                ],
+                "message": "@imp/api may import only @imp/shared."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // the published client: imports only @imp/shared and @imp/api
+      "files": ["packages/client/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": ["node:*"],
+                "message": "Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": [
+                  "@imp/local-tar",
+                  "@imp/local-tar/**",
+                  "@imp/mcp",
+                  "@imp/mcp/**",
+                  "@imp/cli",
+                  "@imp/cli/**",
+                  "@imp/daemon",
+                  "@imp/daemon/**",
+                  "@imp/dashboard",
+                  "@imp/dashboard/**"
+                ],
+                "message": "The client may import only @imp/shared and @imp/api."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // the MCP server: imports the leaves, @imp/api and the client
+      "files": ["packages/mcp/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": [
+                  "@imp/cli",
+                  "@imp/cli/**",
+                  "@imp/daemon",
+                  "@imp/daemon/**",
+                  "@imp/dashboard",
+                  "@imp/dashboard/**"
+                ],
+                "message": "@imp/mcp may import only @imp/shared, @imp/local-tar, @imp/api and the client."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // an app: imports every package below it, never another app
+      "files": ["packages/cli/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": ["@imp/daemon", "@imp/daemon/**", "@imp/dashboard", "@imp/dashboard/**"],
+                "message": "@imp/cli is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // an app: imports every package below it, never another app
+      "files": ["packages/daemon/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": ["@imp/cli", "@imp/cli/**", "@imp/dashboard", "@imp/dashboard/**"],
+                "message": "@imp/daemon is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // an app: imports every package below it, never another app
+      "files": ["packages/dashboard/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": ["@imp/cli", "@imp/cli/**", "@imp/daemon", "@imp/daemon/**"],
+                "message": "@imp/dashboard is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // the database folder: the daemon's rules, with Kysely allowed
+      "files": ["packages/daemon/src/db/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@imp/test-utils",
+                  "@imp/test-utils/**",
+                  "**/test-utils",
+                  "**/test-utils/**"
+                ],
+                "message": "Production code never imports test support."
+              },
+              {
+                "group": ["@imp/cli", "@imp/cli/**", "@imp/dashboard", "@imp/dashboard/**"],
+                "message": "@imp/daemon is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+              },
+              {
+                "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
+                "message": "Import another package by its package name, never by a relative path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // test support: tests may boot impd and reach any package's helpers, so only the Kysely rule holds
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.e2e.ts",
+        "**/*.pebble.ts",
+        "**/test-utils/**",
+        "**/smoke/**",
+        "**/mocks/**",
+        "packages/dashboard/e2e/**",
+        "**/test-setup.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // the shared test helpers: a leaf, like @imp/local-tar
+      "files": ["packages/test-utils/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["kysely", "kysely/*", "kysely-codegen"],
+                "message": "Query through a repository in packages/daemon/src/db instead."
+              },
+              {
+                "group": [
+                  "@imp/local-tar",
+                  "@imp/local-tar/**",
+                  "@imp/api",
+                  "@imp/api/**",
+                  "@zgeoff/imp-client",
+                  "@zgeoff/imp-client/**",
+                  "@imp/mcp",
+                  "@imp/mcp/**",
+                  "@imp/cli",
+                  "@imp/cli/**",
+                  "@imp/daemon",
+                  "@imp/daemon/**",
+                  "@imp/dashboard",
+                  "@imp/dashboard/**"
+                ],
+                "message": "@imp/test-utils is a leaf: it may import only @imp/shared."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // the daemon's own test helpers build queries against real databases
+      "files": ["packages/daemon/src/test-utils/**", "packages/daemon/src/db/**/*.test.ts"],
       "rules": {
         "no-restricted-imports": "off"
       }
