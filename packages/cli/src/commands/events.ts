@@ -1,5 +1,5 @@
 import type { ImpEvent } from '@imp/api';
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import type { ServerCheck } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
 import { runAction } from '../run-action';

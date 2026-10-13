@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test';
 import { buildMockSystemInfo } from '@imp/api/test-utils/build-mock-system-info';
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import { buildRanking, createPlaced, readFreeMib } from './place-imp';
 import { buildMockHostProbe } from './test-utils/build-mock-host-probe';
 

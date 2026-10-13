@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
-import { ORPCError } from '@orpc/client';
+import { ORPCError } from '@zgeoff/imp-client';
 import { listSavedTargets, runOnHosts } from './fan-out';
 import { writeHostConfig } from './host-store';
 import { buildMockSavedTarget } from './test-utils/build-mock-saved-target';
