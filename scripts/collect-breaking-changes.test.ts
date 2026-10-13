@@ -1149,3 +1149,262 @@ test('it reports an output variant that impd no longer sends under its tag', () 
     'message exec.server: no longer sends the variant type "exit"',
   ]);
 });
+
+test('it finds nothing between an intersection and itself', () => {
+  const schema = {
+    procedures: {
+      'imps.rename': {
+        input: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 10 },
+          ],
+        },
+        output: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 10 },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
+});
+
+test('it reports an input intersection whose one side narrows', () => {
+  const base = {
+    procedures: {
+      'imps.rename': {
+        input: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 10 },
+          ],
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.rename': {
+        input: {
+          allOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'string', maxLength: 5 },
+          ],
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'procedure imps.rename input: max length <= 10 → <= 5',
+  ]);
+});
+
+test('it reports a property that both sides of an output intersection name and one widens', () => {
+  const base = {
+    procedures: {
+      'imps.get': {
+        input: { type: 'object' },
+        output: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { name: { type: 'string', minLength: 1 } },
+              required: ['name'],
+            },
+            {
+              type: 'object',
+              properties: { name: { type: 'string', maxLength: 10 }, state: { type: 'string' } },
+              required: ['state'],
+            },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.get': {
+        input: { type: 'object' },
+        output: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { name: { type: 'string', minLength: 1 } },
+              required: ['name'],
+            },
+            {
+              type: 'object',
+              properties: { name: { type: 'string', maxLength: 64 }, state: { type: 'string' } },
+              required: ['state'],
+            },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([
+    'procedure imps.get output .name: max length <= 10 → <= 64',
+  ]);
+});
+
+test('it finds nothing between an intersection of objects and itself, open in the input and closed in the output', () => {
+  const schema = {
+    procedures: {
+      'imps.label': {
+        input: {
+          allOf: [
+            { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+            { type: 'object', properties: { b: { type: 'string' } }, required: ['b'] },
+          ],
+        },
+        output: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { a: { type: 'string' } },
+              required: ['a'],
+              additionalProperties: false,
+            },
+            {
+              type: 'object',
+              properties: { b: { type: 'string' } },
+              required: ['b'],
+              additionalProperties: false,
+            },
+          ],
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
+});
+
+test('it finds nothing between an intersection of two recursive schemas and itself', () => {
+  const schema = {
+    procedures: {
+      'files.chain': {
+        input: {
+          allOf: [{ $ref: '#/$defs/a' }, { $ref: '#/$defs/b' }],
+          $defs: {
+            a: { type: 'object', properties: { next: { $ref: '#/$defs/a' } } },
+            b: { type: 'object', properties: { next: { $ref: '#/$defs/b' } } },
+          },
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
+});
+
+test('it passes an input enum value that the other part of the intersection refused', () => {
+  const base = {
+    procedures: {
+      'imps.tag': {
+        input: { allOf: [{ type: 'string', maxLength: 1 }, { enum: ['a', 'long'] }] },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.tag': {
+        input: { type: 'string', maxLength: 1 },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([]);
+});
+
+test('it passes a changed input property that a closed part of the intersection refused', () => {
+  const base = {
+    procedures: {
+      'imps.label': {
+        input: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { a: { type: 'string' } },
+              additionalProperties: false,
+            },
+            { type: 'object', properties: { b: { type: 'string' } } },
+          ],
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'imps.label': {
+        input: {
+          type: 'object',
+          properties: { a: { type: 'string' }, b: { type: 'integer' } },
+        },
+        output: { type: 'object' },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([]);
+});

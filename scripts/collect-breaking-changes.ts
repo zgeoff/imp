@@ -175,7 +175,7 @@ function collectChanges(
   path: string,
   comparison: Comparison,
 ): string[] {
-  const refKey = `${findRef(narrowRef) ?? ''}|${findRef(wideRef) ?? ''}`;
+  const refKey = `${findCycleKey(narrowRef) ?? ''}|${findCycleKey(wideRef) ?? ''}`;
 
   if (refKey !== '|' && comparison.seen.has(refKey)) {
     return [];
@@ -246,6 +246,20 @@ function readStrings(schema: SchemaObject, keyword: string): readonly string[] {
   const items: readonly unknown[] = value;
 
   return items.filter((item): item is string => typeof item === 'string');
+}
+
+// What names a schema that a recursive schema meets again: its `$ref`, or the
+// whole of an intersection over `$ref`s, which a merge rebuilds at each level.
+function findCycleKey(schema: Schema): string | undefined {
+  const ref = findRef(schema);
+
+  if (ref !== undefined || typeof schema !== 'object') {
+    return ref;
+  }
+
+  const parts = readSchemaList(schema, 'allOf') ?? [];
+
+  return parts.some((part) => findRef(part) !== undefined) ? JSON.stringify(schema) : undefined;
 }
 
 function findRef(schema: Schema): string | undefined {
@@ -367,10 +381,9 @@ function collectObjectChanges(
   const wideParts = readSchemaList(wide, 'allOf');
 
   if (wideParts !== undefined) {
-    return [
-      ...wideParts.flatMap((part) => collectChanges(narrow, part, path, comparison)),
-      ...collectChanges(narrow, buildWithout(wide, ['allOf']), path, comparison),
-    ];
+    return mergeIntersection(wide, comparison.wideRoot, comparison.direction).flatMap((group) =>
+      collectChanges(narrow, group, path, comparison),
+    );
   }
 
   return [
@@ -395,23 +408,227 @@ function mergeSchemas(siblings: SchemaObject, branch: Schema): Schema {
   return typeof branch === 'boolean' ? branch : { ...siblings, ...branch };
 }
 
-// An intersection passes when one of its parts alone does; failing that, the
-// first part's changes stand for it.
+// An intersection's parts merge into one schema where their keywords combine;
+// of parts that stay apart, one alone must pass, failing which the first one's
+// changes stand for it.
 function collectIntersectionChanges(
   narrow: SchemaObject,
   wide: SchemaObject,
   path: string,
   comparison: Comparison,
 ): string[] {
-  const siblings = buildWithout(narrow, ['allOf']);
+  const groups = mergeIntersection(narrow, comparison.narrowRoot, comparison.direction);
 
-  const trials = (readSchemaList(narrow, 'allOf') ?? []).map((part) =>
-    collectChanges(mergeSchemas(siblings, part), wide, path, comparison),
-  );
+  if (groups.length === 1) {
+    return collectChanges(groups[0] ?? true, wide, path, comparison);
+  }
 
+  const trials = groups.map((group) => collectChanges(group, wide, path, comparison));
   const [first = []] = trials;
 
   return trials.some((trial) => trial.length === 0) ? [] : first;
+}
+
+// an intersection, with its siblings, as the fewest schemas a value must pass at once
+function mergeIntersection(
+  schema: SchemaObject,
+  root: Schema,
+  direction: MessageDirection,
+): readonly Schema[] {
+  const parts = [buildWithout(schema, ['allOf']), ...(readSchemaList(schema, 'allOf') ?? [])].map(
+    (part) => resolveRef(part, root),
+  );
+
+  if (parts.includes(false)) {
+    return [false];
+  }
+
+  return mergeIntersectionParts(
+    parts.filter((part) => isSchemaObject(part)),
+    direction,
+  );
+}
+
+// each part folded into the first group whose keywords it combines with
+function mergeIntersectionParts(
+  parts: readonly SchemaObject[],
+  direction: MessageDirection,
+): readonly SchemaObject[] {
+  const groups: SchemaObject[] = [];
+
+  for (const part of parts) {
+    const index = groups.findIndex(
+      (group) => mergeIntersectionPair(group, part, direction) !== undefined,
+    );
+
+    const merged =
+      index === -1 ? undefined : mergeIntersectionPair(groups[index] ?? {}, part, direction);
+
+    if (merged === undefined) {
+      groups.push(part);
+    } else {
+      groups[index] = merged;
+    }
+  }
+
+  return groups;
+}
+
+const OBJECT_KEYWORDS = ['properties', 'additionalProperties'];
+
+// one schema that takes exactly the values both take, or none when a keyword
+// conflicts in a way no one schema can state
+function mergeIntersectionPair(
+  a: SchemaObject,
+  b: SchemaObject,
+  direction: MessageDirection,
+): SchemaObject | undefined {
+  const merged: Record<string, unknown> = {
+    ...buildWithout(a, OBJECT_KEYWORDS),
+    ...mergeObjectKeywords(a, b, direction),
+  };
+
+  for (const [keyword, value] of Object.entries(b)) {
+    if (OBJECT_KEYWORDS.includes(keyword)) {
+      continue;
+    }
+
+    if (!(keyword in a)) {
+      merged[keyword] = value;
+      continue;
+    }
+
+    const combined = mergeKeyword(keyword, a[keyword], value);
+
+    if (combined === undefined) {
+      return undefined;
+    }
+
+    merged[keyword] = combined.value;
+  }
+
+  return merged;
+}
+
+// A key that one part names falls to the other part's `additionalProperties`.
+// zod closes each object of an output on its own keys, though the value it
+// sends carries the keys of every part, so a closed part binds only an input.
+function mergeObjectKeywords(
+  a: SchemaObject,
+  b: SchemaObject,
+  direction: MessageDirection,
+): Record<string, unknown> {
+  const parts = [a, b].map((part) => ({
+    properties: readSchemaMap(part, 'properties'),
+    extra: readSchema(part, 'additionalProperties'),
+  }));
+
+  const keys = [...new Set(parts.flatMap((part) => Object.keys(part.properties)))];
+
+  const properties = Object.fromEntries(
+    keys.map((key) => [
+      key,
+      mergeSchemaList(
+        parts.map(
+          (part) =>
+            part.properties[key] ??
+            (part.extra === false && direction === 'toClient' ? undefined : part.extra),
+        ),
+      ),
+    ]),
+  );
+
+  const extra = mergeSchemaList(parts.map((part) => part.extra));
+  const merged: Record<string, unknown> = {};
+
+  if ('properties' in a || 'properties' in b) {
+    merged['properties'] = properties;
+  }
+
+  if (extra !== undefined) {
+    merged['additionalProperties'] = extra;
+  }
+
+  return merged;
+}
+
+// the schemas a value must pass at once, as one schema
+function mergeSchemaList(schemas: readonly (Schema | undefined)[]): Schema | undefined {
+  const given = schemas.filter((schema) => schema !== undefined);
+
+  const distinct = given.filter(
+    (schema, index) =>
+      schema !== true && given.findIndex((other) => Bun.deepEquals(other, schema, true)) === index,
+  );
+
+  if (distinct.includes(false)) {
+    return false;
+  }
+
+  if (distinct.length === 0) {
+    return given.length === 0 ? undefined : true;
+  }
+
+  return distinct.length === 1 ? distinct[0] : { allOf: distinct };
+}
+
+const LOWER_KEYWORDS = new Set(['minimum', 'exclusiveMinimum', 'minLength', 'minItems']);
+const UPPER_KEYWORDS = new Set(['maximum', 'exclusiveMaximum', 'maxLength', 'maxItems']);
+
+function mergeKeyword(
+  keyword: string,
+  a: unknown,
+  b: unknown,
+): { readonly value: unknown } | undefined {
+  if (Bun.deepEquals(a, b, true) || ANNOTATIONS.has(keyword)) {
+    return { value: a };
+  }
+
+  if (typeof a === 'number' && typeof b === 'number') {
+    if (LOWER_KEYWORDS.has(keyword)) {
+      return { value: Math.max(a, b) };
+    }
+
+    if (UPPER_KEYWORDS.has(keyword)) {
+      return { value: Math.min(a, b) };
+    }
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    const both: readonly unknown[] = [a, b].flat();
+
+    if (keyword === 'required') {
+      return { value: [...new Set(both)] };
+    }
+
+    if (keyword === 'allOf') {
+      return { value: both };
+    }
+  }
+
+  if (keyword === 'type') {
+    return mergeTypes({ type: a }, { type: b });
+  }
+
+  return undefined;
+}
+
+// the types both sides take, where an integer is also a number
+function mergeTypes(a: SchemaObject, b: SchemaObject): { readonly value: unknown } | undefined {
+  const sides = [readTypes(a) ?? JSON_TYPES, readTypes(b) ?? JSON_TYPES];
+
+  const common = JSON_TYPES.filter((type) =>
+    sides.every((side) => side.includes(type) || (type === 'integer' && side.includes('number'))),
+  );
+
+  // a number on both sides already takes every integer
+  const types = common.includes('number') ? common.filter((type) => type !== 'integer') : common;
+
+  if (types.length === 0) {
+    return undefined;
+  }
+
+  return { value: types.length === 1 ? types[0] : types };
 }
 
 function readValues(schema: Schema): unknown[] | undefined {
@@ -440,7 +657,10 @@ function collectValueChanges(
 
   const verb = comparison.direction === 'toServer' ? 'no longer accepts' : 'may now be';
 
+  // a listed value that the narrow side's other keywords refuse, as an
+  // intersection's merge may leave, was never taken
   return (readValues(narrow) ?? [])
+    .filter((value) => isValueAccepted(narrow, value, comparison.narrowRoot))
     .filter((value) => !isValueAccepted(wide, value, comparison.wideRoot))
     .map((value) => formatChange(path, `${verb} ${formatValue(value)}`));
 }
@@ -810,6 +1030,11 @@ function collectPropertyChanges(
 
   const properties = Object.entries(narrowProperties).flatMap(([key, schema]) => {
     const wideProperty = wideProperties[key] ?? recordValues;
+
+    // a property no value can take, as one an intersection's closed part refuses
+    if (schema === false) {
+      return [];
+    }
 
     if (wideProperty !== undefined) {
       return collectChanges(schema, wideProperty, `${path}.${key}`, comparison);
