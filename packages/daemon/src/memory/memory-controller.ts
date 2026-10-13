@@ -169,13 +169,9 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     state.lowerTo = null;
   };
 
-  // a plug or an unplug under the imp's lock; `before` runs first under it
-  const sendLocked = (imp: ElasticImp, mib: number, before = () => {}) =>
-    deps.tryWhileRunning(imp.id, async () => {
-      before();
-
-      await deps.vms.requestPluggedMib(imp.paths, mib);
-    });
+  // an unplug, or a plug's end, under the imp's lock
+  const sendLocked = (imp: ElasticImp, mib: number) =>
+    deps.tryWhileRunning(imp.id, () => deps.vms.requestPluggedMib(imp.paths, mib));
 
   const growImp = async (imp: ElasticImp, memory: Readonly<GuestMemory>) => {
     const state = readState(imp, memory);
@@ -229,8 +225,10 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     const pluggedMib = memory.pluggedMib + stepMib;
 
     // the host lets the guest have it before the guest takes it
-    const isRequested = await sendLocked(imp, pluggedMib, () => {
+    const isRequested = await deps.tryWhileRunning(imp.id, async () => {
       deps.limit.setGuestMib(imp.id, imp.memoryMib + pluggedMib);
+
+      await sendPlug(imp, memory, pluggedMib);
     });
 
     // a sleep or stop took the imp since the tick looked
@@ -256,6 +254,28 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     deps.log(
       `impd: ${imp.name}: memory low (${String(memory.availableMib)} of ${String(memory.totalMib)} MiB free), grew to ${String(imp.memoryMib + pluggedMib)} MiB`,
     );
+  };
+
+  // A failed request may still have landed, its answer lost: the requested
+  // size says. One that did not gives back the reservation and the limit; an
+  // unreadable guest keeps the reservation until the governor lets it lapse.
+  const sendPlug = async (imp: ElasticImp, memory: Readonly<GuestMemory>, pluggedMib: number) => {
+    try {
+      await deps.vms.requestPluggedMib(imp.paths, pluggedMib);
+    } catch (error) {
+      const seen = await deps.vms.readGuestMemory(imp.paths).catch(() => null);
+
+      if (seen?.requestedMib === pluggedMib) {
+        return;
+      }
+
+      if (seen !== null) {
+        deps.releaseGrow(imp.id);
+        deps.limit.setGuestMib(imp.id, imp.memoryMib + memory.pluggedMib);
+      }
+
+      throw error;
+    }
   };
 
   // an unplug toward the spare size; the guest gets there in its own time,
@@ -423,33 +443,34 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
         const freed = { mib: 0 };
 
         await deps.tryWhileRunning(imp.id, async () => {
-          const before = await deps.vms.readGuestMemory(imp.paths);
-
-          const afterMib = await shrinkGuest(deps.vms, imp.paths, {
+          // the shrink's own reads, so a plug that moves between them counts
+          const shrunk = await shrinkGuest(deps.vms, imp.paths, {
             timeLimitMs: RECLAIM_TIME_LIMIT_MS,
             ...(deps.sleep !== undefined && { sleep: deps.sleep }),
             now,
           });
 
+          const afterMib = shrunk.pluggedMib;
+
           deps.setPluggedMib(imp.id, afterMib);
 
           const state = states.get(imp.id);
 
-          if (state !== undefined && afterMib < before.pluggedMib) {
+          if (state !== undefined && afterMib < shrunk.reachedMib) {
             state.lowerTo = afterMib;
             state.uncountedGrow = null;
           } else if (
             state !== undefined &&
             state.uncountedGrow !== null &&
-            afterMib < before.requestedMib
+            afterMib < shrunk.before.requestedMib
           ) {
             // the unplug stopped a plug under way, whose rest the guest never
             // gets; what it got may land in the statistics after this
-            state.uncountedGrow.totalMib -= before.requestedMib - afterMib;
+            state.uncountedGrow.totalMib -= shrunk.before.requestedMib - afterMib;
           }
 
           // a plug under way gives nothing back
-          freed.mib = Math.max(0, before.pluggedMib - afterMib);
+          freed.mib = Math.max(0, shrunk.reachedMib - afterMib);
         });
 
         return freed.mib;

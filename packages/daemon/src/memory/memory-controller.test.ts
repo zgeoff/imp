@@ -911,6 +911,52 @@ test('it counts no part of a plug that a reclaim stopped in the grow after it', 
   expect(ctx.guests.requests).toStrictEqual([256, 0, 128, 384]);
 });
 
+test('it counts what a reclaim unplugs from a plug that moves after its first read, and lowers the limit', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, {
+    pluggedMib: 64,
+    requestedMib: 256,
+    usedMib: 100,
+    unplugFloorMib: 128,
+    isSlow: true,
+  });
+
+  // the reclaim's polls take time on the controller's clock
+  const controller = createMemoryController({
+    ...ctx.deps,
+    readRamMib: () => 400,
+    sleep: (ms) => {
+      ctx.advance(ms);
+
+      return Promise.resolve();
+    },
+  });
+
+  await controller.runTick();
+
+  // the rest of the plug lands after the reclaim first reads the guest, and
+  // the unplug then stops at 128
+  guest.isSlow = false;
+  guest.pluggedOnReads = [64, 256];
+
+  const freed = await controller.reclaimIdle(null);
+
+  await controller.runTick();
+
+  expect(freed).toBe(256 - 128);
+  expect(ctx.limits).toStrictEqual(['dev 768', 'dev 640']);
+});
+
 test('it shrinks a large guest to leave 15 % of it free', async () => {
   const ctx = setupTest();
 
@@ -1165,4 +1211,82 @@ test('it plugs nothing for a grow that a sleep overtakes, and gives its reservat
   expect(ctx.releases).toStrictEqual(['dev']);
   expect(ctx.guests.requests).toStrictEqual([]);
   expect(ctx.limits).toStrictEqual(['dev 512']);
+});
+
+test('it keeps the reservation of a plug that Firecracker applied but never answered', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+  ctx.guests.addGuest(imp.paths, { usedMib: 490, isAnswerLost: true });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+  expect(ctx.releases).toStrictEqual([]);
+
+  expect(ctx.logs).toStrictEqual([
+    `impd: ${imp.name}: memory low (22 of 512 MiB free), grew to 768 MiB`,
+  ]);
+});
+
+test('it grows a guest once after a plug that Firecracker applied but never answered', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  ctx.guests.addGuest(imp.paths, {
+    usedMib: 490,
+    isAnswerLost: true,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256]);
+});
+
+test('it gives back the reservation and the limit of a plug that Firecracker refused', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  // a region too small for the step: Firecracker answers 400
+  ctx.guests.addGuest(imp.paths, { usedMib: 490, regionMib: 128 });
+
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([]);
+  expect(ctx.releases).toStrictEqual(['dev']);
+  expect(ctx.limits).toStrictEqual(['dev 512', 'dev 768', 'dev 512']);
 });

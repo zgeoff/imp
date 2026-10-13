@@ -454,11 +454,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
 
     try {
-      const pluggedMib = await shrinkGuest(context.vms, paths, {
+      const shrunk = await shrinkGuest(context.vms, paths, {
         timeLimitMs: SLEEP_SHRINK_LIMIT_MS,
         now: context.now,
         sleep: context.sleep,
       });
+
+      const pluggedMib = shrunk.pluggedMib;
 
       context.pluggedSizes.write(imp.id, pluggedMib);
 

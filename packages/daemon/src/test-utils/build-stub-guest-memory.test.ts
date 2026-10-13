@@ -77,6 +77,61 @@ test('it leaves a slow guest where it was', async () => {
   expect(memory.pluggedMib).toBe(0);
 });
 
+test('it finds the scripted plugged sizes on the next reads, in order', async () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), {
+    pluggedMib: 64,
+    requestedMib: 256,
+    pluggedOnReads: [128, 256],
+  });
+
+  const first = await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+  const second = await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+
+  expect(first.pluggedMib).toBe(128);
+  expect(second.pluggedMib).toBe(256);
+});
+
+test('it moves the guest as usual once the scripted reads run out', async () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), {
+    pluggedMib: 64,
+    requestedMib: 256,
+    pluggedOnReads: [128],
+  });
+
+  await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+
+  const memory = await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+
+  expect(memory.pluggedMib).toBe(256);
+});
+
+test('it rejects a request whose answer it loses as the runner does a timeout', () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), { isAnswerLost: true });
+
+  expect(stub.vms.requestPluggedMib(buildImpPaths('/data', 'dev'), 256)).rejects.toThrowWithMessage(
+    Error,
+    'firecracker PATCH /hotplug/memory: no answer within 1000 ms',
+  );
+});
+
+test('it applies a request whose answer it loses', async () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), { isAnswerLost: true });
+
+  await stub.vms.requestPluggedMib(buildImpPaths('/data', 'dev'), 256).catch(() => {});
+
+  const memory = await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+
+  expect(memory.requestedMib).toBe(256);
+});
+
 test('it records each requested size', async () => {
   const stub = buildStubGuestMemory();
 

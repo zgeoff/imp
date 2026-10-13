@@ -23,14 +23,22 @@ export function findShrinkTargetMib(memory: Readonly<GuestMemory>): number {
   return Math.max(0, toWholeBlocks(findSpareTotalMib(usedMib) - baseMib));
 }
 
+// What a shrink saw: the guest as its first read found it, the most it held
+// plugged in any read, as a plug under way may still move after the first,
+// and the MiB it holds at the end, or will once a plug under way ends.
+export interface ShrinkResult {
+  readonly before: Readonly<GuestMemory>;
+  readonly reachedMib: number;
+  readonly pluggedMib: number;
+}
+
 // Unplugs toward the shrink target until the guest gets there, stops moving
-// (then asks it back to what it reached), or the time limit passes; returns
-// the MiB it holds then, or will hold once a plug under way ends.
+// (then asks it back to what it reached), or the time limit passes.
 export async function shrinkGuest(
   vm: GuestMemoryVm,
   paths: Parameters<GuestMemoryVm['readGuestMemory']>[0],
   options: Readonly<ShrinkOptions>,
-): Promise<number> {
+): Promise<ShrinkResult> {
   const sleep = options.sleep ?? Bun.sleep;
   const now = options.now ?? Date.now;
   const deadline = now() + options.timeLimitMs;
@@ -41,20 +49,27 @@ export async function shrinkGuest(
 
   // nothing to give back; a plug under way may still add up to its request
   if (targetMib >= before.pluggedMib) {
-    return Math.max(before.pluggedMib, before.requestedMib);
+    return {
+      before,
+      reachedMib: before.pluggedMib,
+      pluggedMib: Math.max(before.pluggedMib, before.requestedMib),
+    };
   }
 
   await vm.requestPluggedMib(paths, targetMib);
 
   const moved = { pluggedMib: before.pluggedMib, at: now() };
+  const reached = { mib: before.pluggedMib };
 
   for (;;) {
     await sleep(POLL_MS);
 
     const seen = await vm.readGuestMemory(paths);
 
+    reached.mib = Math.max(reached.mib, seen.pluggedMib);
+
     if (seen.pluggedMib <= targetMib) {
-      return seen.pluggedMib;
+      return { before, reachedMib: reached.mib, pluggedMib: seen.pluggedMib };
     }
 
     if (seen.pluggedMib !== moved.pluggedMib) {
@@ -65,7 +80,7 @@ export async function shrinkGuest(
     if (now() - moved.at >= STALL_MS || now() >= deadline) {
       await vm.requestPluggedMib(paths, seen.pluggedMib);
 
-      return seen.pluggedMib;
+      return { before, reachedMib: reached.mib, pluggedMib: seen.pluggedMib };
     }
   }
 }
