@@ -23,6 +23,11 @@ const RECLAIM_TIME_LIMIT_MS = 1000;
 // a plug or an unplug whose plugged size stands still this long has stopped
 const STALL_MS = 2000;
 
+// The balloon statistics count a plug at their next poll, 1 s at most after
+// it lands (configure-vm.ts); a grow they still miss after this long no
+// longer holds back the next one.
+const GROW_UNCOUNTED_MS = 3000;
+
 export interface ElasticImp {
   readonly id: string;
   readonly name: string;
@@ -79,6 +84,11 @@ interface ImpState {
   // a plug or an unplug under way: where it stood, and since when
   change: { pluggedMib: number; since: number } | null;
 
+  // after a grow, the total the balloon statistics reach once they count it:
+  // until then they show the guest from before the plug, still low, and the
+  // next grow waits for them or for `until`
+  uncountedGrow: { totalMib: number; until: number } | null;
+
   // a stopped plug is logged once, until the guest's size moves again
   stalledAtMib: number | null;
 
@@ -123,6 +133,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
       shrinkAfter: 0,
       growAfter: 0,
       change: null,
+      uncountedGrow: null,
       stalledAtMib: null,
       lowerTo: null,
       isRefused: false,
@@ -166,7 +177,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
       await deps.vms.requestPluggedMib(imp.paths, mib);
     });
 
-  const growImp = async (imp: ElasticImp, memory: Readonly<GuestMemory>) => {
+  const growImp = async (imp: ElasticImp, memory: Readonly<GuestMemory>, time: number) => {
     const state = readState(imp, memory);
 
     const capMib = Math.min(
@@ -230,6 +241,12 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     }
 
     state.lowerTo = null;
+
+    // the guest's struct pages for the step may come out of what it counts
+    state.uncountedGrow = {
+      totalMib: memory.totalMib + stepMib - findStructPageMib(stepMib),
+      until: time + GROW_UNCOUNTED_MS,
+    };
 
     deps.log(
       `impd: ${imp.name}: memory low (${String(memory.availableMib)} of ${String(memory.totalMib)} MiB free), grew to ${String(imp.memoryMib + pluggedMib)} MiB`,
@@ -321,11 +338,18 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     applyLowerLimit(imp, memory);
 
+    if (
+      state.uncountedGrow !== null &&
+      (memory.totalMib >= state.uncountedGrow.totalMib || time >= state.uncountedGrow.until)
+    ) {
+      state.uncountedGrow = null;
+    }
+
     if (memory.availableMib < findLowMib(memory.totalMib)) {
       state.spareSince = null;
 
-      if (time >= state.growAfter) {
-        await growImp(imp, memory);
+      if (time >= state.growAfter && state.uncountedGrow === null) {
+        await growImp(imp, memory, time);
       }
 
       return;

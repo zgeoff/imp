@@ -45,6 +45,26 @@ test('it finds an unplug stopped at the floor', async () => {
   expect(memory.pluggedMib).toBe(768);
 });
 
+test('it reports stale statistics beside a plug that is done', async () => {
+  const stub = buildStubGuestMemory();
+
+  stub.addGuest(buildImpPaths('/data', 'dev'), {
+    usedMib: 490,
+    staleStats: { totalMib: 512, availableMib: 22 },
+  });
+
+  await stub.vms.requestPluggedMib(buildImpPaths('/data', 'dev'), 256);
+
+  const memory = await stub.vms.readGuestMemory(buildImpPaths('/data', 'dev'));
+
+  expect(memory).toStrictEqual({
+    pluggedMib: 256,
+    requestedMib: 256,
+    totalMib: 512,
+    availableMib: 22,
+  });
+});
+
 test('it leaves a slow guest where it was', async () => {
   const stub = buildStubGuestMemory();
 
