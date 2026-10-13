@@ -314,6 +314,10 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
 
     state.growAfter = time + BACKOFF_MS;
 
+    // the guest never got the rest of the step, and the statistics have had
+    // the stall's time to count what it did get
+    state.uncountedGrow = null;
+
     if (state.stalledAtMib === null) {
       deps.log(`impd: ${imp.name}: the guest could not plug past ${guestMib} MiB`);
     }

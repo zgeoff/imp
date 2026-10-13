@@ -986,6 +986,45 @@ test('it logs a second plug that never finishes no more', async () => {
   expect(ctx.logs.filter((line) => line.includes('could not plug'))).toHaveLength(1);
 });
 
+test('it counts no part of a plug that never finished in the grow after it', async () => {
+  const ctx = setupTest();
+
+  const imp = buildMockElasticImp({
+    id: 'dev',
+    memoryMib: 512,
+    maxMemoryMib: 1536,
+    agentVersion: '0.17.0',
+  });
+
+  ctx.imps.push(imp);
+
+  const guest = ctx.guests.addGuest(imp.paths, { usedMib: 500, isSlow: true });
+  const controller = createMemoryController({ ...ctx.deps, readRamMib: () => 400 });
+
+  await controller.runTick();
+  await controller.runTick();
+
+  ctx.advance(2000);
+
+  await controller.runTick();
+  await controller.runTick();
+
+  guest.isSlow = false;
+
+  ctx.advance(60_000);
+
+  await controller.runTick();
+
+  // the statistics count the retried step, and the guest is still low
+  guest.usedMib = 750;
+
+  ctx.advance(500);
+
+  await controller.runTick();
+
+  expect(ctx.guests.requests).toStrictEqual([256, 0, 256, 512]);
+});
+
 test('it plugs nothing for a grow that a sleep overtakes, and gives its reservation back', async () => {
   const ctx = setupTest();
 
