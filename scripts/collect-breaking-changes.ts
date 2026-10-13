@@ -195,6 +195,56 @@ function collectChanges(
   return collectObjectChanges(narrow, wide, path, inner);
 }
 
+function isSchema(value: unknown): value is Schema {
+  return typeof value === 'boolean' || isSchemaObject(value);
+}
+
+function isSchemaObject(value: unknown): value is SchemaObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readSchema(schema: SchemaObject, keyword: string): Schema | undefined {
+  const value = schema[keyword];
+
+  return isSchema(value) ? value : undefined;
+}
+
+function readSchemaList(schema: SchemaObject, keyword: string): readonly Schema[] | undefined {
+  const value: unknown = schema[keyword];
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const items: readonly unknown[] = value;
+
+  return items.filter((item): item is Schema => isSchema(item));
+}
+
+function readSchemaMap(schema: SchemaObject, keyword: string): Readonly<Record<string, Schema>> {
+  const value = schema[keyword];
+
+  if (!isSchemaObject(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, Schema] => isSchema(entry[1])),
+  );
+}
+
+function readStrings(schema: SchemaObject, keyword: string): readonly string[] {
+  const value: unknown = schema[keyword];
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const items: readonly unknown[] = value;
+
+  return items.filter((item): item is string => typeof item === 'string');
+}
+
 function findRef(schema: Schema): string | undefined {
   return typeof schema === 'object' && typeof schema['$ref'] === 'string'
     ? schema['$ref']
@@ -212,15 +262,15 @@ function resolveRef(schema: Schema, root: Schema): Schema {
   let target: unknown = root;
 
   for (const part of ref.replace(/^#\/?/u, '').split('/').filter(Boolean)) {
-    target = (target as Record<string, unknown> | undefined)?.[decodePointer(part)];
+    target = isSchemaObject(target) ? target[decodePointer(part)] : undefined;
   }
 
-  if (typeof target !== 'object' && typeof target !== 'boolean') {
+  if (!isSchema(target)) {
     throw new TypeError(`unresolved $ref ${ref}`);
   }
 
   const { $ref: _ref, ...siblings } = schema;
-  const resolved = resolveRef(target as Schema, root);
+  const resolved = resolveRef(target, root);
 
   return Object.keys(siblings).length === 0 || typeof resolved === 'boolean'
     ? resolved
@@ -279,7 +329,7 @@ function collectObjectChanges(
     );
   }
 
-  if (Array.isArray(narrow['allOf'])) {
+  if (readSchemaList(narrow, 'allOf') !== undefined) {
     return collectIntersectionChanges(narrow, wide, path, comparison);
   }
 
@@ -293,11 +343,11 @@ function collectObjectChanges(
     return collectUnionChanges(narrow, wide, wideBranches, path, comparison);
   }
 
-  if (Array.isArray(wide['allOf'])) {
+  const wideParts = readSchemaList(wide, 'allOf');
+
+  if (wideParts !== undefined) {
     return [
-      ...(wide['allOf'] as Schema[]).flatMap((part) =>
-        collectChanges(narrow, part, path, comparison),
-      ),
+      ...wideParts.flatMap((part) => collectChanges(narrow, part, path, comparison)),
       ...collectChanges(narrow, buildWithout(wide, ['allOf']), path, comparison),
     ];
   }
@@ -312,10 +362,8 @@ function collectObjectChanges(
   ];
 }
 
-function readBranches(schema: SchemaObject): Schema[] | undefined {
-  const branches = schema['anyOf'] ?? schema['oneOf'];
-
-  return Array.isArray(branches) ? (branches as Schema[]) : undefined;
+function readBranches(schema: SchemaObject): readonly Schema[] | undefined {
+  return readSchemaList(schema, 'anyOf') ?? readSchemaList(schema, 'oneOf');
 }
 
 function buildWithout(schema: SchemaObject, keys: readonly string[]): Record<string, unknown> {
@@ -336,7 +384,7 @@ function collectIntersectionChanges(
 ): string[] {
   const siblings = buildWithout(narrow, ['allOf']);
 
-  const trials = (narrow['allOf'] as Schema[]).map((part) =>
+  const trials = (readSchemaList(narrow, 'allOf') ?? []).map((part) =>
     collectChanges(mergeSchemas(siblings, part), wide, path, comparison),
   );
 
@@ -432,8 +480,8 @@ function hasOtherTag(narrow: SchemaObject, wide: Schema): boolean {
     return false;
   }
 
-  const narrowProperties = (narrow['properties'] ?? {}) as Readonly<Record<string, Schema>>;
-  const wideProperties = (wide['properties'] ?? {}) as Readonly<Record<string, Schema>>;
+  const narrowProperties = readSchemaMap(narrow, 'properties');
+  const wideProperties = readSchemaMap(wide, 'properties');
 
   return Object.entries(narrowProperties).some(([key, schema]) => {
     const narrowValues = readValues(schema);
@@ -450,7 +498,7 @@ function hasOtherTag(narrow: SchemaObject, wide: Schema): boolean {
 
 // the first property fixed to a closed set, as `type "stdout_ack"`
 function formatTag(schema: SchemaObject): string {
-  const properties = (schema['properties'] ?? {}) as Readonly<Record<string, Schema>>;
+  const properties = readSchemaMap(schema, 'properties');
 
   for (const [key, property] of Object.entries(properties)) {
     const values = readValues(property);
@@ -469,14 +517,14 @@ function formatValues(values: readonly unknown[] | undefined): string {
 
 const JSON_TYPES = ['string', 'number', 'integer', 'boolean', 'null', 'array', 'object'];
 
-function readTypes(schema: SchemaObject): string[] | undefined {
+function readTypes(schema: SchemaObject): readonly string[] | undefined {
   const type = schema['type'];
 
   if (typeof type === 'string') {
     return [type];
   }
 
-  return Array.isArray(type) ? (type as string[]) : undefined;
+  return Array.isArray(type) ? readStrings(schema, 'type') : undefined;
 }
 
 // the type, and a closed set that the wide side brings where the narrow had none
@@ -648,8 +696,8 @@ function collectItemChanges(
     return [];
   }
 
-  const narrowItems = (narrow['items'] as Schema | undefined) ?? true;
-  const wideItems = (wide['items'] as Schema | undefined) ?? true;
+  const narrowItems = readSchema(narrow, 'items') ?? true;
+  const wideItems = readSchema(wide, 'items') ?? true;
 
   return collectChanges(narrowItems, wideItems, `${path}[]`, comparison);
 }
@@ -660,12 +708,12 @@ function collectPropertyChanges(
   path: string,
   comparison: Comparison,
 ): string[] {
-  const narrowProperties = (narrow['properties'] ?? {}) as Readonly<Record<string, Schema>>;
-  const wideProperties = (wide['properties'] ?? {}) as Readonly<Record<string, Schema>>;
-  const narrowRequired = (narrow['required'] ?? []) as readonly string[];
-  const wideRequired = (wide['required'] ?? []) as readonly string[];
-  const wideExtra = wide['additionalProperties'] as Schema | undefined;
-  const narrowExtra = narrow['additionalProperties'] as Schema | undefined;
+  const narrowProperties = readSchemaMap(narrow, 'properties');
+  const wideProperties = readSchemaMap(wide, 'properties');
+  const narrowRequired = readStrings(narrow, 'required');
+  const wideRequired = readStrings(wide, 'required');
+  const wideExtra = readSchema(wide, 'additionalProperties');
+  const narrowExtra = readSchema(narrow, 'additionalProperties');
   const recordValues = typeof wideExtra === 'object' ? wideExtra : undefined;
   const missing = comparison.direction === 'toServer' ? 'now required' : 'may now be missing';
 
@@ -715,13 +763,13 @@ function collectKeyChanges(
   path: string,
   comparison: Comparison,
 ): string[] {
-  const wideKeys = wide['propertyNames'] as Schema | undefined;
+  const wideKeys = readSchema(wide, 'propertyNames');
 
   if (wideKeys === undefined) {
     return [];
   }
 
-  const narrowKeys = (narrow['propertyNames'] as Schema | undefined) ?? { type: 'string' };
+  const narrowKeys = readSchema(narrow, 'propertyNames') ?? { type: 'string' };
 
   return collectChanges(narrowKeys, wideKeys, `${path}{key}`, comparison);
 }
@@ -755,7 +803,7 @@ function isValueAccepted(schemaRef: Schema, value: unknown, root: Schema): boole
   }
 
   const branches = readBranches(schema);
-  const parts = Array.isArray(schema['allOf']) ? (schema['allOf'] as Schema[]) : [];
+  const parts = readSchemaList(schema, 'allOf') ?? [];
   const values = readValues(schema);
   const types = readTypes(schema);
 
@@ -794,7 +842,7 @@ function isOfType(value: unknown, type: string): boolean {
 }
 
 function isStringAccepted(schema: SchemaObject, value: string): boolean {
-  const length = [...value].length;
+  const length = countCodePoints(value);
   const pattern = schema['pattern'];
 
   return (
@@ -802,6 +850,11 @@ function isStringAccepted(schema: SchemaObject, value: string): boolean {
     isInBound(length, readInclusive(schema, 'maxLength'), 'upper') &&
     (typeof pattern !== 'string' || new RegExp(pattern, 'u').test(value))
   );
+}
+
+// JSON Schema counts a string's length in code points
+function countCodePoints(value: string): number {
+  return [...value.matchAll(/./gsu)].length;
 }
 
 function isNumberAccepted(schema: SchemaObject, value: number): boolean {

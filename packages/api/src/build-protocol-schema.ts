@@ -1,4 +1,5 @@
 import { getEventIteratorSchemaDetails, isContractProcedure } from '@orpc/contract';
+import type { AnySchema } from '@orpc/contract';
 import * as z from 'zod';
 import {
   EXEC_CHANNELS,
@@ -33,7 +34,7 @@ import {
   TunnelServerMessageSchema,
 } from './tunnel-protocol';
 
-type JsonSchema = Record<string, unknown>;
+type JsonSchema = Readonly<Record<string, unknown>>;
 
 // `toServer`: a client sends it and impd reads it; `toClient`: the reverse
 export type MessageDirection = 'toServer' | 'toClient';
@@ -113,7 +114,7 @@ function collectProcedures(
   node: unknown,
   path: readonly string[],
 ): Record<string, ProcedureSchema> {
-  if (isContractProcedure(node)) {
+  if (isProcedure(node)) {
     const definition = node['~orpc'];
     const events = getEventIteratorSchemaDetails(definition.outputSchema);
     const output = events === undefined ? definition.outputSchema : events.yields;
@@ -127,15 +128,30 @@ function collectProcedures(
     };
   }
 
+  if (typeof node !== 'object' || node === null) {
+    return {};
+  }
+
   return Object.fromEntries(
-    Object.entries(node as Record<string, unknown>).flatMap(([key, child]) =>
+    Object.entries(node).flatMap(([key, child]) =>
       Object.entries(collectProcedures(child, [...path, key])),
     ),
   );
 }
 
+interface Procedure {
+  readonly '~orpc': {
+    readonly inputSchema?: AnySchema;
+    readonly outputSchema?: AnySchema;
+  };
+}
+
+function isProcedure(node: unknown): node is Procedure {
+  return isContractProcedure(node);
+}
+
 // A message on the wire is what its reader parses, so it is the schema's input.
-function toMessage(direction: MessageDirection, schema: z.ZodType): MessageSchema {
+function toMessage(direction: MessageDirection, schema: unknown): MessageSchema {
   return { direction, schema: buildJsonSchema(schema, 'input') };
 }
 
@@ -146,15 +162,19 @@ function buildJsonSchema(schema: unknown, io: 'input' | 'output'): JsonSchema {
     return {};
   }
 
-  const { $schema: _dialect, ...json } = z.toJSONSchema(schema as z.ZodType, {
+  if (!(schema instanceof z.ZodType)) {
+    throw new TypeError('the protocol schema reads zod schemas only');
+  }
+
+  const { $schema: _dialect, ...json } = z.toJSONSchema(schema, {
     io,
     unrepresentable: 'any',
     override: (context) => {
       const zodSchema = context.zodSchema;
 
       if (zodSchema instanceof z.ZodDate) {
-        context.jsonSchema['type'] = 'string';
-        context.jsonSchema['format'] = 'date-time';
+        context.jsonSchema.type = 'string';
+        context.jsonSchema.format = 'date-time';
       } else if (zodSchema instanceof z.ZodCustom) {
         context.jsonSchema['x-unrepresentable'] = 'custom';
       } else if (zodSchema instanceof z.ZodTransform) {
