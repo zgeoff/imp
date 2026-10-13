@@ -762,7 +762,7 @@ test('it ends a call only once impd answers, after its stream drops', async () =
   expect(endedBeforeAnswer).toBeFalse();
 });
 
-test('it knows no call end for a response that is not a streamed call', () => {
+test('it knows no call end for a response that carries no tool call', () => {
   const transport = createHttpTransport({
     version: '1.2.3',
     authenticate: () => Promise.resolve(null),
@@ -2360,5 +2360,65 @@ test('it waits at close for a 2026-07-28 create whose request the client aborted
 
   await closing;
 
+  expect(whileCreating).toBeUndefined();
+});
+
+test('it ends the call behind an aborted 2026-07-28 create’s response only when the create does', async () => {
+  const ctx = await setupTest();
+
+  ctx.gate.arm();
+  ctx.principals.set('Bearer alice', buildMockMcpPrincipal({ key: 'alice', client: ctx.client }));
+
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  // what drops the connection under every request, as a client gone away
+  const abort = new AbortController();
+
+  const responses: Response[] = [];
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://impd.test/mcp'), {
+      requestInit: { headers: { authorization: 'Bearer alice' } },
+      fetch: async (url, init) => {
+        const response = await ctx.transport.handle(
+          new Request(url.toString(), { ...init, signal: abort.signal }),
+        );
+
+        responses.push(response);
+
+        return response;
+      },
+    }),
+  );
+
+  onTestFinished(() => client.close());
+
+  const call = client.callTool({ name: 'imp_create', arguments: { name: 'box' } });
+
+  // the create waits inside impd while its request aborts
+  await ctx.gate.reached;
+
+  abort.abort();
+
+  await expect(call).toReject();
+
+  const aborted = responses.at(-1);
+
+  invariant(aborted);
+
+  const callEnd = ctx.transport.readCallEnd(aborted);
+
+  invariant(callEnd);
+
+  const whileCreating = await Promise.race([callEnd.then(() => 'ended'), Bun.sleep(50)]);
+
+  ctx.gate.release();
+
+  await callEnd;
+
+  expect(aborted.status).toBe(499);
   expect(whileCreating).toBeUndefined();
 });

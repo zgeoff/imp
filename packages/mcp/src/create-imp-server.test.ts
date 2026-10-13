@@ -484,6 +484,55 @@ test('it refuses a call whose id a running call holds with an invalid-params err
   ]);
 });
 
+test('it still answers a create whose cancel arrives before the create starts', async () => {
+  const ctx = await setupTest();
+
+  const server = createMcpServer({ version: '1.2.3' });
+
+  const context = {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  } as const;
+
+  // the connection is open before the two lines come
+  await server.receive('{"jsonrpc":"2.0","id":0,"method":"ping"}', {
+    ...context,
+    reply: () => {},
+  });
+
+  // both lines in one read, as one chunk of stdin brings them
+  const created = server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_create', arguments: { name: 'box' } },
+    }),
+    context,
+  );
+
+  const cancelled = server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'notifications/cancelled',
+      params: { requestId: 1 },
+    }),
+    context,
+  );
+
+  await Promise.all([created, cancelled]);
+
+  expect(ctx.sent).toMatchObject([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: { content: [{ type: 'text', text: expect.any(String) as unknown }] },
+    },
+  ]);
+});
+
 test('it cancels the first call after refusing a second with its id', async () => {
   const ctx = await setupTest();
 

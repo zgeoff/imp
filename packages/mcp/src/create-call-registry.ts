@@ -1,5 +1,6 @@
 import { INVALID_PARAMS, isJSONRPCRequest } from '@modelcontextprotocol/server';
 import type { JSONRPCErrorResponse, RequestId, Transport } from '@modelcontextprotocol/server';
+import { TOOLS } from './tools/tool-list';
 
 interface Call {
   readonly abort: AbortController;
@@ -32,15 +33,30 @@ export interface CallRegistry {
 export function createCallRegistry(): CallRegistry {
   const calls = new Map<RequestId, Call>();
 
-  // tool calls past the gate that have not started yet
-  const arriving = new Set<RequestId>();
+  // tool calls past the gate that have not started yet, and whether a cancel
+  // the gate held came for one
+  const arriving = new Map<RequestId, Arrival>();
 
   const isRunning = (id: RequestId): boolean => arriving.has(id) || calls.has(id);
 
   // true when the message is a cancel the gate keeps from the SDK
   const holdCancel = (message: unknown): boolean => {
     const requestId = readCancelledRequestID(message);
-    const call = requestId === null ? undefined : calls.get(requestId);
+
+    if (requestId === null) {
+      return false;
+    }
+
+    // a call not started yet takes the cancel as it starts
+    const arrival = arriving.get(requestId);
+
+    if (arrival !== undefined) {
+      arrival.cancelled = !arrival.cancellable;
+
+      return arrival.cancelled;
+    }
+
+    const call = calls.get(requestId);
 
     if (call === undefined || call.cancellable) {
       return false;
@@ -54,8 +70,14 @@ export function createCallRegistry(): CallRegistry {
   return {
     isRunning,
     add: (id, call) => {
+      const arrival = arriving.get(id);
+
       arriving.delete(id);
       calls.set(id, call);
+
+      if (arrival?.cancelled === true) {
+        call.abort.abort(new Error('the client cancelled the call'));
+      }
     },
     remove: (id) => {
       calls.delete(id);
@@ -96,7 +118,10 @@ export function createCallRegistry(): CallRegistry {
             return;
           }
 
-          arriving.add(message.id);
+          arriving.set(message.id, {
+            cancellable: isCancellable(message.params),
+            cancelled: false,
+          });
         }
 
         gate.onmessage?.(message, extra);
@@ -114,6 +139,20 @@ export function createCallRegistry(): CallRegistry {
       return gate;
     },
   };
+}
+
+interface Arrival {
+  readonly cancellable: boolean;
+  cancelled: boolean;
+}
+
+// whether the tool a `tools/call` names may stop mid-run; an unknown one,
+// which the server refuses, may
+function isCancellable(params: unknown): boolean {
+  const name =
+    typeof params === 'object' && params !== null && 'name' in params ? params.name : null;
+
+  return TOOLS.find((tool) => tool.definition.name === name)?.cancellable ?? true;
 }
 
 // the request a `notifications/cancelled` names; null for any other message

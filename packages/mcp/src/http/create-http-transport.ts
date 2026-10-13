@@ -43,8 +43,8 @@ export interface HttpTransport {
   // ends every session and stops what their calls run
   readonly close: () => Promise<void>;
 
-  // when the tool call behind a streamed response ends, which a dropped
-  // stream does not hasten; null for any other response
+  // when the tool call behind a response ends, which neither a dropped
+  // stream nor an aborted request hastens; null for any other response
   readonly readCallEnd: (response: Response) => Promise<void> | null;
 }
 
@@ -68,7 +68,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
   const keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
   const challenge = options.challenge ?? 'Bearer';
 
-  // each streamed call's end, by its response
+  // each tool call's end, by its response
   const callEnds = new WeakMap<Response, Promise<void>>();
 
   // every tool call in flight, for close
@@ -146,9 +146,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       exchange.ended.resolve();
     }
 
-    if ((response.headers.get('content-type') ?? '').startsWith('text/event-stream')) {
-      callEnds.set(response, exchange.ended.promise);
-    }
+    callEnds.set(response, exchange.ended.promise);
 
     return response;
   };
