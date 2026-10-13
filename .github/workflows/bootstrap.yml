@@ -15,6 +15,7 @@ on:
     paths:
       - deploy/**
       - scripts/test-bootstrap.sh
+      - scripts/check-kvm.sh
       - .github/workflows/bootstrap.yml
 
 permissions:
