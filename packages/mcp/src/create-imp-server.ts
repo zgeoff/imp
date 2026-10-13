@@ -1,3 +1,4 @@
+import { hasScope } from '@imp/api';
 import { ProtocolError, ProtocolErrorCode, Server } from '@modelcontextprotocol/server';
 import type { CallToolRequest, ServerContext } from '@modelcontextprotocol/server';
 import { runAfter } from './after';
@@ -8,7 +9,6 @@ import type { McpCaller } from './create-caller-auth';
 import { runOnInterval } from './repeat';
 import type { Repeat } from './repeat';
 import type { Tool } from './tools/define-tool';
-import { hasScope } from './tools/define-tool';
 import { TOOLS } from './tools/tool-list';
 
 // newest first; a 2025-era client asking for another version gets the newest.

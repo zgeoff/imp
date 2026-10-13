@@ -1,9 +1,8 @@
-import { SecretNameSchema, isImpAllowed } from '@imp/api';
+import { SecretNameSchema, hasScope, isImpAllowed } from '@imp/api';
 import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
 import type { ForkAuthority, GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';
-import { hasScope } from './scopes';
 
 // host-wide: only a caller with no imp patterns
 interface HostAccess {

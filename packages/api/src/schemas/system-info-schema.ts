@@ -47,6 +47,61 @@ const PublicInfoSchema = z.object({
   records: PassStatusSchema.nullable(),
 });
 
+// what an impd can do. `sessionOffsets` says only that impd can carry
+// offsets: each session's continuity decides, as an imp runs its old agent
+// until a cold boot.
+const SystemFeaturesSchema = z.object({
+  sessionOffsets: z.boolean(),
+  leases: z.boolean(),
+
+  // tokens.create takes `grantable`, and secrets.add takes `rebind`; an
+  // older impd drops both unread, so a client checks first
+  grantableTokens: z.boolean().optional(),
+  secretRebind: z.boolean().optional(),
+
+  // tokens.update, which changes a token's grantable list
+  tokenUpdate: z.boolean().optional(),
+
+  // system.copyDatabase; from 0.30.0
+  databaseCopy: z.boolean().optional(),
+
+  // POST /images/build streams build events to a client that accepts
+  // them (docs/guides/images.md#build-an-image)
+  imageBuildStream: z.boolean().optional(),
+
+  // images.addStream and images.buildStream
+  imageOpStream: z.boolean().optional(),
+
+  // an `/exec` start takes `require`, which an older impd drops unread
+  execRequire: z.boolean().optional(),
+
+  // the oauth procedures and the public MCP route exist; the route runs
+  // only where the operator turned it on (publicMcp)
+  oauthGrants: z.boolean().optional(),
+
+  // system.gc takes `secretFiles`; an older impd drops it unread and
+  // never lists the secret values it kept aside
+  secretFilesGc: z.boolean().optional(),
+
+  // a session start takes `log`, and `sessions.logs`, `readLog` and
+  // `deleteLog` exist (docs/guides/session-logs.md)
+  sessionLog: z.boolean().optional(),
+
+  // the `public` egress policy; an older impd refuses the mode
+  publicEgress: z.boolean().optional(),
+
+  // secret kind `oauth` and `secrets.refresh`; an older impd refuses the kind
+  oauthSecrets: z.boolean().optional(),
+
+  // a custom secret's rule takes `upstream`; an older impd drops it
+  // unread and would send the credential to https://<host>
+  secretUpstream: z.boolean().optional(),
+
+  // imps.create takes `backup`; an older impd drops it unread and would
+  // back the imp up
+  backupOptOut: z.boolean().optional(),
+});
+
 export const SystemInfoSchema = z.object({
   version: z.string(),
   ramBudgetMib: z.int().nonnegative(),
@@ -144,62 +199,16 @@ export const SystemInfoSchema = z.object({
   // for an impd from before it.
   https: HttpsInfoSchema.nullable().optional(),
 
-  // what this impd can do; an impd without it has none of them.
-  // `sessionOffsets` says only that impd can carry offsets: each session's
-  // continuity decides, as an imp runs its old agent until a cold boot.
-  features: z
-    .object({
-      sessionOffsets: z.boolean(),
-      leases: z.boolean(),
-
-      // tokens.create takes `grantable`, and secrets.add takes `rebind`; an
-      // older impd drops both unread, so a client checks first
-      grantableTokens: z.boolean().optional(),
-      secretRebind: z.boolean().optional(),
-
-      // tokens.update, which changes a token's grantable list
-      tokenUpdate: z.boolean().optional(),
-
-      // system.copyDatabase; from 0.30.0
-      databaseCopy: z.boolean().optional(),
-
-      // POST /images/build streams build events to a client that accepts
-      // them (docs/guides/images.md#build-an-image)
-      imageBuildStream: z.boolean().optional(),
-
-      // images.addStream and images.buildStream
-      imageOpStream: z.boolean().optional(),
-
-      // an `/exec` start takes `require`, which an older impd drops unread
-      execRequire: z.boolean().optional(),
-
-      // the oauth procedures and the public MCP route exist; the route runs
-      // only where the operator turned it on (publicMcp)
-      oauthGrants: z.boolean().optional(),
-
-      // system.gc takes `secretFiles`; an older impd drops it unread and
-      // never lists the secret values it kept aside
-      secretFilesGc: z.boolean().optional(),
-
-      // a session start takes `log`, and `sessions.logs`, `readLog` and
-      // `deleteLog` exist (docs/guides/session-logs.md)
-      sessionLog: z.boolean().optional(),
-
-      // the `public` egress policy; an older impd refuses the mode
-      publicEgress: z.boolean().optional(),
-
-      // secret kind `oauth` and `secrets.refresh`; an older impd refuses the kind
-      oauthSecrets: z.boolean().optional(),
-
-      // a custom secret's rule takes `upstream`; an older impd drops it
-      // unread and would send the credential to https://<host>
-      secretUpstream: z.boolean().optional(),
-
-      // imps.create takes `backup`; an older impd drops it unread and would
-      // back the imp up
-      backupOptOut: z.boolean().optional(),
-    })
-    .optional(),
+  // an impd without it has none of them
+  features: SystemFeaturesSchema.optional(),
 });
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;
+
+export type SystemFeatures = z.infer<typeof SystemFeaturesSchema>;
+
+// every feature SystemFeaturesSchema names, each on: what the current impd
+// says it can do, so adding a feature means editing only the schema
+export const SYSTEM_FEATURES = Object.fromEntries(
+  SystemFeaturesSchema.keyof().options.map((name) => [name, true]),
+) as { readonly [Name in keyof Required<SystemFeatures>]: true };

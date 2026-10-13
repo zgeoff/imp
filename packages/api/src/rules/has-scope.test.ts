@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { hasScope } from './scopes';
+import { hasScope } from './has-scope';
 
 test.each([
   ['read', 'read', true],

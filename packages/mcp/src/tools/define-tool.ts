@@ -148,10 +148,3 @@ function formatErrorText(error: unknown): string {
 function formatCoded(code: string, message: string): string {
   return `${code}: ${message}`;
 }
-
-// Scopes nest, as impd counts them: manage includes exec, exec includes read
-const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, exec: 1, manage: 2 };
-
-export function hasScope(granted: Scope, needed: Scope): boolean {
-  return SCOPE_RANK[granted] >= SCOPE_RANK[needed];
-}

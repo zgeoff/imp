@@ -1,8 +1,8 @@
+import { hasScope } from '@imp/api';
 import { buildForbiddenError } from '../api-errors';
 import { formatCaller, isCallerAllowed } from '../auth/caller';
 import type { Caller } from '../auth/caller';
 import { toCallerError } from '../auth/caller-view';
-import { hasScope } from '../auth/scopes';
 import type { ExecBackend } from './exec-session';
 
 // What an `/exec` socket may start: its caller, and a ticket's one imp. Each

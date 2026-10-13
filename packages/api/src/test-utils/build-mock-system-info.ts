@@ -1,4 +1,5 @@
 import { faker } from '@faker-js/faker';
+import { SYSTEM_FEATURES } from '../schemas/system-info-schema';
 import type { SystemInfo } from '../schemas/system-info-schema';
 
 // the parts an override merges into their defaults; every other key replaces
@@ -66,25 +67,7 @@ export function buildMockSystemInfo(overrides: SystemInfoOverrides = {}): System
   };
 
   const egress: NonNullable<SystemInfo['egress']> = { isEnforced: true };
-
-  const features: NonNullable<SystemInfo['features']> = {
-    sessionOffsets: true,
-    leases: true,
-    grantableTokens: true,
-    secretRebind: true,
-    tokenUpdate: true,
-    databaseCopy: true,
-    imageBuildStream: true,
-    imageOpStream: true,
-    execRequire: true,
-    oauthGrants: true,
-    secretFilesGc: true,
-    sessionLog: true,
-    publicEgress: true,
-    oauthSecrets: true,
-    secretUpstream: true,
-    backupOptOut: true,
-  };
+  const features: NonNullable<SystemInfo['features']> = { ...SYSTEM_FEATURES };
 
   const defaultsInfo: SystemInfo = {
     version: faker.system.semver(),

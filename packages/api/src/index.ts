@@ -259,7 +259,7 @@ export {
 } from './schemas/session-log-schema';
 
 export type { SessionLog, SessionLogRead } from './schemas/session-log-schema';
-export { SystemInfoSchema } from './schemas/system-info-schema';
+export { SYSTEM_FEATURES, SystemInfoSchema } from './schemas/system-info-schema';
 
 export {
   IdentitySchema,
@@ -284,4 +284,5 @@ export {
 } from './schemas/oauth-schema';
 
 export type { OAuthApproval, OAuthClient, OAuthGrant } from './schemas/oauth-schema';
-export type { SystemInfo } from './schemas/system-info-schema';
+export type { SystemFeatures, SystemInfo } from './schemas/system-info-schema';
+export { hasScope } from './rules/has-scope';

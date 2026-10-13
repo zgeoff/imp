@@ -1,3 +1,4 @@
+import { ScopeSchema } from '@imp/api';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { Scope, SshKey, Token } from '@zgeoff/imp-client';
 import { useState } from 'react';
@@ -13,8 +14,6 @@ import { readText } from '../lib/read-form';
 import { useNow } from '../lib/use-now';
 import { useRefresh } from '../lib/use-refresh';
 import styles from './page.module.css';
-
-const SCOPES: readonly Scope[] = ['read', 'exec', 'manage'];
 
 // a made token's secret, shown until the page is left: impd keeps a hash
 interface MadeToken {
@@ -73,7 +72,7 @@ export function TokensPage() {
           <label className={formStyles['field']}>
             Scope
             <select name="scope" defaultValue="read">
-              {SCOPES.map((scope) => (
+              {ScopeSchema.options.map((scope) => (
                 <option key={scope} value={scope}>
                   {scope}
                 </option>
@@ -183,7 +182,7 @@ function MadeTokenCard(props: MadeTokenCardProps) {
 function readScope(form: FormData): Scope {
   const scope = readText(form, 'scope');
 
-  return SCOPES.find((each) => each === scope) ?? 'read';
+  return ScopeSchema.options.find((each) => each === scope) ?? 'read';
 }
 
 // `dev-*, ci-*` as a list; empty for every imp

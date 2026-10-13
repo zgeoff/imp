@@ -9,7 +9,7 @@ import type {
   SystemInfo,
   Token,
 } from '@imp/api';
-import { EVENT_VERSION, impContract, isImpAllowed } from '@imp/api';
+import { EVENT_VERSION, SYSTEM_FEATURES, impContract, isImpAllowed } from '@imp/api';
 import {
   buildBuilderError,
   buildConflictError,
@@ -49,27 +49,6 @@ const MIB = 1024 * 1024;
 
 // impd's root token, which no made token may be named after
 const ROOT_NAME = 'root';
-
-// what impd says it can do (SYSTEM_FEATURES in packages/daemon
-// build-router.ts, which it does not export)
-const SYSTEM_FEATURES = {
-  sessionOffsets: true,
-  leases: true,
-  grantableTokens: true,
-  tokenUpdate: true,
-  secretRebind: true,
-  databaseCopy: true,
-  imageBuildStream: true,
-  imageOpStream: true,
-  execRequire: true,
-  oauthGrants: true,
-  secretFilesGc: true,
-  sessionLog: true,
-  publicEgress: true,
-  oauthSecrets: true,
-  secretUpstream: true,
-  backupOptOut: true,
-} as const;
 
 // Every call passes impd's own access check (packages/daemon
 // auth/access-policy.ts), then its refusal of a change to an image builder.
