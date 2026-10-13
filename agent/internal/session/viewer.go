@@ -100,7 +100,7 @@ func (v *viewer) stop(last *frame, drop bool) bool {
 		v.queue = nil
 	}
 	if last != nil && last.typ != proto.TypeExit {
-		v.conn.SetWriteDeadline(time.Now().Add(lastWriteTimeout))
+		_ = v.conn.SetWriteDeadline(time.Now().Add(lastWriteTimeout))
 	}
 	v.signal()
 	return true
@@ -180,7 +180,7 @@ func (v *viewer) finish(last *frame) {
 		v.conn.Close()
 		return
 	}
-	v.conn.SetReadDeadline(time.Now().Add(exitLinger))
+	_ = v.conn.SetReadDeadline(time.Now().Add(exitLinger))
 }
 
 func mustJSON(value any) []byte {

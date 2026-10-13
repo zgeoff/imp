@@ -231,7 +231,7 @@ func TestRestartRefusesAFileThatDoesNotParse(t *testing.T) {
 
 func TestRestartKeepsAServiceWhoseFileIsGone(t *testing.T) {
 	s := newManagedSupervisor(t)
-	s.Start(Def{Name: "mem", Argv: []string{"sleep", "30"}, Restart: "always"})
+	s.startAt(Def{Name: "mem", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
 	first := waitRunning(t, s, "mem", 0)
 
 	err := s.Restart("mem")
@@ -261,8 +261,8 @@ func TestRestartAfterStopAllIsRefusedAsPoweringOff(t *testing.T) {
 
 func TestListSaysWhichServicesRunAsRoot(t *testing.T) {
 	s := newManagedSupervisor(t)
-	s.Start(Def{Name: "rooted", Argv: []string{"sleep", "30"}, Restart: "always"})
-	s.Start(Def{Name: "nobody", Argv: []string{"sleep", "30"}, User: "65534", Restart: "always"})
+	s.startAt(Def{Name: "rooted", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
+	s.startAt(Def{Name: "nobody", Argv: []string{"sleep", "30"}, User: "65534", Restart: "always"}, "")
 
 	root := map[string]bool{}
 	for _, st := range s.List() {

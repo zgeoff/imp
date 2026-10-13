@@ -101,7 +101,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	// itself the panic then goes on to the request handler's recover.
 	abort := func() {
 		s.close()
-		s.proc.Signal(syscall.SIGHUP)
+		_ = s.proc.Signal(syscall.SIGHUP)
 	}
 	defer func() {
 		if v := recover(); v != nil {
@@ -110,7 +110,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		}
 	}()
 	if err := w.WriteJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, KillGraceMs: s.stop.grace.Milliseconds()}); err != nil {
-		s.proc.Signal(syscall.SIGHUP)
+		_ = s.proc.Signal(syscall.SIGHUP)
 	}
 
 	var writer sync.WaitGroup
@@ -158,7 +158,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		}
 	}
 	for _, o := range s.outputs {
-		o.f.SetReadDeadline(time.Now().Add(m.drainGrace))
+		_ = o.f.SetReadDeadline(time.Now().Add(m.drainGrace))
 	}
 	pumps.Wait()
 	s.close()
@@ -313,7 +313,7 @@ func (s *session) input(r *proto.Reader) {
 		f, err := r.Next()
 		if err != nil {
 			if !s.exited.Load() {
-				s.proc.Signal(syscall.SIGHUP)
+				_ = s.proc.Signal(syscall.SIGHUP)
 			}
 			s.endStdin()
 			return
@@ -332,13 +332,13 @@ func (s *session) input(r *proto.Reader) {
 		case proto.TypeResize:
 			var rs proto.Resize
 			if s.tty != nil && json.Unmarshal(f.Payload, &rs) == nil {
-				pty.SetWinsize(s.tty, rs.Cols, rs.Rows)
+				_ = pty.SetWinsize(s.tty, rs.Cols, rs.Rows)
 			}
 		case proto.TypeSignal:
 			var sig proto.Signal
 			if json.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 && !s.exited.Load() {
 				s.stop.arm(syscall.Signal(sig.Signal))
-				s.proc.Signal(syscall.Signal(sig.Signal))
+				_ = s.proc.Signal(syscall.Signal(sig.Signal))
 			}
 		default:
 			log.Printf("exec: ignoring %s frame", f.Type)

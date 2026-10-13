@@ -371,7 +371,7 @@ func WriteFileAtomic(fsys FS, p string, data []byte, mode os.FileMode) error {
 		err = fsys.Rename(tmp, p)
 	}
 	if err != nil {
-		fsys.Remove(tmp)
+		_ = fsys.Remove(tmp)
 	}
 	return err
 }

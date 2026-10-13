@@ -1,0 +1,56 @@
+# golangci-lint v2, pinned in tools/go.mod: go tool -modfile=tools/go.mod golangci-lint run
+# CI runs it in the go job; it is too heavy for a pre-push hook.
+version: '2'
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck and unused
+  default: standard
+  enable:
+    - depguard
+    - gosec
+    - nolintlint
+  settings:
+    errcheck:
+      # a reply the peer may no longer read is best effort: the connection's
+      # own read or close reports the failure
+      exclude-functions:
+        - (*github.com/zgeoff/imp/agent/internal/proto.Writer).Write
+        - (*github.com/zgeoff/imp/agent/internal/proto.Writer).WriteJSON
+    gosec:
+      excludes:
+        # errcheck checks unhandled errors
+        - G104
+        # integer conversions at the syscall and wire boundaries, where the
+        # kernel or the protocol bounds the value
+        - G115
+        # the agent runs the commands the host asks for
+        - G204
+        # the agent makes directories and files that the user and the kernel
+        # read: cgroupfs, /proc/sys, the container's mounts
+        - G301
+        - G306
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    depguard:
+      # a new dependency is a change to this list
+      rules:
+        main:
+          allow:
+            - $gostd
+            - github.com/zgeoff/imp/agent
+            - github.com/charmbracelet/x/ansi
+            - github.com/mdlayher/vsock
+            - github.com/pkg/sftp
+            - github.com/vishvananda/netlink
+            - golang.org/x/sys
+            - golang.org/x/term
+            - gotest.tools/v3
+  exclusions:
+    presets:
+      - common-false-positives
+      - std-error-handling
+    rules:
+      # a test fails on what it checks; its cleanup and fixtures are best effort
+      - path: _test\.go
+        linters: [errcheck, gosec]

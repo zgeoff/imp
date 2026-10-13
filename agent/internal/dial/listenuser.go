@@ -48,7 +48,7 @@ func (b *Bound) Close() {
 	var st unix.Stat_t
 	err := unix.Fstatat(b.Dir, b.Name, &st, unix.AT_SYMLINK_NOFOLLOW)
 	if err == nil && st.Mode&unix.S_IFMT == unix.S_IFSOCK && uint64(st.Dev) == b.Dev && st.Ino == b.Ino {
-		unix.Unlinkat(b.Dir, b.Name, 0)
+		_ = unix.Unlinkat(b.Dir, b.Name, 0)
 	}
 	unix.Close(b.Dir)
 }
@@ -169,7 +169,7 @@ func bindTCP(address string) (int, error) {
 	if err != nil {
 		return -1, &proto.Error{Code: proto.ErrListenFailed, Message: "socket: " + err.Error()}
 	}
-	unix.SetsockoptInt(sock, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+	_ = unix.SetsockoptInt(sock, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
 	err = unix.Bind(sock, &unix.SockaddrInet4{Port: port, Addr: [4]byte{127, 0, 0, 1}})
 	if err == nil {
 		err = unix.Listen(sock, listenBacklog)
@@ -240,11 +240,11 @@ func bindUnix(address string) ([]int, error) {
 		return fail(proto.ErrListenFailed, fmt.Sprintf("bind %s: %v", address, err))
 	}
 	if err := unix.Fchmodat(dir, name, 0o600, 0); err != nil {
-		unix.Unlinkat(dir, name, 0)
+		_ = unix.Unlinkat(dir, name, 0)
 		return fail(proto.ErrListenFailed, fmt.Sprintf("chmod %s: %v", address, err))
 	}
 	if err := unix.Listen(sock, listenBacklog); err != nil {
-		unix.Unlinkat(dir, name, 0)
+		_ = unix.Unlinkat(dir, name, 0)
 		return fail(proto.ErrListenFailed, fmt.Sprintf("listen on %s: %v", address, err))
 	}
 	return []int{sock, dir}, nil

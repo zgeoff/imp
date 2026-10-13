@@ -94,7 +94,7 @@ func setupUserCgroup() error {
 	for _, c := range strings.Fields(string(controllers)) {
 		enable = append(enable, "+"+c)
 	}
-	if err := os.WriteFile(root+"/cgroup.subtree_control", []byte(strings.Join(enable, " ")), 0); err != nil {
+	if err := os.WriteFile(root+"/cgroup.subtree_control", []byte(strings.Join(enable, " ")), 0); err != nil { //nolint:gosec // G703: the path is the cgroup root the agent mounted, not input
 		log.Printf("boot: enable %v: %v", enable, err)
 	}
 	if err := os.MkdirAll(inner.CgroupDir, 0o755); err != nil {

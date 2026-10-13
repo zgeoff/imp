@@ -204,7 +204,7 @@ func copyDev(src, dst string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.Symlink(link, target); err != nil {
+			if err := os.Symlink(link, target); err != nil { //nolint:gosec // G122: the copy runs before any of the container's processes start
 				return err
 			}
 		case unix.S_IFCHR, unix.S_IFBLK:
@@ -266,7 +266,7 @@ func setupCgroup() error {
 		enable = append(enable, "+"+c)
 	}
 	if len(enable) > 0 {
-		if err := os.WriteFile(root+"/cgroup.subtree_control", []byte(strings.Join(enable, " ")), 0); err != nil {
+		if err := os.WriteFile(root+"/cgroup.subtree_control", []byte(strings.Join(enable, " ")), 0); err != nil { //nolint:gosec // G703: the path is the cgroup root the init mounted, not input
 			// a controller the guest kernel lacks must not stop the boot
 			log.Printf("inner: enable %v: %v", enable, err)
 		}

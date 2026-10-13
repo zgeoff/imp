@@ -115,13 +115,6 @@ func (t *Tree) Release(g *Group) {
 	t.mu.Unlock()
 }
 
-// Ended returns how many ended leaves still wait for their last member.
-func (t *Tree) Ended() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.ended)
-}
-
 func (t *Tree) sweepLocked() {
 	for path := range t.ended {
 		if err := os.Remove(path); err == nil || errors.Is(err, os.ErrNotExist) {

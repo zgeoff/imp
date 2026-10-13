@@ -210,11 +210,6 @@ func checkDef(d *Def) error {
 	return nil
 }
 
-// Start supervises def. A service with the same name is left alone.
-func (s *Supervisor) Start(def Def) {
-	s.startAt(def, "")
-}
-
 func (s *Supervisor) startAt(def Def, path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -336,7 +331,7 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 	// StopAll may have run between proc.Start and here, when svc.proc was
 	// still nil, so its SIGTERM missed this process. Send it now.
 	if isClosed(svc.stop) {
-		p.Signal(syscall.SIGTERM)
+		_ = p.Signal(syscall.SIGTERM)
 	}
 	s.mu.Unlock()
 	return <-p.Done, nil
@@ -428,7 +423,7 @@ func (s *Supervisor) StopAll() {
 			close(svc.stop)
 		}
 		if svc.proc != nil {
-			svc.proc.Signal(syscall.SIGTERM)
+			_ = svc.proc.Signal(syscall.SIGTERM)
 		}
 	}
 	s.mu.Unlock()
@@ -443,7 +438,7 @@ func (s *Supervisor) StopAll() {
 	s.mu.Lock()
 	for _, svc := range s.services {
 		if svc.proc != nil {
-			svc.proc.Signal(syscall.SIGKILL)
+			_ = svc.proc.Signal(syscall.SIGKILL)
 		}
 	}
 	s.mu.Unlock()

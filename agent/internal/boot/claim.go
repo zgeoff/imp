@@ -66,7 +66,7 @@ func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) e
 func serveParked(c net.Conn, apply func(proto.Claim) error) (proto.Claim, bool) {
 	defer c.Close()
 	r, w := proto.NewReader(c), proto.NewWriter(c)
-	c.SetReadDeadline(time.Now().Add(claimRequestTimeout))
+	_ = c.SetReadDeadline(time.Now().Add(claimRequestTimeout))
 	f, err := r.Next()
 	if err != nil || f.Type != proto.TypeRequest {
 		return proto.Claim{}, false

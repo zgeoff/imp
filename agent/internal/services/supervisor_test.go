@@ -56,7 +56,7 @@ func TestStopAllDeliversSIGTERMWhenItLandsDuringAStart(t *testing.T) {
 		offset := time.Duration(i) * 50 * time.Microsecond
 		t.Run(fmt.Sprintf("stop %s into the start", offset), func(t *testing.T) {
 			s := newSupervisor(t)
-			s.Start(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"})
+			s.startAt(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
 			time.Sleep(offset)
 
 			began := time.Now()
@@ -183,7 +183,7 @@ func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
 	// the release first, so a start the runner holds cannot block the stop
 	t.Cleanup(func() { r.release(); s.StopAll() })
 	s.logDir = t.TempDir()
-	s.Start(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"})
+	s.startAt(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
 	p := r.nextFork(t)
 	t.Cleanup(func() { p.Signal(syscall.SIGKILL) })
 	stopped := make(chan time.Duration, 1)
@@ -236,7 +236,7 @@ func TestAFailedRestartKeepsTheLastExit(t *testing.T) {
 	s := newSupervisor(t)
 	s.firstBackoff = 100 * time.Millisecond
 
-	s.Start(Def{Name: "once", Argv: []string{bin}, Restart: "always"})
+	s.startAt(Def{Name: "once", Argv: []string{bin}, Restart: "always"}, "")
 
 	// The first restart comes after the first backoff and fails.
 	var st proto.ServiceStatus

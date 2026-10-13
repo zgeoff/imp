@@ -237,7 +237,7 @@ func (m *Manager) openOwn(l *listener, root, name string) (proto.Listening, erro
 	path := filepath.Join(dir, name)
 	ln, err := m.listenOwn(l, path, dir, name, uid, gid)
 	if err != nil {
-		m.fsys.RemoveAll(dir)
+		_ = m.fsys.RemoveAll(dir)
 		return proto.Listening{}, err
 	}
 	l.ln, l.checkPeer, l.uid = ln, true, uid

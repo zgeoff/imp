@@ -124,7 +124,7 @@ func unary(sock string, req proto.Request) error {
 func ping(sock string, args []string) error {
 	fs := flag.NewFlagSet("ping", flag.ExitOnError)
 	wait := fs.Duration("wait", 0, "retry until the agent answers or this much time passes")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	start := time.Now()
 	for {
@@ -146,7 +146,7 @@ func execCmd(sock string, args []string) (int, error) {
 	tty := fs.Bool("t", false, "allocate a pty (puts the local terminal in raw mode)")
 	user := fs.String("u", "", "run as user")
 	cwd := fs.String("C", "", "working directory")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		return 2, errors.New("exec: missing command")
 	}
@@ -164,7 +164,7 @@ func execCmd(sock string, args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		defer term.Restore(stdinFd, old)
+		defer func() { _ = term.Restore(stdinFd, old) }()
 	}
 
 	c, br, err := dial(sock)

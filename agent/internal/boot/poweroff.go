@@ -28,14 +28,14 @@ func Poweroff(sup *services.Supervisor, mgr *inner.Manager, thaw func() error) {
 	sup.StopAll()
 
 	// the inner init ignores SIGTERM; the processes under it get it
-	unix.Kill(-1, unix.SIGTERM)
+	_ = unix.Kill(-1, unix.SIGTERM)
 	deadline := time.Now().Add(killGrace)
 	for userProcesses(mgr.InitPid()) > 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	// no restart after this
 	mgr.Stop()
-	unix.Kill(-1, unix.SIGKILL)
+	_ = unix.Kill(-1, unix.SIGKILL)
 
 	unix.Sync()
 	if err := unix.Mount("", inner.UserRoot, "", unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {

@@ -14,6 +14,13 @@ import (
 // These run on plain directories: what cgroupfs adds (cgroup.kill, a leaf
 // that rmdir takes with its files) is left to the e2e suite.
 
+// countEnded returns how many ended leaves still wait for their last member.
+func countEnded(tree *Tree) int {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	return len(tree.ended)
+}
+
 // newTree makes a tree under a fresh temporary parent.
 func newTree(t *testing.T) *Tree {
 	t.Helper()
@@ -77,7 +84,7 @@ func TestReleaseRemovesAnEmptyLeaf(t *testing.T) {
 
 	_, err = os.Stat(g.path)
 	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist), "leaf %s left after release", g.path)
-	assert.Check(t, cmp.Equal(tree.Ended(), 0), "an empty leaf waits for a sweep")
+	assert.Check(t, cmp.Equal(countEnded(tree), 0), "an empty leaf waits for a sweep")
 }
 
 func TestReleaseKeepsALeafThatStillHasAMember(t *testing.T) {
@@ -87,7 +94,7 @@ func TestReleaseKeepsALeafThatStillHasAMember(t *testing.T) {
 
 	_, err := os.Stat(leaf)
 	assert.Check(t, err)
-	assert.Check(t, cmp.Equal(tree.Ended(), 1))
+	assert.Check(t, cmp.Equal(countEnded(tree), 1))
 }
 
 func TestNewSparesAnEndedLeafThatStillHasAMember(t *testing.T) {
@@ -98,7 +105,7 @@ func TestNewSparesAnEndedLeafThatStillHasAMember(t *testing.T) {
 
 	_, err := os.Stat(leaf)
 	assert.Check(t, err, "a sweep took a leaf that still has a member")
-	assert.Check(t, cmp.Equal(tree.Ended(), 1))
+	assert.Check(t, cmp.Equal(countEnded(tree), 1))
 }
 
 func TestNewSweepsAnEndedLeafOnceItEmpties(t *testing.T) {
@@ -110,7 +117,7 @@ func TestNewSweepsAnEndedLeafOnceItEmpties(t *testing.T) {
 
 	_, err := os.Stat(leaf)
 	assert.Check(t, cmp.ErrorIs(err, fs.ErrNotExist), "the emptied leaf outlived the sweep")
-	assert.Check(t, cmp.Equal(tree.Ended(), 0))
+	assert.Check(t, cmp.Equal(countEnded(tree), 0))
 }
 
 // A live session's leaf may be empty because its child is not yet cloned

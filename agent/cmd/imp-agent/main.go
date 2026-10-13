@@ -71,9 +71,8 @@ func main() {
 	case len(os.Args) == 2 && os.Args[1] == inner.Command:
 		// PID 1 of the container's namespaces, never of the guest: on failure
 		// it exits, and the agent starts the container again
-		if err := inner.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "imp-agent inner: %v\n", err)
-		}
+		err := inner.Run()
+		fmt.Fprintf(os.Stderr, "imp-agent inner: %v\n", err)
 		os.Exit(1)
 	case os.Getpid() == 1:
 		err = boot.Run()
@@ -86,5 +85,5 @@ func main() {
 	// cleanly, after a pause that keeps the message on the console.
 	log.Printf("fatal: %v", err)
 	time.Sleep(time.Second)
-	unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART)
+	_ = unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART)
 }

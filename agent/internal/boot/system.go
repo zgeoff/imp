@@ -156,7 +156,7 @@ func Run() error {
 	// thaw (sync would block on a frozen disk), sync and reboot.
 	powerOff := sync.OnceFunc(func() {
 		defer safe.Recover("poweroff", func() {
-			safe.Call("poweroff: thaw", func() { srv.ThawForPoweroff() })
+			safe.Call("poweroff: thaw", func() { _ = srv.ThawForPoweroff() })
 			unix.Sync()
 			reboot()
 		})

@@ -14,6 +14,7 @@ bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, deploy/, test/
 bun run lint:docs                 # every relative link and anchor in the docs resolves
 (cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
+(cd agent && go tool -modfile=tools/go.mod golangci-lint run --build-tags root ./...)   # the lint CI runs
 scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
 test/test-e2e.sh --clean       # end to end, from a clean state
 ```
@@ -229,22 +230,24 @@ Lefthook installs the hooks with `bun install`.
   `.lefthook/pre-push-baseline.yml`, which repo-sync delivers from zgeoff/tools. The baseline checks
   the format and the types of the whole tree, and lints and tests only the files the branch changes
   since its merge base with `origin/main`. A dashboard file's tests run from its package. CI's
-  `checks` job runs type-aware lint, deadcode and every test.
+  `checks` job runs type-aware lint, deadcode and every test. On a branch that changes the agent's
+  Go, pre-push also runs `gofmt` on the changed files and `go vet -p 1`, which keeps vet's memory
+  within what a 2 GB imp can spare; the Go lint, vulnerability and dead-code gates run in CI only.
 
 ## CI
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                                                                                           |
-| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                        |
-| `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint:full`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `scripts/test-go.sh` (`go test -race` through gotestsum) in `agent/`; uploads the JSON results.                                            |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                                  |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                              |
-| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                       |
-| `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                                   |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                      |
+| Job          | Required | What it runs                                                                                                                                                                                                      |
+| ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                                                                   |
+| `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint:full`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build.                                            |
+| `go`         | yes      | In `agent/`: `gofmt`, `go vet`, golangci-lint, govulncheck, deadcode, `scripts/test-go.sh`, then the suite again as root with the `root` build tag. Also `gofmt`, vet and lint on the Dockerfile difftest module. |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                                                                             |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                                                                         |
+| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                                                                  |
+| `e2e`        | yes      | Passes only when every `e2e-group` job passed: the `fast` end-to-end set on real microVMs, in three groups on three runners (below).                                                                              |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                                                                 |
 
 The `checks` job also runs the docs-writing skill's scripts. `bun run lint:docs` runs
 `check-links.sh`, which fails on a broken relative link or anchor in a README or a page under

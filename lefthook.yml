@@ -38,3 +38,11 @@ pre-push:
     # needs shellcheck on PATH, the version CI pins (0.11.0)
     - name: lint:shell
       run: bun run lint:shell
+    # the agent's gofmt and vet, on a branch that changes its Go; -p 1 keeps
+    # vet to about 335 MB cold. golangci-lint, govulncheck, deadcode and the
+    # race tests are CI's alone: each needs more than a 2 GB imp can spare.
+    - name: go:fmt-vet
+      files: bun run --silent files:branch
+      glob: 'agent/**/*.go'
+      root: agent/
+      run: test -z "$(gofmt -l {files})" && go vet -p 1 ./...
