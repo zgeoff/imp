@@ -7,15 +7,15 @@ import {
   TUNNEL_WINDOW_BYTES,
   TunnelServerMessageSchema,
 } from '@imp/api';
-import type { TunnelClientMessage, TunnelServerMessage } from '@imp/api';
+import type { TunnelClientMessage, TunnelListen, TunnelServerMessage } from '@imp/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
 
 // Where a reverse forward listens in the imp: a unix socket at a path (null
 // for one the agent makes under /run/imp/forward), or a port on the imp's
 // 127.0.0.1, where 0 takes any free port.
 export type ReverseGuest =
-  | { readonly network: 'unix'; readonly path: string | null }
-  | { readonly network: 'tcp'; readonly port: number };
+  | { readonly network: 'unix'; readonly path: Exclude<TunnelListen['path'], undefined> }
+  | { readonly network: 'tcp'; readonly port: Exclude<TunnelListen['port'], undefined> };
 
 // where it listens: the socket path, or the port
 export interface ReverseListening {

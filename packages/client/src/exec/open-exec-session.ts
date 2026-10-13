@@ -9,47 +9,26 @@ import {
 } from '@imp/api';
 import type {
   DetachReason,
+  ExecAttachMessageSchema,
   ExecClientMessage,
-  ExecRequirement,
-  ResumeFrom,
+  ExecStartMessageSchema,
   SessionOutput,
 } from '@imp/api';
+import type { ReadonlyFields } from '@imp/shared';
+import type * as z from 'zod';
 import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkExecRequire } from './check-exec-require';
 import { checkImpdAccess } from './check-impd-access';
 
-export interface ExecStart {
-  readonly name: string;
-  readonly argv: readonly string[];
-  readonly tty: boolean;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly cwd?: string;
-  readonly cols?: number;
-  readonly rows?: number;
-
-  // starts this session, or attaches to it if it runs; needs a tty
-  readonly session?: string;
-  readonly killGraceMs?: number;
-
-  // with a session: the output after this byte rather than a replay
-  readonly resumeFrom?: ResumeFrom;
-  readonly require?: readonly ExecRequirement[];
-
-  // with a session this start creates: impd keeps its output on the host
-  readonly log?: boolean;
-}
+// a command to start: the start message without the tool and outer fields,
+// which only impd's own clients send. A session start needs a tty, and only
+// a session takes resumeFrom or log.
+export type ExecStart = ReadonlyFields<
+  Omit<z.input<typeof ExecStartMessageSchema>, 'type' | 'tool' | 'outer'>
+>;
 
 // attaches to a session that runs: its replay, then live output
-export interface ExecAttach {
-  readonly name: string;
-  readonly session: string;
-  readonly cols?: number;
-  readonly rows?: number;
-  readonly resumeFrom?: ResumeFrom;
-
-  // false: fail with INVALID_STATE rather than boot or wake the imp
-  readonly wake?: boolean;
-}
+export type ExecAttach = ReadonlyFields<Omit<z.input<typeof ExecAttachMessageSchema>, 'type'>>;
 
 // session is null for a plain exec; created is false for an attach to a
 // session that already ran

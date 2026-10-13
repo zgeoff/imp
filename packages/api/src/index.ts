@@ -112,7 +112,11 @@ export {
   TunnelServerMessageSchema,
 } from './protocols/tunnel-protocol';
 
-export type { TunnelClientMessage, TunnelServerMessage } from './protocols/tunnel-protocol';
+export type {
+  TunnelClientMessage,
+  TunnelListen,
+  TunnelServerMessage,
+} from './protocols/tunnel-protocol';
 
 export {
   DatabaseCopySchema,

@@ -46,6 +46,8 @@ const TunnelListenSchema = z
     { message: 'tcp takes a port, unix a path or null', path: ['network'] },
   );
 
+export type TunnelListen = z.infer<typeof TunnelListenSchema>;
+
 export const TunnelClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('open'),
