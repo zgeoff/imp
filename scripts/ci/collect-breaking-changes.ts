@@ -607,6 +607,11 @@ function mergeKeyword(
     if (keyword === 'allOf') {
       return { value: both };
     }
+
+    // the values both list
+    if (keyword === 'enum') {
+      return { value: a.filter((value) => b.some((other) => Bun.deepEquals(value, other, true))) };
+    }
   }
 
   if (keyword === 'type') {
