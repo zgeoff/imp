@@ -15,6 +15,7 @@ import { startTicker } from './process/ticker';
 import { waitWithin } from './process/wait-within';
 import { startWakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
+import { renderNetworkEnv } from './render-network-env';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { createDataDirs } from './storage/data-layout';
@@ -318,9 +319,11 @@ async function main(): Promise<void> {
 }
 
 // The release pipeline runs `impd --version` in the built image to check it
-// reports the tag it is published under.
+// reports the tag it is published under. host/entrypoint runs `impd --network-env`.
 if (process.argv[2] === '--version') {
   process.stdout.write(`${packageJson.version}\n`);
+} else if (process.argv[2] === '--network-env') {
+  process.stdout.write(renderNetworkEnv(loadConfig(process.env)));
 } else {
   await main();
 }
