@@ -91,7 +91,7 @@ export async function startMcpSession(args: readonly string[]): Promise<McpSessi
   await sendRequest('initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'e2e' },
+    clientInfo: { name: 'e2e', version: '1.0.0' },
   });
 
   return {
@@ -167,7 +167,7 @@ export async function startHttpMcpSession(token: string): Promise<HttpMcpSession
   await sendRequest('initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'e2e' },
+    clientInfo: { name: 'e2e', version: '1.0.0' },
   });
 
   return {

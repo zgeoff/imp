@@ -719,17 +719,22 @@ The mcp package's tests boot impd's real app with `createImpd` and reach it thro
 holds impd's read of the imps with `buildQueryGate`. One stand-in models an impd release from before
 the fork's grant report: `packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts`
 (`buildStubOlderImpdFetch`) takes `grantsNotCopied` and `grantsError` out of the real `imps.fork`
-answer. The progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a
-`repeat`, and the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`),
-which ticks only when the test says so. A tool call's deadline (`timeoutSeconds`) and kill grace
-take `createMcpServer`'s `after`, `setTimeout` by default, and the tests pass
-`packages/mcp/src/test-utils/build-stub-after.ts` (`buildStubAfter`), which fires only when the test
-says so.
+answer. The progress timer of `createImpServer` takes a `repeat`, and the tests pass
+`packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks only when the
+test says so. The SSE keepalive is the MCP SDK's own interval, which takes only a period, so its
+test passes a short `keepaliveMs` and reads the first frame of a held call's stream. A tool call's
+deadline (`timeoutSeconds`) and kill grace take `createImpServer`'s `after`, `setTimeout` by
+default, and the tests pass `packages/mcp/src/test-utils/build-stub-after.ts` (`buildStubAfter`),
+which fires only when the test says so.
 
 In the `mcp/*.test.ts` files, an exec through impd's real app reaches the guest through
 `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path, which runs
 each command on `buildStubExecGuest`; the agent keeps its socket through a sleep or stop and wake.
-The tool tests drive `createMcpServer` in process. `exec-tool.test.ts` passes `buildStubRepeat` and
+The tool tests drive the real server in process through
+`packages/mcp/src/test-utils/create-mcp-server.ts` (`createMcpServer`), which connects it to an
+in-memory transport and takes one JSON-RPC line at a time. The HTTP tests read a session's SSE
+answers with `read-mcp-answer.ts` (`readMcpAnswer`), and drive the `2026-07-28` protocol with the
+SDK's own client (`@modelcontextprotocol/client`). `exec-tool.test.ts` passes `buildStubRepeat` and
 `buildStubAfter` as its timers, except one timeout test that keeps the default timers and waits its
 one-second deadline. `imp mcp` runs as a subprocess against impd's app on a loopback port.
 

@@ -6,7 +6,9 @@ import { invariant } from '@imp/test-utils/invariant';
 import { readImpEnv } from '@imp/test-utils/read-imp-env';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createImpClient } from '@zgeoff/imp-client';
+import { readMcpAnswer } from '../../../mcp/src/test-utils/read-mcp-answer';
 import { buildApiListenOptions } from '../api-listen-options';
 import { runWhois } from '../auth/tailnet-identity';
 import { loadConfig } from '../config';
@@ -197,7 +199,11 @@ test('it names a nameless create under the one prefix its token may touch', asyn
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -210,7 +216,7 @@ test('it names a nameless create under the one prefix its token may touch', asyn
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -221,7 +227,7 @@ test('it names a nameless create under the one prefix its token may touch', asyn
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -252,7 +258,11 @@ test('it audits a tool call as the token that made it', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -265,7 +275,7 @@ test('it audits a tool call as the token that made it', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -315,7 +325,11 @@ test('it runs a command in an imp its token may touch', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -328,7 +342,7 @@ test('it runs a command in an imp its token may touch', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -339,7 +353,7 @@ test('it runs a command in an imp its token may touch', async () => {
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -367,7 +381,11 @@ test('it refuses a create outside the patterns of its token', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -380,7 +398,7 @@ test('it refuses a create outside the patterns of its token', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -391,7 +409,7 @@ test('it refuses a create outside the patterns of its token', async () => {
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -417,7 +435,11 @@ test('it lists only the read tools to a read token', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -430,13 +452,13 @@ test('it lists only the read tools to a read token', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -469,7 +491,11 @@ test('it lists the imps to a read token', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -482,7 +508,7 @@ test('it lists the imps to a read token', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -493,7 +519,7 @@ test('it lists the imps to a read token', async () => {
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -535,7 +561,11 @@ test.each([
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -548,7 +578,7 @@ test.each([
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -559,7 +589,7 @@ test.each([
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -596,7 +626,11 @@ test('it refuses a fork to a token that may grant secrets', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -609,7 +643,7 @@ test('it refuses a fork to a token that may grant secrets', async () => {
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -620,7 +654,7 @@ test('it refuses a fork to a token that may grant secrets', async () => {
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
   const imps = await ctx.client.imps.list();
 
   expect(body).toMatchObject({
@@ -654,7 +688,11 @@ test('it asks a token with two patterns to name the imp it creates', async () =>
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -667,7 +705,7 @@ test('it asks a token with two patterns to name the imp it creates', async () =>
     headers: {
       authorization: `Bearer ${made.secret}`,
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -678,7 +716,7 @@ test('it asks a token with two patterns to name the imp it creates', async () =>
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toStrictEqual({
     jsonrpc: '2.0',
@@ -711,7 +749,11 @@ test('it refuses a session to a caller other than the one that opened it', async
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -763,7 +805,11 @@ test('it ends the streamed call and running command of a token that is removed',
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -829,7 +875,11 @@ test('it refuses the session of a removed token with 401', async () => {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -870,7 +920,11 @@ test('it refuses a caller with no token and no handed-over address with 401', as
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -908,7 +962,11 @@ test('it serves a tailnet identity the wake proxy hands over the imps its rule a
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'atc' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'atc', version: '1.0.0' },
+      },
     }),
   });
 
@@ -920,7 +978,7 @@ test('it serves a tailnet identity the wake proxy hands over the imps its rule a
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
       [PEER_HEADER]: ctx.impd.peers.register('100.101.102.103'),
     },
@@ -932,7 +990,7 @@ test('it serves a tailnet identity the wake proxy hands over the imps its rule a
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -1014,7 +1072,11 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 
@@ -1027,7 +1089,7 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
     headers: {
       authorization: 'Bearer root-token',
       'content-type': 'application/json',
-      accept: 'application/json',
+      accept: 'application/json, text/event-stream',
       'mcp-session-id': session,
     },
     body: JSON.stringify({
@@ -1038,7 +1100,7 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
     }),
   });
 
-  const body: unknown = await response.json();
+  const body = await readMcpAnswer(response);
 
   expect(body).toMatchObject({
     id: 1,
@@ -1095,39 +1157,33 @@ test('it answers a long JSON tool call through the wake proxy', async () => {
 
   const via = `http://127.0.0.1:${String(front.port)}`;
 
-  const opened = await fetch(`${via}/mcp`, {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer root-token',
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+  // a 2026-07-28 call with no progress token gets one JSON answer; a
+  // 2025-era session streams every answer
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+
+  const answers: (string | null)[] = [];
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${via}/mcp`), {
+      requestInit: { headers: { authorization: 'Bearer root-token' } },
+      fetch: async (url, init) => {
+        const response = await fetch(url, init);
+
+        answers.push(response.headers.get('content-type'));
+
+        return response;
+      },
     }),
-  });
+  );
 
-  const session = opened.headers.get('mcp-session-id');
+  ctx.stack.defer(() => client.close());
 
-  invariant(session);
-
-  const call = fetch(`${via}/mcp`, {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer root-token',
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'mcp-session-id': session,
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: 'imp_exec', arguments: { name: 'box', command: 'wait 1' } },
-    }),
+  const call = client.callTool({
+    name: 'imp_exec',
+    arguments: { name: 'box', command: 'wait 1' },
   });
 
   await waitFor(() => {
@@ -1136,14 +1192,13 @@ test('it answers a long JSON tool call through the wake proxy', async () => {
 
   done.resolve();
 
-  const response = await call;
-  const text = await response.text();
+  const result = await call;
 
-  expect(response.headers.get('content-type')).toBe('application/json');
+  expect(answers).toSatisfyAll((type: string | null) => type === 'application/json');
 
-  expect(JSON.parse(text)).toMatchObject({
-    id: 1,
-    result: { isError: false, structuredContent: { exitCode: 0, stdout: 'waited\n' } },
+  expect(result).toMatchObject({
+    isError: false,
+    structuredContent: { exitCode: 0, stdout: 'waited\n' },
   });
 });
 
@@ -1207,7 +1262,11 @@ test('it keeps a call answered as server-sent events open through the wake proxy
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      },
     }),
   });
 

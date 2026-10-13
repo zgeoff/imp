@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker';
 import { createImpClient } from '@zgeoff/imp-client';
-import type { McpPrincipal } from '../http/http-transport';
+import type { McpPrincipal } from '../http/create-http-transport';
 import { createImpGuard } from '../imp-guard';
 
 // A caller as the host resolves it for one MCP request: a manage-scope caller

@@ -31,6 +31,7 @@
   "devDependencies": {
     "@faker-js/faker": "catalog:",
     "@imp/test-utils": "workspace:*",
+    "@modelcontextprotocol/client": "2.3.1",
     "@msw/data": "catalog:",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",

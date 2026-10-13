@@ -11,6 +11,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import * as z from 'zod';
+import { readMcpAnswer } from '../../../mcp/src/test-utils/read-mcp-answer';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { listApiCalls } from '../db/api-audit';
@@ -833,7 +834,11 @@ test('it lists an exec grant’s tools over /mcp, without the manage ones', asyn
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -859,8 +864,7 @@ test('it lists an exec grant’s tools over /mcp, without the manage ones', asyn
     null,
   );
 
-  // a list answers as one JSON body, not an event stream
-  const json: unknown = await listing.json();
+  const json = await readMcpAnswer(listing);
 
   const ToolSchema = z.object({ name: z.string() });
   const listed = z.object({ result: z.object({ tools: z.array(ToolSchema) }) }).parse(json);
@@ -977,7 +981,11 @@ test('it ends a grant’s running command when the grant is revoked', async () =
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -1116,7 +1124,11 @@ test('it refuses /mcp to a revoked grant’s session', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -1259,7 +1271,11 @@ test('it ends the grant a removed token approved, and its running command', asyn
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -1409,7 +1425,11 @@ test('it lists only the read tools to a read grant', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -1435,8 +1455,7 @@ test('it lists only the read tools to a read grant', async () => {
     null,
   );
 
-  // a list answers as one JSON body, not an event stream
-  const json: unknown = await listing.json();
+  const json = await readMcpAnswer(listing);
 
   const ToolSchema = z.object({ name: z.string() });
   const listed = z.object({ result: z.object({ tools: z.array(ToolSchema) }) }).parse(json);
@@ -1578,7 +1597,11 @@ test.each([
           jsonrpc: '2.0',
           id: 0,
           method: 'initialize',
-          params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+          params: {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1.0.0' },
+          },
         }),
       }),
       null,
@@ -1735,7 +1758,11 @@ test('it audits a grant’s change under its client and grant id', async () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -1886,7 +1913,11 @@ test('it audits a grant’s change refused past its patterns as FORBIDDEN', asyn
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -2319,7 +2350,11 @@ test('it lets a cancel through with every slot held, which stops its tool and fr
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -2576,7 +2611,11 @@ test('it refuses a signed-in notification too large for the allowance with every
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,
@@ -2752,7 +2791,11 @@ test('it ends a signed-in session with its DELETE with every slot held', async (
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0.0' },
+        },
       }),
     }),
     null,

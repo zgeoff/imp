@@ -128,15 +128,16 @@ file tools work in a minimal image too.
 
 ## Protocol
 
-- Versions `2025-11-25`, `2025-06-18` and `2025-03-26`; a client that asks for another gets
-  `2025-11-25`. Tools are the only capability.
-- One JSON-RPC message per line. Batches (JSON arrays, which `2025-03-26` allows) are not supported:
-  a batch is an invalid request.
-- stdout carries only JSON-RPC messages; `imp mcp` writes everything else to stderr.
+- Versions `2026-07-28`, which needs no handshake, and `2025-11-25`, `2025-06-18` and `2025-03-26`
+  through `initialize`; a 2025-era client that asks for another gets `2025-11-25`. Tools are the
+  only capability.
+- One JSON-RPC message per line on stdio. stdout carries only JSON-RPC messages; `imp mcp` writes
+  everything else to stderr.
 - `initialize` returns `instructions` that name the guard, so the agent knows which imps it has.
 
-The server lives in `packages/mcp` (`@imp/mcp`), transport-free over the SDK client
-(`@zgeoff/imp-client`); `imp mcp` connects it to stdio, and impd connects it to `/mcp`.
+The server lives in `packages/mcp` (`@imp/mcp`), built on the MCP TypeScript SDK
+(`@modelcontextprotocol/server`) and calling impd through `@zgeoff/imp-client`; `imp mcp` serves it
+on stdio, and impd serves it at `/mcp`.
 
 ## HTTP
 
@@ -162,25 +163,29 @@ claude mcp add --transport http imp https://imp.example.com/mcp \
 - **The guard is the token's patterns.** No `--prefix` here. A create without a name works only for
   a caller with exactly one pattern of the form `prefix*`, and gets `prefix` and 8 more characters.
   Any other caller must name the imp, and gets a `GUARD` error that names its patterns.
-- **Sessions.** `initialize` returns an `Mcp-Session-Id`; send it on every later request. A session
-  answers only the caller that opened it, and another caller gets 404. `DELETE /mcp` with the id
-  ends a session. Each caller has at most 16 sessions and impd 256 in all; the least recently used
-  idle session makes room, and when every session is busy, `initialize` gets 429. A session idle for
-  an hour ends.
+- **Sessions.** A `2026-07-28` request carries everything it needs and opens no session. A 2025-era
+  `initialize` returns an `Mcp-Session-Id`; send it on every later request. A session answers only
+  the caller that opened it, and another caller gets 404. `DELETE /mcp` with the id ends a session.
+  Each caller has at most 16 sessions and impd 256 in all; the least recently used idle session
+  makes room, and when every session is busy, `initialize` gets 429. A session idle for an hour
+  ends.
 - **Restarts.** Sessions live in impd's memory. After a restart a request with an old id gets 404,
   and the client must `initialize` again, as the spec says.
-- **Revocation.** Removing a token ends its sessions and stops their execs as a cancel does; the
-  next request with the token gets 401. A change to the tailnet ACL or to `IMP_TAILNET_IDENTITIES`
-  applies to a tailnet identity on its next request, which impd resolves again: a new scope takes
-  effect, or the request gets 401 once no rule matches. An exec already in flight runs on to its
-  end.
-- **Responses.** A `tools/call` from a client that accepts `text/event-stream` gets an SSE stream:
-  its progress notifications, then the response. impd sends an SSE comment every 5 s, so no idle
-  timeout on the way ends a long call. Every other request gets one JSON response. A notification or
-  a cancelled call gets 202 with no body. A stream the client drops is no cancel: the call runs to
-  its end, and its reply goes nowhere. Send `notifications/cancelled` to stop it.
+- **Revocation.** Removing a token ends its sessions and its `2026-07-28` calls, and stops their
+  execs as a cancel does; the next request with the token gets 401. A change to the tailnet ACL or
+  to `IMP_TAILNET_IDENTITIES` applies to a tailnet identity on its next request, which impd resolves
+  again: a new scope takes effect, or the request gets 401 once no rule matches. An exec already in
+  flight runs on to its end.
+- **Responses.** A client must accept both `application/json` and `text/event-stream`, as the spec
+  says, or gets 406. A request in a 2025-era session gets an SSE stream: a tool call's progress
+  notifications, then the response. A `2026-07-28` request gets one JSON response, or an SSE stream
+  once it sends progress. impd sends an SSE comment every 5 s, so no idle timeout on the way ends a
+  long call. A notification gets 202 with no body, and a cancelled call's stream ends with no
+  response. In a 2025-era session a stream the client drops is no cancel: the call runs to its end,
+  and its reply goes nowhere, so send `notifications/cancelled` to stop it. A `2026-07-28` call
+  stops when its request is dropped.
 - **No GET and no resume.** impd sends nothing outside a POST's own response, so `GET /mcp` gets 405
-  and `Last-Event-ID` is not supported.
+  and `Last-Event-ID` is not supported. A JSON array of messages gets 400.
 
 Exec over HTTP runs inside impd: the tool takes an exec ticket as the CLI does, and the `/exec`
 session is joined in process, not over a socket.

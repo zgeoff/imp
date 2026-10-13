@@ -112,7 +112,7 @@ export async function openRouteMcp(origin: string, bearer: string): Promise<stri
   const opened = await sendMcp(origin, bearer, '', 'initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'e2e' },
+    clientInfo: { name: 'e2e', version: '1.0.0' },
   });
 
   if (opened.status !== 200) {

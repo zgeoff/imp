@@ -1,41 +1,57 @@
-import type { McpServer } from '../mcp-server';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
+import type { Server } from '@modelcontextprotocol/server';
+import { createCallRegistry } from '../create-call-registry';
+import type { CallRegistry } from '../create-call-registry';
+import type { McpCaller } from '../create-caller-auth';
 
-export interface McpSession {
+export interface LegacySession {
   readonly id: string;
+
+  // the caller that opened it, the only one it answers
   readonly key: string;
-  readonly server: McpServer;
+  readonly transport: WebStandardStreamableHTTPServerTransport;
 }
 
-interface SessionState extends McpSession {
+interface SessionState extends LegacySession {
+  // oxlint-disable-next-line no-deprecated -- create-imp-server.ts says why it is the low-level Server
+  readonly server: Server;
+  readonly drain: () => Promise<void>;
   lastUsedAt: number;
 
-  // calls in flight: a busy session is never swept or evicted
+  // tool calls in flight: a busy session is never swept or evicted
   busy: number;
   readonly forgetEnds: () => void;
 }
 
-interface SessionStoreOptions {
+export interface SessionOwner extends McpCaller {
+  readonly key: string;
+
+  // aborts when what the caller authenticated with ends; its sessions end
+  readonly ends: AbortSignal | null;
+}
+
+interface LegacySessionsOptions {
   readonly limits: {
     readonly perCaller: number;
     readonly total: number;
     readonly idleMs: number;
   };
   readonly now: () => number;
-  readonly createServer: () => McpServer;
+
+  // between SSE comments, so no idle timeout ends a long call's stream
+  readonly keepaliveMs: number;
+
+  // oxlint-disable-next-line no-deprecated -- create-imp-server.ts says why it is the low-level Server
+  readonly createServer: (owner: Readonly<SessionOwner>, calls: Readonly<CallRegistry>) => Server;
 }
 
-interface SessionOwner {
-  readonly key: string;
-  readonly ends: AbortSignal | null;
-}
-
-// The MCP sessions of one impd, in memory: a restart ends them all, and a
-// client then gets 404 and initializes again. Each belongs to the caller that
-// opened it, and ends with what that caller authenticated with.
-export function createSessionStore(options: Readonly<SessionStoreOptions>) {
+// The 2025-era MCP sessions of one impd, in memory: a restart ends them all.
+// The SDK's transport has no hook for a session limit, an idle sweep or the
+// caller a session belongs to, so those live here.
+export function createLegacySessions(options: Readonly<LegacySessionsOptions>) {
   const sessions = new Map<string, SessionState>();
 
-  const stopSession = async (session: Readonly<McpSession>): Promise<void> => {
+  const stopSession = async (session: Readonly<LegacySession>): Promise<void> => {
     const state = sessions.get(session.id);
 
     if (state === undefined) {
@@ -45,7 +61,9 @@ export function createSessionStore(options: Readonly<SessionStoreOptions>) {
     sessions.delete(session.id);
     state.forgetEnds();
 
+    // closes the session's streams and aborts its calls, which then stop
     await state.server.close();
+    await state.drain();
   };
 
   // room for one more session of `key`, by evicting idle ones; false when
@@ -74,12 +92,19 @@ export function createSessionStore(options: Readonly<SessionStoreOptions>) {
 
   return {
     // null when the limits leave no room
-    open: (owner: Readonly<SessionOwner>): McpSession | null => {
+    open: async (owner: Readonly<SessionOwner>): Promise<LegacySession | null> => {
       if (owner.ends?.aborted === true || !makeRoom(owner.key)) {
         return null;
       }
 
       const id = crypto.randomUUID();
+      const calls = createCallRegistry();
+      const server = options.createServer(owner, calls);
+
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => id,
+        keepAliveMs: options.keepaliveMs,
+      });
 
       const onEnd = (): void => {
         const state = sessions.get(id);
@@ -94,7 +119,9 @@ export function createSessionStore(options: Readonly<SessionStoreOptions>) {
       const state: SessionState = {
         id,
         key: owner.key,
-        server: options.createServer(),
+        transport,
+        server,
+        drain: calls.drain,
         lastUsedAt: options.now(),
         busy: 0,
         forgetEnds: () => owner.ends?.removeEventListener('abort', onEnd),
@@ -102,11 +129,13 @@ export function createSessionStore(options: Readonly<SessionStoreOptions>) {
 
       sessions.set(id, state);
 
+      await server.connect(calls.createGate(transport));
+
       return state;
     },
 
     // another caller's session is not found
-    get: (id: string, key: string): McpSession | null => {
+    findOwned: (id: string, key: string): LegacySession | null => {
       const state = sessions.get(id);
 
       if (state?.key !== key) {
@@ -118,22 +147,22 @@ export function createSessionStore(options: Readonly<SessionStoreOptions>) {
       return state;
     },
 
-    // runs one message's handling, which keeps the session from a sweep
-    track: async (session: Readonly<McpSession>, handle: () => Promise<void>): Promise<void> => {
+    // counts a tool call until it ends, which keeps the session from a sweep
+    track: (session: Readonly<LegacySession>, ended: Promise<void>): void => {
       const state = sessions.get(session.id);
 
-      if (state !== undefined) {
-        state.busy += 1;
+      if (state === undefined) {
+        return;
       }
 
-      try {
-        await handle();
-      } finally {
-        if (state !== undefined) {
-          state.busy -= 1;
-          state.lastUsedAt = options.now();
-        }
-      }
+      state.busy += 1;
+
+      void (async () => {
+        await ended;
+
+        state.busy -= 1;
+        state.lastUsedAt = options.now();
+      })();
     },
     end: stopSession,
 
@@ -154,7 +183,7 @@ export function createSessionStore(options: Readonly<SessionStoreOptions>) {
 }
 
 // the least recently used idle session of these, to make room
-function findEvictable(candidates: readonly Readonly<SessionState>[]): McpSession | null {
+function findEvictable(candidates: readonly Readonly<SessionState>[]): LegacySession | null {
   const idle = candidates.filter((state) => state.busy === 0);
 
   return idle.toSorted((a, b) => a.lastUsedAt - b.lastUsedAt)[0] ?? null;

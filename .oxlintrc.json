@@ -75,6 +75,20 @@
             ],
             "package": "ssh2"
           },
+          // the MCP SDK's live server, transports and per-request context,
+          // and the request and auth records it hands a handler to read
+          {
+            "from": "package",
+            "name": [
+              "Server",
+              "Transport",
+              "WebStandardStreamableHTTPServerTransport",
+              "ServerContext",
+              "CallToolRequest",
+              "AuthInfo"
+            ],
+            "package": "@modelcontextprotocol/server"
+          },
           // live streams the SSH gateway relays between
           { "from": "package", "name": ["Readable", "Writable"], "package": "node:stream" },
           { "from": "package", "name": "Buffer", "package": "@types/node" },
