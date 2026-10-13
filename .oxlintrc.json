@@ -40,6 +40,8 @@
         "allow": [
           // wraps a live db connection; not meaningfully freezable
           { "from": "package", "name": "Database", "package": "bun:sqlite" },
+          // a zod schema: its methods build new schemas and never change it
+          { "from": "package", "name": "ZodType", "package": "zod" },
           // query builders bound to a live connection; not meaningfully
           // freezable
           { "from": "package", "name": ["Kysely", "Transaction"], "package": "kysely" },

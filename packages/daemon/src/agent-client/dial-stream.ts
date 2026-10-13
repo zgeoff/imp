@@ -64,7 +64,7 @@ export async function openRelayStream(
     const answer = await readFrameWithin(connection, answerTimeoutMs);
 
     if (answer?.type !== FRAME_TYPES.response) {
-      throw new Error(`agent closed the ${String(request['op'])} connection before it answered`);
+      throw new Error(`agent closed the ${request.op} connection before it answered`);
     }
 
     requireNoAgentError(answer);
