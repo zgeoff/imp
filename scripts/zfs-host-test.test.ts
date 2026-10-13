@@ -91,18 +91,24 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
     'sudo zpool list impbenchPID',
     'zpool list impbenchPID',
     'docker container inspect imp-zfs',
+    'docker container inspect imp-zfs-mv-b',
+    'docker network inspect imp-zfs-mv',
     `sudo env PATH=${ctx.path} IMP_ZFS_TEST_DIR=${work}/unit ${ctx.dir}/root/scripts/test-zfs.sh`,
     'test-zfs.sh ',
     `sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     'sudo zfs create -o mountpoint=legacy impbenchPID/imp',
     'zfs create -o mountpoint=legacy impbenchPID/imp',
+    'sudo zfs create -o mountpoint=legacy impbenchPID/imp-mv-b',
+    'zfs create -o mountpoint=legacy impbenchPID/imp-mv-b',
     'test-e2e.sh --only checkpoints,sleep',
     'docker logs imp-zfs',
     'sudo zfs list -r -o name,used,refer,compressratio,recordsize impbenchPID',
     'zfs list -r -o name,used,refer,compressratio,recordsize impbenchPID',
+    'docker container inspect imp-zfs-mv-b',
     'docker logs imp-zfs',
     'dev.sh down',
+    'docker network rm imp-zfs-mv',
     'sudo zpool list -H -o name',
     'zpool list -H -o name',
     'sudo zpool status -P impbenchPID',
@@ -127,6 +133,15 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
 
   expect(owner).toBe(
     `{"pool":"impbenchPID","root":"impbenchPID/imp","vdev":"${work}/bench.img"}\n`,
+  );
+
+  const ownerB = readFileSync(join(work, 'data-mv-b', 'imp-e2e-zfs-owner'), 'utf8').replaceAll(
+    /impbench\d+/g,
+    'impbenchPID',
+  );
+
+  expect(ownerB).toBe(
+    `{"pool":"impbenchPID","root":"impbenchPID/imp-mv-b","vdev":"${work}/bench.img"}\n`,
   );
 });
 
@@ -253,6 +268,8 @@ test('it never destroys a pool or stops an instance when its own pool create fai
     'sudo zpool list impbenchPID',
     'zpool list impbenchPID',
     'docker container inspect imp-zfs',
+    'docker container inspect imp-zfs-mv-b',
+    'docker network inspect imp-zfs-mv',
     `sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     `zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa impbenchPID ${work}/bench.img`,
     'sudo zpool list -H -o name',
@@ -363,6 +380,107 @@ test('it refuses an imp-zfs container that is already there and touches nothing'
   expect(existsSync(join(work, 'data'))).toBeFalse();
 });
 
+test('it refuses a work dir that already holds the moves suites’ B data dir and leaves it as it was', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(join(work, 'data-mv-b'), { recursive: true });
+  writeFileSync(join(work, 'data-mv-b', 'imp.db'), 'another run');
+  createStubZpool(ctx.stubs);
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    `zfs-host-test: ${work}/data-mv-b already exists; refusing to touch it\n`,
+  );
+
+  expect(calls).toBe('sudo zpool list impbenchPID\nzpool list impbenchPID\n');
+  expect(readFileSync(join(work, 'data-mv-b', 'imp.db'), 'utf8')).toBe('another run');
+  expect(existsSync(join(work, 'data'))).toBeFalse();
+});
+
+test('it refuses an imp-zfs-mv-b container that is already there and touches nothing', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+
+  // another run's B answers inspect
+  createStubInstanceDocker(ctx.stubs, { containers: ['imp-zfs-mv-b'] });
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    'zfs-host-test: a container named imp-zfs-mv-b already exists; refusing to touch it\n',
+  );
+
+  expect(calls).toBe(
+    'sudo zpool list impbenchPID\nzpool list impbenchPID\ndocker container inspect imp-zfs\ndocker container inspect imp-zfs-mv-b\n',
+  );
+
+  expect(existsSync(join(work, 'data'))).toBeFalse();
+});
+
+test('it refuses an imp-zfs-mv network that is already there and touches nothing', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+
+  // another run's move network answers inspect
+  createStubInstanceDocker(ctx.stubs, { containers: [], networks: ['imp-zfs-mv'] });
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    'zfs-host-test: a network named imp-zfs-mv already exists; refusing to touch it\n',
+  );
+
+  expect(calls).toBe(
+    'sudo zpool list impbenchPID\nzpool list impbenchPID\ndocker container inspect imp-zfs\ndocker container inspect imp-zfs-mv-b\ndocker network inspect imp-zfs-mv\n',
+  );
+
+  expect(existsSync(join(work, 'data'))).toBeFalse();
+});
+
 test('it makes a work dir that does not exist yet, parents included', () => {
   const ctx = setupTest();
 
@@ -385,19 +503,30 @@ test('it makes a work dir that does not exist yet, parents included', () => {
   expect(existsSync(join(work, 'summary.txt'))).toBeTrue();
 });
 
-test('it stops the suites, the instance and the pool when it gets SIGTERM during the run', async () => {
+test('it stops the suites, the moves suites’ B, the instance and the pool when it gets SIGTERM during the run', async () => {
   const ctx = setupTest();
-
-  createStubInstanceDocker(ctx.stubs, { containers: [] });
-
   const work = join(ctx.dir, 'work');
   const started = join(ctx.dir, 'suites-started');
+
+  // the moves suites start B once the run is under way
+  createStubInstanceDocker(ctx.stubs, {
+    containers: [],
+    startedLater: { marker: started, containers: ['imp-zfs-mv-b'] },
+  });
 
   mkdirSync(work);
   createStubZpool(ctx.stubs);
 
-  // a run that holds the instance until something stops it
+  // a run that holds the instance until something stops it, and a dev.sh
+  // that logs which instance each call is for
   createStubRepoScript(ctx.tests, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
+
+  createStubRepoScript(
+    join(ctx.dir, 'root', 'scripts', 'dev'),
+    'dev.sh',
+    ctx.calls,
+    `printf '%s\\n' "  for $IMP_DEV_NAME on $IMP_DEV_DATA" >>'${ctx.calls}'`,
+  );
 
   const proc = Bun.spawn([ctx.script], {
     stdout: 'ignore',
@@ -425,10 +554,16 @@ test('it stops the suites, the instance and the pool when it gets SIGTERM during
 
   expect(exitCode).toBe(143);
 
-  expect(calls.split('\n').slice(-15)).toStrictEqual([
+  expect(calls.split('\n').slice(-21)).toStrictEqual([
     'test-e2e.sh --only checkpoints,sleep',
+    'docker container inspect imp-zfs-mv-b',
+    'docker logs imp-zfs-mv-b',
+    'dev.sh down',
+    `  for imp-zfs-mv-b on ${work}/data-mv-b`,
     'docker logs imp-zfs',
     'dev.sh down',
+    `  for imp-zfs on ${work}/data`,
+    'docker network rm imp-zfs-mv',
     'sudo zpool list -H -o name',
     'zpool list -H -o name',
     'sudo zpool status -P impbenchPID',

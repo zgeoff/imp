@@ -131,6 +131,23 @@ test('#readMoveHosts names B, its network and the CLI config beside the run’s 
   });
 });
 
+test('#readMoveHosts puts B on a ZFS root dataset of its own beside the run’s', () => {
+  updateEnv('IMP_STORAGE_BACKEND', 'zfs');
+  updateEnv('IMP_ZFS_ROOT', 'impbench42/imp');
+
+  const hosts = readMoveHosts({ tailnet: false });
+
+  expect(hosts.b.env['IMP_ZFS_ROOT']).toBe('impbench42/imp-mv-b');
+});
+
+test('#readMoveHosts gives B no ZFS root on XFS', () => {
+  updateEnv('IMP_ZFS_ROOT', 'impbench42/imp');
+
+  const hosts = readMoveHosts({ tailnet: false });
+
+  expect(hosts.b.env).not.toContainKey('IMP_ZFS_ROOT');
+});
+
 test('#readMoveHosts counts A as rebooted onto the network for a move off the tailnet', () => {
   expect(readMoveHosts({ tailnet: false }).isARebooted).toBeTrue();
 });

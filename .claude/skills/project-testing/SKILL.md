@@ -447,24 +447,29 @@ this checkout whatever its `-C` says.
   (default 40) in `<dir>/bench.img`, runs the suites in `IMP_ZFS_E2E_SUITES` (default
   `checkpoints,sleep`), and writes `<dir>/summary.txt`; `<dir>` keeps the results and is made,
   parents included, when it does not exist. Before it touches anything it refuses a bench pool name
-  that `zpool list` already shows, a `bench.img` (a symlink included) or `data` already in the work
-  dir, and an `imp-zfs` container that is already there; so a second run in the same dir is refused.
-  It claims `<dir>/data` with `mkdir`, and once the pool and root dataset exist it writes the owner
-  file `imp-e2e-zfs-owner` there, which lets `main.ts` make the instance anew (see the end-to-end
-  harness). The e2e run goes in the background, its output through `tee` into `<dir>/e2e.log`, so
-  TERM (143) or INT (130) reaches the trap at once and cleanup stops it first. Its EXIT cleanup
-  releases only what the run made: it collects the impd log and stops the instance only once the run
-  started it, destroys the pool only when `zpool status -P` lists this run's `bench.img` (the whole
-  path), and removes that file only when no pool lists it and `zpool` could say so. A pool that will
-  not go keeps its file and fails the run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in
-  `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh`
-  and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh` (`create-stub-repo-script.ts`), with stub
-  `sudo`, the `zfs` stub, a `docker` that knows only the containers a test lists
+  that `zpool list` already shows, a `bench.img` (a symlink included), `data` or `data-mv-b` already
+  in the work dir, an `imp-zfs` or `imp-zfs-mv-b` container, and an `imp-zfs-mv` network that is
+  already there; so a second run in the same dir is refused. It claims `<dir>/data` and
+  `<dir>/data-mv-b`, the moves suites' B, with `mkdir`. It makes B's root dataset
+  `<IMP_ZFS_ROOT>-mv-b` beside the instance's, which `readHostBZfsRoot` in
+  `test/e2e/lib/move-hosts.ts` gives B, and once the pool and both datasets exist it writes an owner
+  file `imp-e2e-zfs-owner` with each root into each data dir, which lets `main.ts` make either
+  instance anew (see the end-to-end harness). The e2e run goes in the background, its output through
+  `tee` into `<dir>/e2e.log`, so TERM (143) or INT (130) reaches the trap at once and cleanup stops
+  it first. Its EXIT cleanup releases only what the run made: once the run started the instance, it
+  takes a B the run left up down with `dev.sh down`, its docker proxy and volumes included, collects
+  the impd log, stops the instance and removes the move network, destroys the pool only when
+  `zpool status -P` lists this run's `bench.img` (the whole path), and removes that file only when
+  no pool lists it and `zpool` could say so. A pool that will not go keeps its file and fails the
+  run. `IMP_ZFS_MODULE_VERSION_FILE` is read as in `test-zfs.sh`. `scripts/zfs-host-test.test.ts`
+  runs a copy of the script beside the real `lib.sh` and stand-in `dev.sh`, `test-e2e.sh` and
+  `test-zfs.sh` (`create-stub-repo-script.ts`), with stub `sudo`, the `zfs` stub, a `docker` that
+  knows only the containers a test lists, some of them once a marker file exists
   (`create-stub-instance-docker.ts`) and the stateful `zpool` on `PATH`: the refusal for a missing
-  module, a normal release with its owner file, a work dir made with its parents, the pool, file,
-  symlink, data dir and container collisions, a failed `zpool create`, a failed destroy, a pool that
-  still uses the file, a failed `zpool` query, a work dir path with spaces, and SIGTERM during the
-  held create and during the e2e run.
+  module, a normal release with its owner files, a work dir made with its parents, the pool, file,
+  symlink, data dir, container and network collisions, a failed `zpool create`, a failed destroy, a
+  pool that still uses the file, a failed `zpool` query, a work dir path with spaces, and SIGTERM
+  during the held create and during an e2e run that has B up.
 
 ## NixOS
 
@@ -555,7 +560,7 @@ and how the call was made.
   `needs.e2e-group.result` is `success`.
 - **`zfs`** (not required) runs `scripts/ci/check-kvm.sh`, installs ZFS, runs `scripts/test-zfs.sh`
   with `IMP_ZFS_TEST_DIR` blank, then `scripts/zfs-host-test.sh` with `IMP_ZFS_TEST_UNIT=0` and
-  `IMP_ZFS_E2E_SUITES=lifecycle,checkpoints,disks,sleep,backups,boot-templates`.
+  `IMP_ZFS_E2E_SUITES=lifecycle,checkpoints,disks,sleep,backups,boot-templates,moves`.
 - **`go`** runs `gofmt -l`, `go vet ./...` and `scripts/test-go.sh` in `agent/`, with
   `GO_TEST_JSONFILE` under `runner.temp`, and uploads that JSON as `go-test-results`, whether the
   tests pass or fail.

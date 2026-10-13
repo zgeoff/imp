@@ -114,10 +114,20 @@ function buildHostEnv(
   };
 }
 
+// On ZFS, B's root dataset beside A's, which scripts/zfs-host-test.sh makes:
+// B would inherit A's IMP_ZFS_ROOT otherwise, and two impds on one dataset
+// take each other's disks. Undefined on XFS.
+export function readHostBZfsRoot(): string | undefined {
+  const root = process.env['IMP_ZFS_ROOT'] ?? '';
+
+  return process.env['IMP_STORAGE_BACKEND'] === 'zfs' && root !== '' ? `${root}-mv-b` : undefined;
+}
+
 // B as the options make it, for starting it and for its teardown
 function buildHostB(options: MoveHostsOptions): DevInstance {
   const names = buildNames();
   const network = buildMoveNetwork(readOffset());
+  const zfsRoot = readHostBZfsRoot();
 
   return createInstance({
     container: names.container,
@@ -129,6 +139,7 @@ function buildHostB(options: MoveHostsOptions): DevInstance {
 
       // off the tailnet, unless the suite moves over it under B's own name
       ...(options.tailnet ? { IMP_TAILSCALE_HOSTNAME: names.container } : { IMP_DEV_TAILNET: '0' }),
+      ...(zfsRoot !== undefined && { IMP_ZFS_ROOT: zfsRoot }),
     },
   });
 }
@@ -272,7 +283,7 @@ export function buildHostBFixtureDeps(keep: boolean): HostBFixtureDeps {
     },
     removeHost: async (host) => {
       // refused before anything goes, as for a dir that is no instance's
-      const target = await resolveDataWipe(host.dataDir);
+      const target = await resolveDataWipe(host.dataDir, readHostBZfsRoot());
 
       await runDevScript('down', host);
 
