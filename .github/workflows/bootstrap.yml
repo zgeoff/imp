@@ -25,7 +25,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Whether the pull request changes the paths push lists; keep both lists alike.
+  # Whether the pull request changes the paths push lists; keep both lists
+  # alike. This list adds the detector, so a change to it runs the work.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -46,6 +47,7 @@ jobs:
             deploy/**
             scripts/test-bootstrap.sh
             .github/workflows/bootstrap.yml
+            .github/actions/paths-changed/**
 
   # Only a 'false' skips it, so a failed changes job runs the work rather than
   # pass it.
