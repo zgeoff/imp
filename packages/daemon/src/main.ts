@@ -323,7 +323,7 @@ async function main(): Promise<void> {
 if (process.argv[2] === '--version') {
   process.stdout.write(`${packageJson.version}\n`);
 } else if (process.argv[2] === '--network-env') {
-  process.stdout.write(renderNetworkEnv(loadConfig(process.env)));
+  process.stdout.write(renderNetworkEnv(process.env));
 } else {
   await main();
 }
