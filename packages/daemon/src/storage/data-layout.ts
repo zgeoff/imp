@@ -32,7 +32,7 @@ export interface ImagePaths {
 }
 
 // The directories directly under the data dir that impd keeps its state in.
-export const DATA_DIRS = ['db', 'system', 'images', 'imps'] as const;
+const DATA_DIRS = ['db', 'system', 'images', 'imps'] as const;
 
 // impd makes its own top-level directories at start, on whatever the data dir
 // is mounted from, so nothing that sets up the mount needs to know them.
