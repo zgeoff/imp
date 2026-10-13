@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,8 +15,8 @@ import { buildStubExecReplies } from '../test-utils/build-stub-exec-replies';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import {
   buildBrokerEnv,
+  buildInstallArgv,
   buildInstallInput,
-  buildInstallScript,
   createGuestTrust,
   runBundleInstall,
 } from './guest-trust';
@@ -63,14 +63,10 @@ test("it builds the bundle from the guest's own roots and the broker CA", async 
   writeFileSync(join(ctx.dir, 'roots.pem'), 'GUEST ROOTS, A CA THE GUEST ADDED INCLUDED\n');
 
   const install = Bun.spawnSync(
-    [
-      'sh',
-      '-c',
-      buildInstallScript(join(ctx.dir, 'imp', 'broker-ca.pem'), [
-        join(ctx.dir, 'missing.pem'),
-        join(ctx.dir, 'roots.pem'),
-      ]),
-    ],
+    buildInstallArgv(join(ctx.dir, 'imp', 'broker-ca.pem'), [
+      join(ctx.dir, 'missing.pem'),
+      join(ctx.dir, 'roots.pem'),
+    ]),
     {
       stdin: Buffer.from(
         buildInstallInput('-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----'),
@@ -91,7 +87,7 @@ test('it leaves the bundle file as it was when the same bundle is installed agai
 
   writeFileSync(join(ctx.dir, 'roots.pem'), 'GUEST ROOTS\n');
 
-  const script = buildInstallScript(join(ctx.dir, 'imp', 'broker-ca.pem'), [
+  const argv = buildInstallArgv(join(ctx.dir, 'imp', 'broker-ca.pem'), [
     join(ctx.dir, 'roots.pem'),
   ]);
 
@@ -99,11 +95,11 @@ test('it leaves the bundle file as it was when the same bundle is installed agai
     buildInstallInput('-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----'),
   );
 
-  Bun.spawnSync(['sh', '-c', script], { stdin: input });
+  Bun.spawnSync(argv, { stdin: input });
 
   const before = statSync(join(ctx.dir, 'imp', 'broker-ca.pem')).ino;
 
-  Bun.spawnSync(['sh', '-c', script], { stdin: input });
+  Bun.spawnSync(argv, { stdin: input });
 
   expect(statSync(join(ctx.dir, 'imp', 'broker-ca.pem')).ino).toBe(before);
 });
@@ -112,11 +108,7 @@ test('it gives a guest without roots the host roots and the broker CA', async ()
   const ctx = await setupTest();
 
   const install = Bun.spawnSync(
-    [
-      'sh',
-      '-c',
-      buildInstallScript(join(ctx.dir, 'imp', 'broker-ca.pem'), [join(ctx.dir, 'missing.pem')]),
-    ],
+    buildInstallArgv(join(ctx.dir, 'imp', 'broker-ca.pem'), [join(ctx.dir, 'missing.pem')]),
     {
       stdin: Buffer.from(
         buildInstallInput('-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----'),
@@ -129,6 +121,46 @@ test('it gives a guest without roots the host roots and the broker CA', async ()
   expect(readFileSync(join(ctx.dir, 'imp', 'broker-ca.pem'), 'utf8')).toBe(
     `${rootCertificates.join('\n')}\n\n-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----\n`,
   );
+});
+
+test("it installs into a path that holds a quote and spaces, since paths are the script's arguments", async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, "guest's roots.pem"), 'GUEST ROOTS\n');
+
+  const install = Bun.spawnSync(
+    buildInstallArgv(join(ctx.dir, "it's imp", 'broker-ca.pem'), [
+      join(ctx.dir, "guest's roots.pem"),
+    ]),
+    {
+      stdin: Buffer.from(
+        buildInstallInput('-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----'),
+      ),
+    },
+  );
+
+  expect(install.exitCode).toBe(0);
+
+  expect(readFileSync(join(ctx.dir, "it's imp", 'broker-ca.pem'), 'utf8')).toBe(
+    'GUEST ROOTS\n\n-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----\n',
+  );
+});
+
+test('it refuses an install input without the roots marker and writes no bundle', async () => {
+  const ctx = await setupTest();
+
+  const install = Bun.spawnSync(
+    buildInstallArgv(join(ctx.dir, 'imp', 'broker-ca.pem'), [join(ctx.dir, 'missing.pem')]),
+    { stdin: Buffer.from('-----BEGIN CERTIFICATE-----\nBROKER\n-----END CERTIFICATE-----\n') },
+  );
+
+  expect(install.exitCode).toBe(1);
+
+  expect(install.stderr.toString()).toBe(
+    "install-broker-ca: stdin has no '# imp: host roots' line\n",
+  );
+
+  expect(readdirSync(join(ctx.dir, 'imp'))).toStrictEqual([]);
 });
 
 test('it answers a failed install as not installed, with why, and logs it', async () => {
@@ -272,7 +304,18 @@ test('it runs the install as root through the agent with the input on stdin', as
 
   expect(decodeJsonPayload(request)).toStrictEqual({
     op: 'exec',
-    argv: ['/bin/sh', '-c', buildInstallScript()],
+    argv: [
+      '/bin/sh',
+      '-c',
+      readFileSync(join(import.meta.dir, 'install-broker-ca.sh'), 'utf8'),
+      'install-broker-ca',
+      '/etc/imp/broker-ca.pem',
+      '# imp: host roots',
+      '/etc/ssl/certs/ca-certificates.crt',
+      '/etc/pki/tls/certs/ca-bundle.crt',
+      '/etc/ssl/ca-bundle.pem',
+      '/etc/ssl/cert.pem',
+    ],
     tty: false,
     user: '0',
   });

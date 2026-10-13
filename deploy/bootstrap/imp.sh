@@ -33,8 +33,8 @@ ensure_imp() {
     "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet" "$ksm")
   # An operator's value stays (render_env), so the floor binds the formula only.
   local refusal
-  if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] \
-    && ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
+  if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] &&
+    ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
     die "$refusal"
   fi
   # The image the units run: the env file's pin, else their own release's.
@@ -85,8 +85,8 @@ ensure_imp() {
 # read_seccomp REF: the seccomp profile in the image REF; refuses an image
 # without one.
 read_seccomp() {
-  docker run --rm "$1" cat "$SECCOMP_IN_IMAGE" \
-    || die "$1 has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
+  docker run --rm "$1" cat "$SECCOMP_IN_IMAGE" ||
+    die "$1 has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
 }
 
 # check_image_contract REF: fails, and says why, unless REF runs as these
@@ -194,8 +194,8 @@ check_storage_live() {
 # check_ipv6_live: with IPv6 on, the container has an IPv6 default route,
 # and impd took it (docs/architecture/network/networking.md#ipv6).
 check_ipv6_live() {
-  [ -n "$(docker exec imp-host ip -6 route show default)" ] \
-    || die "imp-host has no IPv6 default route on the $HOST_NETWORK network"
+  [ -n "$(docker exec imp-host ip -6 route show default)" ] ||
+    die "imp-host has no IPv6 default route on the $HOST_NETWORK network"
   wait_for "impd to log its IPv6 plan" 60 impd_ipv6_line
   local line
   line=$(impd_ipv6_line)
@@ -211,8 +211,8 @@ tailnet_joined() {
 }
 
 tailscale_backend() {
-  docker exec imp-host tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null \
-    | jq -r '.BackendState // empty'
+  docker exec imp-host tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null |
+    jq -r '.BackendState // empty'
 }
 
 tailscale_running() { [ "$(tailscale_backend)" = Running ]; }

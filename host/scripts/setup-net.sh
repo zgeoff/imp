@@ -49,8 +49,8 @@ rule nat POSTROUTING -s "$subnet" -o "$out" -j MASQUERADE
 # It is tagged, so a start removes any other form of it.
 peer_mark=0x1000000/0x1000000
 peer_rule=(-i imp+ -o imp+ -m mark --mark "$peer_mark" -m comment --comment imp-network -j ACCEPT)
-stale=$(iptables -S FORWARD | grep -- '--comment imp-network' \
-  | grep -v -- "--mark $peer_mark .*-j ACCEPT\$" || true)
+stale=$(iptables -S FORWARD | grep -- '--comment imp-network' |
+  grep -v -- "--mark $peer_mark .*-j ACCEPT\$" || true)
 while read -r spec; do
   # shellcheck disable=SC2086 # the saved rule is split back into its words
   [ -z "$spec" ] || iptables ${spec/#-A/-D}
@@ -94,8 +94,8 @@ if ip6tables -S INPUT >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
   # Router and neighbour solicitations and neighbour adverts, as only a
   # neighbour sends them (hop limit 255); never adverts or redirects.
   for type in 133 135 136; do
-    ip6tables -C INPUT -i imp+ -p ipv6-icmp --icmpv6-type "$type" -m hl --hl-eq 255 -j ACCEPT 2>/dev/null \
-      || ip6tables -I INPUT 1 -i imp+ -p ipv6-icmp --icmpv6-type "$type" -m hl --hl-eq 255 -j ACCEPT
+    ip6tables -C INPUT -i imp+ -p ipv6-icmp --icmpv6-type "$type" -m hl --hl-eq 255 -j ACCEPT 2>/dev/null ||
+      ip6tables -I INPUT 1 -i imp+ -p ipv6-icmp --icmpv6-type "$type" -m hl --hl-eq 255 -j ACCEPT
   done
   rule6 filter INPUT -i imp+ -j DROP
 
@@ -133,15 +133,15 @@ broker_tag=(-m comment --comment imp-broker)
 # INPUT DROP an older setup-net.sh added.
 for where in "filter INPUT ACCEPT" "raw PREROUTING DROP"; do
   read -r table chain target <<<"$where"
-  stale=$(iptables -t "$table" -S "$chain" | grep -- '--comment imp-broker' \
-    | grep -v -- "--dport $broker_port .*-j $target\$" || true)
+  stale=$(iptables -t "$table" -S "$chain" | grep -- '--comment imp-broker' |
+    grep -v -- "--dport $broker_port .*-j $target\$" || true)
   while read -r spec; do
     # shellcheck disable=SC2086 # the saved rule is split back into its words
     [ -z "$spec" ] || iptables -t "$table" ${spec/#-A/-D}
   done <<<"$stale"
 done
-iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j ACCEPT 2>/dev/null \
-  || iptables -I INPUT 1 -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j ACCEPT
+iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j ACCEPT 2>/dev/null ||
+  iptables -I INPUT 1 -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j ACCEPT
 rule raw PREROUTING ! -i imp+ -p tcp --dport "$broker_port" -m addrtype --dst-type LOCAL \
   "${broker_tag[@]}" -j DROP
 
@@ -152,8 +152,8 @@ rule raw PREROUTING ! -i imp+ -p tcp --dport "$broker_port" -m addrtype --dst-ty
 # tailnet address comes in on lo.
 rule raw PREROUTING -s 100.64.0.0/10 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
 if ip6tables -t raw -S PREROUTING >/dev/null 2>&1; then
-  ip6tables -t raw -C PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP 2>/dev/null \
-    || ip6tables -t raw -A PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
+  ip6tables -t raw -C PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP 2>/dev/null ||
+    ip6tables -t raw -A PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
 fi
 
 # The egress resolver (docs/architecture/network/egress.md#the-resolver): box and
@@ -165,16 +165,16 @@ dns_port=$IMP_EGRESS_DNS_PORT
 dns_tag=(-m comment --comment imp-egress-dns)
 for where in "filter INPUT ACCEPT" "raw PREROUTING DROP"; do
   read -r table chain target <<<"$where"
-  stale=$(iptables -t "$table" -S "$chain" | grep -- '--comment imp-egress-dns' \
-    | grep -v -- "--dport $dns_port .*-j $target\$" || true)
+  stale=$(iptables -t "$table" -S "$chain" | grep -- '--comment imp-egress-dns' |
+    grep -v -- "--dport $dns_port .*-j $target\$" || true)
   while read -r spec; do
     # shellcheck disable=SC2086 # the saved rule is split back into its words
     [ -z "$spec" ] || iptables -t "$table" ${spec/#-A/-D}
   done <<<"$stale"
 done
 for proto in udp tcp; do
-  iptables -C INPUT -i imp+ -p "$proto" --dport "$dns_port" "${dns_tag[@]}" -j ACCEPT 2>/dev/null \
-    || iptables -I INPUT 1 -i imp+ -p "$proto" --dport "$dns_port" "${dns_tag[@]}" -j ACCEPT
+  iptables -C INPUT -i imp+ -p "$proto" --dport "$dns_port" "${dns_tag[@]}" -j ACCEPT 2>/dev/null ||
+    iptables -I INPUT 1 -i imp+ -p "$proto" --dport "$dns_port" "${dns_tag[@]}" -j ACCEPT
   rule raw PREROUTING ! -i imp+ -p "$proto" --dport "$dns_port" -m addrtype --dst-type LOCAL \
     "${dns_tag[@]}" -j DROP
 done

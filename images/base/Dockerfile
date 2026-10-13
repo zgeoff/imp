@@ -19,6 +19,8 @@ ARG DOCKER_APT_GPG_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb9
 ARG DEBIAN_FRONTEND=noninteractive
 
 # git stays: coding agents clone and commit, and it costs about 20 MB.
+# the pipe feeds echo into `sha256sum -c`, where only the check can fail
+# hadolint ignore=DL4006
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl iproute2 iptables procps sudo less vim-tiny \
@@ -40,6 +42,9 @@ RUN apt-get update \
 # NOTICE from the source tag of each installed version. The sums pin the
 # text: a version bump that changes a file fails here and names the new sum,
 # for the reviewer to read the text and update the sum.
+# a dpkg-query that fails leaves the version empty, and the curl of that
+# URL then fails the step
+# hadolint ignore=DL4006
 RUN set -eu; \
     notice() { \
       version=$(dpkg-query -W -f '${Version}' "$1" | sed 's/^[0-9]*://; s/-.*//'); \

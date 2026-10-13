@@ -32,6 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Gitleaks
@@ -52,6 +53,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -77,29 +80,16 @@ jobs:
       - name: Bun Pin
         run: scripts/ci/check-bun-pin.sh
 
-      - name: Dead Code
-        run: bun run deadcode
-
-      - name: Format
-        run: bun run format:check
-
-      - name: Lint
-        run: bun run lint:full
-
-      - name: Doc links
-        run: bun run lint:docs
+      # the whole-tree gates: dead code, format, type-aware lint, doc links,
+      # types and every test, as package.json's check script lists them
+      - name: Check
+        run: bun run check
 
       # Some READMEs and docs/ pages fail the shared length or prose rules, so this step reports
       # its findings without failing the run.
       - name: Doc length and prose
         continue-on-error: true
         run: bash .claude/skills/docs-writing/scripts/check-length.sh --package README.md
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Test
-        run: bun test
 
       # an image build's disk hold against what it really takes, on a small
       # loop-mounted XFS of its own, as impd's data dir is; the tests skip
@@ -150,6 +140,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       # go.mod lives in agent/, so the version and the module cache key both
       # need pointing there; the key also covers the lint tools and the
@@ -222,33 +214,91 @@ jobs:
           name: go-test-results
           path: ${{ runner.temp }}/go-test.json
 
+  # Lints shell, workflows and Dockerfiles. The job keeps its first name,
+  # since that name is the required check in .github/rulesets/main.json.
   shellcheck:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       SHELLCHECK_VERSION: v0.11.0
       SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      SHFMT_VERSION: v3.14.1
+      SHFMT_SHA256: 76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      ZIZMOR_VERSION: v1.30.1
+      ZIZMOR_SHA256: e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a
+      HADOLINT_VERSION: v2.15.1
+      HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
-      # the runner's apt shellcheck is older and reports a different set of
-      # findings, so pin the release the hooks run locally
-      - name: Install ShellCheck
+      # pinned releases, checked by sum: the runner's apt shellcheck is older
+      # and reports a different set of findings, and the hooks run these
+      # versions locally
+      - name: Install linters
         run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
           cd "$RUNNER_TEMP"
-          tarball="shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
-          curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$tarball"
-          echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
-          tar -xJf "$tarball"
-          echo "$PWD/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
+          fetch() {
+            curl -fsSL --retry 3 -o "$1" "$2"
+            echo "$3  $1" | sha256sum -c -
+          }
+          fetch shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz" "$SHELLCHECK_SHA256"
+          tar -xJf shellcheck.tar.xz
+          install "shellcheck-$SHELLCHECK_VERSION/shellcheck" "$bin/"
+          fetch shfmt "https://github.com/mvdan/sh/releases/download/$SHFMT_VERSION/shfmt_${SHFMT_VERSION}_linux_amd64" "$SHFMT_SHA256"
+          install shfmt "$bin/"
+          fetch actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" "$ACTIONLINT_SHA256"
+          tar -xzf actionlint.tar.gz actionlint
+          install actionlint "$bin/"
+          fetch zizmor.tar.gz "https://github.com/zizmorcore/zizmor/releases/download/$ZIZMOR_VERSION/zizmor-x86_64-unknown-linux-gnu.tar.gz" "$ZIZMOR_SHA256"
+          tar -xzf zizmor.tar.gz zizmor
+          install zizmor "$bin/"
+          fetch hadolint "https://github.com/hadolint/hadolint/releases/download/$HADOLINT_VERSION/hadolint-linux-x86_64" "$HADOLINT_SHA256"
+          install hadolint "$bin/"
+          echo "$bin" >>"$GITHUB_PATH"
 
-      - name: ShellCheck
+      - name: ShellCheck and shfmt
         run: |
           shellcheck --version
+          shfmt --version
           scripts/ci/shellcheck.sh
+
+      # also runs shellcheck over every run: block
+      - name: actionlint
+        run: actionlint
+
+      # GH_TOKEN turns on the audits that ask GitHub, such as known-vulnerable
+      # actions and impostor commits
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --config .github/zizmor.yml .github
+
+      - name: hadolint
+        run: hadolint host/Dockerfile images/base/Dockerfile
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # the shell that production code holds as text; plain `bun test` skips
+      # these where shellcheck is missing, and here it is the pinned one
+      - name: Embedded shell
+        run: >-
+          bun test -t shellcheck ./packages/api/src/protocols/login-shell.test.ts
+          ./packages/mcp/src/tools/file-tools.test.ts ./packages/cli/src/completion.test.ts
 
   # Compiles the CLI for every platform, as a release does, and runs the
   # linux-x64 one. The release workflow runs each binary on its own platform;
@@ -261,6 +311,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -293,6 +345,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -670,6 +724,10 @@ jobs:
         with:
           client-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # what the steps below use it for: release-please, the push to the
+          # release branch and the auto-merge; the App holds no more
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Run release-please
         id: release
@@ -688,11 +746,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # no cache: a job holding the App token must not run a Bun binary that
+      # another run's cache entry could have replaced
       - name: Setup Bun
         if: steps.release.outputs.prs_created == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
+          no-cache: true
 
       # The token goes in the push URL only, never into .git/config; Actions
       # masks it in the log.

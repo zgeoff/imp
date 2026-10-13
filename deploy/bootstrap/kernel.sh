@@ -58,8 +58,8 @@ ensure_ksm() {
   local rule=/etc/tmpfiles.d/imp-ksm.conf sysfs=${1:-/sys/kernel/mm/ksm}
   if [ "$ksm" = off ]; then
     [ ! -f "$rule" ] || change "remove $rule" rm -f "$rule"
-    [ -n "$in_container" ] || ! ksm_merges \
-      || change "stop ksmd and unmerge its pages" write_param "$sysfs/run" 2
+    [ -n "$in_container" ] || ! ksm_merges ||
+      change "stop ksmd and unmerge its pages" write_param "$sysfs/run" 2
     return 0
   fi
   [ -z "$in_container" ] || die "--ksm cannot run in a container: KSM is global to the host's kernel"
@@ -89,6 +89,6 @@ ksm_tmpfiles() {
 # ksm_merges: ksmd runs, or pages it merged are still shared
 ksm_merges() {
   local dir=${KSM_DIR:-/sys/kernel/mm/ksm}
-  [ "$(cat "$dir/run" 2>/dev/null || echo 0)" = 1 ] \
-    || [ "$(cat "$dir/pages_shared" 2>/dev/null || echo 0)" -gt 0 ]
+  [ "$(cat "$dir/run" 2>/dev/null || echo 0)" = 1 ] ||
+    [ "$(cat "$dir/pages_shared" 2>/dev/null || echo 0)" -gt 0 ]
 }

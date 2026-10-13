@@ -8,7 +8,10 @@
 dev_image_tag() {
   local name hash
   name=$(basename "$1")
-  name=$(LC_ALL=C; printf '%s' "${name//[^A-Za-z0-9_.-]/-}")
+  name=$(
+    LC_ALL=C
+    printf '%s' "${name//[^A-Za-z0-9_.-]/-}"
+  )
   hash=$(printf '%s' "$1" | sha256sum)
   printf 'imp-host:dev-%s-%s\n' "${name:0:40}" "${hash:0:8}"
 }
@@ -78,7 +81,10 @@ read_proxy_privileges() {
 # read is quiet and exports IMP_TAILSCALE_OP_MISSED=1, so the rest of the run
 # skips op. Tracing stays off in here, so `bash -x` never shows the key.
 load_tailscale_authkey() {
-  { local xtrace=$-; set +x; } 2>/dev/null
+  {
+    local xtrace=$-
+    set +x
+  } 2>/dev/null
   local key=${TAILSCALE_AUTHKEY:-} found=1
   # 1Password only on request (IMP_TAILSCALE_OP=1): otherwise every worktree's
   # dev instance would join the tailnet
@@ -111,7 +117,10 @@ load_tailscale_authkey() {
 # preauthorized. Never TAILSCALE_AUTHKEY or .env: those hold dev's tag:imp key,
 # and tag:imp nodes reach a live impd. Tracing stays off in here.
 load_tailscale_e2e_authkey() {
-  { local xtrace=$-; set +x; } 2>/dev/null
+  {
+    local xtrace=$-
+    set +x
+  } 2>/dev/null
   local secret=${IMP_E2E_TAILSCALE_AUTHKEY:-} found=1
   if [ -z "$secret" ] && command -v op >/dev/null 2>&1; then
     secret=$(timeout 20 op read \
@@ -133,12 +142,15 @@ load_tailscale_e2e_authkey() {
 # fields client-id and client-secret. Returns 1 when op has no such item.
 # Tracing stays off in here, so `bash -x` never shows the secret.
 write_tailnet_oauth_file() {
-  { local xtrace=$-; set +x; } 2>/dev/null
+  {
+    local xtrace=$-
+    set +x
+  } 2>/dev/null
   local ref=${IMP_TAILNET_OAUTH_REF:-op://cloud/imp-tailscale-oauth} id secret found=1
-  if command -v op >/dev/null 2>&1 \
-    && id=$(timeout 20 op read "$ref/client-id" </dev/null 2>/dev/null) \
-    && secret=$(timeout 20 op read "$ref/client-secret" </dev/null 2>/dev/null) \
-    && [ -n "$id" ] && [ -n "$secret" ]; then
+  if command -v op >/dev/null 2>&1 &&
+    id=$(timeout 20 op read "$ref/client-id" </dev/null 2>/dev/null) &&
+    secret=$(timeout 20 op read "$ref/client-secret" </dev/null 2>/dev/null) &&
+    [ -n "$id" ] && [ -n "$secret" ]; then
     mkdir -p "$(dirname "$1")"
     (umask 077 && jq -n --arg id "$id" --arg secret "$secret" \
       '{clientId: $id, clientSecret: $secret}' >"$1")

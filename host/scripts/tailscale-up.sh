@@ -106,7 +106,10 @@ if ! alive; then
   # Kernel TUN mode: the container is privileged and has its own netns.
   setsid tailscaled "${args[@]}" --socket="$sock" --tun=tailscale0 \
     >"$log" 2>&1 </dev/null &
-  for _ in $(seq 100); do [ -S "$sock" ] && break; sleep 0.1; done
+  for _ in $(seq 100); do
+    [ -S "$sock" ] && break
+    sleep 0.1
+  done
   if [ ! -S "$sock" ]; then
     echo "tailscale-up: tailscaled did not start; log tail:" >&2
     tail -20 "$log" >&2
@@ -161,7 +164,7 @@ ensure_tags() {
 }
 
 # needs_login: the saved node cannot come back by itself.
-needs_login() { case $1 in NeedsLogin | NeedsMachineAuth | Stopped) return 0 ;; *) return 1 ;; esac; }
+needs_login() { case $1 in NeedsLogin | NeedsMachineAuth | Stopped) return 0 ;; *) return 1 ;; esac }
 
 # wait_later: the saved node is still coming up, as on a boot with no
 # network yet. tailscaled keeps trying by itself; this only joins with the
@@ -225,8 +228,8 @@ if [ -n "$has_state" ]; then
     wait_later </dev/null &
     exit 0
   fi
-elif [ "$(backend)" = Running ] \
-  && [ "$(ts status --json | jq -r '.Self.HostName')" = "$hostname" ]; then
+elif [ "$(backend)" = Running ] &&
+  [ "$(ts status --json | jq -r '.Self.HostName')" = "$hostname" ]; then
   # a second run while tailscaled is up (state in memory)
   want_up=0
 fi
@@ -235,7 +238,10 @@ if [ $want_up = 1 ]; then
   join || exit 1
 fi
 
-for _ in $(seq 100); do [ "$(backend)" = Running ] && break; sleep 0.1; done
+for _ in $(seq 100); do
+  [ "$(backend)" = Running ] && break
+  sleep 0.1
+done
 if [ "$(backend)" != Running ]; then
   state=$(backend)
   # it may come up later, with its tags unchecked

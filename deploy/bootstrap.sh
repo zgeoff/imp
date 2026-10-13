@@ -112,8 +112,8 @@ change() {
 # CONTENT may be secret: it goes through printf, a builtin, so not to argv.
 put_file() {
   local path=$1 perm=$2 content=$3
-  if [ -f "$path" ] && [ "$(stat -c %a "$path")" = "$perm" ] \
-    && [ "$(cat "$path")" = "$content" ]; then
+  if [ -f "$path" ] && [ "$(stat -c %a "$path")" = "$perm" ] &&
+    [ "$(cat "$path")" = "$content" ]; then
     return 1
   fi
   change "write $path (mode $perm)" write_file "$path" "$perm" "$content"
@@ -329,8 +329,8 @@ host_addresses() { ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | 
 
 # network_others: the containers on the network other than imp-host.
 network_others() {
-  docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$HOST_NETWORK" 2>/dev/null \
-    | tr ' ' '\n' | grep -vx -e imp-host -e '' | paste -sd ' ' - || true
+  docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$HOST_NETWORK" 2>/dev/null |
+    tr ' ' '\n' | grep -vx -e imp-host -e '' | paste -sd ' ' - || true
 }
 
 # create_host_network SUBNET6: the network imp-host runs on with IPv6, on
@@ -738,10 +738,10 @@ ensure_storage() {
 storage_xfs() {
   if mountpoint -q "$DATA_DIR"; then
     check_xfs_reflink
-    grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab \
-      || warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
-    findmnt -n -o OPTIONS --mountpoint "$DATA_DIR" | tr ',' '\n' | grep -qx nosuid \
-      || warn "$DATA_DIR is mounted without nosuid; add nosuid to its /etc/fstab entry and run: mount -o remount,nosuid $DATA_DIR"
+    grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab ||
+      warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
+    findmnt -n -o OPTIONS --mountpoint "$DATA_DIR" | tr ',' '\n' | grep -qx nosuid ||
+      warn "$DATA_DIR is mounted without nosuid; add nosuid to its /etc/fstab entry and run: mount -o remount,nosuid $DATA_DIR"
   else
     local source
     if [ -n "$data_device" ]; then
@@ -768,10 +768,10 @@ mount_data() {
 }
 
 check_xfs_reflink() {
-  [ "$(findmnt -n -o FSTYPE --mountpoint "$DATA_DIR")" = xfs ] \
-    || die "$DATA_DIR is mounted but not XFS; imp needs XFS with reflink"
-  [[ $(xfs_info "$DATA_DIR") == *reflink=1* ]] \
-    || die "$DATA_DIR is XFS without reflink; recreate it with mkfs.xfs -m reflink=1"
+  [ "$(findmnt -n -o FSTYPE --mountpoint "$DATA_DIR")" = xfs ] ||
+    die "$DATA_DIR is mounted but not XFS; imp needs XFS with reflink"
+  [[ $(xfs_info "$DATA_DIR") == *reflink=1* ]] ||
+    die "$DATA_DIR is XFS without reflink; recreate it with mkfs.xfs -m reflink=1"
   log "$DATA_DIR is XFS with reflink"
 }
 
@@ -836,8 +836,8 @@ storage_zfs() {
     fstype=$(blkid -p -s TYPE -o value "$data_device" 2>/dev/null || true)
     case $fstype in
       zfs_member)
-        [ "$(blkid -p -s LABEL -o value "$data_device")" = "$zfs_pool" ] \
-          || die "$data_device belongs to another ZFS pool"
+        [ "$(blkid -p -s LABEL -o value "$data_device")" = "$zfs_pool" ] ||
+          die "$data_device belongs to another ZFS pool"
         change "zpool import $zfs_pool" zpool import "$zfs_pool"
         ;;
       "")
@@ -866,11 +866,11 @@ storage_zfs() {
 prepare_loop_file() {
   local dir avail_gib
   dir=$(dirname "$loop_file")
-  [ "$(findmnt -n -o TARGET --target "$dir")" = / ] \
-    || die "--loop-file must be on the root filesystem, which mounts before $DATA_DIR"
+  [ "$(findmnt -n -o TARGET --target "$dir")" = / ] ||
+    die "--loop-file must be on the root filesystem, which mounts before $DATA_DIR"
   if [ -e "$loop_file" ]; then
-    [ "$(blkid -p -s TYPE -o value "$loop_file" 2>/dev/null || true)" = xfs ] \
-      || die "$loop_file exists and is not XFS"
+    [ "$(blkid -p -s TYPE -o value "$loop_file" 2>/dev/null || true)" = xfs ] ||
+      die "$loop_file exists and is not XFS"
     log "$loop_file already holds XFS; reusing it"
     return
   fi
@@ -881,8 +881,8 @@ prepare_loop_file() {
   elif [ $((avail_gib - loop_size_gib)) -lt "$(loop_reserve_gib "$avail_gib")" ]; then
     warn "$loop_file is sparse: once full, ${loop_size_gib} GiB leaves under $(loop_reserve_gib "$avail_gib") GiB of the ${avail_gib} GiB free on / for the OS"
   fi
-  [ "$loop_size_gib" -ge "$LOOP_MIN_GIB" ] \
-    || die "a ${loop_size_gib} GiB loop file is too small (${avail_gib} GiB free on /); imp needs ${LOOP_MIN_GIB}"
+  [ "$loop_size_gib" -ge "$LOOP_MIN_GIB" ] ||
+    die "a ${loop_size_gib} GiB loop file is too small (${avail_gib} GiB free on /); imp needs ${LOOP_MIN_GIB}"
   change "create a ${loop_size_gib} GiB sparse XFS file $loop_file" make_loop_file
 }
 
@@ -1039,8 +1039,8 @@ ensure_ksm() {
   local rule=/etc/tmpfiles.d/imp-ksm.conf sysfs=${1:-/sys/kernel/mm/ksm}
   if [ "$ksm" = off ]; then
     [ ! -f "$rule" ] || change "remove $rule" rm -f "$rule"
-    [ -n "$in_container" ] || ! ksm_merges \
-      || change "stop ksmd and unmerge its pages" write_param "$sysfs/run" 2
+    [ -n "$in_container" ] || ! ksm_merges ||
+      change "stop ksmd and unmerge its pages" write_param "$sysfs/run" 2
     return 0
   fi
   [ -z "$in_container" ] || die "--ksm cannot run in a container: KSM is global to the host's kernel"
@@ -1070,8 +1070,8 @@ ksm_tmpfiles() {
 # ksm_merges: ksmd runs, or pages it merged are still shared
 ksm_merges() {
   local dir=${KSM_DIR:-/sys/kernel/mm/ksm}
-  [ "$(cat "$dir/run" 2>/dev/null || echo 0)" = 1 ] \
-    || [ "$(cat "$dir/pages_shared" 2>/dev/null || echo 0)" -gt 0 ]
+  [ "$(cat "$dir/run" 2>/dev/null || echo 0)" = 1 ] ||
+    [ "$(cat "$dir/pages_shared" 2>/dev/null || echo 0)" -gt 0 ]
 }
 
 # --- deploy/bootstrap/network.sh ---
@@ -1135,8 +1135,8 @@ ensure_firewall() {
 # goes; the platform's rules stay.
 remove_firewall() {
   local loaded=""
-  if [ -e /etc/systemd/system/imp-firewall.service ] || [ -e "$FIREWALL_FILE" ] \
-    || { command -v nft >/dev/null && nft list table inet imp_host >/dev/null 2>&1; }; then
+  if [ -e /etc/systemd/system/imp-firewall.service ] || [ -e "$FIREWALL_FILE" ] ||
+    { command -v nft >/dev/null && nft list table inet imp_host >/dev/null 2>&1; }; then
     loaded=1
   fi
   if [ -z "$loaded" ]; then
@@ -1164,9 +1164,9 @@ uninstall_firewall() {
   # Read first: under pipefail, grep -q quitting early fails nft with SIGPIPE.
   local rules
   rules=$(nft list ruleset 2>/dev/null || true)
-  if ! grep -q 'hook input' <<<"$rules" \
-    && ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } \
-    && ! systemctl -q is-active firewalld 2>/dev/null; then
+  if ! grep -q 'hook input' <<<"$rules" &&
+    ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } &&
+    ! systemctl -q is-active firewalld 2>/dev/null; then
     warn "the host now has no inbound firewall; the platform must give one (docs/architecture/host.md#the-host-firewall)"
   fi
 }
@@ -1404,8 +1404,8 @@ ra_userspace() {
   if [ -n "$network_file" ] && [ "$network_file" != n/a ]; then
     owner=systemd-networkd
     # networkd's IPv6AcceptRA defaults to off once forwarding is on; yes keeps it
-    if cat "$network_file" "$network_file.d"/*.conf 2>/dev/null \
-      | grep -qiE '^[[:space:]]*IPv6AcceptRA[[:space:]]*=[[:space:]]*(yes|true|on|1)[[:space:]]*$'; then
+    if cat "$network_file" "$network_file.d"/*.conf 2>/dev/null |
+      grep -qiE '^[[:space:]]*IPv6AcceptRA[[:space:]]*=[[:space:]]*(yes|true|on|1)[[:space:]]*$'; then
       log "router adverts: systemd-networkd takes them on $uplink, with IPv6AcceptRA=yes in $network_file"
       return
     fi
@@ -1841,8 +1841,8 @@ ensure_imp() {
     "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet" "$ksm")
   # An operator's value stays (render_env), so the floor binds the formula only.
   local refusal
-  if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] \
-    && ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
+  if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] &&
+    ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
     die "$refusal"
   fi
   # The image the units run: the env file's pin, else their own release's.
@@ -1893,8 +1893,8 @@ ensure_imp() {
 # read_seccomp REF: the seccomp profile in the image REF; refuses an image
 # without one.
 read_seccomp() {
-  docker run --rm "$1" cat "$SECCOMP_IN_IMAGE" \
-    || die "$1 has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
+  docker run --rm "$1" cat "$SECCOMP_IN_IMAGE" ||
+    die "$1 has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
 }
 
 # check_image_contract REF: fails, and says why, unless REF runs as these
@@ -2002,8 +2002,8 @@ check_storage_live() {
 # check_ipv6_live: with IPv6 on, the container has an IPv6 default route,
 # and impd took it (docs/architecture/network/networking.md#ipv6).
 check_ipv6_live() {
-  [ -n "$(docker exec imp-host ip -6 route show default)" ] \
-    || die "imp-host has no IPv6 default route on the $HOST_NETWORK network"
+  [ -n "$(docker exec imp-host ip -6 route show default)" ] ||
+    die "imp-host has no IPv6 default route on the $HOST_NETWORK network"
   wait_for "impd to log its IPv6 plan" 60 impd_ipv6_line
   local line
   line=$(impd_ipv6_line)
@@ -2019,8 +2019,8 @@ tailnet_joined() {
 }
 
 tailscale_backend() {
-  docker exec imp-host tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null \
-    | jq -r '.BackendState // empty'
+  docker exec imp-host tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null |
+    jq -r '.BackendState // empty'
 }
 
 tailscale_running() { [ "$(tailscale_backend)" = Running ]; }

@@ -1,0 +1,15 @@
+# zizmor's settings for the workflows and actions under .github/, which the
+# shellcheck job in ci.yml audits.
+rules:
+  # repo-sync.yml calls the shared workflow from zgeoff/tools at main on
+  # purpose, so each run syncs the files main holds; every other action stays
+  # pinned to a commit
+  unpinned-uses:
+    config:
+      policies:
+        zgeoff/tools/.github/workflows/repo-sync.yml: ref-pin
+        '*': hash-pin
+  # the `uses: $/...` form this audit asks for fails actionlint 1.7.12, which
+  # knows only `./...` for an action in this repository
+  self-repository:
+    disable: true

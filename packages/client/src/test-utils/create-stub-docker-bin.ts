@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // an image the engine has: its ID, and the files of a container made from it
@@ -9,21 +9,23 @@ export interface StubDockerImage {
 }
 
 // The docker CLI of an amd64 host engine with the Dockerfile frontend and
-// `images` by reference, for impd's host builds and adds; it pulls nothing,
-// and any call it lacks fails and names itself
+// `images` by reference (run-stub-docker.sh), for impd's host builds and adds;
+// it pulls nothing, and any call it lacks fails and names itself
 export function createStubDockerBin(
   dir: string,
   images: Readonly<Record<string, StubDockerImage>>,
 ) {
   const bin = join(dir, 'bin');
   const exports = join(dir, 'exports');
+  const inspects = join(dir, 'inspect');
   const log = join(dir, 'docker.log');
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(exports, { recursive: true });
+  mkdirSync(inspects, { recursive: true });
   writeFileSync(log, '');
 
-  const inspects: string[] = [];
+  const lines: string[] = [];
 
   for (const [ref, image] of Object.entries(images)) {
     const key = image.id.replace('sha256:', '');
@@ -37,30 +39,17 @@ export function createStubDockerBin(
 
     Bun.spawnSync(['tar', '-C', tree, '-cf', join(exports, `${key}.tar`), '.']);
 
-    const inspect = JSON.stringify([
-      { Id: image.id, Config: {}, Size: 1024, RepoDigests: image.repoDigests },
-    ]);
-
-    inspects.push(
-      `  "image inspect ${ref}") echo '${inspect}' ;;`,
-      `  "create ${ref} /bin/true") echo '${key}' ;;`,
+    writeFileSync(
+      join(inspects, `${key}.json`),
+      `${JSON.stringify([{ Id: image.id, Config: {}, Size: 1024, RepoDigests: image.repoDigests }])}\n`,
     );
+
+    lines.push(`${ref} ${key}\n`);
   }
 
-  const script = [
-    '#!/bin/bash',
-    `echo "$*" >> '${log}'`,
-    'case "$*" in',
-    `  "version --format "*) echo '"linux" "amd64"' ;;`,
-    `  "image inspect --format {{.Id}} docker/dockerfile:"*) echo 'sha256:${'f'.repeat(64)}' ;;`,
-    ...inspects,
-    `  "export "*) cat '${exports}'/"$2.tar" ;;`,
-    '  "rm -f "*) ;;',
-    '  *) echo "the stub docker has no $*" >&2; exit 1 ;;',
-    'esac',
-  ].join('\n');
-
-  writeFileSync(join(bin, 'docker'), `${script}\n`, { mode: 0o755 });
+  writeFileSync(join(dir, 'images'), lines.join(''));
+  copyFileSync(join(import.meta.dir, 'run-stub-docker.sh'), join(bin, 'docker'));
+  chmodSync(join(bin, 'docker'), 0o755);
 
   return {
     // put it first on PATH

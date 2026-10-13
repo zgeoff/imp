@@ -202,8 +202,8 @@ host_addresses() { ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | 
 
 # network_others: the containers on the network other than imp-host.
 network_others() {
-  docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$HOST_NETWORK" 2>/dev/null \
-    | tr ' ' '\n' | grep -vx -e imp-host -e '' | paste -sd ' ' - || true
+  docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$HOST_NETWORK" 2>/dev/null |
+    tr ' ' '\n' | grep -vx -e imp-host -e '' | paste -sd ' ' - || true
 }
 
 # create_host_network SUBNET6: the network imp-host runs on with IPv6, on
