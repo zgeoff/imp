@@ -7,8 +7,10 @@ import type { ImpRecord } from '../db/imps';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpRuntime } from '../imps/imp-runtime';
-import { createSemaphore } from '../imps/semaphore';
 import { deriveSlotAddress } from '../net/addressing';
+import type { StartTimer } from '../process/clock';
+import { createSemaphore } from '../process/semaphore';
+import { startRealTimer } from '../process/start-real-timer';
 import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
 import { PEER_HEADER, isCallerPath } from './forwarded-peers';
@@ -54,21 +56,13 @@ interface WakeProxyDeps {
   readonly upstreamSocketTimeoutMs?: number;
 
   // that deadline's timer, returning its cancel; setTimeout by default
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
 }
 
 // how long an upstream WebSocket may take to open, and the timer that waits
 interface OpenDeadline {
   readonly timeoutMs: number;
-  readonly startTimer: (fire: () => void, ms: number) => () => void;
-}
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
+  readonly startTimer: StartTimer;
 }
 
 // Where a request goes: an imp, which it wakes, impd's own API, nowhere,

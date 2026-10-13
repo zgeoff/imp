@@ -1,22 +1,14 @@
+import type { StartTimer } from './clock';
+import { startRealTimer } from './start-real-timer';
+
 // setTimeout's longest delay: a longer one overflows, warns, and fires at once
 const MAX_DELAY_MS = 2 ** 31 - 1;
-
-// starts a timer and returns its cancel
-type StartTimer = (fire: () => void, ms: number) => () => void;
 
 interface TimerAtOptions {
   readonly now: () => number;
 
   // setTimeout by default; a test passes a fake clock's
   readonly startTimer?: StartTimer;
-}
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
 }
 
 // the cancel before the first step starts

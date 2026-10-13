@@ -1,4 +1,6 @@
 import { connect } from 'node:net';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 import { readErrorMessage } from '../read-error-message';
 
 // how long one upstream has to answer before the next is asked
@@ -7,17 +9,6 @@ const TC = 0x02_00;
 
 // sends the query to an upstream resolver and returns its reply
 export type DnsForward = (query: Uint8Array) => Promise<Uint8Array>;
-
-// starts a timer and returns its cancel
-type StartTimer = (fire: () => void, ms: number) => () => void;
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
-}
 
 // The upstreams in order (IMP_DNS, port 53 unless given), over UDP, then TCP
 // for a truncated reply. A fresh random id per upstream query keeps a guest

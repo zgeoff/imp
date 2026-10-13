@@ -1,3 +1,4 @@
+import { requireWithin } from '../process/require-within';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
@@ -173,21 +174,13 @@ export async function sendThaw(vsockPath: string): Promise<void> {
 }
 
 // the next frame, or a rejection after `timeoutMs`
-export async function readFrameWithin(
+export function readFrameWithin(
   connection: AgentConnection,
   timeoutMs: number,
 ): Promise<AgentFrame | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`agent did not answer within ${String(timeoutMs)} ms`));
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([connection.next(), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return requireWithin(
+    connection.next(),
+    timeoutMs,
+    () => new Error(`agent did not answer within ${String(timeoutMs)} ms`),
+  );
 }

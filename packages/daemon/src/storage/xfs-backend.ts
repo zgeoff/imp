@@ -14,6 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import * as z from 'zod';
 import { printLog } from '../process/print-log';
 import { runChecked } from '../process/run-command';
+import { writeFileDurably } from '../process/write-file-durably';
 import { countOwnerBytes } from './count-owner-bytes';
 import type { OwnedFile } from './count-owner-bytes';
 import {
@@ -146,8 +147,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   const writeCopies = (copies: Readonly<Copies>): void => {
     mkdirSync(backup.dir, { recursive: true });
-    writeFileSync(`${backup.copies}.new`, JSON.stringify(copies));
-    renameSync(`${backup.copies}.new`, backup.copies);
+    writeFileDurably(backup.copies, JSON.stringify(copies));
   };
 
   // a clone made once: checkpoints and images never change

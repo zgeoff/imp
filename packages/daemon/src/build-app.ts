@@ -38,6 +38,7 @@ import type { BuildContextRoute } from './images/build-context-route';
 import { createMcpEndpoint } from './mcp/mcp-endpoint';
 import type { MoveService } from './moves/move-service';
 import { PROTECTED_RESOURCE_PATH } from './oauth/oauth-metadata';
+import { getImpdLogger } from './process/get-impd-logger';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
 import { createReverseForwards } from './reverse/reverse-forwards';
@@ -112,7 +113,7 @@ export function buildApp(deps: AppDeps) {
   const logRpcFailure =
     deps.logRpcFailure ??
     ((failure: unknown) => {
-      console.error('impd: rpc failed:', failure);
+      getImpdLogger('api').error('rpc failed: {failure}', { failure });
     });
 
   // expected errors (NOT_FOUND, INVALID_STATE, …) go to the client; anything

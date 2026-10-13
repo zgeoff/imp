@@ -6,14 +6,16 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readdirSync,
   rmSync,
   statSync,
   truncateSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { CommandResult } from '../process/run-command';
+import { IMPD_USER } from '../process/impd-user';
+import { parseMounts, readMounts as readHostMounts } from '../process/mounts';
+import { listPids } from '../process/proc';
+import type { CommandRunner } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths } from '../storage/data-layout';
 import type { FirecrackerPaths } from './firecracker-process';
@@ -99,11 +101,6 @@ interface ChrootPlan {
   readonly setupFiles: () => void;
 }
 
-// root in the container; the test's own uid in a unit test
-const IMPD_USER = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
-
-type CommandRunner = (argv: readonly string[]) => Promise<CommandResult>;
-
 export interface JailDeps {
   readonly jailerBin: string;
 
@@ -136,7 +133,7 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
   const execName = basename(deps.firecrackerBin);
   const findJailDir = (impId: string): string => join(deps.chrootBase, execName, impId);
   const findRoot = (impId: string): string => join(findJailDir(impId), 'root');
-  const readMounts = deps.readMounts ?? (() => readFileSync('/proc/self/mounts', 'utf8'));
+  const readMounts = deps.readMounts ?? readHostMounts;
   const listUidPids = deps.listUidPids ?? listProcessesOfUid;
   const killUidPid = deps.killUidPid ?? stopProcessOfUid;
   const wait = deps.wait ?? Bun.sleep;
@@ -387,17 +384,10 @@ export function listBoundDirs(paths: Readonly<ImpPaths>): readonly string[] {
 // The mount points at `root` or below it, shallowest first. /proc/self/mounts
 // escapes a space as \040.
 export function listMountsUnder(mounts: string, root: string): string[] {
-  return mounts
-    .split('\n')
-    .map((line) => decodeMountPath(line.split(' ')[1] ?? ''))
+  return parseMounts(mounts)
+    .map((mount) => mount.target)
     .filter((target) => target === root || target.startsWith(`${root}/`))
     .toSorted((a, b) => a.split('/').length - b.split('/').length);
-}
-
-function decodeMountPath(field: string): string {
-  return field.replaceAll(/\\(?<octal>[0-7]{3})/g, (_match, octal: string) =>
-    String.fromCodePoint(Number.parseInt(octal, 8)),
-  );
 }
 
 // What the VM may write: run/ until it is sealed, the disk, and the snapshot
@@ -517,8 +507,5 @@ function setupRealDir(dir: string): void {
 
 // every live process whose real or effective uid is `uid`
 function listProcessesOfUid(uid: number): number[] {
-  return readdirSync('/proc')
-    .filter((entry) => /^\d+$/.test(entry))
-    .map(Number)
-    .filter((pid) => isProcessOfUid(pid, uid));
+  return listPids().filter((pid) => isProcessOfUid(pid, uid));
 }

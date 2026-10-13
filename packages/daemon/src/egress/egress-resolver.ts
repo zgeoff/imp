@@ -2,6 +2,7 @@ import * as dnsPacket from 'dns-packet';
 import type { Answer } from 'dns-packet';
 import { findGuestSlot } from '../net/addressing';
 import type { Subnet } from '../net/addressing';
+import { createCountedLimit } from '../process/counted-limit';
 import { readErrorMessage } from '../read-error-message';
 import { EDE_PROHIBITED, RCODE, buildEmptyReply, buildLocalReply, readQuery } from './dns-messages';
 import type { DnsForward } from './dns-upstream';
@@ -304,8 +305,7 @@ export async function startResolverServer(
   options: Readonly<ResolverServerOptions>,
 ): Promise<ResolverServer> {
   const limits = options.limits ?? DEFAULT_TCP_LIMITS;
-
-  const open = new Map<number, number>();
+  const open = createCountedLimit(limits.maxPerSlot);
 
   // an unhandled error would end impd; the ICMP error of a reply to a guest
   // that went is routine, anything else is logged
@@ -323,25 +323,23 @@ export async function startResolverServer(
     },
   });
 
-  const tcp = Bun.listen<{ buffered: Buffer; slot: number | null }>({
+  // a socket's release frees its slot's count once it closes; null for a
+  // socket refused at open
+  const tcp = Bun.listen<{ buffered: Buffer; release: (() => void) | null }>({
     hostname: '0.0.0.0',
     port: udp.port,
     socket: {
       open: (socket) => {
         const slot = findGuestSlot(socket.remoteAddress, subnet);
-        const count = slot === null ? 0 : (open.get(slot) ?? 0);
+        const release = slot === null ? null : open.tryClaim(String(slot));
 
-        if (slot === null || count >= limits.maxPerSlot) {
-          socket.data = { buffered: Buffer.alloc(0), slot: null };
+        socket.data = { buffered: Buffer.alloc(0), release };
 
+        if (release === null) {
           socket.end();
 
           return;
         }
-
-        open.set(slot, count + 1);
-
-        socket.data = { buffered: Buffer.alloc(0), slot };
 
         socket.timeout(limits.idleS);
       },
@@ -349,22 +347,10 @@ export async function startResolverServer(
         socket.end();
       },
       close: (socket) => {
-        const slot = socket.data.slot;
-
-        if (slot === null) {
-          return;
-        }
-
-        const left = (open.get(slot) ?? 1) - 1;
-
-        if (left === 0) {
-          open.delete(slot);
-        } else {
-          open.set(slot, left);
-        }
+        socket.data.release?.();
       },
       data: (socket, chunk) => {
-        if (socket.data.slot === null) {
+        if (socket.data.release === null) {
           return;
         }
 

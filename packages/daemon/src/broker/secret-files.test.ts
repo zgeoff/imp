@@ -1,9 +1,11 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import {
+  fsyncSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -48,6 +50,30 @@ test('it writes a value to an owner-only file', async () => {
 
   expect(statSync(join(ctx.dir, 'secrets', 'github')).mode & 0o777).toBe(0o600);
   expect(readFileSync(join(ctx.dir, 'secrets', 'github'), 'utf8')).toBe('ghp_value');
+});
+
+test("it flushes a new secret's file and its directory to the disk", async () => {
+  const ctx = await setupTest();
+
+  const synced: string[] = [];
+
+  const files = createSecretFiles(ctx.dir, {
+    sync: (fd) => {
+      synced.push(readlinkSync(`/proc/self/fd/${String(fd)}`));
+
+      fsyncSync(fd);
+    },
+  });
+
+  files.write('github.a1', 'ghp_value');
+
+  expect(synced).toStrictEqual([
+    join(ctx.dir, 'secrets', 'github.a1.new'),
+    join(ctx.dir, 'secrets'),
+  ]);
+
+  expect(readFileSync(join(ctx.dir, 'secrets', 'github.a1'), 'utf8')).toBe('ghp_value');
+  expect(statSync(join(ctx.dir, 'secrets', 'github.a1')).mode & 0o777).toBe(0o600);
 });
 
 test('it replaces a written value and leaves no temp file', async () => {

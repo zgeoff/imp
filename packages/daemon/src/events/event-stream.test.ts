@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { ImpEvent } from '@imp/api';
 import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { createEventBus } from './event-bus';
 import { openEventStream } from './event-stream';
 
@@ -137,7 +137,7 @@ test('it ends at its abort and lets go of the bus', async () => {
 
 test('it ends at its end time and lets go of the bus', async () => {
   const bus = createEventBus();
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const subscriptions: string[] = [];
 
   const counted = {
@@ -181,7 +181,7 @@ test('it stays open when the longest timer fires short of a 30-day end, and wait
 
   const controller = new AbortController();
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const snapshot = buildMockGovernorDecision();
   const later = buildMockGovernorDecision();
   const clock = { at: Date.UTC(2026, 9, 2, 12) };
@@ -222,7 +222,7 @@ test('it stays open when the longest timer fires short of a 30-day end, and wait
 
 test('it ends at a 30-day end once the timer after the longest one fires', async () => {
   const bus = createEventBus();
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const snapshot = buildMockGovernorDecision();
   const clock = { at: Date.UTC(2026, 9, 2, 12) };
 

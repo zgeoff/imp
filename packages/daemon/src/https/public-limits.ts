@@ -1,3 +1,5 @@
+import { createCountedLimit } from '../process/counted-limit';
+
 // Limits per public imp (docs/guides/https.md#how-it-works-1). They count by imp,
 // not by client: behind Docker's userland proxy every client can share one
 // source address, so a limit by address would lock everyone out at once.
@@ -29,39 +31,12 @@ interface Bucket {
 }
 
 export function createPublicLimits(now: () => number = Date.now): PublicLimits {
-  const open = new Map<string, number>();
-
+  const open = createCountedLimit(MAX_OPEN);
   const tryWake = createBuckets(WAKE_BUCKET, now);
   const tryFail = createBuckets(FAILURE_BUCKET, now);
 
   return {
-    tryOpen: (impId) => {
-      const count = open.get(impId) ?? 0;
-
-      if (count >= MAX_OPEN) {
-        return null;
-      }
-
-      open.set(impId, count + 1);
-
-      let isReleased = false;
-
-      return () => {
-        if (isReleased) {
-          return;
-        }
-
-        isReleased = true;
-
-        const left = (open.get(impId) ?? 1) - 1;
-
-        if (left === 0) {
-          open.delete(impId);
-        } else {
-          open.set(impId, left);
-        }
-      };
-    },
+    tryOpen: open.tryClaim,
     tryWake,
     tryFail,
     readRetryS: (kind) =>

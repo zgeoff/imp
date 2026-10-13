@@ -1,3 +1,4 @@
+import { createCountedLimit } from '../process/counted-limit';
 import { MAX_RELAYS_PER_FORWARD } from './run-guest-listener';
 
 // The reverse forwards `/tunnel` control sockets hold, shared by every tunnel
@@ -23,9 +24,8 @@ interface ForwardEntry {
 
 export function createReverseForwards(max = MAX_RELAYS_PER_FORWARD): ReverseForwards {
   const entries = new Map<string, ForwardEntry>();
-  const relays = new Map<string, number>();
 
-  const countRelays = (listener: string): number => relays.get(listener) ?? 0;
+  const relays = createCountedLimit(max);
 
   return {
     register: (listener, impId, owner) => {
@@ -42,32 +42,10 @@ export function createReverseForwards(max = MAX_RELAYS_PER_FORWARD): ReverseForw
         return { refused: 'unknown' };
       }
 
-      if (countRelays(listener) >= max) {
-        return { refused: 'full' };
-      }
+      const release = relays.tryClaim(listener);
 
-      relays.set(listener, countRelays(listener) + 1);
-
-      let released = false;
-
-      return {
-        release: () => {
-          if (released) {
-            return;
-          }
-
-          released = true;
-
-          const left = countRelays(listener) - 1;
-
-          if (left <= 0) {
-            relays.delete(listener);
-          } else {
-            relays.set(listener, left);
-          }
-        },
-      };
+      return release === null ? { refused: 'full' } : { release };
     },
-    isFull: (listener) => countRelays(listener) >= max,
+    isFull: relays.isFull,
   };
 }

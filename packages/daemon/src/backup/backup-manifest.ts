@@ -1,7 +1,6 @@
 import { ImageSourceSchema } from '@imp/api';
 import * as z from 'zod';
-
-const LEGACY_DISK_BYTES = 32 * 1024 ** 3;
+import { LEGACY_DISK_BYTES } from '../process/legacy-disk-bytes';
 
 const ManifestCheckpointSchema = z
   .object({

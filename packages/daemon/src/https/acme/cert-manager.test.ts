@@ -463,7 +463,7 @@ test('it logs a renewal that fails outside the CA call, and answers no certifica
 
   // a directory where the attempts file's temporary copy goes: the first
   // write of the attempts fails
-  await mkdir(join(ctx.dir, 'tls', 'attempts.json.tmp'), { recursive: true });
+  await mkdir(join(ctx.dir, 'tls', 'attempts.json.new'), { recursive: true });
 
   const manager = createCertManager({
     domain: 'imp.test',
@@ -487,7 +487,7 @@ test('it runs a new renewal after one that failed outside the CA call', async ()
   const ctx = await setupTest();
   const fresh = await buildMockCertificate({ names: ['imp.test', '*.imp.test'] });
 
-  const blocker = join(ctx.dir, 'tls', 'attempts.json.tmp');
+  const blocker = join(ctx.dir, 'tls', 'attempts.json.new');
 
   await mkdir(blocker, { recursive: true });
 

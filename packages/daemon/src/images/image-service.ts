@@ -26,8 +26,9 @@ import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
-import { createKeyedMutex } from '../imps/keyed-mutex';
+import { createKeyedMutex } from '../process/keyed-mutex';
 import { runChecked, runCommand } from '../process/run-command';
+import { createSingleFlight } from '../process/single-flight';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildImagesDir, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -317,7 +318,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   const storageGate = deps.storageGate;
 
   // one build per docker image ID at a time
-  const building = new Map<string, Promise<number>>();
+  const building = createSingleFlight<number>();
 
   // per guest digest, the writers whose row is not written yet, and whether
   // one made its rootfs or a removal waits on them: the last to end removes
@@ -427,23 +428,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   // one rootfs per digest at a time; a second build of it waits for the first
-  const createRootfsOnce = async (digest: string, create: () => Promise<number>) => {
-    const inFlight = building.get(digest);
-
-    if (inFlight !== undefined) {
-      return inFlight;
-    }
-
-    const promise = create();
-
-    building.set(digest, promise);
-
-    try {
-      return await promise;
-    } finally {
-      building.delete(digest);
-    }
-  };
+  const createRootfsOnce = (digest: string, create: () => Promise<number>) =>
+    building.run(digest, create);
 
   // the image row by its name: made, or moved to the new digest, whose old
   // rootfs goes when nothing else uses it
@@ -609,55 +595,34 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   // the builders' image, at most one add of it at a time
-  const builderImage = { adding: null as Promise<ImageRecord> | null };
+  const builderImage = createSingleFlight<ImageRecord>();
 
   // The one add of the builder image, under its own timeout and no caller's
   // signal; once it settles, the next add starts afresh
-  const startBuilderImage = (ref: string): Promise<ImageRecord> => {
+  const createBuilderImage = async (ref: string): Promise<ImageRecord> => {
     const pullMs = deps.builderImagePullMs ?? BUILDER_IMAGE_PULL_MS;
     const timeout = deps.startPullLimit?.(pullMs) ?? AbortSignal.timeout(pullMs);
 
     // a later step that fails after the limit is no pull that timed out
     const step = { pulled: false };
 
-    const createBuilderImage = async (): Promise<ImageRecord> => {
-      try {
-        return await createImageOnHost(ref, BUILDER_IMAGE, {
-          signal: timeout,
-          onPulled: () => {
-            step.pulled = true;
-          },
-        });
-      } catch (error) {
-        const reason =
-          timeout.aborted && !step.pulled
-            ? `the pull did not finish in ${formatPullLimit(pullMs)}; on a slow link, pull ${ref} on the host engine first (docker pull ${ref}), and impd takes it from there`
-            : readErrorMessage(error);
+    try {
+      return await createImageOnHost(ref, BUILDER_IMAGE, {
+        signal: timeout,
+        onPulled: () => {
+          step.pulled = true;
+        },
+      });
+    } catch (error) {
+      const reason =
+        timeout.aborted && !step.pulled
+          ? `the pull did not finish in ${formatPullLimit(pullMs)}; on a slow link, pull ${ref} on the host engine first (docker pull ${ref}), and impd takes it from there`
+          : readErrorMessage(error);
 
-        throw new ORPCError('SERVICE_UNAVAILABLE', {
-          message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${reason}`,
-        });
-      }
-    };
-
-    const adding = createBuilderImage();
-
-    const removeOnSettle = async () => {
-      try {
-        await adding;
-      } catch {
-        // each caller gets the error from its own wait
-      } finally {
-        if (builderImage.adding === adding) {
-          builderImage.adding = null;
-        }
-      }
-    };
-
-    builderImage.adding = adding;
-    void removeOnSettle();
-
-    return adding;
+      throw new ORPCError('SERVICE_UNAVAILABLE', {
+        message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${reason}`,
+      });
+    }
   };
 
   const loadBuilderImage = async (signal?: AbortSignal): Promise<void> => {
@@ -669,7 +634,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       return;
     }
 
-    await waitForPull(builderImage.adding ?? startBuilderImage(ref), signal);
+    // a call while an add is in flight joins it, whatever ref it adds
+    await waitForPull(
+      builderImage.run(BUILDER_IMAGE, () => createBuilderImage(ref)),
+      signal,
+    );
   };
 
   const findDefaultImage = async (): Promise<ImageRecord | undefined> => {

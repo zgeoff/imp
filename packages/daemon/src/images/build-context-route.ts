@@ -9,6 +9,7 @@ import { checkAccess, findAccess } from '../auth/access-policy';
 import type { Caller } from '../auth/caller';
 import type { Config } from '../config';
 import type { ImageRecord } from '../db/images';
+import { getImpdLogger } from '../process/get-impd-logger';
 import { readErrorMessage } from '../read-error-message';
 import { buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -156,7 +157,7 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
         } catch (error) {
           // a client that went is in the audit, not the log
           if (!(error instanceof ORPCError) && !signal.aborted) {
-            console.error('impd: image build from an upload failed:', error);
+            getImpdLogger('image').error('image build from an upload failed: {error}', { error });
           }
 
           return { ok: false, failure: writeFailure(error) };

@@ -2,7 +2,8 @@ import { ImpPatternSchema, ScopeSchema } from '@imp/api';
 import * as z from 'zod';
 import type { TailscaleStatus } from '../net/tailscale-status';
 import { runCommand } from '../process/run-command';
-import type { CommandResult } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
+import { createTtlCache } from '../process/ttl-cache';
 import type { Caller } from './caller';
 
 // Tailnet identity (docs/guides/tokens.md#tailnet-identity): a connection
@@ -62,35 +63,25 @@ interface TailnetIdentitiesDeps {
 }
 
 export function createTailnetIdentities(deps: Readonly<TailnetIdentitiesDeps>): TailnetIdentities {
-  const cache = new Map<
-    string,
-    { readonly peer: Promise<TailnetPeer | null>; readonly at: number }
-  >();
+  // An answer is stale at 60 s, where lru-cache keeps an entry until its
+  // age passes the ttl, hence one ms less. A hit peeks, so a set past
+  // MAX_CACHED evicts the oldest answer, not the least used.
+  const cache = createTtlCache<string, Promise<TailnetPeer | null>>({
+    max: MAX_CACHED,
+    ttlMs: WHOIS_TTL_MS - 1,
+    now: deps.now,
+  });
 
   const readCachedPeer = (address: string): Promise<TailnetPeer | null> => {
-    const at = deps.now();
-    const cached = cache.get(address);
+    const cached = cache.peek(address);
 
-    if (cached !== undefined && at - cached.at < WHOIS_TTL_MS) {
-      return cached.peer;
-    }
-
-    cache.delete(address);
-
-    // a Map iterates in insertion order: the first key is the oldest
-    while (cache.size >= MAX_CACHED) {
-      const [oldest] = cache.keys();
-
-      if (oldest === undefined) {
-        break;
-      }
-
-      cache.delete(oldest);
+    if (cached !== undefined) {
+      return cached;
     }
 
     const peer = readWhois(deps.whois, address);
 
-    cache.set(address, { peer, at });
+    cache.set(address, peer);
 
     return peer;
   };
@@ -178,7 +169,7 @@ export function parseWhois(json: string): TailnetPeer | null {
 // `run` is the command runner, the host's by default
 export async function runWhois(
   address: string,
-  run: (argv: readonly string[]) => Promise<CommandResult> = runCommand,
+  run: CommandRunner = runCommand,
 ): Promise<TailnetPeer | null> {
   const result = await run(['tailscale', 'whois', '--json', address]);
 

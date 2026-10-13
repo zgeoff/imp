@@ -3,13 +3,11 @@ import { isDiskFullError } from '../api-errors';
 import type { ImpContext } from '../imps/imp-context';
 import type { LockedImp } from '../imps/imp-lock';
 import type { ImpVmOps } from '../imps/imp-vm-ops';
+import { IMPD_USER } from '../process/impd-user';
 import { readErrorMessage } from '../read-error-message';
 import { buildSnapshotIdentity, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildWatchdogSlot } from '../storage/data-layout';
-
-// root in the container; the test's own uid in a unit test
-const IMPD_USER = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
 
 // The silent VM's memory, for a post-mortem, in a slot only the owner reads;
 // the VM stops. Without room, or on a failed snapshot, it logs why and leaves

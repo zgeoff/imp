@@ -3,7 +3,7 @@ import { buildImpOverBudgetError, buildRamBudgetError, readNeededMib } from '../
 import type { ProtectedImp } from '../api-errors';
 import type { EventBus } from '../events/event-bus';
 import type { LockFreeSleep } from '../imps/lock-free-sleep';
-import { createSemaphore } from '../imps/semaphore';
+import { createSemaphore } from '../process/semaphore';
 import { pickSleepVictims } from './pick-sleep-victims';
 
 // A reservation covers a VM until its RSS catches up: a VM that just booted

@@ -1,4 +1,6 @@
-import type { TryResult } from '../imps/keyed-mutex';
+import type { Clock } from '../process/clock';
+import type { TryResult } from '../process/keyed-mutex';
+import { REAL_CLOCK } from '../process/real-clock';
 
 // An operation that may make storage before its rows commit runs in `join`.
 // `runAlone` (the GC) waits until none is in flight, and holds new ones back
@@ -15,25 +17,9 @@ export interface StorageGate {
 }
 
 // The wall clock and setTimeout by default; tests pass a clock they step
-interface StorageGateClock {
-  readonly now: () => number;
-
-  // starts a timer `ms` from now; returns its cancel
-  readonly startTimer: (fire: () => void, ms: number) => () => void;
-}
-
-const SYSTEM_CLOCK: StorageGateClock = {
-  now: () => Date.now(),
-  startTimer: (fire, ms) => {
-    const timeout = setTimeout(fire, ms);
-
-    return () => {
-      clearTimeout(timeout);
-    };
-  },
-};
-
-export function createStorageGate(clock: StorageGateClock = SYSTEM_CLOCK): StorageGate {
+export function createStorageGate(
+  clock: Pick<Clock, 'now' | 'startTimer'> = REAL_CLOCK,
+): StorageGate {
   const state = {
     inFlight: 0,
     waiting: 0,

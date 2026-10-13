@@ -1,6 +1,8 @@
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
@@ -138,17 +140,6 @@ export interface ExportLimits {
 
 // how long a builder's export may send nothing before impd ends it
 const EXPORT_IDLE_MS = 120_000;
-
-// starts a timer and returns its cancel; the export's idle limit runs on it
-type StartTimer = (fire: () => void, ms: number) => () => void;
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  return () => {
-    clearTimeout(timer);
-  };
-}
 
 // how far ahead of the export the disk is held at a time
 const GROW_STEP_BYTES = 256 * 1024 ** 2;

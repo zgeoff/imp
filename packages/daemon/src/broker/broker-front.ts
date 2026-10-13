@@ -6,6 +6,8 @@ import type { BrokerPeer } from '../db/secrets';
 import { isTunnelAllowed } from '../egress/egress-rules';
 import { findPeerSlot } from '../net/addressing';
 import type { Subnet } from '../net/addressing';
+import { createCountedLimit } from '../process/counted-limit';
+import type { CountedLimit } from '../process/counted-limit';
 import { readErrorMessage } from '../read-error-message';
 import { MAX_HEAD_BYTES, findHeadEnd, parseConnectHead } from './connect-head';
 import type { TerminatorKey } from './terminators';
@@ -123,42 +125,9 @@ function createTunnelRegistry(): TunnelRegistry {
   };
 }
 
-// how many connections each imp holds open
-interface ConnectionCounts {
-  // false when the imp is at the cap
-  readonly tryTake: (impId: string, max: number) => boolean;
-  readonly release: (impId: string) => void;
-}
-
-function createConnectionCounts(): ConnectionCounts {
-  const open = new Map<string, number>();
-
-  return {
-    tryTake: (impId, max) => {
-      const count = open.get(impId) ?? 0;
-
-      if (count >= max) {
-        return false;
-      }
-
-      open.set(impId, count + 1);
-
-      return true;
-    },
-    release: (impId) => {
-      const left = (open.get(impId) ?? 1) - 1;
-
-      if (left === 0) {
-        open.delete(impId);
-      } else {
-        open.set(impId, left);
-      }
-    },
-  };
-}
-
 export function startBrokerFront(port: number, deps: BrokerFrontDeps): Promise<BrokerFront> {
-  const open = createConnectionCounts();
+  // how many connections each imp holds open
+  const open = createCountedLimit(deps.maxConnectionsPerImp ?? MAX_CONNECTIONS_PER_IMP);
   const tunnels = createTunnelRegistry();
 
   const sockets = new Set<Socket>();
@@ -211,7 +180,7 @@ export function startBrokerFront(port: number, deps: BrokerFrontDeps): Promise<B
 async function handleConnection(
   socket: Socket,
   deps: BrokerFrontDeps,
-  open: ConnectionCounts,
+  open: CountedLimit,
   tunnels: TunnelRegistry,
 ): Promise<void> {
   try {
@@ -225,7 +194,7 @@ async function handleConnection(
 async function runConnection(
   socket: Socket,
   deps: BrokerFrontDeps,
-  open: ConnectionCounts,
+  open: CountedLimit,
   tunnels: TunnelRegistry,
 ): Promise<void> {
   const slot = findPeerSlot(socket.remoteAddress ?? '', socket.localAddress ?? '', deps.subnet);
@@ -245,16 +214,15 @@ async function runConnection(
     return;
   }
 
-  if (!open.tryTake(peer.id, deps.maxConnectionsPerImp ?? MAX_CONNECTIONS_PER_IMP)) {
+  const release = open.tryClaim(peer.id);
+
+  if (release === null) {
     sendReply(socket, 503, 'too many broker connections from this imp');
 
     return;
   }
 
-  socket.once('close', () => {
-    open.release(peer.id);
-  });
-
+  socket.once('close', release);
   socket.setKeepAlive(true, KEEPALIVE_MS);
   tunnels.add(peer.id, socket);
 

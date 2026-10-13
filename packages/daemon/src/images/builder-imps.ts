@@ -2,6 +2,8 @@ import type { Config } from '../config';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpService } from '../imps/imp-service';
+import type { StartTimer } from '../process/clock';
+import { startRealTimer } from '../process/start-real-timer';
 import { readErrorMessage } from '../read-error-message';
 import { createGuestExec } from './guest-exec';
 import type { GuestExec } from './guest-exec';
@@ -40,20 +42,10 @@ export interface BuildersDeps {
   readonly log: (message: string) => void;
 
   // the removal retry's timer; setTimeout, unref'd, by default
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
 
   // the engine wait's clock; Date.now and Bun.sleep by default
   readonly engineClock?: EngineClock;
-}
-
-function startUnrefTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  timer.unref();
-
-  return () => {
-    clearTimeout(timer);
-  };
 }
 
 function pickBuilderName(): string {
@@ -97,7 +89,9 @@ async function waitForEngine(
 }
 
 export function createBuilders(deps: BuildersDeps): Builders {
-  const startTimer = deps.startTimer ?? startUnrefTimer;
+  const startTimer: StartTimer =
+    deps.startTimer ?? ((fire, ms) => startRealTimer(fire, ms, { isUnref: true }));
+
   const engineClock = deps.engineClock ?? { now: Date.now, wait: Bun.sleep };
 
   const retrying = new Set<string>();

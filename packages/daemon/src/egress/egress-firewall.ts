@@ -1,3 +1,4 @@
+import { buildExitError } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 
 // applies one nft script; throws with nft's reason
@@ -77,7 +78,8 @@ export function createNftRunner(nftBin = 'nft'): NftRunner {
     const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
 
     if (exitCode !== 0) {
-      throw new Error(`nft exited ${String(exitCode)}: ${stderr.trim().split('\n')[0] ?? ''}`);
+      // the first line alone, under the name `nft` whatever the binary's path
+      throw buildExitError(['nft'], { exitCode, stderr: stderr.trim().split('\n')[0] ?? '' });
     }
   };
 }

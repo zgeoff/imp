@@ -1,5 +1,7 @@
 import { ORPCError } from '@orpc/server';
-import { createKeyedMutex } from '../imps/keyed-mutex';
+import type { StartTimer } from '../process/clock';
+import { createKeyedMutex } from '../process/keyed-mutex';
+import { startRealTimer } from '../process/start-real-timer';
 import type { StorageBackend } from './storage-backend';
 
 const GIB = 1024 ** 3;
@@ -48,19 +50,8 @@ interface DiskBudgetDeps {
   readonly releaseDelayMs?: number;
 
   // runs `fire` once `ms` is up and returns the cancel; setTimeout by default
-  readonly startTimer?: (fire: () => void, ms: number) => () => void;
+  readonly startTimer?: StartTimer;
   readonly log: (message: string) => void;
-}
-
-function startRealTimer(fire: () => void, ms: number): () => void {
-  const timer = setTimeout(fire, ms);
-
-  // a pending release never keeps impd running
-  timer.unref();
-
-  return () => {
-    clearTimeout(timer);
-  };
 }
 
 function buildDiskFullError(availableBytes: number, reserveBytes: number, requestedBytes: number) {
@@ -75,7 +66,11 @@ function buildDiskFullError(availableBytes: number, reserveBytes: number, reques
 
 export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   const mutex = createKeyedMutex();
-  const startTimer = deps.startTimer ?? startRealTimer;
+
+  // a pending release never keeps impd running
+  const startTimer: StartTimer =
+    deps.startTimer ?? ((fire, ms) => startRealTimer(fire, ms, { isUnref: true }));
+
   const ledger = { pendingBytes: 0, wasLow: false };
 
   const readStatus = async (): Promise<DiskStatus> => {

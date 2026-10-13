@@ -1,7 +1,7 @@
 import type { RamGovernor, RamGovernorDeps } from '../governor/ram-governor';
-import { createKeyedMutex } from '../imps/keyed-mutex';
 import { createLockFreeSleep } from '../imps/lock-free-sleep';
 import type { SleepOutcome } from '../imps/lock-free-sleep';
+import { createKeyedMutex } from '../process/keyed-mutex';
 
 interface HostImp {
   awake: boolean;

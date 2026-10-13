@@ -13,10 +13,12 @@ import {
 import { join } from 'node:path';
 import * as z from 'zod';
 import type { RamAdmission } from '../governor/ram-governor';
-import { createSemaphore } from '../imps/semaphore';
 import type { SlotAddress } from '../net/addressing';
 import type { TapDevices } from '../net/tap-devices';
+import { buildBackoffMs } from '../process/build-backoff-ms';
 import { runCommand } from '../process/run-command';
+import { createSemaphore } from '../process/semaphore';
+import { createSingleFlight } from '../process/single-flight';
 import { readErrorMessage } from '../read-error-message';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -178,8 +180,8 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
 
   // the snapshot names this path, so it is the same for every template
   const placeholder = join(root, PLACEHOLDER_NAME);
+  const building = createSingleFlight<TemplateFiles>();
 
-  const building = new Map<string, Promise<TemplateFiles>>();
   const records = new Map<string, KeyRecord>();
 
   // when each template last served a restore; LRU eviction reads it
@@ -433,7 +435,14 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
     }
 
     record.buildFailures += 1;
-    record.retryAt = now() + BUILD_RETRY_MS * 2 ** (record.buildFailures - 1);
+
+    record.retryAt =
+      now() +
+      buildBackoffMs(record.buildFailures, {
+        baseMs: BUILD_RETRY_MS,
+        capMs: Number.POSITIVE_INFINITY,
+      });
+
     record.isOff = record.buildFailures >= MAX_BUILD_FAILURES;
 
     const next = record.isOff
@@ -459,7 +468,7 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
       return Promise.resolve(ready);
     }
 
-    const inFlight = building.get(key);
+    const inFlight = building.findRun(key);
 
     if (inFlight !== undefined) {
       return inFlight;
@@ -471,22 +480,14 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
       );
     }
 
-    const runShared = async (): Promise<TemplateFiles> => {
+    return building.run(key, async () => {
       try {
         return await lane.run(() => runBuild(shape, key));
       } catch (error) {
         setBuildFailed(key, error);
         throw error;
-      } finally {
-        building.delete(key);
       }
-    };
-
-    const promise = runShared();
-
-    building.set(key, promise);
-
-    return promise;
+    });
   };
 
   const buildInBackground = async (shape: Readonly<TemplateShape>): Promise<void> => {
@@ -554,7 +555,7 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
         return [];
       }
 
-      const live = new Set(building.keys());
+      const live = new Set(building.listKeys());
 
       // a key names one host's identity and one shape (meta.json says which):
       // any other is stale, as is what a build cut short left
@@ -583,8 +584,6 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
 
         return meta === null ? [] : [meta.systemDrivePath];
       }),
-    stop: async () => {
-      await Promise.allSettled(building.values());
-    },
+    stop: () => building.waitForAll(),
   };
 }

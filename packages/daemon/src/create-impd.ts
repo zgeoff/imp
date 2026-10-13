@@ -53,6 +53,7 @@ import { createNetworkService } from './networks/network-service';
 import { createOAuthService } from './oauth/oauth-service';
 import { printLog } from './process/print-log';
 import { runCommand } from './process/run-command';
+import type { CommandRunner } from './process/run-command';
 import { createForwardedPeers } from './proxy/forwarded-peers';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { UNKNOWN_VERSION, readHostIdentity } from './sleep/vm-identity';
@@ -176,7 +177,7 @@ export interface ImpdDeps {
   // Firecracker and the jailer; `runCommand` runs the jailer's mount and
   // chown when `vms` is left out
   readonly vms?: VmRunner;
-  readonly runCommand?: typeof runCommand;
+  readonly runCommand?: CommandRunner;
 
   // `ip` for each imp's tap
   readonly taps?: TapDevices;

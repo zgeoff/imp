@@ -1,16 +1,7 @@
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
+import { writeFileDurably } from '../../process/write-file-durably';
 
 // One key and its certificate chain, as the TLS listener takes them.
 export interface Certificate {
@@ -76,18 +67,7 @@ export function createCertStore(
 
   const write = (path: string, content: string): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-
-    const temporary = `${path}.tmp`;
-    const fd = openSync(temporary, 'w', 0o600);
-
-    try {
-      writeSync(fd, content);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-
-    renameSync(temporary, path);
+    writeFileDurably(path, content, { mode: 0o600 });
   };
 
   // the stored account, whatever its directory; null when there is none.

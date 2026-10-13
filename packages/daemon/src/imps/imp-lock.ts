@@ -1,10 +1,11 @@
 import { buildMovingError, buildNotFoundError } from '../api-errors';
 import { findImpById, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { createKeyedMutex } from '../process/keyed-mutex';
+import type { TryResult } from '../process/keyed-mutex';
+import { withImpLogContext } from '../process/with-imp-log-context';
 import type { ImpContext } from './imp-context';
 import { checkLiveness } from './imp-liveness';
-import { createKeyedMutex } from './keyed-mutex';
-import type { TryResult } from './keyed-mutex';
 
 const LOCKED = Symbol('locked');
 
@@ -138,7 +139,7 @@ export function createImpLock(context: ImpContext): ImpLock {
             throw buildMovingError(imp.name);
           }
 
-          return action(imp);
+          return runAbout(imp, action);
         }),
       );
     },
@@ -147,7 +148,7 @@ export function createImpLock(context: ImpContext): ImpLock {
         runJoined(async () => {
           const imp = await readLocked(id);
 
-          return action(imp);
+          return runAbout(imp, action);
         }),
       ),
     withNewImp: (id, insert, action) =>
@@ -155,7 +156,7 @@ export function createImpLock(context: ImpContext): ImpLock {
         runJoined(async () => {
           const imp = await insert();
 
-          return action({ ...imp, [LOCKED]: true });
+          return runAbout({ ...imp, [LOCKED]: true }, action);
         }),
       ),
 
@@ -166,7 +167,7 @@ export function createImpLock(context: ImpContext): ImpLock {
           runJoined(async () => {
             const imp = await readLocked(id);
 
-            return action(imp);
+            return runAbout(imp, action);
           }),
         ),
       ),
@@ -174,4 +175,13 @@ export function createImpLock(context: ImpContext): ImpLock {
     countQueued: (id) => queued.get(id) ?? 0,
     waitForAll: () => mutex.waitForAll(),
   };
+}
+
+// Runs `action` on `imp` with the imp as the imp of every log line it
+// writes; a gone imp names none.
+function runAbout<I extends LockedImp | undefined, T>(
+  imp: I,
+  action: (imp: I) => Promise<T>,
+): Promise<T> {
+  return imp === undefined ? action(imp) : withImpLogContext(imp.name, () => action(imp));
 }

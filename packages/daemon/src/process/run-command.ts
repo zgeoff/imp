@@ -4,7 +4,7 @@ export interface CommandResult {
   readonly stderr: string;
 }
 
-interface CommandOptions {
+export interface CommandOptions {
   // the whole environment of the child; impd's own by default
   readonly env?: Readonly<Record<string, string>>;
 
@@ -37,20 +37,36 @@ export async function runCommand(
   return { exitCode, stdout, stderr };
 }
 
-// Like runCommand, but throws with stderr on a non-zero exit. `run` runs the
-// command, runCommand by default.
+// what runs a command: runCommand, or a stand-in in tests
+export type CommandRunner = (
+  argv: readonly string[],
+  options?: CommandOptions,
+) => Promise<CommandResult>;
+
+// Like runCommand, but throws buildExitError's error on a non-zero exit.
+// `run` runs the command, runCommand by default.
 export async function runChecked(
   argv: readonly string[],
   options: CommandOptions = {},
-  run: typeof runCommand = runCommand,
+  run: CommandRunner = runCommand,
 ): Promise<string> {
   const result = await run(argv, options);
 
   if (result.exitCode !== 0) {
-    throw new Error(
-      `${argv.join(' ')} exited ${String(result.exitCode)}: ${result.stderr.trim() || result.stdout.trim()}`,
-    );
+    throw buildExitError(argv, result);
   }
 
   return result.stdout;
+}
+
+// "<argv> exited <code>: <stderr>", or stdout when stderr is empty
+export function buildExitError(
+  argv: readonly string[],
+  result: Readonly<
+    Pick<CommandResult, 'exitCode' | 'stderr'> & Partial<Pick<CommandResult, 'stdout'>>
+  >,
+): Error {
+  const output = result.stderr.trim() || (result.stdout ?? '').trim();
+
+  return new Error(`${argv.join(' ')} exited ${String(result.exitCode)}: ${output}`);
 }

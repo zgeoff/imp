@@ -1,9 +1,9 @@
 import { existsSync, rmSync } from 'node:fs';
 import * as z from 'zod';
 import { ServicesListSchema } from '../agent-client/agent-protocol';
+import { writeFileDurably, writeRenamed } from '../process/write-file-durably';
 import { SeenSessionSchema } from '../sessions/session-cache';
 import type { ImpPaths } from '../storage/data-layout';
-import { writeFileDurably, writeRenamed } from '../storage/write-file-durably';
 import { readRegularFile } from '../vmm/vm-files';
 import { findCpuChange } from './cpu-identity';
 import type { HostIdentity, VmIdentity } from './vm-identity';

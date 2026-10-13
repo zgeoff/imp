@@ -4,9 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import type { StubAnswer } from '../test-utils/build-stub-guest';
 import { buildStubGuest } from '../test-utils/build-stub-guest';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { GuestOutputError, createGuestExec } from './guest-exec';
 
 async function setupTest() {
@@ -99,7 +99,7 @@ test('it refuses a step that writes past the stdout impd keeps', () => {
 
 test('it fails a step that does not exit within its timeout', async () => {
   const guest = buildStubGuest(() => new Promise<StubAnswer>(() => {}));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const running = createGuestExec(guest.open, timers.startTimer)(['sleep', 'inf'], {
     signal: new AbortController().signal,
@@ -117,7 +117,7 @@ test('it fails a step that does not exit within its timeout', async () => {
 
 test('it kills and closes a step that does not exit within its timeout', async () => {
   const guest = buildStubGuest(() => new Promise<StubAnswer>(() => {}));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   const running = createGuestExec(guest.open, timers.startTimer)(['sleep', 'inf'], {
     signal: new AbortController().signal,
@@ -136,7 +136,7 @@ test('it kills and closes a step that does not exit within its timeout', async (
 
 test('it cancels the timeout of a step that exits within it', async () => {
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   await createGuestExec(guest.open, timers.startTimer)(['true'], {
     signal: new AbortController().signal,

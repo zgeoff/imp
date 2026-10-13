@@ -1,3 +1,5 @@
+import { buildExitError } from './run-command';
+
 // A command whose stdout is read as it comes: `done` resolves once it exits
 // 0, and rejects with its stderr otherwise. `stop` kills it and resolves once
 // it has exited, so nothing it holds, such as a snapshot, is busy after.
@@ -31,7 +33,7 @@ export function createStreamRunner(): StreamRunner {
         if (exitCode !== 0 && !state.isStopped) {
           const message = await stderr;
 
-          throw new Error(`${argv.join(' ')} exited ${String(exitCode)}: ${message.trim()}`);
+          throw buildExitError(argv, { exitCode, stderr: message });
         }
       };
 
@@ -86,6 +88,6 @@ async function requireExitZero(
   if (exitCode !== 0) {
     const message = await stderr;
 
-    throw new Error(`${argv.join(' ')} exited ${String(exitCode)}: ${message.trim()}`);
+    throw buildExitError(argv, { exitCode, stderr: message });
   }
 }

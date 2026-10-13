@@ -1,6 +1,7 @@
-import { FFIType, dlopen } from 'bun:ffi';
 import { closeSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { getPidfdLibc } from '../process/libc';
+import { stopPid } from '../process/proc';
 
 // What /proc says about who runs a process: its uids and its cgroup. A jailed
 // process can rewrite its argv, but not these.
@@ -59,18 +60,16 @@ interface Pidfd {
 
 // glibc's pidfd wrappers (2.36+); null where they or the syscalls are missing
 function loadPidfd(): Pidfd | null {
-  try {
-    const libc = dlopen('libc.so.6', {
-      pidfd_open: { args: [FFIType.i32, FFIType.u32], returns: FFIType.i32 },
-      pidfd_send_signal: {
-        args: [FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.u32],
-        returns: FFIType.i32,
-      },
-    });
+  const libc = getPidfdLibc();
 
+  if (libc === null) {
+    return null;
+  }
+
+  try {
     const pidfd: Pidfd = {
-      open: (pid) => libc.symbols.pidfd_open(pid, 0),
-      sendSignal: (fd, signal) => libc.symbols.pidfd_send_signal(fd, signal, null, 0),
+      open: (pid) => libc.pidfd_open(pid, 0),
+      sendSignal: (fd, signal) => libc.pidfd_send_signal(fd, signal, null, 0),
     };
 
     // a kernel before 5.3 has the wrapper but not the syscall
@@ -117,13 +116,5 @@ export function stopProcessOfUid(pid: number, uid: number): void {
     }
   } finally {
     closeSync(fd);
-  }
-}
-
-function stopPid(pid: number): void {
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch {
-    // already gone
   }
 }

@@ -24,7 +24,6 @@ import {
   STUB_BUILDER_CONTAINER,
   buildStubImageBuilder,
 } from '../test-utils/build-stub-image-builder';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { createBuilderImage } from '../test-utils/create-builder-image';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -421,7 +420,7 @@ test('it keeps the build of a builder that survives its removal, and logs the su
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const logs: string[] = [];
 
   const builders = createBuilders({
@@ -464,7 +463,7 @@ test('it removes a builder that survived its removal on a later retry', async ()
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const logs: string[] = [];
 
   const builders = createBuilders({
@@ -509,7 +508,7 @@ test('it retries the removal of a leftover builder that survives it at start', a
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const logs: string[] = [];
 
   const builders = createBuilders({
@@ -566,7 +565,7 @@ test('it never removes a user imp that took the id of a removed builder on a ret
   const ctx = await setupTest();
 
   const guest = buildStubGuest(() => ({ stdout: 'ok' }));
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
   const logs: string[] = [];
 
   const builders = createBuilders({
@@ -697,7 +696,7 @@ test('it ends an export stopped while its exec opens, closes the exec and remove
     isExportStalled: true,
   });
 
-  const timers = buildStubTimers();
+  const timers = buildStubClock();
 
   // the export's exec opens only once the test lets it
   const exportOpen = Promise.withResolvers<void>();

@@ -1,6 +1,7 @@
 import { ORPCError } from '@orpc/server';
 import { readProxyRefusal } from '../docker-proxy/refusal';
-import { runCommand } from '../process/run-command';
+import { getImpdLogger } from '../process/get-impd-logger';
+import { buildExitError, runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 
 interface DockerOptions {
@@ -21,7 +22,7 @@ export function readRefusalError(call: string, output: string): ORPCError<string
     return null;
   }
 
-  console.warn(`impd: ${call} refused: ${refusal}`);
+  getImpdLogger('image').warning('{call} refused: {refusal}', { call, refusal });
 
   return new ORPCError('BAD_REQUEST', { message: refusal });
 }
@@ -56,9 +57,7 @@ export async function runDockerChecked(
   const result = await runDocker(argv, options);
 
   if (result.exitCode !== 0) {
-    throw new Error(
-      `docker ${argv.join(' ')} exited ${String(result.exitCode)}: ${result.stderr.trim() || result.stdout.trim()}`,
-    );
+    throw buildExitError(['docker', ...argv], result);
   }
 
   return result.stdout;

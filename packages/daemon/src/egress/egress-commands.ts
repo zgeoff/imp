@@ -1,17 +1,17 @@
-import { runCommand } from '../process/run-command';
+import { buildExitError, runCommand } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
 
-// The commands the egress service runs past nft, each from `run`
-
-type CommandRunner = typeof runCommand;
+// The commands the egress service runs past nft, each from `run`. A failure
+// names stderr alone, never stdout.
 
 // setup-net.sh's FORWARD rules, as `iptables -S FORWARD` prints them
 export async function runForwardRulesList(run: CommandRunner = runCommand): Promise<string> {
-  const result = await run(['iptables', '-S', 'FORWARD']);
+  const argv = ['iptables', '-S', 'FORWARD'];
+
+  const result = await run(argv);
 
   if (result.exitCode !== 0) {
-    throw new Error(
-      `iptables -S FORWARD exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-    );
+    throw buildExitError(argv, { exitCode: result.exitCode, stderr: result.stderr });
   }
 
   return result.stdout;
@@ -27,12 +27,12 @@ export async function runPairFlush(
     [first, second],
     [second, first],
   ] as const) {
-    const result = await run(['conntrack', '-D', '-s', source, '-d', destination]);
+    const argv = ['conntrack', '-D', '-s', source, '-d', destination];
+
+    const result = await run(argv);
 
     if (result.exitCode !== 0 && !result.stderr.includes('0 flow entries')) {
-      throw new Error(
-        `conntrack -D -s ${source} -d ${destination} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-      );
+      throw buildExitError(argv, { exitCode: result.exitCode, stderr: result.stderr });
     }
   }
 }
@@ -42,11 +42,11 @@ export async function runConntrackFlush(
   guestIp: string,
   run: CommandRunner = runCommand,
 ): Promise<void> {
-  const result = await run(['conntrack', '-D', '-s', guestIp]);
+  const argv = ['conntrack', '-D', '-s', guestIp];
+
+  const result = await run(argv);
 
   if (result.exitCode !== 0 && !result.stderr.includes('0 flow entries')) {
-    throw new Error(
-      `conntrack -D -s ${guestIp} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
-    );
+    throw buildExitError(argv, { exitCode: result.exitCode, stderr: result.stderr });
   }
 }

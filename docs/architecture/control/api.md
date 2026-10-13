@@ -80,3 +80,11 @@ Telemetry is OpenTelemetry, loaded only when the owner names an OTLP endpoint. I
 transition counts and durations, governor decisions, RAM, disk, CPU and network use, and spans for
 each boot, wake, sleep and restore with a child span per step, all read from the bus and the
 resource sampler. Metric attributes stay in a closed set, so no imp name multiplies their series.
+
+impd writes its log through LogTape to stdout, which the container runtime collects. Each line
+starts with its level and its category, `impd` plus the area that wrote it, and carries `imp=<name>`
+when it concerns one imp. An operation under an imp's lifecycle lock tags every line it writes with
+that imp, awaited work included, because the lock runs it inside a log context. Call sites that pass
+one line of text in the form `impd: <area or imp>: …` go through an adapter, which reads the area,
+the imp and the level from that text and keeps the text unchanged, because scripts and tests match
+it.

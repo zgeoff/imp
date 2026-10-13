@@ -1,6 +1,6 @@
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import { createSemaphore } from '../imps/semaphore';
+import { createSemaphore } from '../process/semaphore';
 import { readErrorMessage } from '../read-error-message';
 import { listServeEntries } from './service-serve';
 import type { ServedServices, ServiceServe } from './service-serve';

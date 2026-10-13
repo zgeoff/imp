@@ -13,6 +13,7 @@ import type { ImpStateChange } from '../db/imps';
 import { shrinkGuest } from '../memory/shrink-guest';
 import type { SlotAddress } from '../net/addressing';
 import { GATEWAY_IP6 } from '../net/addressing6';
+import { createSemaphore } from '../process/semaphore';
 import { readErrorMessage } from '../read-error-message';
 import { findSessionLogImp } from '../session-logs/find-session-log-imp';
 import { toSeenSessions } from '../sessions/session-cache';
@@ -40,7 +41,6 @@ import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
 import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
-import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
 
 // what a sleep waits under the imp's lock for an elastic guest to unplug

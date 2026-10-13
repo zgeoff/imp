@@ -60,6 +60,7 @@ import {
   RESERVED_RANGES6,
   createRangeChecker6,
 } from '../net/ranges6';
+import { createTtlCache } from '../process/ttl-cache';
 import { readErrorMessage } from '../read-error-message';
 import { loadOrCreateBrokerCa } from './broker-ca';
 import { startBrokerFront } from './broker-front';
@@ -218,13 +219,16 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
   const ca = await loadOrCreateBrokerCa(join(brokerDir, 'ca'), now);
 
-  const blocked6: { check: ((address: string) => boolean) | null; readAt: number } = {
-    check: null,
-    readAt: 0,
-  };
+  // the container's own prefixes, each read again once it is more than
+  // CONNECTED_CACHE_MS old
+  const blocked6 = createTtlCache<'blocked6', (address: string) => boolean>({
+    max: 1,
+    ttlMs: CONNECTED_CACHE_MS,
+    now,
+  });
 
   // with IPv6, what no tunnel dials: the fixed ranges, the imps' /64, and
-  // the container's own links, read again every CONNECTED_CACHE_MS
+  // the container's own links
   const readBlocked6 = async (): Promise<((address: string) => boolean) | null> => {
     const ipv6 = deps.ipv6 ?? null;
 
@@ -232,46 +236,52 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return null;
     }
 
-    if (blocked6.check === null || now() - blocked6.readAt > CONNECTED_CACHE_MS) {
-      const connected = await readConnectedPrefixes6();
+    const cached = blocked6.get('blocked6');
 
-      blocked6.check = createRangeChecker6([...BLOCKED_RANGES6, ipv6.prefix.text, ...connected]);
-      blocked6.readAt = now();
+    if (cached !== undefined) {
+      return cached;
     }
 
-    return blocked6.check;
+    const connected = await readConnectedPrefixes6();
+
+    const check = createRangeChecker6([...BLOCKED_RANGES6, ipv6.prefix.text, ...connected]);
+
+    blocked6.set('blocked6', check);
+
+    return check;
   };
 
-  const publicRefused: { check: (address: string) => boolean; uplinks: Uplinks; readAt: number } = {
-    check: () => true,
-    uplinks: { ipv4: [], ipv6: [] },
-    readAt: 0,
-  };
+  const publicRefused = createTtlCache<
+    'public',
+    { readonly check: (address: string) => boolean; readonly uplinks: Uplinks }
+  >({ max: 1, ttlMs: CONNECTED_CACHE_MS, now });
 
   // what a public imp's tunnel may not dial beyond every tunnel's ranges,
   // as its firewall refuses it: the container's IPv4 networks (can be
   // public), IMP_EGRESS_DENY and the IPv6 ranges refused to public only
-  const readPublicRefused = async (): Promise<(address: string) => boolean> => {
-    if (publicRefused.readAt === 0 || now() - publicRefused.readAt > CONNECTED_CACHE_MS) {
-      const connected = await readConnectedPrefixes4();
+  const readPublicRefused = async (): Promise<{
+    readonly check: (address: string) => boolean;
+    readonly uplinks: Uplinks;
+  }> => {
+    const cached = publicRefused.get('public');
 
-      publicRefused.uplinks = await readUplinks();
-
-      const deny = config.egressDeny;
-
-      publicRefused.check = createRangeChecker(
-        [...connected, ...deny.filter((cidr) => !cidr.includes(':'))],
-        [
-          ...DOCUMENTATION_RANGES6,
-          ...RESERVED_RANGES6,
-          ...deny.filter((cidr) => cidr.includes(':')),
-        ],
-      );
-
-      publicRefused.readAt = now();
+    if (cached !== undefined) {
+      return cached;
     }
 
-    return publicRefused.check;
+    const connected = await readConnectedPrefixes4();
+    const uplinks = await readUplinks();
+
+    const deny = config.egressDeny;
+
+    const check = createRangeChecker(
+      [...connected, ...deny.filter((cidr) => !cidr.includes(':'))],
+      [...DOCUMENTATION_RANGES6, ...RESERVED_RANGES6, ...deny.filter((cidr) => cidr.includes(':'))],
+    );
+
+    publicRefused.set('public', { check, uplinks });
+
+    return { check, uplinks };
   };
 
   const resolveTarget = async (host: string, mode: EgressMode): Promise<string> => {
@@ -281,12 +291,12 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return resolveTunnelTarget(host, { isBlocked6 });
     }
 
-    const isRefusedMore = await readPublicRefused();
-    const address = await resolveTunnelTarget(host, { isBlocked6, isRefusedMore });
+    const refused = await readPublicRefused();
+    const address = await resolveTunnelTarget(host, { isBlocked6, isRefusedMore: refused.check });
 
     // as the firewall's uplink rule: a route by another interface reaches
     // a private service whatever the address
-    await requireUplinkRoute(host, address, publicRefused.uplinks, readRouteDevice);
+    await requireUplinkRoute(host, address, refused.uplinks, readRouteDevice);
 
     return address;
   };

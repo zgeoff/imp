@@ -6,6 +6,7 @@ import type { Imps } from '../imps/imp-service';
 import { deriveSlotAddress } from '../net/addressing';
 import type { TailscaleStatus } from '../net/tailscale-status';
 import { runChecked, runCommand } from '../process/run-command';
+import type { CommandRunner } from '../process/run-command';
 import { loadOrCreateHostId } from './host-id';
 import { readOAuthCredential } from './oauth-credential';
 import { createServiceServe } from './service-serve';
@@ -23,7 +24,7 @@ interface BuildTailnetNamesOptions {
   readonly log: (message: string) => void;
 
   // runs `tailscale serve`; runCommand by default
-  readonly runCommand?: typeof runCommand | undefined;
+  readonly runCommand?: CommandRunner | undefined;
 }
 
 // Per-imp names from impd's config, with the real API and tailscaled.

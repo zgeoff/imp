@@ -10,10 +10,10 @@ import { AgentError } from '../agent-client/agent-connection';
 import type { ExecStream } from '../agent-client/exec-stream';
 import { buildMockAgentSession } from '../test-utils/build-mock-agent-session';
 import { buildMockSessionOutput } from '../test-utils/build-mock-session-output';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubGenerationLogGate } from '../test-utils/build-stub-generation-log-gate';
 import { buildStubTapOpener } from '../test-utils/build-stub-tap-opener';
 import { buildStubTapStream } from '../test-utils/build-stub-tap-stream';
-import { buildStubTimers } from '../test-utils/build-stub-timers';
 import { createGenerationLog, readGenerationMeta } from './generation-log';
 import { createSessionLogs } from './session-log-service';
 import type { SessionLogImp } from './session-log-service';
@@ -35,7 +35,7 @@ async function setupTest() {
     stack,
     root,
     sessionLogsDir: join(root, 'session-logs'),
-    timers: buildStubTimers(),
+    timers: buildStubClock(),
     calls: taps.calls,
     answers: taps.answers,
     looks,

@@ -8,12 +8,13 @@ import { sendPing } from '../agent-client/agent-requests';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { parsePrefix64 } from '../net/addressing6';
+import { stopPid } from '../process/proc';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubJails } from '../test-utils/build-stub-jails';
 import { createStubKsmExec } from '../test-utils/create-stub-ksm-exec';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { startStubFirecracker } from '../test-utils/start-stub-firecracker';
-import { isFirecrackerAlive, stopProcess } from './firecracker-process';
+import { isFirecrackerAlive } from './firecracker-process';
 import { buildJailerCommand } from './jail';
 import { buildBootArgs, createVmRunner } from './vm-runner';
 
@@ -322,7 +323,7 @@ test('#readVmState reads no state once the API is gone', async () => {
 
   const vm = await startStubFirecracker({ apiSocket: paths.apiSocket, logPath: ctx.logPath });
 
-  stopProcess(vm.pid);
+  stopPid(vm.pid);
 
   await vm.exited;
 

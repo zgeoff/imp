@@ -10,7 +10,9 @@ import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { readSetfcapWarning } from './images/unpack-export';
 import { startPublicListener } from './oauth/public-listener';
+import { getImpdLogger } from './process/get-impd-logger';
 import { printLog } from './process/print-log';
+import { setupLogging } from './process/setup-logging';
 import { startTicker } from './process/ticker';
 import { waitWithin } from './process/wait-within';
 import { startWakeProxy } from './proxy/wake-proxy';
@@ -57,6 +59,8 @@ async function runStopStep(
 }
 
 async function main(): Promise<void> {
+  setupLogging();
+
   const config = loadConfig(process.env);
 
   for (const warning of config.warnings) {
@@ -99,7 +103,10 @@ async function main(): Promise<void> {
 
   const app = impd.api.app.listen(buildApiListenOptions(config));
 
-  console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
+  getImpdLogger('api').info('api on :{port}, data in {dataDir}', {
+    port: config.apiPort,
+    dataDir: config.dataDir,
+  });
 
   // off unless the operator names the route's origin
   const publicMcp =
@@ -139,7 +146,9 @@ async function main(): Promise<void> {
 
   const brokerPort = await impd.broker.listen(config.brokerPort);
 
-  console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
+  getImpdLogger('broker').info("credential broker on :{port} of every imp's gateway", {
+    port: brokerPort,
+  });
 
   const ssh = await startSsh({
     config,
@@ -214,7 +223,7 @@ async function main(): Promise<void> {
         );
       }
     } catch (error) {
-      console.error('impd: could not add the default image:', error);
+      getImpdLogger('image').error('could not add the default image: {error}', { error });
     } finally {
       impd.state.ready = true;
     }

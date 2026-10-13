@@ -1,4 +1,6 @@
 import type { ImpRecord } from '../db/imps';
+import { buildBackoffMs } from '../process/build-backoff-ms';
+import { createSingleFlight } from '../process/single-flight';
 
 const HOUR_MS = 3_600_000;
 
@@ -47,7 +49,8 @@ export function createAgentWatchdog(deps: AgentWatchdogDeps): AgentWatchdog {
   const reported = new Set<string>();
   const capped = new Set<string>();
   const recoveries = new Map<string, number[]>();
-  const running = new Map<string, Promise<void>>();
+
+  const running = createSingleFlight<void>();
 
   // when the next recovery may run; null once the hour's are spent
   const findNextRecovery = (id: string): number | null => {
@@ -65,7 +68,10 @@ export function createAgentWatchdog(deps: AgentWatchdogDeps): AgentWatchdog {
       return null;
     }
 
-    return last + FIRST_BACKOFF_MS * 2 ** (recent.length - 1);
+    return (
+      last +
+      buildBackoffMs(recent.length, { baseMs: FIRST_BACKOFF_MS, capMs: Number.POSITIVE_INFINITY })
+    );
   };
 
   const removeSilence = (id: string): void => {
@@ -132,15 +138,6 @@ export function createAgentWatchdog(deps: AgentWatchdogDeps): AgentWatchdog {
     }
   };
 
-  // checkSilence, and forgotten as running once it ends
-  const runCheck = async (imp: ImpRecord, since: number): Promise<void> => {
-    try {
-      await checkSilence(imp, since);
-    } finally {
-      running.delete(imp.id);
-    }
-  };
-
   return {
     observe: (imp, answered) => {
       if (answered) {
@@ -157,11 +154,11 @@ export function createAgentWatchdog(deps: AgentWatchdogDeps): AgentWatchdog {
 
       silences.set(imp.id, since);
 
-      if (deps.now() - since < deps.timeoutMs || running.has(imp.id)) {
+      if (deps.now() - since < deps.timeoutMs || running.findRun(imp.id) !== undefined) {
         return;
       }
 
-      running.set(imp.id, runCheck(imp, since));
+      void running.run(imp.id, () => checkSilence(imp, since));
     },
 
     forget: removeSilence,
@@ -172,8 +169,6 @@ export function createAgentWatchdog(deps: AgentWatchdogDeps): AgentWatchdog {
       return since !== undefined && reported.has(id) ? new Date(since) : null;
     },
 
-    settle: async () => {
-      await Promise.all(running.values());
-    },
+    settle: () => running.waitForAll(),
   };
 }

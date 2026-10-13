@@ -11,6 +11,7 @@
     "@imp/api": "workspace:*",
     "@imp/local-tar": "workspace:*",
     "@imp/mcp": "workspace:*",
+    "@logtape/logtape": "2.4.0",
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
     "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
@@ -24,6 +25,7 @@
     "dns-packet": "catalog:",
     "elysia": "catalog:",
     "kysely": "catalog:",
+    "lru-cache": "11.5.3",
     "reflect-metadata": "catalog:",
     "ssh2": "catalog:",
     "zod": "catalog:"
