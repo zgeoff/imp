@@ -3,6 +3,7 @@ import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import type { StartTimer } from '../process/clock';
 import { startRealTimer } from '../process/start-real-timer';
+import { countTreeBytes } from '../storage/count-tree-bytes';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
@@ -176,18 +177,18 @@ function readAllocatedBytes(line: string): number {
   return Math.max(1, Math.ceil(bytes / BLOCK_BYTES)) * BLOCK_BYTES;
 }
 
-// tar -vv prints one line per entry as it starts it, names escaped, and a
-// "Creating directory:" line for each parent the archive lacks; past either
-// limit it is killed. The entries before the last are written.
+// tar -vv prints one line per entry it unpacks, names escaped, and a
+// "Creating directory:" line for each parent a member names that the
+// archive does not; past either limit it is killed
 async function countUnpacked(
   stdout: ReadableStream<Uint8Array>,
   limits: Readonly<ExportLimits>,
-  onCounted: (bytes: number, writtenBytes: number) => void,
+  onCounted: (bytes: number) => void,
   onOver: (limit: 'bytes' | 'files') => void,
 ): Promise<void> {
   const decoder = new TextDecoder();
 
-  const counted = { lines: 0, bytes: 0, lastBytes: 0, rest: '' };
+  const counted = { lines: 0, bytes: 0, rest: '' };
 
   for await (const chunk of stdout as AsyncIterable<Uint8Array>) {
     const lines = `${counted.rest}${decoder.decode(chunk, { stream: true })}`.split('\n');
@@ -196,11 +197,10 @@ async function countUnpacked(
 
     for (const line of lines) {
       counted.lines += 1;
-      counted.lastBytes = readAllocatedBytes(line);
-      counted.bytes += counted.lastBytes;
+      counted.bytes += readAllocatedBytes(line);
     }
 
-    onCounted(counted.bytes, counted.bytes - counted.lastBytes);
+    onCounted(counted.bytes);
 
     if (counted.bytes > limits.maxBytes) {
       onOver('bytes');
@@ -268,12 +268,12 @@ export async function writeGuestTree(
 
   // tar's listing may come only as it exits, which can be after the end of
   // the archive and before the end of the export
-  const listed = { bytes: 0, writtenBytes: 0 };
+  const listed = { bytes: 0 };
   const held = { bytes: 0 };
 
   // twice the larger of the archive and the disk its entries take: the tree,
   // then its ext4 file, with the ext4 file's journal; in steps, ahead of what
-  // tar has listed
+  // tar has listed, with the tree the disk shows written so far
   const growHold = async () => {
     const tree = Math.max(sent.bytes, listed.bytes);
     const needed = 2 * tree + planRootfsOverhead(tree);
@@ -281,13 +281,12 @@ export async function writeGuestTree(
     if (needed > held.bytes) {
       held.bytes = (Math.floor(needed / GROW_STEP_BYTES) + 1) * GROW_STEP_BYTES;
 
-      await grow(held.bytes, listed.writtenBytes);
+      await grow(held.bytes, countTreeBytes(root));
     }
   };
 
-  const onCounted = (bytes: number, writtenBytes: number) => {
+  const onCounted = (bytes: number) => {
     listed.bytes = bytes;
-    listed.writtenBytes = writtenBytes;
   };
 
   const counting = countUnpacked(tar.stdout, limits, onCounted, (limit) => {

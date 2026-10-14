@@ -30,7 +30,7 @@ export interface DiskBudget {
 
   // withRoom for a write whose size shows only as it goes, such as a
   // build's export: grow(total, written) holds up to total, or refuses as
-  // withRoom, with the bytes the write says it has written counted once
+  // withRoom, with the bytes the disk shows it has written counted once
   readonly withGrowingRoom: <T>(
     task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
   ) => Promise<T>;
@@ -105,11 +105,11 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   // the check and the hold run under one lock, so two writes never both
   // pass on the same reading; readWrittenBytes counts back what the write
   // has written already, gone from `available` and still held in `pending`
-  const holdRoom = (bytes: number, readWrittenBytes: (usedBytes: number) => number = () => 0) =>
+  const holdRoom = (bytes: number, readWrittenBytes: () => number = () => 0) =>
     mutex.runExclusive('ledger', async () => {
       const status = await readStatus();
 
-      const free = status.availableBytes - status.pendingBytes + readWrittenBytes(status.usedBytes);
+      const free = status.availableBytes - status.pendingBytes + readWrittenBytes();
 
       if (free - bytes < status.reserveBytes) {
         throw buildDiskFullError(Math.max(0, free), status.reserveBytes, bytes);
@@ -146,20 +146,16 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
     task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
   ): Promise<T> => {
     const held = { bytes: 0 };
+
+    // what the write has written, up to what it holds; the caller counts
+    // only bytes the disk shows as its own, which `available` has lost
     const written = { bytes: 0 };
-
-    // what the write says it has written, up to what it holds and to the
-    // growth in used bytes since it began, so neither a count ahead of the
-    // disk nor another write's bytes are counted back
-    const start = await deps.storage.readUsage();
-
-    const readWrittenBytes = (usedBytes: number) =>
-      Math.min(held.bytes, written.bytes, Math.max(0, usedBytes - start.usedBytes));
+    const readWrittenBytes = () => Math.min(held.bytes, written.bytes);
 
     const grow = async (totalBytes: number, writtenBytes: number) => {
       const more = totalBytes - held.bytes;
 
-      written.bytes = Math.max(written.bytes, writtenBytes);
+      written.bytes = writtenBytes;
 
       if (more > 0) {
         await holdRoom(more, readWrittenBytes);

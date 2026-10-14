@@ -278,7 +278,7 @@ test('it refuses a growing write that has written part of its hold and grows pas
 });
 
 test('it counts another write as no part of a growing write', () => {
-  const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
+  const disk = { usedBytes: 88 * 1024 ** 3, availableBytes: 12 * 1024 ** 3 };
 
   const budget = createDiskBudget({
     storage: { readUsage: () => Promise.resolve({ ...disk }) },
@@ -287,23 +287,24 @@ test('it counts another write as no part of a growing write', () => {
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(4 * 1024 ** 3, 0);
-
-    // a write that holds nothing takes 2 GiB
-    disk.usedBytes += 2 * 1024 ** 3;
-    disk.availableBytes -= 2 * 1024 ** 3;
-
-    // 8 GiB free and all 4 GiB of the hold still to write: 2 GiB more leaves 2
     await grow(6 * 1024 ** 3, 0);
+
+    // a write that holds nothing takes 3 GiB, before the disk shows any of
+    // the growing write's own
+    disk.usedBytes += 3 * 1024 ** 3;
+    disk.availableBytes -= 3 * 1024 ** 3;
+
+    // 9 GiB free and all 6 GiB of the hold still to write: 2 GiB more leaves 1
+    await grow(8 * 1024 ** 3, 0);
   });
 
   expect(growing).rejects.toMatchObject({
     code: 'DISK_FULL',
-    data: { availableBytes: 4 * 1024 ** 3, requestedBytes: 2 * 1024 ** 3 },
+    data: { availableBytes: 3 * 1024 ** 3, requestedBytes: 2 * 1024 ** 3 },
   });
 });
 
-test('it counts back no more than the disk shows a growing write has written', () => {
+test('it counts back no more than a growing write holds', () => {
   const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
 
   const budget = createDiskBudget({
@@ -313,19 +314,18 @@ test('it counts back no more than the disk shows a growing write has written', (
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(4 * 1024 ** 3, 0);
+    await grow(1024 ** 3, 0);
 
-    // the write says 3 GiB, and the disk shows 1 GiB of it so far
     disk.usedBytes += 1024 ** 3;
     disk.availableBytes -= 1024 ** 3;
 
-    // 9 GiB free and 3 GiB of the hold still to write: 3 GiB more leaves 3
-    await grow(7 * 1024 ** 3, 3 * 1024 ** 3);
+    // 9 GiB free and the 1 GiB hold all written: 6 GiB more leaves 3
+    await grow(7 * 1024 ** 3, 4 * 1024 ** 3);
   });
 
   expect(growing).rejects.toMatchObject({
     code: 'DISK_FULL',
-    data: { availableBytes: 6 * 1024 ** 3, requestedBytes: 3 * 1024 ** 3 },
+    data: { availableBytes: 9 * 1024 ** 3, requestedBytes: 6 * 1024 ** 3 },
   });
 });
 
