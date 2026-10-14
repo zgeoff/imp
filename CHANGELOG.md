@@ -2,10 +2,11 @@
 
 ## [1.1.0](https://github.com/zgeoff/imp/compare/v1.0.4...v1.1.0) (2026-10-14)
 
-
 ### Features
 
-* **geo-498:** let a scoped token add its own pinned images ([#358](https://github.com/zgeoff/imp/issues/358)) ([cfe2c3f](https://github.com/zgeoff/imp/commit/cfe2c3f306c21772f7e3e79b78e26b88650bcbaf))
+- **geo-498:** let a scoped token add its own pinned images
+  ([#358](https://github.com/zgeoff/imp/issues/358))
+  ([cfe2c3f](https://github.com/zgeoff/imp/commit/cfe2c3f306c21772f7e3e79b78e26b88650bcbaf))
 
 ## [1.0.4](https://github.com/zgeoff/imp/compare/v1.0.3...v1.0.4) (2026-10-13)
 
