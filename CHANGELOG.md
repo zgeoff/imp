@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/zgeoff/imp/compare/v1.2.0...v1.3.0) (2026-10-14)
+
+
+### Features
+
+* **geo-283:** limit a grant to given methods and paths ([#364](https://github.com/zgeoff/imp/issues/364)) ([df41eaf](https://github.com/zgeoff/imp/commit/df41eaf659bfdd945dae4c738fdb6ed5d06e2565))
+
+
+### Bug Fixes
+
+* **geo-832:** keep a pool that a kernel oops in zfs holds ([#367](https://github.com/zgeoff/imp/issues/367)) ([b3dbfa7](https://github.com/zgeoff/imp/commit/b3dbfa787d9a62b806c13a6980a133de8f36792f))
+* **geo-846:** encode a warm move's snapshot record as meta.json does ([#368](https://github.com/zgeoff/imp/issues/368)) ([831f40f](https://github.com/zgeoff/imp/commit/831f40f9fc6bfbcf24a903c866352205e8bd64d1))
+
 ## [1.2.0](https://github.com/zgeoff/imp/compare/v1.1.0...v1.2.0) (2026-10-14)
 
 ### Features
