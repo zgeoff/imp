@@ -380,3 +380,283 @@ test('it never holds a release up on the base job', () => {
 
   expect(jobs.publish.needs).not.toContain('base');
 });
+
+// The lock that keeps an older release from moving `latest` back: one group for every release
+// run, which keeps each waiting job rather than cancelling it.
+test('it holds the latest job under one queued group that every release run shares', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  expect(jobs.latest.concurrency).toStrictEqual({
+    group: 'latest-tag',
+    'cancel-in-progress': false,
+    queue: 'max',
+  });
+});
+
+test('it moves latest in one line of the whole workflow', () => {
+  const text = readFileSync(
+    new URL('../../.github/workflows/release.yml', import.meta.url),
+    'utf8',
+  );
+
+  expect(
+    text
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .filter((line) => line.includes(':latest')),
+  ).toStrictEqual([
+    '          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"',
+  ]);
+});
+
+test('it looks up the newest release in the same step that moves latest', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  const step = jobs.latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  expect(step).toInclude('gh release view');
+  expect(step).toInclude('docker buildx imagetools create -t "$IMAGE:latest"');
+});
+
+test('it moves latest only after the release has its assets', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  expect(jobs.latest.needs).toContain('publish');
+});
+
+test.each([['tap'], ['npm-pack']] as const)(
+  'it gives the %s job the newest release that the latest job looked up',
+  (name) => {
+    const jobs = parseReleaseWorkflow(
+      readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+    );
+
+    expect(jobs[name].needs).toContain('latest');
+  },
+);
+
+// The traces run the Tag latest step of two overlapping release runs one after the other, as the
+// latest-tag group runs them, with a stub gh that answers the newest release from a file the test
+// moves on as release-please would, and a stub docker that records the move.
+test('it leaves latest on the newer release when the older run holds the lock after the newer run', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  const newest = join(ctx.dir, 'newest');
+  const gh = createStubBin(ctx.dir, 'gh', `cat '${newest}'`);
+
+  createStubBin(ctx.dir, 'docker', 'exit 0');
+  invariant(step);
+  writeFileSync(newest, 'v1.0.4\n');
+
+  const runs = [
+    { TAG: 'v1.0.4', VERSION: '1.0.4' },
+    { TAG: 'v1.0.3', VERSION: '1.0.3' },
+  ].map(
+    (run) =>
+      Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+        env: {
+          ...run,
+          PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+          IMAGE: 'ghcr.io/zgeoff/imp-host',
+          GITHUB_OUTPUT: ctx.outputs,
+          GITHUB_REPOSITORY: 'zgeoff/imp',
+        },
+      }).exitCode,
+  );
+
+  expect(runs).toStrictEqual([0, 0]);
+
+  expect(readFileSync(gh.calls, 'utf8')).toBe(
+    [
+      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.4',
+      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      '',
+    ].join('\n'),
+  );
+});
+
+test('it leaves latest on the newer release when the older run holds the lock first, after the newer release is out', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  const newest = join(ctx.dir, 'newest');
+  const gh = createStubBin(ctx.dir, 'gh', `cat '${newest}'`);
+
+  createStubBin(ctx.dir, 'docker', 'exit 0');
+  invariant(step);
+  writeFileSync(newest, 'v1.0.4\n');
+
+  const runs = [
+    { TAG: 'v1.0.3', VERSION: '1.0.3' },
+    { TAG: 'v1.0.4', VERSION: '1.0.4' },
+  ].map(
+    (run) =>
+      Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+        env: {
+          ...run,
+          PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+          IMAGE: 'ghcr.io/zgeoff/imp-host',
+          GITHUB_OUTPUT: ctx.outputs,
+          GITHUB_REPOSITORY: 'zgeoff/imp',
+        },
+      }).exitCode,
+  );
+
+  expect(runs).toStrictEqual([0, 0]);
+
+  expect(readFileSync(gh.calls, 'utf8')).toBe(
+    [
+      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.4',
+      '',
+    ].join('\n'),
+  );
+});
+
+test('it moves latest forward when the older run holds the lock before the newer release is out', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  const newest = join(ctx.dir, 'newest');
+  const gh = createStubBin(ctx.dir, 'gh', `cat '${newest}'`);
+
+  const env = {
+    PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+    IMAGE: 'ghcr.io/zgeoff/imp-host',
+    GITHUB_OUTPUT: ctx.outputs,
+    GITHUB_REPOSITORY: 'zgeoff/imp',
+  };
+
+  createStubBin(ctx.dir, 'docker', 'exit 0');
+  invariant(step);
+  writeFileSync(newest, 'v1.0.3\n');
+
+  const older = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    env: { ...env, TAG: 'v1.0.3', VERSION: '1.0.3' },
+  });
+
+  writeFileSync(newest, 'v1.0.4\n');
+
+  const newer = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    env: { ...env, TAG: 'v1.0.4', VERSION: '1.0.4' },
+  });
+
+  expect(older.exitCode).toBe(0);
+  expect(newer.exitCode).toBe(0);
+
+  expect(readFileSync(gh.calls, 'utf8')).toBe(
+    [
+      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.3',
+      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.4',
+      '',
+    ].join('\n'),
+  );
+});
+
+test('it tells the formula and npm that a release behind the newest is not the newest', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  const gh = createStubBin(ctx.dir, 'gh', 'echo v1.0.4');
+
+  createStubBin(ctx.dir, 'docker', 'exit 0');
+  invariant(step);
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    env: {
+      PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+      IMAGE: 'ghcr.io/zgeoff/imp-host',
+      TAG: 'v1.0.3',
+      VERSION: '1.0.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('newest_tag=v1.0.4\nis_newest=false\n');
+
+  expect(result.stdout.toString()).toBe(
+    'v1.0.3 is not the newest release (v1.0.4); latest stays\n',
+  );
+});
+
+test('it tells the formula and npm that the newest release is the newest', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  const gh = createStubBin(ctx.dir, 'gh', 'echo v1.0.4');
+
+  createStubBin(ctx.dir, 'docker', 'exit 0');
+  invariant(step);
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    env: {
+      PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+      IMAGE: 'ghcr.io/zgeoff/imp-host',
+      TAG: 'v1.0.4',
+      VERSION: '1.0.4',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('newest_tag=v1.0.4\nis_newest=true\n');
+});
+
+test('it fails the job, moving nothing, when the newest release cannot be read', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).latest.steps.find((candidate) => candidate.id === 'latest')?.run;
+
+  const gh = createStubBin(ctx.dir, 'gh', 'echo "HTTP 502" >&2; exit 1');
+
+  createStubBin(ctx.dir, 'docker', 'exit 0');
+  invariant(step);
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    env: {
+      PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+      IMAGE: 'ghcr.io/zgeoff/imp-host',
+      TAG: 'v1.0.4',
+      VERSION: '1.0.4',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(readFileSync(gh.calls, 'utf8')).toBe(
+    'gh release view --repo zgeoff/imp --json tagName --jq .tagName\n',
+  );
+});

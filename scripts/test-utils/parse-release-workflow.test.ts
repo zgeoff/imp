@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { parseReleaseWorkflow } from './parse-release-workflow';
 
-test('it reads the steps and needs of the base, image and publish jobs', () => {
+test('it reads the steps, needs and concurrency of the jobs its tests read', () => {
   const yaml = [
     'jobs:',
     '  base:',
@@ -20,6 +20,16 @@ test('it reads the steps and needs of the base, image and publish jobs', () => {
     '      - name: Checkout',
     '        uses: actions/checkout@v5',
     '        with: { ref: main }',
+    '  latest:',
+    '    needs: [publish]',
+    '    concurrency: { group: latest-tag, cancel-in-progress: false, queue: max }',
+    '    steps: []',
+    '  tap:',
+    '    needs: [latest]',
+    '    steps: []',
+    '  npm-pack:',
+    '    needs: [latest]',
+    '    steps: []',
   ].join('\n');
 
   expect(parseReleaseWorkflow(yaml)).toStrictEqual({
@@ -33,6 +43,13 @@ test('it reads the steps and needs of the base, image and publish jobs', () => {
       needs: ['image'],
       steps: [{ name: 'Checkout', uses: 'actions/checkout@v5', with: { ref: 'main' } }],
     },
+    latest: {
+      needs: ['publish'],
+      concurrency: { group: 'latest-tag', 'cancel-in-progress': false, queue: 'max' },
+      steps: [],
+    },
+    tap: { needs: ['latest'], steps: [] },
+    'npm-pack': { needs: ['latest'], steps: [] },
   });
 });
 
@@ -45,9 +62,41 @@ test('it throws on a workflow without the base job', () => {
     '  publish:',
     '    needs: []',
     '    steps: []',
+    '  latest:',
+    '    needs: []',
+    '    steps: []',
+    '  tap:',
+    '    needs: []',
+    '    steps: []',
+    '  npm-pack:',
+    '    needs: []',
+    '    steps: []',
   ].join('\n');
 
   expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"base"/u);
+});
+
+test('it throws on a workflow without the latest job', () => {
+  const yaml = [
+    'jobs:',
+    '  base:',
+    '    needs: []',
+    '    steps: []',
+    '  image:',
+    '    needs: []',
+    '    steps: []',
+    '  publish:',
+    '    needs: []',
+    '    steps: []',
+    '  tap:',
+    '    needs: []',
+    '    steps: []',
+    '  npm-pack:',
+    '    needs: []',
+    '    steps: []',
+  ].join('\n');
+
+  expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"latest"/u);
 });
 
 test('it throws on a job without needs', () => {
@@ -59,6 +108,15 @@ test('it throws on a job without needs', () => {
     '    needs: []',
     '    steps: []',
     '  publish:',
+    '    needs: []',
+    '    steps: []',
+    '  latest:',
+    '    needs: []',
+    '    steps: []',
+    '  tap:',
+    '    needs: []',
+    '    steps: []',
+    '  npm-pack:',
     '    needs: []',
     '    steps: []',
   ].join('\n');
@@ -77,7 +135,43 @@ test('it throws on a job without steps', () => {
     '  publish:',
     '    needs: []',
     '    steps: []',
+    '  latest:',
+    '    needs: []',
+    '    steps: []',
+    '  tap:',
+    '    needs: []',
+    '    steps: []',
+    '  npm-pack:',
+    '    needs: []',
+    '    steps: []',
   ].join('\n');
 
   expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"steps"/u);
+});
+
+test('it throws on a concurrency whose queue is not a string', () => {
+  const yaml = [
+    'jobs:',
+    '  base:',
+    '    needs: []',
+    '    steps: []',
+    '  image:',
+    '    needs: []',
+    '    steps: []',
+    '  publish:',
+    '    needs: []',
+    '    steps: []',
+    '  latest:',
+    '    needs: []',
+    '    concurrency: { group: latest-tag, queue: [max] }',
+    '    steps: []',
+    '  tap:',
+    '    needs: []',
+    '    steps: []',
+    '  npm-pack:',
+    '    needs: []',
+    '    steps: []',
+  ].join('\n');
+
+  expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"queue"/u);
 });
