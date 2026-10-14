@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.4.1](https://github.com/zgeoff/imp/compare/v1.4.0...v1.4.1) (2026-10-14)
+
+### Bug Fixes
+
+- **geo-456:** count a pool as using the image only on an equal vdev path
+  ([#371](https://github.com/zgeoff/imp/issues/371))
+  ([16777fc](https://github.com/zgeoff/imp/commit/16777fc3d8f79e0bb383eaa4072d0f45901b5ab6))
+- **geo-458:** log a refused resolver reply to a guest that went
+  ([#372](https://github.com/zgeoff/imp/issues/372))
+  ([b432e13](https://github.com/zgeoff/imp/commit/b432e138e6c498bfa90a6f5785ebf643dd0c449f))
+
 ## [1.4.0](https://github.com/zgeoff/imp/compare/v1.3.0...v1.4.0) (2026-10-14)
 
 ### Features
