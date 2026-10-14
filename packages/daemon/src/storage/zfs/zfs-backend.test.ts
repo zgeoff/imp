@@ -2432,3 +2432,87 @@ test('#openMoveSource reads a move to XFS from read-only clones that a GC leaves
   expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toStrictEqual([]);
   expect(ctx.fake.listSnapshots().filter((name) => name.includes('@mv-'))).toStrictEqual([]);
 });
+
+test('#removeImpDisk logs a busy dataset once while a kernel oops holds it, not on each pass', async () => {
+  const ctx = setupTest();
+
+  const backend = createZfsBackend({
+    dataDir: ctx.dataDir,
+    root: 'tank/imp',
+    run: ctx.fake.run,
+    readMounts: ctx.fake.readMounts,
+    readModuleVersion: () => '2.2.2-0ubuntu9',
+    log: ctx.log,
+    isKernelOopsed: () => true,
+  });
+
+  ctx.stack.defer(() => backend.waitForReclaim());
+
+  await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+  await backend.createImage('sha256:9f2c', () => Promise.resolve());
+  await backend.createImpDisk('a', { kind: 'image', digest: 'sha256:9f2c' });
+  await backend.createImpDisk('b', { kind: 'image', digest: 'sha256:9f2c' });
+
+  // the task an oops killed still has the retired disk open
+  const block = ctx.fake.blockBefore((command) => command.startsWith('zfs destroy'));
+
+  await backend.removeImpDisk('a', []);
+
+  await block.reached;
+
+  const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
+
+  invariant(retired);
+
+  await ctx.fake.run(['mount', '-t', 'zfs', retired, join(ctx.dataDir, 'held')]);
+
+  block.release();
+
+  await backend.waitForReclaim();
+
+  // a second change starts a second pass, which meets the same busy dataset
+  await backend.removeImpDisk('b', []);
+  await backend.waitForReclaim();
+
+  const failures = ctx.log.mock.calls.filter(([line]) => line.includes('reclaim failed'));
+
+  expect(failures).toStrictEqual([
+    [
+      `impd: zfs: reclaim failed: zfs destroy ${retired} exited 1: cannot destroy '${retired}': dataset is busy; a kernel oops holds ${retired} until the host reboots, so impd logs it once`,
+    ],
+  ]);
+});
+
+test('#removeImpDisk logs a busy dataset on each pass while the kernel has not oopsed', async () => {
+  const ctx = setupTest();
+
+  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+  await ctx.backend.createImage('sha256:9f2c', () => Promise.resolve());
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:9f2c' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:9f2c' });
+
+  // a task still has the retired disk open
+  const block = ctx.fake.blockBefore((command) => command.startsWith('zfs destroy'));
+
+  await ctx.backend.removeImpDisk('a', []);
+
+  await block.reached;
+
+  const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
+
+  invariant(retired);
+
+  await ctx.fake.run(['mount', '-t', 'zfs', retired, join(ctx.dataDir, 'held')]);
+
+  block.release();
+
+  await ctx.backend.waitForReclaim();
+
+  // a second change starts a second pass, which meets the same busy dataset
+  await ctx.backend.removeImpDisk('b', []);
+  await ctx.backend.waitForReclaim();
+
+  const failures = ctx.log.mock.calls.filter(([line]) => line.includes('reclaim failed'));
+
+  expect(failures).toHaveLength(2);
+});

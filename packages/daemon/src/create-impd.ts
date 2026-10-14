@@ -35,6 +35,7 @@ import { HOST_ADD_WARNING, HOST_BUILD_WARNING, createImageService } from './imag
 import type { ImageService, ImageServiceDeps } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import type { ImpServiceDeps, Imps } from './imps/imp-service';
+import { createKernelOopsWatch } from './imps/kernel-oops-watch';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
 import { createMoveService } from './moves/move-service';
 import type { MoveServiceDeps } from './moves/move-service';
@@ -127,6 +128,7 @@ type ImpBoundaries = Pick<
   | 'sleep'
   | 'sleepTiming'
   | 'openTap'
+  | 'kernelOops'
 >;
 
 // What impd reaches outside its own code: every field but the four
@@ -339,6 +341,9 @@ export function startGovernedImps(
       return status.hostname;
     },
     ...(deps.now !== undefined && { now: deps.now }),
+
+    // the host's own taint flag; main.ts passes the watch it shares with storage
+    kernelOops: createKernelOopsWatch(),
     ...deps.imps,
   });
 }
@@ -703,6 +708,7 @@ export async function createImpd(config: Config, deps: Readonly<ImpdDeps>) {
     subscribeResources: imps.subscribeResources,
     readDiskUsedBytes: diskUsage.readExclusiveTotal,
     readStateCounts: () => countImpsByState(db),
+    readRebootReason: imps.readRebootReason,
     readRam: async () => {
       const usage = await governor.readUsage();
 

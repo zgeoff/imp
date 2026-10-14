@@ -32,6 +32,7 @@ test('it creates a default host on XFS, off the tailnet, on impd defaults', asyn
     publicIp: null,
     publicRecords: null,
     https: null,
+    rebootReason: null,
   });
 });
 
@@ -76,5 +77,6 @@ test('it applies overrides on top of the defaults, nested objects whole', async 
     publicIp: '203.0.113.7',
     publicRecords: null,
     https: null,
+    rebootReason: null,
   });
 });

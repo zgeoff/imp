@@ -1018,6 +1018,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
       names: deps.readTailnetNames?.() ?? null,
     },
     cpu: deps.imps.readCpuHost(),
+    rebootReason: deps.imps.readRebootReason(),
     defaults: { memoryMib: deps.config.defaultMemoryMib, image: defaultImage?.name ?? null },
     egress: { isEnforced: deps.egress.isEnforced() },
     ksm: readKsmInfo(deps, running, usage.headroomMib),

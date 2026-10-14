@@ -50,6 +50,8 @@ import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { KsmHostStats } from '../vmm/ksm';
 import type { ImpService } from './imp-service';
+import { NO_KERNEL_OOPS } from './kernel-oops-watch';
+import type { KernelOopsWatch } from './kernel-oops-watch';
 
 export const TEST_TOKEN = 'test-token';
 
@@ -170,6 +172,9 @@ export interface ImpTestOptions {
 
   // the storage backend over the data dir; XFS on plain files by default
   readonly createStorage?: (dataDir: string) => StorageBackend;
+
+  // the host's taint flag; the kernel never oopses by default
+  readonly kernelOops?: KernelOopsWatch;
 
   // CPU limits: none enforced, and 8 cores, by default
   readonly cgroups?: CpuCgroups;
@@ -371,6 +376,7 @@ export async function createImpTest(
         },
       },
       hostCpus: options.hostCpus ?? 8,
+      kernelOops: options.kernelOops ?? NO_KERNEL_OOPS,
       ...(frozenAt !== undefined && {
         sleepTiming: {
           now: readClock,

@@ -27,6 +27,7 @@ import { createImpPresenter } from './imp-presenter';
 import { createImpRuntime } from './imp-runtime';
 import type { ImpRuntime } from './imp-runtime';
 import { createImpVmOps } from './imp-vm-ops';
+import { KERNEL_OOPS_REASON } from './kernel-oops-watch';
 import { readRunningImpUsage } from './read-running-imp-usage';
 import type { ResourceDelta } from './resource-sampler';
 import { createShutdownGate } from './shutdown-gate';
@@ -64,6 +65,9 @@ export type ImpService = ImpCommands &
     readonly sampleResources: () => Promise<void>;
     readonly subscribeResources: (listener: ResourceListener) => () => void;
     readonly readCpuHost: () => { readonly hostCpus: number; readonly limitsEnforced: boolean };
+
+    // why the host needs a reboot, such as `a kernel oops`; null when it does not
+    readonly readRebootReason: () => string | null;
   };
 
 type ResourceListener = (deltas: readonly ResourceDelta[]) => void;
@@ -163,6 +167,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
       hostCpus: context.hostCpus,
       limitsEnforced: context.cgroups.isEnforced,
     }),
+    readRebootReason: () => (context.kernelOops.isOopsed() ? KERNEL_OOPS_REASON : null),
     subscribeResources: (listener) => {
       resourceListeners.add(listener);
 

@@ -30,6 +30,9 @@ interface TelemetryDeps {
   // the disk-usage pass's exclusive bytes, together; none in a test without
   readonly readDiskUsedBytes?: () => number;
 
+  // why the host needs a reboot, null when it does not; none in a test without
+  readonly readRebootReason?: () => string | null;
+
   // each pass of the resource sampler; none in a test that has no sampler
   readonly subscribeResources?: (
     listener: (deltas: readonly ResourceDelta[]) => void,
@@ -77,6 +80,10 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
 
   const cpuUsage = meter.createObservableGauge('imp.cpu.usage', {
     description: 'cores the running imps used over the last sample, together',
+  });
+
+  const rebootNeeded = meter.createObservableGauge('imp.host.reboot_needed', {
+    description: 'whether the host needs a reboot: 1 after a kernel oops, until the reboot',
   });
 
   const cpuThrottled = meter.createCounter('imp.cpu.throttled', {
@@ -132,9 +139,15 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
     if (deps.readDiskUsedBytes !== undefined) {
       result.observe(diskUsed, deps.readDiskUsedBytes());
     }
+
+    if (deps.readRebootReason !== undefined) {
+      const needed = deps.readRebootReason() === null ? 0 : 1;
+
+      result.observe(rebootNeeded, needed);
+    }
   };
 
-  const gauges = [states, ramUsed, ramBudget, cpuUsage, diskUsed];
+  const gauges = [states, ramUsed, ramBudget, cpuUsage, diskUsed, rebootNeeded];
 
   meter.addBatchObservableCallback(readGauges, gauges);
 

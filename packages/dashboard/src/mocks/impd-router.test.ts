@@ -1558,6 +1558,7 @@ test('#system.info answers every part impd does', async () => {
     'storage',
     'tailscale',
     'cpu',
+    'rebootReason',
     'defaults',
     'egress',
     'ksm',

@@ -192,6 +192,10 @@ export const SystemInfoSchema = z.object({
     .nullable()
     .optional(),
 
+  // why the host needs a reboot, such as `a kernel oops`: null when it does
+  // not, absent from an impd older than it (docs/guides/operations.md#a-kernel-oops)
+  rebootReason: z.string().nullable().optional(),
+
   // the host's cores, the most a CPU limit may be; whether limits hold
   // (false outside a private cgroup v2 namespace: they are kept, not applied)
   cpu: z.object({ hostCpus: z.int().positive(), limitsEnforced: z.boolean() }).optional(),

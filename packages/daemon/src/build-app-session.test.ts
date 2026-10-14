@@ -488,7 +488,8 @@ test('it answers /health beside the dashboard', async () => {
   // main.ts marks impd ready once it seeds the default image; nothing here does
   const body: unknown = await response.json();
 
-  expect(body).toStrictEqual({ status: 'ok', ready: false });
+  // the warnings follow this host's own kernel, which the test does not set
+  expect(body).toStrictEqual({ status: 'ok', ready: false, warnings: expect.toBeArray() });
 });
 
 test('it keeps the API behind its auth beside the dashboard', async () => {

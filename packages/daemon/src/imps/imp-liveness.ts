@@ -4,6 +4,7 @@ import { hasSnapshot, readLoadingMeta, readSnapshotMeta } from '../sleep/snapsho
 import type { ImpPaths } from '../storage/data-layout';
 import { isImpVm } from '../vmm/firecracker-process';
 import type { ImpContext } from './imp-context';
+import { KERNEL_OOPS_TRIGGER } from './kernel-oops-watch';
 import { OOM_KILL_TRIGGER } from './oom-kill';
 
 // A dead VM or a lost snapshot means stopped; a VM that died after its sleep
@@ -31,10 +32,15 @@ export async function checkLiveness(
     return imp;
   }
 
-  const change = lostVm ? findSleptChange(imp, paths) : null;
+  const trigger = lostVm ? findLostVmTrigger(context, imp.id) : null;
 
-  // read before the cgroup goes: whether its memory limit killed this VM
-  const trigger = lostVm && context.cgroups.hasOomKillSinceStart(imp.id) ? OOM_KILL_TRIGGER : null;
+  // an oops holds the disk until a reboot, so the record says so even asleep
+  const slept = lostVm ? findSleptChange(imp, paths) : null;
+
+  const change =
+    slept !== null && trigger === KERNEL_OOPS_TRIGGER
+      ? { ...slept, detail: { trigger }, error: trigger }
+      : slept;
 
   const repaired = await updateImpStateIf(
     context.db,
@@ -60,7 +66,10 @@ export async function checkLiveness(
 
   const what = lostSnapshot ? 'the snapshot is gone' : (trigger ?? 'firecracker is gone');
 
-  context.log(`impd: ${imp.name}: ${what}; marked it ${repaired.state}`);
+  const hold =
+    trigger === KERNEL_OOPS_TRIGGER ? '; it stays off its disk until the host reboots' : '';
+
+  context.log(`impd: ${imp.name}: ${what}; marked it ${repaired.state}${hold}`);
 
   // the VM is gone; the jail's mounts of it can go
   if (lostVm) {
@@ -73,6 +82,16 @@ export async function checkLiveness(
   }
 
   return repaired;
+}
+
+// Why a lost VM died, when impd can tell: its memory limit, read before the
+// cgroup goes, or a kernel oops since impd saw the taint flag clear.
+function findLostVmTrigger(context: ImpContext, impId: string): string | null {
+  if (context.cgroups.hasOomKillSinceStart(impId)) {
+    return OOM_KILL_TRIGGER;
+  }
+
+  return context.kernelOops.hasOopsedSinceClear() ? KERNEL_OOPS_TRIGGER : null;
 }
 
 // Sleeping when the snapshot on disk is newer than the imp's last activity,

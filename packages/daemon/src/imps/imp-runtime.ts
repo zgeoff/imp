@@ -625,6 +625,13 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     // the lock's liveness check marks an imp whose VM died with impd stopped
     reconcileImps: async () => {
+      // the first read sets what a lost VM's oops is judged against
+      if (context.kernelOops.isOopsed()) {
+        context.log(
+          'impd: the kernel oopsed since the host booted (taint flag D); the host needs a reboot',
+        );
+      }
+
       const imps = await listImps(context.db);
 
       // cgroups of imps destroyed while impd was down, or whose remove failed

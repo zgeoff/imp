@@ -329,6 +329,39 @@ agent.
 An outer shell is root in the agent's world. It can kill or ptrace the agent, or `reboot` the guest,
 and either one ends the imp.
 
+## A kernel oops
+
+A kernel oops kills its task inside the kernel, and the locks and holds that task had stay until the
+host reboots. When the task is an imp's Firecracker, as a ZFS oops in `zfs_read` can make it, the
+imp's disk stays busy, and no stop, retry or remove frees it. impd reads the kernel's taint flag `D`
+(value 128 in `/proc/sys/kernel/tainted`) at start and whenever it finds a VM gone. While the flag
+is set:
+
+- `/health` lists `host needs a reboot: a kernel oops` under `warnings`, the dashboard shows the
+  same line on every page, `system.info` returns `rebootReason: "a kernel oops"`, and the
+  `imp.host.reboot_needed` gauge reads 1.
+- An imp whose VM was lost after impd saw the flag go from clear to set shows the error
+  `a kernel oops killed firecracker`. A start or a wake of it fails with `PRECONDITION_FAILED`:
+  `the host needs a reboot: a kernel oops holds the disk of <name>; reboot the host, then start it`.
+- On ZFS, a reclaim that meets the held dataset logs `impd: zfs: reclaim failed: …` once for that
+  dataset, and tries again on each pass without a log line.
+
+To recover:
+
+1. Save the kernel log of this boot, which holds the oops and its trace:
+   `journalctl -k -b > oops.log` as root, or `dmesg > oops.log` where journald keeps no kernel log.
+
+   **CAUTION:** A reboot ends every running imp without its memory. Stop impd first, so that it
+   sleeps the imps and writes their memory to disk.
+
+2. Stop impd with a full stop that sleeps the imps (`systemctl stop imp-host`, or
+   `docker compose stop`), not a restart.
+3. Reboot the host.
+4. Check that impd sees a clear flag: `curl -s http://127.0.0.1:7070/health`. Expect
+   `"warnings":[]`.
+5. Start each imp that shows `a kernel oops killed firecracker`: `imp start <name>`. It boots cold
+   from its disk, and a successful boot clears the error.
+
 ## Troubleshooting
 
 | Symptom                                   | Cause and fix                                                                                                            |
