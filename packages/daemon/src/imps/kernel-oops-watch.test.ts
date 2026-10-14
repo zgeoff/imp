@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createKernelOopsWatch } from './kernel-oops-watch';
@@ -60,6 +60,56 @@ test('it reads a malformed taint file as no oops', () => {
   writeFileSync(ctx.taintPath, 'tainted\n');
 
   expect(createKernelOopsWatch(ctx.taintPath).isOopsed()).toBeFalse();
+});
+
+test('it reads the flag clear from a taint mask without D', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.taintPath, `${String(4096)}\n`);
+
+  expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('clear');
+});
+
+test('it reads the flag set from a taint mask with D', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.taintPath, `${String(128 + 4096)}\n`);
+
+  expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('set');
+});
+
+test('it reads the flag unknown from a missing taint file', () => {
+  const ctx = setupTest();
+
+  expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('unknown');
+});
+
+test('it reads the flag unknown from a taint file it cannot read', () => {
+  const ctx = setupTest();
+
+  // a directory where the file should be: the read fails with EISDIR
+  mkdirSync(ctx.taintPath);
+
+  expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('unknown');
+});
+
+test('it reads the flag unknown from a malformed taint file', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.taintPath, 'tainted\n');
+
+  expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('unknown');
+});
+
+test('it reads the flag clear once the file reads clear after an unknown read', () => {
+  const ctx = setupTest();
+  const watch = createKernelOopsWatch(ctx.taintPath);
+
+  watch.readFlag();
+
+  writeFileSync(ctx.taintPath, '0\n');
+
+  expect(watch.readFlag()).toBe('clear');
 });
 
 test('it finds when it first read the flag set after it read the flag clear', () => {

@@ -914,10 +914,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 }
 
 // allocated size: the mem file is sparse after --dig-holes
-// The task an oops killed keeps its hold on the imp's disk until the host
-// reboots, which clears the taint flag: no VM boots or wakes on it before.
+// The task an oops killed holds the imp's disk until the host reboots: no VM
+// boots or wakes on it before a read of the taint flag clear proves that.
 function requireNoOopsHold(context: ImpContext, imp: Readonly<LockedImp>): void {
-  if (imp.error === KERNEL_OOPS_TRIGGER && context.kernelOops.isOopsed()) {
+  if (imp.error === KERNEL_OOPS_TRIGGER && context.kernelOops.readFlag() !== 'clear') {
     throw buildRebootNeededError(imp.name);
   }
 }

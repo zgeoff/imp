@@ -347,6 +347,11 @@ is set:
 - On ZFS, a reclaim that meets the held dataset logs `impd: zfs: reclaim failed: …` once for that
   dataset, and tries again on each pass without a log line.
 
+When impd cannot read `/proc/sys/kernel/tainted`, or finds no number in it, it logs
+`impd: cannot read the kernel taint flag; imps a kernel oops held stay held` at start. Each imp that
+shows `a kernel oops killed firecracker` keeps that error, and its start or wake fails with the same
+`PRECONDITION_FAILED` error until impd reads the flag clear.
+
 To recover:
 
 1. Save the kernel log of this boot, which holds the oops and its trace:
