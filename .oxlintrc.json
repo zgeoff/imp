@@ -65,7 +65,14 @@
           // types as mutable; the agent client only reads them
           {
             "from": "package",
-            "name": ["DescMessage", "DescFile", "DescField", "JsonValue", "Message"],
+            "name": [
+              "DescMessage",
+              "DescFile",
+              "DescField",
+              "JsonValue",
+              "Message",
+              "MessageInitShape"
+            ],
             "package": "@bufbuild/protobuf"
           },
           // the agent protocol's generated messages, mutable for the same reason
@@ -86,6 +93,18 @@
               "Started"
             ],
             "path": "packages/daemon/src/agent-client/gen/imp/agent/v1/agent_pb.ts"
+          },
+          // a request to the agent, and a session impd saw: generated messages
+          // under the names impd gives them
+          {
+            "from": "file",
+            "name": "AgentRequest",
+            "path": "packages/daemon/src/agent-client/agent-requests.ts"
+          },
+          {
+            "from": "file",
+            "name": "SeenSession",
+            "path": "packages/daemon/src/sessions/session-cache.ts"
           },
           // tar-stream's live pack and extract streams, which `imp cp` drives
           { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },

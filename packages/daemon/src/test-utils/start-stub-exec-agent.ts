@@ -130,7 +130,7 @@ async function stopStream(pending: Promise<ExecStream>): Promise<void> {
 
 // the agent's killGrace (agent/internal/exec/group.go): off for a tty exec
 // or none asked, else capped at a minute
-function readKillGraceMs(request: Readonly<Request>) {
+function readKillGraceMs(request: Request) {
   if (request.tty === true || request.killGraceMs === undefined || request.killGraceMs <= 0) {
     return 0;
   }

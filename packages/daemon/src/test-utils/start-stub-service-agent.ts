@@ -120,7 +120,7 @@ export async function startStubServiceAgent(
 
   // the last `lines` lines; or from a cursor, unless the log shrank below it
   // or it names another file, which sends the whole log
-  const findLogStart = (log: Buffer, request: Readonly<Request>): number => {
+  const findLogStart = (log: Buffer, request: Request): number => {
     if (request.cursor === undefined) {
       return findLastLines(log, request.lines ?? 0);
     }
@@ -130,7 +130,7 @@ export async function startStubServiceAgent(
     return cursor.inode === LOG_INODE && cursor.offset <= log.length ? cursor.offset : 0;
   };
 
-  const handleLogs = (socket: Socket, request: Readonly<Request>): void => {
+  const handleLogs = (socket: Socket, request: Request): void => {
     const service = request.service ?? '';
     const log = logs.get(service) ?? Buffer.alloc(0);
     const lines = request.lines ?? 0;
@@ -170,7 +170,7 @@ export async function startStubServiceAgent(
     });
   };
 
-  const handleAdd = (socket: Socket, request: Readonly<Request>): void => {
+  const handleAdd = (socket: Socket, request: Request): void => {
     const def = request.def;
 
     if (def === undefined || def.argv[0] === 'bad') {
@@ -196,7 +196,7 @@ export async function startStubServiceAgent(
 
   // a remove or a restart needs the service itself: a log that a removed
   // service left is NO_SERVICE to both, as it is to the agent
-  const handleChange = (socket: Socket, request: Readonly<Request>): void => {
+  const handleChange = (socket: Socket, request: Request): void => {
     const name = request.service ?? '';
     const index = services.findIndex((service) => service.name === name);
     const service = services[index];
@@ -219,7 +219,7 @@ export async function startStubServiceAgent(
     sendResponse(socket, { ok: true });
   };
 
-  const handleRequest = (socket: Socket, request: Readonly<Request>): void => {
+  const handleRequest = (socket: Socket, request: Request): void => {
     requests.push(request);
 
     const name = request.service ?? '';

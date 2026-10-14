@@ -148,7 +148,7 @@ export function writeSnapshotMeta(
   writeFileDurably(paths.snapshotMeta, `${JSON.stringify(json, null, 2)}\n`);
 }
 
-function encodeSeenSession(session: Readonly<SeenSession>): JsonValue {
+function encodeSeenSession(session: SeenSession): JsonValue {
   const json = toJson(SessionInfoSchema, session, AGENT_RECORD_JSON);
 
   if (

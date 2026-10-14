@@ -3,7 +3,7 @@ import { isAgentSessionState } from '../agent-client/is-agent-session-state';
 import { findSignalName } from '../exec/signal-names';
 import type { SeenSession } from './session-cache';
 
-export function toApiSession(session: Readonly<SeenSession>): Session {
+export function toApiSession(session: SeenSession): Session {
   const hasOffsets = session.executionGeneration !== '';
 
   const api: Session = {
