@@ -16,22 +16,27 @@ export interface KernelOopsWatch {
   // reads the flag again while it is clear; once set it stays set
   readonly isOopsed: () => boolean;
 
-  // whether impd saw the flag clear before it saw it set: an oops since then
-  readonly hasOopsedSinceClear: () => boolean;
+  // when impd first read the flag set, after it had read it clear: the oops
+  // came before then and since the clear read. Null without such a change
+  readonly findOopsSeenAt: () => number | null;
 }
 
 // tests and a host without the file: the kernel never oopses
 export const NO_KERNEL_OOPS: KernelOopsWatch = {
   isOopsed: () => false,
-  hasOopsedSinceClear: () => false,
+  findOopsSeenAt: () => null,
 };
 
 // An unreadable or malformed file reads as clear, so it never starts a hold.
-export function createKernelOopsWatch(path = '/proc/sys/kernel/tainted'): KernelOopsWatch {
-  const seen = { clear: false, oopsed: false };
+// `now` stamps the first read that finds the flag set.
+export function createKernelOopsWatch(
+  path = '/proc/sys/kernel/tainted',
+  now: () => number = Date.now,
+): KernelOopsWatch {
+  const seen: { clear: boolean; oopsedAt: number | null } = { clear: false, oopsedAt: null };
 
   const isOopsed = (): boolean => {
-    if (seen.oopsed) {
+    if (seen.oopsedAt !== null) {
       return true;
     }
 
@@ -47,14 +52,14 @@ export function createKernelOopsWatch(path = '/proc/sys/kernel/tainted'): Kernel
       return false;
     }
 
-    seen.oopsed = true;
+    seen.oopsedAt = now();
 
     return true;
   };
 
   return {
     isOopsed,
-    hasOopsedSinceClear: () => isOopsed() && seen.clear,
+    findOopsSeenAt: () => (isOopsed() && seen.clear ? seen.oopsedAt : null),
   };
 }
 

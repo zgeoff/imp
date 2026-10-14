@@ -57,10 +57,11 @@ The repair also records why the VM died, when impd can tell. A VM that its memor
 named as such. A VM lost after a kernel oops is named as an oops and kept off its disk until the
 host reboots, because an oops keeps every hold its dead task had, and a hold on the disk's dataset
 lasts until the reboot clears it. impd reads the kernel's taint flag for an oops at start and at
-each repair of a lost VM. It blames the oops only for a VM lost after it saw the flag go from clear
-to set, because a VM that ran when impd started had already outlived any earlier oops. Until the
-flag clears, impd refuses a start or a wake of that imp with an error that asks for the reboot
-([a kernel oops](../../guides/operations.md#a-kernel-oops)).
+each repair of a lost VM. It blames the oops only after it saw the flag go from clear to set,
+because a VM that ran when impd started had already outlived any earlier oops. It also blames it
+only for a VM that was running when impd first read the flag set, because a VM that booted or woke
+later never met the oops. Until the flag clears, impd refuses a start or a wake of that imp with an
+error that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)).
 
 Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
 controller try the lock and skip the imp when anything holds it or waits for it. The governor holds

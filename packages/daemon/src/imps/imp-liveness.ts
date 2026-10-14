@@ -32,7 +32,7 @@ export async function checkLiveness(
     return imp;
   }
 
-  const trigger = lostVm ? findLostVmTrigger(context, imp.id) : null;
+  const trigger = lostVm ? findLostVmTrigger(context, imp) : null;
 
   // an oops holds the disk until a reboot, so the record says so even asleep
   const slept = lostVm ? findSleptChange(imp, paths) : null;
@@ -85,13 +85,16 @@ export async function checkLiveness(
 }
 
 // Why a lost VM died, when impd can tell: its memory limit, read before the
-// cgroup goes, or a kernel oops since impd saw the taint flag clear.
-function findLostVmTrigger(context: ImpContext, impId: string): string | null {
-  if (context.cgroups.hasOomKillSinceStart(impId)) {
+// cgroup goes, or a kernel oops that impd saw while the VM ran
+function findLostVmTrigger(context: ImpContext, imp: Readonly<ImpRecord>): string | null {
+  if (context.cgroups.hasOomKillSinceStart(imp.id)) {
     return OOM_KILL_TRIGGER;
   }
 
-  return context.kernelOops.hasOopsedSinceClear() ? KERNEL_OOPS_TRIGGER : null;
+  const oopsSeenAt = context.kernelOops.findOopsSeenAt();
+  const ranSince = imp.awakeSince?.getTime() ?? 0;
+
+  return oopsSeenAt !== null && ranSince <= oopsSeenAt ? KERNEL_OOPS_TRIGGER : null;
 }
 
 // Sleeping when the snapshot on disk is newer than the imp's last activity,

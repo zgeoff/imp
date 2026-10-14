@@ -62,18 +62,25 @@ test('it reads a malformed taint file as no oops', () => {
   expect(createKernelOopsWatch(ctx.taintPath).isOopsed()).toBeFalse();
 });
 
-test('it finds an oops since clear once the flag goes from clear to set', () => {
+test('it finds when it first read the flag set after it read the flag clear', () => {
   const ctx = setupTest();
+  const clock = { nowMs: 1000 };
 
   writeFileSync(ctx.taintPath, '0\n');
 
-  const watch = createKernelOopsWatch(ctx.taintPath);
+  const watch = createKernelOopsWatch(ctx.taintPath, () => clock.nowMs);
 
   watch.isOopsed();
 
   writeFileSync(ctx.taintPath, '128\n');
 
-  expect(watch.hasOopsedSinceClear()).toBeTrue();
+  clock.nowMs = 2000;
+
+  watch.isOopsed();
+
+  clock.nowMs = 3000;
+
+  expect(watch.findOopsSeenAt()).toBe(2000);
 });
 
 test('it finds no oops since clear when the flag was set at the first read', () => {
@@ -85,7 +92,7 @@ test('it finds no oops since clear when the flag was set at the first read', () 
 
   watch.isOopsed();
 
-  expect(watch.hasOopsedSinceClear()).toBeFalse();
+  expect(watch.findOopsSeenAt()).toBeNull();
 });
 
 test('it finds no oops since clear while the flag stays clear', () => {
@@ -97,7 +104,7 @@ test('it finds no oops since clear while the flag stays clear', () => {
 
   watch.isOopsed();
 
-  expect(watch.hasOopsedSinceClear()).toBeFalse();
+  expect(watch.findOopsSeenAt()).toBeNull();
 });
 
 test('it keeps an oops it saw once the file reads clear again', () => {

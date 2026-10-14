@@ -340,8 +340,9 @@ is set:
 - `/health` lists `host needs a reboot: a kernel oops` under `warnings`, the dashboard shows the
   same line on every page, `system.info` returns `rebootReason: "a kernel oops"`, and the
   `imp.host.reboot_needed` gauge reads 1.
-- An imp whose VM was lost after impd saw the flag go from clear to set shows the error
-  `a kernel oops killed firecracker`. A start or a wake of it fails with `PRECONDITION_FAILED`:
+- An imp whose VM ran when impd saw the flag go from clear to set, and was lost after it, shows the
+  error `a kernel oops killed firecracker`. A start or a wake of it fails with
+  `PRECONDITION_FAILED`:
   `the host needs a reboot: a kernel oops holds the disk of <name>; reboot the host, then start it`.
 - On ZFS, a reclaim that meets the held dataset logs `impd: zfs: reclaim failed: …` once for that
   dataset, and tries again on each pass without a log line.

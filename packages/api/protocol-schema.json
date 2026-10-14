@@ -12157,6 +12157,16 @@
               }
             ]
           },
+          "rebootReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cpu": {
             "type": "object",
             "properties": {

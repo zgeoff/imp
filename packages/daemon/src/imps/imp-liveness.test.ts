@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { findImpByName, updateImpState } from '../db/imps';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { createKernelOopsWatch } from './kernel-oops-watch';
 import { createImpTest, writeTestSnapshot } from './test-imps';
 import type { ImpTestOptions } from './test-imps';
 
@@ -23,10 +22,7 @@ async function setupTest(options: ImpTestOptions = {}) {
 
   const taintPath = join(taintDir, 'tainted');
 
-  const harness = await createImpTest(stack, {
-    kernelOops: createKernelOopsWatch(taintPath),
-    ...options,
-  });
+  const harness = await createImpTest(stack, { taintPath, ...options });
 
   // the image every imp boots from
   await harness.createTestImage('ubuntu');
@@ -257,6 +253,30 @@ test('it refuses to wake an imp whose VM a kernel oops killed after its sleep wr
     message:
       'the host needs a reboot: a kernel oops holds the disk of dev; reboot the host, then start it',
   });
+});
+
+test('it gives no kernel oops trigger to a VM that booted after impd saw the oops', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(ctx.taintPath, '0\n');
+
+  // impd's start reads the flag clear, then /health reads it set
+  await ctx.imps.reconcileImps();
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  ctx.imps.readRebootReason();
+  ctx.advance(1000);
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.fake.alive.clear();
+
+  const found = await ctx.imps.getImp('dev');
+
+  // the API leaves out an error the record does not have
+  expect(found.state).toBe('stopped');
+  expect(found).not.toContainKey('error');
 });
 
 test('it gives no kernel oops trigger to a VM lost while the flag stays as impd found it at start', async () => {
