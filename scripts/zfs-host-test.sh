@@ -113,7 +113,9 @@ child=
 # read_zfs_oops: the key lines of each kernel oops since the pool's create
 # whose own trace runs through ZFS; nothing when there is none, or dmesg
 # cannot say. A record runs from its first report line to its end-trace line,
-# so a ZFS warning beside an oops elsewhere is no ZFS oops.
+# so a ZFS warning beside an oops elsewhere is no ZFS oops. A generic `BUG:`
+# report, such as a soft lockup, has no end-trace line: it closes any open
+# record and opens none, so its frames never join a later oops.
 read_zfs_oops() {
   local log
   [ -n "$created_at" ] || return 0
@@ -124,7 +126,11 @@ read_zfs_oops() {
       inside = oops = zfs = 0
       kept = ""
     }
-    !inside && /usercopy: |cut here|kernel BUG|Oops: |BUG: / { inside = 1 }
+    /BUG: / && !/kernel BUG/ {
+      if (inside) end_record()
+      next
+    }
+    !inside && /usercopy: |cut here|kernel BUG|Oops: / { inside = 1 }
     !inside { next }
     /kernel BUG|Oops: / { oops = 1 }
     /\[zfs\]/ { zfs = 1 }
