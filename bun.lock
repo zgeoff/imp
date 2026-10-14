@@ -34,7 +34,7 @@
     },
     "packages/api": {
       "name": "@imp/api",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "dependencies": {
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
@@ -47,7 +47,7 @@
     },
     "packages/cli": {
       "name": "@imp/cli",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "bin": {
         "imp": "src/main.ts",
       },
@@ -70,7 +70,7 @@
     },
     "packages/client": {
       "name": "@zgeoff/imp-client",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "dependencies": {
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
@@ -93,7 +93,7 @@
     },
     "packages/daemon": {
       "name": "@imp/daemon",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@imp/api": "workspace:*",
