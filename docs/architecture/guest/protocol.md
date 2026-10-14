@@ -94,6 +94,6 @@ operation gets the same answer. An imp moves to a new agent at its next cold boo
 
 The agent authenticates nothing: reaching the vsock socket on the host is the only gate, and only
 impd and the imp's own Firecracker can. In the other direction, impd does not trust the guest. Every
-name, generation and boot ID an agent reports is checked against the form the real agent gives it
-before impd uses it, so a guest that runs a forged agent can corrupt nothing on the host but its own
-records.
+name, generation and boot ID an agent reports is checked against the form the real agent gives it,
+and every count must be a whole number that JavaScript holds exactly, before impd uses it, so a
+guest that runs a forged agent can corrupt nothing on the host but its own records.
