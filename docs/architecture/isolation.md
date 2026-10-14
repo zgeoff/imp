@@ -31,7 +31,9 @@ Before each boot or wake, impd prepares the jail as if the last VM had been host
 
 1. It kills every process of the imp's uid, through the cgroup and then one by one through pidfds,
    so a pid that exits and is reused between the scan and the kill is never hit. A process that
-   survives stops the start, and the uid stays taken.
+   still runs after its kills stops the start, and the uid stays taken. A process that the kernel
+   shows as exiting gets a longer wait, because a killed Firecracker frees its guest's memory before
+   it leaves, and a large guest takes seconds. The removal of an imp waits the same way.
 2. It unmounts what an earlier run left, refuses to go on while anything stays mounted, and makes
    the jail again from nothing, since the last VM owned it and may have left symlinks in it.
 3. It binds the imp's files in, without setuid or device nodes anywhere below, and the kernel and
