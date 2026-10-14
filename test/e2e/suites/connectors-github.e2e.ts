@@ -197,7 +197,7 @@ test('it pushes a git pack over 1 MB through the broker with Basic auth', async 
   const landed = await runChecked(['git', '-C', repo, 'rev-parse', 'main']);
   const audit = await readBrokerAudit(name);
 
-  const pushes = audit.filter((entry) => entry.path.endsWith('/git-receive-pack'));
+  const pushes = audit.filter((entry) => entry.path?.endsWith('/git-receive-pack') === true);
 
   expect(landed.trim()).toBe(pushed.split('\n').at(-1) ?? '');
 

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildMockApiCall } from '@imp/api/test-utils/build-mock-api-call';
+import { buildMockAuditEntry } from '@imp/api/test-utils/build-mock-audit-entry';
 import { buildMockCheckpoint } from '@imp/api/test-utils/build-mock-checkpoint';
 import { buildMockIdentity } from '@imp/api/test-utils/build-mock-identity';
 import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
@@ -8,6 +9,7 @@ import { buildMockSession } from '@imp/api/test-utils/build-mock-session';
 import { buildMockToken } from '@imp/api/test-utils/build-mock-token';
 import {
   formatApiCalls,
+  formatAudit,
   formatBootStatus,
   formatCheckpoints,
   formatCpuUse,
@@ -580,6 +582,43 @@ test('#formatIdentity names a caller from an impd that sends no grantable list',
   });
 
   expect(formatIdentity(identity)).toBe('token ci: read on every imp');
+});
+
+test('#formatAudit lists a sent request and a refused one, with a dash for what each lacks', () => {
+  const text = formatAudit([
+    buildMockAuditEntry({
+      at: new Date(0),
+      imp: 'dev',
+      secret: 'gh',
+      method: 'GET',
+      host: 'api.github.com',
+      path: '/user',
+      status: 200,
+      requestBytes: 0,
+      responseBytes: 12,
+      durationMs: 40,
+      reason: null,
+    }),
+    buildMockAuditEntry({
+      at: new Date(0),
+      imp: 'dev',
+      secret: null,
+      method: 'CONNECT',
+      host: 'evil.example',
+      path: null,
+      status: 403,
+      requestBytes: 0,
+      responseBytes: 0,
+      durationMs: 1,
+      reason: 'egress-policy',
+    }),
+  ]);
+
+  expect(text.split('\n')).toStrictEqual([
+    'TIME                      IMP  SECRET  METHOD   HOST            PATH   STATUS  BYTES  MS  REFUSED',
+    '1970-01-01T00:00:00.000Z  dev  gh      GET      api.github.com  /user  200     0/12   40  -',
+    '1970-01-01T00:00:00.000Z  dev  -       CONNECT  evil.example    -      403     0/0    1   egress-policy',
+  ]);
 });
 
 test('#formatApiCalls names who made each api call', () => {

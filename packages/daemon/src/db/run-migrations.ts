@@ -794,6 +794,51 @@ export const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // refused requests in the broker audit (GEO-286): a reason, and no secret,
+  // method, host or path needed. SQLite cannot drop NOT NULL in place, so a
+  // copy of the table replaces it in its own transaction, as in 028.
+  '030_add_broker_audit_refusals': {
+    async up(db: Kysely<NoTables>) {
+      await db.transaction().execute(async (trx) => {
+        await trx.schema
+          .createTable('broker_audit_refusals')
+          .addColumn('id', 'integer', (c) => c.primaryKey().autoIncrement())
+          .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+          .addColumn('secret_name', 'text')
+          .addColumn('at', 'integer', (c) => c.notNull())
+          .addColumn('method', 'text')
+          .addColumn('host', 'text')
+          .addColumn('path', 'text')
+          .addColumn('status', 'integer', (c) => c.notNull())
+          .addColumn('request_bytes', 'integer', (c) => c.notNull())
+          .addColumn('response_bytes', 'integer', (c) => c.notNull())
+          .addColumn('duration_ms', 'integer', (c) => c.notNull())
+
+          // null for a request the broker sent upstream
+          .addColumn('reason', 'text')
+          .execute();
+
+        await sql`
+          INSERT INTO broker_audit_refusals
+            (id, imp_id, secret_name, at, method, host, path, status, request_bytes,
+             response_bytes, duration_ms)
+          SELECT id, imp_id, secret_name, at, method, host, path, status, request_bytes,
+            response_bytes, duration_ms
+          FROM broker_audit
+        `.execute(trx);
+
+        await trx.schema.dropTable('broker_audit').execute();
+        await trx.schema.alterTable('broker_audit_refusals').renameTo('broker_audit').execute();
+
+        await trx.schema
+          .createIndex('broker_audit_imp_id')
+          .on('broker_audit')
+          .columns(['imp_id', 'id'])
+          .execute();
+      });
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

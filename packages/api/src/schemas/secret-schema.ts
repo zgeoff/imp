@@ -125,21 +125,62 @@ export const SecretAddedSchema = SecretSchema.extend({
 
 export type SecretAdded = z.infer<typeof SecretAddedSchema>;
 
-// One request the broker sent upstream with a credential. The path has no
-// query string, and no header is kept.
+// Why the broker refused a request, before any credential was added.
+export const AuditRefusalSchema = z.enum([
+  // the front port's head was not HTTP/1, not a CONNECT, or not to host:port
+  'not-http',
+  'not-connect',
+  'bad-target',
+
+  // the imp held its most connections through the broker
+  'connection-limit',
+
+  // the imp's egress policy does not allow the host
+  'egress-policy',
+
+  // the host resolves only to an address no tunnel may reach
+  'address-refused',
+
+  // a Host header for another name than the connection's
+  'wrong-host',
+
+  // an upgrade to a WebSocket, which the broker does not carry
+  'websocket',
+
+  // the grant for the host was gone when the request came
+  'no-grant',
+]);
+
+export type AuditRefusal = z.infer<typeof AuditRefusalSchema>;
+
+// One request the broker sent upstream with a credential, or one it refused.
+// The path has no query string, and no header or body is kept.
 export const AuditEntrySchema = z.object({
   at: z.date(),
   imp: NameSchema,
-  secret: SecretNameSchema,
-  method: z.string(),
-  host: BrokerHostSchema,
-  path: z.string(),
 
-  // 502 when the upstream could not be reached
+  // null for a refused request: it got no credential
+  secret: SecretNameSchema.nullable(),
+
+  // null when a refused head named none
+  method: z.string().nullable(),
+
+  // the host as the guest named it, an IP address included; null when a
+  // refused head named none
+  host: z.string().max(253).nullable(),
+
+  // null for a CONNECT, which has none
+  path: z.string().nullable(),
+
+  // 502 when the upstream could not be reached; for a refusal, the status the
+  // guest got
   status: z.int(),
   requestBytes: z.int().nonnegative(),
   responseBytes: z.int().nonnegative(),
   durationMs: z.int().nonnegative(),
+
+  // null for a request the broker sent upstream
+  reason: AuditRefusalSchema.nullable(),
 });
 
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;

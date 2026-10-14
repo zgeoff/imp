@@ -722,6 +722,33 @@ test('it keeps the newest audit rows of each imp', async () => {
   expect(rows[0]?.path).toBe(`/${String(AUDIT_ROWS_PER_IMP + 4)}`);
 });
 
+test('it keeps the sent rows of an imp whose refused rows pass the cap', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId: dev.id, path: '/sent' }));
+
+  // a full cap of refusals after it, and one past
+  for (let index = 0; index < AUDIT_ROWS_PER_IMP + 1; index += 1) {
+    await writeAuditEntry(
+      ctx.db,
+      buildMockNewAuditEntry({
+        impId: dev.id,
+        secretName: null,
+        method: 'CONNECT',
+        path: null,
+        status: 403,
+        reason: 'egress-policy',
+      }),
+    );
+  }
+
+  const rows = await listAuditEntries(ctx.db, dev.id, 2000, null);
+
+  expect(rows.filter((row) => row.reason === null).map((row) => row.path)).toStrictEqual(['/sent']);
+  expect(rows).toHaveLength(AUDIT_ROWS_PER_IMP + 1);
+});
+
 test('it lists the audit rows of an imp newest first, up to the limit', async () => {
   const ctx = await setupTest();
   const dev = await ctx.client.imps.create({ name: 'dev' });

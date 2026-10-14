@@ -84,6 +84,7 @@ import type { BrokerExecEnv, InstallBundle, TrustedImp } from './guest-trust';
 import { createOAuthRefresher } from './oauth-refresher';
 import type { OAuthFetch } from './oauth-refresher';
 import { buildPendingState, formatOAuthState, parseOAuthState, readIdClaims } from './oauth-state';
+import { createRefusalBudget } from './refusal-budget';
 import { buildValueFile, createSecretFiles } from './secret-files';
 import type { SecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
@@ -209,6 +210,10 @@ export interface BrokerDeps {
 
 // how long the container's own prefixes stay read
 const CONNECTED_CACHE_MS = 30_000;
+
+// the refused requests of one imp audited in one second; past it, the rest
+// of that second's refusals get no row
+const REFUSED_AUDITS_PER_SECOND = 20;
 
 export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const config = deps.config;
@@ -375,6 +380,16 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   };
 
+  const refusals = createRefusalBudget({ perSecond: REFUSED_AUDITS_PER_SECOND, now });
+
+  // every request sent with a credential, and the refused ones within the
+  // imp's budget
+  const writeBudgetedAudit = (entry: NewAuditEntry): void => {
+    if (entry.reason === null || refusals.tryClaim(entry.impId)) {
+      void writeAudit(entry);
+    }
+  };
+
   const terminators = createTerminators({
     socketDir: join(brokerDir, 'run'),
     issueLeaf: ca.issueLeaf,
@@ -385,9 +400,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         host: key.host,
         findCredential,
         resolveUpstream,
-        recordAudit: (entry) => {
-          void writeAudit(entry);
-        },
+        recordAudit: writeBudgetedAudit,
         ...(deps.fetch !== undefined && { fetch: deps.fetch }),
       }),
   });
@@ -777,6 +790,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         openTerminator: terminators.open,
         resolveTunnelTarget: deps.resolveTunnelTarget ?? resolveTarget,
         ...(deps.dialTunnel !== undefined && { dialTunnel: deps.dialTunnel }),
+        recordAudit: writeBudgetedAudit,
         log,
       });
 

@@ -223,6 +223,7 @@ test('it records an audit row with the path without its query and the bytes each
       requestBytes: 'payload'.length,
       responseBytes: 'upstream body'.length,
       durationMs: expect.toBeNumber(),
+      reason: null,
     },
   ]);
 });
@@ -291,6 +292,7 @@ test('it records an audit row for an answer with no body', async () => {
       requestBytes: 0,
       responseBytes: 0,
       durationMs: expect.toBeNumber(),
+      reason: null,
     },
   ]);
 });
@@ -359,6 +361,7 @@ test('it records an audit row when the upstream body fails midway', async () => 
       requestBytes: 0,
       responseBytes: 'first'.length,
       durationMs: expect.toBeNumber(),
+      reason: null,
     },
   ]);
 });
@@ -418,6 +421,7 @@ test('it records an audit row with the bytes read when the guest hangs up mid-bo
       requestBytes: 0,
       responseBytes: 'first'.length,
       durationMs: expect.toBeNumber(),
+      reason: null,
     },
   ]);
 });
@@ -589,6 +593,7 @@ test('it records a 502 audit row when the upstream cannot be reached', async () 
       requestBytes: 0,
       responseBytes: 0,
       durationMs: expect.toBeNumber(),
+      reason: null,
     },
   ]);
 });
@@ -647,16 +652,15 @@ test.each([['websocket'], ['WebSocket'], ['h2c, websocket']])(
   },
 );
 
-test('it answers a websocket upgrade without a credential lookup or an audit row', async () => {
+test('it answers a websocket upgrade without a credential lookup', async () => {
   const findCredential = mock(() => Promise.resolve(null));
-  const recordAudit = mock<(entry: NewAuditEntry) => void>();
 
   const forward = createForwarder({
     impId: 'imp-1',
     host: 'api.github.com',
     findCredential,
     resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
-    recordAudit,
+    recordAudit: () => {},
   });
 
   await forward(
@@ -666,7 +670,104 @@ test('it answers a websocket upgrade without a credential lookup or an audit row
   );
 
   expect(findCredential).not.toHaveBeenCalled();
-  expect(recordAudit).not.toHaveBeenCalled();
+});
+
+test('it records a refused audit row for a websocket upgrade', async () => {
+  const recordAudit = mock<(entry: NewAuditEntry) => void>();
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () => Promise.resolve(null),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit,
+  });
+
+  await forward(
+    new Request('https://api.github.com/stream?token=abc', {
+      headers: { host: 'api.github.com', connection: 'Upgrade', upgrade: 'websocket' },
+    }),
+  );
+
+  expect(recordAudit).toHaveBeenCalledExactlyOnceWith({
+    impId: 'imp-1',
+    secretName: null,
+    at: expect.toBeValidDate(),
+    method: 'GET',
+    host: 'api.github.com',
+    path: '/stream',
+    status: 426,
+    requestBytes: 0,
+    responseBytes: 0,
+    durationMs: expect.toBeNumber(),
+    reason: 'websocket',
+  });
+});
+
+test('it records a refused audit row for a Host header for another name', async () => {
+  const recordAudit = mock<(entry: NewAuditEntry) => void>();
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () => Promise.resolve(buildMockCredential({ secretName: 'gh' })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit,
+  });
+
+  await forward(new Request('https://evil.test/x', { headers: { host: 'evil.test' } }));
+
+  expect(recordAudit).toHaveBeenCalledExactlyOnceWith({
+    impId: 'imp-1',
+    secretName: null,
+    at: expect.toBeValidDate(),
+    method: 'GET',
+    host: 'api.github.com',
+    path: '/x',
+    status: 421,
+    requestBytes: 0,
+    responseBytes: 0,
+    durationMs: expect.toBeNumber(),
+    reason: 'wrong-host',
+  });
+});
+
+test('it records a refused audit row with no secret, header or body once the grant is gone', async () => {
+  const recordAudit = mock<(entry: NewAuditEntry) => void>();
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () => Promise.resolve(null),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit,
+  });
+
+  await forward(
+    new Request('https://api.github.com/repos/x/issues?token=query-secret', {
+      method: 'POST',
+      headers: {
+        host: 'api.github.com',
+        authorization: 'Bearer imp-broker-placeholder',
+        cookie: 'session=cookie-secret',
+      },
+      body: 'body-secret',
+    }),
+  );
+
+  expect(recordAudit).toHaveBeenCalledExactlyOnceWith({
+    impId: 'imp-1',
+    secretName: null,
+    at: expect.toBeValidDate(),
+    method: 'POST',
+    host: 'api.github.com',
+    path: '/repos/x/issues',
+    status: 403,
+    requestBytes: 0,
+    responseBytes: 0,
+    durationMs: expect.toBeNumber(),
+    reason: 'no-grant',
+  });
 });
 
 test('it forwards an upgrade to another protocol', async () => {
@@ -778,6 +879,7 @@ test('it records the guest host, not the rule upstream, in the audit row', async
       requestBytes: 0,
       responseBytes: 'upstream body'.length,
       durationMs: expect.toBeNumber(),
+      reason: null,
     },
   ]);
 });

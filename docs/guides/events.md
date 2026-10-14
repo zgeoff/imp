@@ -129,7 +129,8 @@ It keeps the newest 10,000 rows across all imps. A row names the imp by name wit
 it outlives `imp rm`.
 
 The broker's log, `imp audit` with no `--kind` (or `--kind broker`), is a different table: the
-requests an imp sent with a credential ([connectors](./connectors.md)).
+requests an imp sent with a credential and the ones the broker refused
+([connectors](./connectors.md)).
 
 ## Telemetry
 

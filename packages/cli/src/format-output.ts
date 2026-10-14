@@ -593,17 +593,20 @@ function formatGrantable(
 
 export function formatAudit(entries: readonly AuditEntry[]): string {
   return formatTable(
-    ['TIME', 'IMP', 'SECRET', 'METHOD', 'HOST', 'PATH', 'STATUS', 'BYTES', 'MS'],
+    ['TIME', 'IMP', 'SECRET', 'METHOD', 'HOST', 'PATH', 'STATUS', 'BYTES', 'MS', 'REFUSED'],
     entries.map((entry) => [
       entry.at.toISOString(),
       entry.imp,
-      entry.secret,
-      entry.method,
-      entry.host,
-      entry.path,
+      entry.secret ?? '-',
+      entry.method ?? '-',
+      entry.host ?? '-',
+      entry.path ?? '-',
       String(entry.status),
       `${String(entry.requestBytes)}/${String(entry.responseBytes)}`,
       String(entry.durationMs),
+
+      // an older impd sends no reason
+      entry.reason ?? '-',
     ]),
   );
 }

@@ -1,21 +1,26 @@
-import type { AuditEntry } from '@imp/api';
+import type { AuditEntry, AuditRefusal } from '@imp/api';
 import { toLikePattern } from '../auth/imp-patterns';
 import type { ImpDatabase } from './open-database';
 
-// the newest rows an imp keeps; older ones go as new ones come
+// the newest rows an imp keeps of each kind, sent and refused; older ones go
+// as new ones of their kind come, so a guest's refusals never push out the
+// requests sent with a credential
 export const AUDIT_ROWS_PER_IMP = 1000;
 
+// A request the broker sent with a credential, with reason null, or one it
+// refused, with no secret. Nothing from a header or a body is kept.
 export interface NewAuditEntry {
   readonly impId: string;
-  readonly secretName: string;
+  readonly secretName: string | null;
   readonly at: Date;
-  readonly method: string;
-  readonly host: string;
-  readonly path: string;
+  readonly method: string | null;
+  readonly host: string | null;
+  readonly path: string | null;
   readonly status: number;
   readonly requestBytes: number;
   readonly responseBytes: number;
   readonly durationMs: number;
+  readonly reason: AuditRefusal | null;
 }
 
 export async function writeAuditEntry(db: ImpDatabase, entry: NewAuditEntry): Promise<void> {
@@ -33,14 +38,18 @@ export async function writeAuditEntry(db: ImpDatabase, entry: NewAuditEntry): Pr
         request_bytes: entry.requestBytes,
         response_bytes: entry.responseBytes,
         duration_ms: entry.durationMs,
+        reason: entry.reason,
       })
       .execute();
 
-    // the id of the newest row past the cap, if there is one
+    const sameKind = entry.reason === null ? 'is' : 'is not';
+
+    // the id of the newest row of the entry's kind past the cap, if there is one
     const cut = await trx
       .selectFrom('broker_audit')
       .select('id')
       .where('imp_id', '=', entry.impId)
+      .where('reason', sameKind, null)
       .orderBy('id', 'desc')
       .offset(AUDIT_ROWS_PER_IMP)
       .limit(1)
@@ -50,6 +59,7 @@ export async function writeAuditEntry(db: ImpDatabase, entry: NewAuditEntry): Pr
       await trx
         .deleteFrom('broker_audit')
         .where('imp_id', '=', entry.impId)
+        .where('reason', sameKind, null)
         .where('id', '<=', cut.id)
         .execute();
     }
@@ -78,6 +88,7 @@ export async function listAuditEntries(
       'broker_audit.request_bytes',
       'broker_audit.response_bytes',
       'broker_audit.duration_ms',
+      'broker_audit.reason',
     ])
     .orderBy('broker_audit.id', 'desc')
     .limit(limit);
@@ -103,5 +114,6 @@ export async function listAuditEntries(
     requestBytes: row.request_bytes,
     responseBytes: row.response_bytes,
     durationMs: row.duration_ms,
+    reason: row.reason,
   }));
 }
