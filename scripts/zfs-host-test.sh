@@ -230,10 +230,10 @@ created_at=$(date '+%Y-%m-%d %H:%M:%S')
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
-# the moves suites' B, on a root dataset of its own (test/e2e/lib/move-hosts.ts)
+# the moves suites' B, on a root dataset of its own (e2e/lib/move-hosts.ts)
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT-mv-b"
 
-# what test/e2e/main.ts proves before it wipes this run's data dirs and
+# what e2e/main.ts proves before it wipes this run's data dirs and
 # datasets to make an instance anew, one owner file for each impd
 printf '{"pool":"%s","root":"%s","vdev":"%s"}\n' "$pool" "$IMP_ZFS_ROOT" "$img" \
   >"$work/data/imp-e2e-zfs-owner"
@@ -272,7 +272,7 @@ report() {
 started_instance=1
 exec 3> >(tee "$work/e2e.log")
 tee_pid=$!
-"$IMP_ROOT/test/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" >&3 2>&1 &
+"$IMP_ROOT/e2e/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" >&3 2>&1 &
 child=$!
 set +e
 wait "$child"

@@ -1,10 +1,10 @@
 name: Bootstrap
 
 # Runs deploy/bootstrap.sh twice in a systemd container on Debian 13 and
-# Ubuntu 24.04 and 26.04 (test/test-bootstrap.sh), and checks the second
+# Ubuntu 24.04 and 26.04 (e2e/test-bootstrap.sh), and checks the second
 # run changes nothing, on XFS and on a ZFS pool. A stand-in image replaces
 # the release image, so the health check, which boots an imp, runs by hand:
-# test/test-bootstrap.sh --image imp-host:<tag> --health. The bootstrap job
+# e2e/test-bootstrap.sh --image imp-host:<tag> --health. The bootstrap job
 # is a required check in .github/rulesets/main.json: rename both together. It
 # runs on every pull request, and skips its work, reporting success, unless the
 # pull request changes a path that push lists below.
@@ -14,7 +14,7 @@ on:
     branches: [main]
     paths:
       - deploy/**
-      - test/test-bootstrap.sh
+      - e2e/test-bootstrap.sh
       - scripts/ci/check-kvm.sh
       - .github/workflows/bootstrap.yml
 
@@ -46,7 +46,7 @@ jobs:
         with:
           paths: |
             deploy/**
-            test/test-bootstrap.sh
+            e2e/test-bootstrap.sh
             scripts/ci/check-kvm.sh
             .github/workflows/bootstrap.yml
             .github/actions/paths-changed/**
@@ -80,4 +80,4 @@ jobs:
           cat /sys/module/zfs/version
 
       - name: Test
-        run: test/test-bootstrap.sh --stub --zfs
+        run: e2e/test-bootstrap.sh --stub --zfs

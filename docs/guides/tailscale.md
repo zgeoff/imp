@@ -247,7 +247,7 @@ The `tailscale` suite of the end-to-end harness checks the tailnet from this mac
 a member (`tailscale status` reports `Running`):
 
 ```sh
-test/test-e2e.sh --only tailscale
+e2e/test-e2e.sh --only tailscale
 ```
 
 It waits for impd's node to come up, checks DNS inside the host container, then fetches an imp by
@@ -256,4 +256,4 @@ sleeps the imp and checks that a tailnet request wakes it. The key comes from `T
 then 1Password (`op read` with a 20-second limit, reference in `IMP_TAILSCALE_AUTHKEY_REF`; the
 harness turns this on only for runs that include this suite), then `.env`, as for
 `scripts/dev/dev.sh`. Without one the suite skips, except in the `acceptance` set, where it fails.
-`test/test-e2e.sh --clean` logs the node out with `tailscale-down.sh` before it wipes the instance.
+`e2e/test-e2e.sh --clean` logs the node out with `tailscale-down.sh` before it wipes the instance.

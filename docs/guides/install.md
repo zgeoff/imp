@@ -347,7 +347,7 @@ the container's address on `imp-host` ([IPv6](../architecture/network/networking
 
 ### Test it
 
-`test/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on Debian
+`e2e/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on Debian
 13 and Ubuntu 24.04 and 26.04, with a loop file and Docker inside. It checks `--check` on the fresh
 host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*` and
 `kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel settings
@@ -360,8 +360,8 @@ container. `--zfs` adds a real ZFS run on Ubuntu 24.04, on a pool with a unique 
 destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
 
 ```sh
-test/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)
-test/test-bootstrap.sh --image imp-host:<tag> --health     # a release image; boots an imp
+e2e/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)
+e2e/test-bootstrap.sh --image imp-host:<tag> --health     # a release image; boots an imp
 ```
 
 Nothing has run on a real OVH or Vultr server yet.

@@ -14,14 +14,14 @@
       // run-related-tests.ts is a synced CLI that test:related reaches through
       // run-branch-tests.ts; its other exports serve the tests in zgeoff/tools
       "entry": [
-        "test/e2e/main.ts",
-        "test/e2e/suites/*.e2e.ts",
+        "e2e/main.ts",
+        "e2e/suites/*.e2e.ts",
         "scripts/ci/run-related-tests.ts",
         // a protoc plugin buf.gen.yaml runs
         "scripts/proto/protoc-gen-protocol-reference.ts"
       ],
       "project": [
-        "test/**/*.ts",
+        "e2e/**/*.ts",
         "scripts/**/*.ts",
         "deploy/**/*.ts",
         "images/**/*.ts",

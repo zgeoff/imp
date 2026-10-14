@@ -18,7 +18,7 @@ bun run lint:docs                 # every relative link and anchor in the docs r
 (cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
 (cd agent && go tool -modfile=tools/go.mod golangci-lint run --build-tags root ./...)   # the lint CI runs
 scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
-test/test-e2e.sh --clean       # end to end, from a clean state
+e2e/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
 `bun run check` runs the whole-tree gates of CI's `checks` job: dead code, format, the type-aware
@@ -30,10 +30,10 @@ the lifecycle, the agent or the host.
 
 ## End-to-end tests
 
-`test/test-e2e.sh` brings up the dev instance (`scripts/dev/dev.sh`), then runs each journey file of
-each suite in `test/e2e/suites/` as its own `bun test` process, and resets the suite's leftovers
-after each one. Every case drives impd through the `imp` CLI, the way a user would; the dashboard
-suite drives it through a browser. The suites run in this order:
+`e2e/test-e2e.sh` brings up the dev instance (`scripts/dev/dev.sh`), then runs each journey file of
+each suite in `e2e/suites/` as its own `bun test` process, and resets the suite's leftovers after
+each one. Every case drives impd through the `imp` CLI, the way a user would; the dashboard suite
+drives it through a browser. The suites run in this order:
 
 | Suite            | What it proves                                                                                                                                                                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,17 +82,17 @@ suite drives it through a browser. The suites run in this order:
 | `backups`        | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                                                                                                                           |
 
 ```sh
-test/test-e2e.sh                          # the acceptance set: every suite
-test/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
-test/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
-test/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
-test/test-e2e.sh --clean                  # wipe the dev instance's data first
+e2e/test-e2e.sh                          # the acceptance set: every suite
+e2e/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
+e2e/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
+e2e/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
+e2e/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
 
 | Flag      | Effect                                                                                                                                  |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `--only`  | Comma-separated suites or sets. `acceptance` (the default) is every suite; `fast` is the CI subset.                                     |
-| `--group` | One of the three groups the `fast` set splits into (`FAST_GROUPS` in `test/e2e/lib/suites.ts`): `1`, `2` or `3`.                        |
+| `--group` | One of the three groups the `fast` set splits into (`FAST_GROUPS` in `e2e/lib/suites.ts`): `1`, `2` or `3`.                             |
 | `--clean` | Logs the instance out of the tailnet, removes the container and wipes its data dir, and the moves suites' second host and its data dir. |
 | `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                                                          |
 | `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                                                                |
@@ -168,7 +168,7 @@ usual roots: verification stays on. The suite writes the file and removes it whe
 
 A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the timings the suites
 measure. A suite file also runs on its own against a running instance:
-`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep.e2e.ts`.
+`bun test --config=e2e/bunfig.toml ./e2e/suites/sleep.e2e.ts`.
 
 ### Wake bench
 
@@ -283,11 +283,11 @@ On `main`, the `release-please` job makes releases ([releasing](./releasing.md))
 
 ### The e2e job
 
-The `fast` set runs in three groups (`FAST_GROUPS` in `test/e2e/lib/suites.ts`), one `e2e-group` job
-per group, each on its own runner. The `e2e` job is the required check: it fails when any group
-failed, was cancelled or was skipped. Each group boots real Firecracker guests on a standard
-`ubuntu-24.04` runner (4 cores, 16 GB), which exposes `/dev/kvm`. `scripts/ci/check-kvm.sh` runs
-first, so a runner without KVM fails in seconds with the reason. The job then:
+The `fast` set runs in three groups (`FAST_GROUPS` in `e2e/lib/suites.ts`), one `e2e-group` job per
+group, each on its own runner. The `e2e` job is the required check: it fails when any group failed,
+was cancelled or was skipped. Each group boots real Firecracker guests on a standard `ubuntu-24.04`
+runner (4 cores, 16 GB), which exposes `/dev/kvm`. `scripts/ci/check-kvm.sh` runs first, so a runner
+without KVM fails in seconds with the reason. The job then:
 
 1. builds the guest kernel and the system drive from the `system-files` stage, with the release's
    GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/build.sh`,
@@ -302,7 +302,7 @@ first, so a runner without KVM fails in seconds with the reason. The job then:
 3. restores the Playwright browser cache (`~/.cache/ms-playwright`), keyed on the Playwright version
    in `bun.lock`, which pins the Chromium build, in the group with the dashboard suite only. The
    dashboard suite installs that Chromium's headless shell when the cache misses.
-4. runs `test/test-e2e.sh --group N` with `E2E_RAM_BUDGET_MIB=4096`, `IMP_DEFAULT_MEMORY_MIB=1024`
+4. runs `e2e/test-e2e.sh --group N` with `E2E_RAM_BUDGET_MIB=4096`, `IMP_DEFAULT_MEMORY_MIB=1024`
    and the XFS file on the runner's `/mnt` disk. There is no Tailscale key in CI, and a missed
    timing limit only warns. The host networking tests run in group 2 only (`HOST_TESTS_GROUP`).
 
@@ -327,8 +327,8 @@ A new push to a pull request cancels its older run. On `main`, a run that has st
 a run still waiting behind it is cancelled when a newer push comes, so only the newest push runs
 next.
 
-`.github/workflows/bootstrap.yml` runs `test/test-bootstrap.sh --stub --zfs` when a pull request or
-a push to `main` changes `deploy/` or the test ([Bootstrap a server](../guides/install.md#test-it)).
+`.github/workflows/bootstrap.yml` runs `e2e/test-bootstrap.sh --stub --zfs` when a pull request or a
+push to `main` changes `deploy/` or the test ([Bootstrap a server](../guides/install.md#test-it)).
 Its job is a required check.
 
 `deploy/bootstrap.sh` is generated, so that a server downloads one file to install. Its sources are

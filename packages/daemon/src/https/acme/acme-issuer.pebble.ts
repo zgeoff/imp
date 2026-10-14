@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { server } from '@imp/test-utils/mock-server';
-import { startPebbleStack } from '../../../../../test/e2e/lib/pebble';
+import { startPebbleStack } from '../../../../../e2e/lib/pebble';
 import { buildStubCloudflareApi } from '../../test-utils/build-stub-cloudflare-api';
 import { createChalltestsrvProvider } from '../dns/challtestsrv-provider';
 import { createCloudflareProvider } from '../dns/cloudflare-provider';

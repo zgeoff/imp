@@ -292,7 +292,7 @@ no token. [Pebble](https://github.com/letsencrypt/pebble) is Let's Encrypt's tes
 `pebble-challtestsrv` is the DNS server it asks:
 
 ```sh
-IMP_DEV_NAME=imp-dev-https IMP_DEV_PORT_OFFSET=4500 test/test-e2e.sh --only https
+IMP_DEV_NAME=imp-dev-https IMP_DEV_PORT_OFFSET=4500 e2e/test-e2e.sh --only https
 ```
 
 The harness starts both containers on a Docker network of their own. The suite then reboots the dev
