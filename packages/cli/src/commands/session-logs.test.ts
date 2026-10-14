@@ -145,16 +145,10 @@ async function setupTest() {
     fetch: sendRequest,
   });
 
-  // the image a test's imps boot from
-  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
-
-  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
-
-  await createImage(db, image);
-
   return {
     stack,
     dataDir,
+    db,
     sendRequest,
     client,
     rootToken,
@@ -164,6 +158,13 @@ async function setupTest() {
 
 test('it writes the newest log to stdout and the bytes the log lost to stderr', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -200,6 +201,13 @@ test('it writes the newest log to stdout and the bytes the log lost to stderr', 
 
 test('it reads a named generation from the --from offset', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -291,6 +299,12 @@ test.each([
 test('it says the imp has no log of a session that never logged', async () => {
   const ctx = await setupTest();
 
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   await ctx.client.imps.create({ name: 'dev' });
 
   const result = await runCli({ args: ['sessions', 'log', 'dev', 'main'], env: ctx.env });
@@ -304,6 +318,13 @@ test('it says the imp has no log of a session that never logged', async () => {
 
 test('it lists the logs of an imp as JSON', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -353,6 +374,13 @@ test('it lists the logs of an imp as JSON', async () => {
 
 test('it deletes the logs of the session it names', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'dev' });
 
   const generation = 'c'.repeat(32);
@@ -390,6 +418,13 @@ test('it deletes the logs of the session it names', async () => {
 
 test('it never deletes the logs of another session or another imp', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const dev = await ctx.client.imps.create({ name: 'dev' });
   const web = await ctx.client.imps.create({ name: 'web' });
 

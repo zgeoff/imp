@@ -146,14 +146,6 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  // the image every imp a test creates boots from, with a rootfs where its
-  // digest names
-  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
-
-  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
-
-  await createImage(db, image);
-
   // the tunnel is a WebSocket, so impd listens as main.ts has it
   const server = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' }).server;
 
@@ -169,6 +161,7 @@ async function setupTest() {
     stack,
     rootToken,
     dataDir,
+    db,
     impd,
     server,
     url,
@@ -178,6 +171,13 @@ async function setupTest() {
 
 test('#startProxy relays a half-closed request and its reply on both loopbacks', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   // the guest's server behind the agent's dial: it answers once the request
@@ -225,6 +225,13 @@ test('#startProxy relays a half-closed request and its reply on both loopbacks',
 
 test('#startProxy stops reading an upload at the window while the guest takes none of it', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   // the guest's server takes the dial, then reads nothing, so impd holds
@@ -278,6 +285,13 @@ test('#startProxy stops reading an upload at the window while the guest takes no
 
 test('#startProxy sends the rest of an upload once the guest takes it again', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   const size = 4 * TUNNEL_WINDOW_BYTES;
@@ -449,6 +463,13 @@ test('#startProxy rejects an imp that impd does not have, and frees its local po
 
 test('#startProxy reports impd’s refusal of a dial and resets the local connection', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   // the agent cannot connect to the port in the guest
@@ -494,6 +515,13 @@ test('#startProxy reports impd’s refusal of a dial and resets the local connec
 
 test('#startProxy ends only the tunnel that gets a message that is not JSON, and closes its local connection', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   // the guest's server takes each dial and answers a request once it is whole
@@ -573,6 +601,13 @@ test('#startProxy ends only the tunnel that gets a message that is not JSON, and
 
 test('#startProxy says impd restarted when impd closes an open tunnel to restart', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box' });
 
   const dialed = Promise.withResolvers<void>();
@@ -620,6 +655,12 @@ test('#startProxy says impd restarted when impd closes an open tunnel to restart
 test('#startProxy prints one notice for a burst of connections that cannot reach impd', async () => {
   const ctx = await setupTest();
 
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   await ctx.client.imps.create({ name: 'box' });
 
   const writeNotice = mock<(text: string) => void>();
@@ -655,6 +696,12 @@ test('#startProxy prints one notice for a burst of connections that cannot reach
 
 test('#startProxy prints the notice again once the quiet time passed without a failure', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'box' });
 
