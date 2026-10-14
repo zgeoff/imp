@@ -25,7 +25,7 @@ test('it counts the blocks of every file in the tree, less a 512-byte block each
 
   expect(motd).toBeGreaterThanOrEqual(10_000);
   expect(sources).toBeGreaterThanOrEqual(70_000);
-  expect(countTreeBytes(ctx.dir)).toBe(motd + sources - 2 * 512);
+  expect(countTreeBytes(ctx.dir)).resolves.toBe(motd + sources - 2 * 512);
 });
 
 test('it counts an empty file as 0', async () => {
@@ -33,7 +33,7 @@ test('it counts an empty file as 0', async () => {
 
   writeFileSync(join(ctx.dir, 'empty'), '');
 
-  expect(countTreeBytes(ctx.dir)).toBe(0);
+  expect(countTreeBytes(ctx.dir)).resolves.toBe(0);
 });
 
 test('it counts a hard-linked file once', async () => {
@@ -42,7 +42,9 @@ test('it counts a hard-linked file once', async () => {
   writeFileSync(join(ctx.dir, 'busybox'), 'z'.repeat(50_000));
   linkSync(join(ctx.dir, 'busybox'), join(ctx.dir, 'sh'));
 
-  expect(countTreeBytes(ctx.dir)).toBe(statSync(join(ctx.dir, 'busybox')).blocks * 512 - 512);
+  expect(countTreeBytes(ctx.dir)).resolves.toBe(
+    statSync(join(ctx.dir, 'busybox')).blocks * 512 - 512,
+  );
 });
 
 test('it never counts the target of a symlink', async () => {
@@ -55,11 +57,11 @@ test('it never counts the target of a symlink', async () => {
   symlinkSync(join(outside, 'big'), join(ctx.dir, 'tree', 'big'));
   symlinkSync(outside, join(ctx.dir, 'tree', 'elsewhere'));
 
-  expect(countTreeBytes(join(ctx.dir, 'tree'))).toBe(0);
+  expect(countTreeBytes(join(ctx.dir, 'tree'))).resolves.toBe(0);
 });
 
 test('it counts a tree that does not exist yet as 0', async () => {
   const ctx = await setupTest();
 
-  expect(countTreeBytes(join(ctx.dir, 'root'))).toBe(0);
+  expect(countTreeBytes(join(ctx.dir, 'root'))).resolves.toBe(0);
 });

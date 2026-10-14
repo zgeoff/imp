@@ -281,7 +281,9 @@ export async function writeGuestTree(
     if (needed > held.bytes) {
       held.bytes = (Math.floor(needed / GROW_STEP_BYTES) + 1) * GROW_STEP_BYTES;
 
-      await grow(held.bytes, countTreeBytes(root));
+      const writtenBytes = await countTreeBytes(root);
+
+      await grow(held.bytes, writtenBytes);
     }
   };
 

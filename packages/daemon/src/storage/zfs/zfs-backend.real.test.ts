@@ -1035,8 +1035,7 @@ test.skipIf(readZfsTestPool() === null)(
     for (let chunk = 0; chunk < 16; chunk += 1) {
       writeSync(fd, randomBytes(16 * 1024 ** 2));
 
-      const treeBytes = countTreeBytes(tree);
-
+      const treeBytes = await countTreeBytes(tree);
       const usage = await ctx.backend.readUsage();
 
       margins.push(before.availableBytes - usage.availableBytes - treeBytes);

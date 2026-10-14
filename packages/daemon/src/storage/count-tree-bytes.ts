@@ -1,30 +1,32 @@
-import { lstatSync, readdirSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // The disk a tree's files take, less the 512-byte dnode slot ZFS shows in a
 // file's blocks before its free space drops; a hard link counts once, and a
 // symlink is never followed, as Bun's recursive readdir follows one
-export function countTreeBytes(root: string): number {
+export async function countTreeBytes(root: string): Promise<number> {
   const inodes = new Map<string, number>();
 
   const dirs = [root];
 
+  // off the event loop, one directory's entries at a time
   for (let dir = dirs.pop(); dir !== undefined; dir = dirs.pop()) {
-    for (const entry of readEntries(dir)) {
-      const path = join(dir, entry.name);
+    const entries = await readEntries(dir);
 
-      if (entry.isDirectory()) {
-        dirs.push(path);
-      } else if (entry.isFile()) {
-        const stats = lstatSync(path, { throwIfNoEntry: false });
+    dirs.push(
+      ...entries.filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name)),
+    );
 
-        if (stats !== undefined) {
-          inodes.set(
-            `${String(stats.dev)}:${String(stats.ino)}`,
-            Math.max(0, stats.blocks - 1) * 512,
-          );
-        }
+    const files = entries.filter((entry) => entry.isFile());
+
+    const stats = await Promise.all(
+      files.map((entry) => lstat(join(dir, entry.name)).catch(readMissingAsUndefined)),
+    );
+
+    for (const stat of stats) {
+      if (stat !== undefined) {
+        inodes.set(`${String(stat.dev)}:${String(stat.ino)}`, Math.max(0, stat.blocks - 1) * 512);
       }
     }
   }
@@ -33,14 +35,19 @@ export function countTreeBytes(root: string): number {
 }
 
 // a directory gone since its listing, or never made, holds nothing
-function readEntries(dir: string): Dirent[] {
+async function readEntries(dir: string): Promise<Dirent[]> {
   try {
-    return readdirSync(dir, { withFileTypes: true });
+    return await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return [];
-    }
-
-    throw error;
+    return readMissingAsUndefined(error) ?? [];
   }
+}
+
+// an entry gone since its listing counts nothing
+function readMissingAsUndefined(error: unknown): undefined {
+  if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+    return undefined;
+  }
+
+  throw error;
 }
