@@ -314,6 +314,40 @@ test('it reads the disk the imps take on their own into imp.disk.used', async ()
   expect(points).toStrictEqual([{ attributes: {}, value: 3_221_225_472 }]);
 });
 
+test('it reads 1 into imp.host.reboot_needed while a kernel oops needs a reboot', async () => {
+  const recorded = startInMemoryMetrics();
+
+  const stop = startImpTelemetry({
+    bus: createEventBus(),
+    readStateCounts: () => Promise.resolve(new Map()),
+    readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
+    readRebootReason: () => 'a kernel oops',
+  });
+
+  onTestFinished(stop);
+
+  const points = await recorded.readPoints('imp.host.reboot_needed');
+
+  expect(points).toStrictEqual([{ attributes: {}, value: 1 }]);
+});
+
+test('it reads 0 into imp.host.reboot_needed while the host needs no reboot', async () => {
+  const recorded = startInMemoryMetrics();
+
+  const stop = startImpTelemetry({
+    bus: createEventBus(),
+    readStateCounts: () => Promise.resolve(new Map()),
+    readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
+    readRebootReason: () => null,
+  });
+
+  onTestFinished(stop);
+
+  const points = await recorded.readPoints('imp.host.reboot_needed');
+
+  expect(points).toStrictEqual([{ attributes: {}, value: 0 }]);
+});
+
 test('it reads no gauge once stopped', async () => {
   const recorded = startInMemoryMetrics();
 

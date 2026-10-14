@@ -64,6 +64,10 @@ const ROOTFS_FILE = 'rootfs.ext4';
 
 // a reclaim pass ends after this many steps, so a bug never spins
 const MAX_RECLAIM_STEPS = 1000;
+
+// zfs's refusal of a dataset a task still holds, such as
+// `cannot destroy 'tank/imp/a': dataset is busy`
+const BUSY_DATASET = /'(?<name>[^']+)': dataset is busy/v;
 const CHECKPOINT_SNAPSHOT = /@cp-[^@]+$/;
 const FORK_SNAPSHOT = /@fork-[^@]+$/;
 
@@ -109,6 +113,10 @@ export interface ZfsBackendDeps {
   readonly readMounts?: () => string;
   readonly readModuleVersion?: () => string | null;
   readonly log?: (message: string) => void;
+
+  // whether the host's kernel has oopsed (imps/kernel-oops-watch.ts); never
+  // by default
+  readonly isKernelOopsed?: () => boolean;
 }
 
 // Each imp disk is a dataset holding one file, a checkpoint is a snapshot of
@@ -128,6 +136,10 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
   const log = deps.log ?? printLog;
   const readMounts = deps.readMounts ?? readHostMounts;
   const readModuleVersion = deps.readModuleVersion ?? readZfsModuleVersion;
+  const isKernelOopsed = deps.isKernelOopsed ?? (() => false);
+
+  // datasets an oops holds busy until a reboot, each logged once
+  const oopsHeld = new Set<string>();
 
   // Dataset changes run one at a time: a reclaim must never see a restore
   // half done. Snapshots of a frozen guest have a lane of their own and never
@@ -226,7 +238,23 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       log(`impd: zfs: reclaim stopped after ${String(MAX_RECLAIM_STEPS)} steps`);
     } catch (error) {
       // the space comes back on the next pass; the change itself is done
-      log(`impd: zfs: reclaim failed: ${readErrorMessage(error)}`);
+      const message = readErrorMessage(error);
+      const busy = BUSY_DATASET.exec(message)?.groups?.['name'];
+
+      // no pass frees it before the reboot, so one line says so
+      if (busy !== undefined && isKernelOopsed()) {
+        if (!oopsHeld.has(busy)) {
+          oopsHeld.add(busy);
+
+          log(
+            `impd: zfs: reclaim failed: ${message}; a kernel oops holds ${busy} until the host reboots, so impd logs it once`,
+          );
+        }
+
+        return;
+      }
+
+      log(`impd: zfs: reclaim failed: ${message}`);
     }
   };
 

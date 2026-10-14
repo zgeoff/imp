@@ -284,7 +284,11 @@ export function buildApp(deps: AppDeps) {
   const dashboard = createDashboardFiles(deps.config.dashboardDir);
 
   const app = new Elysia({ websocket: EXEC_SOCKET_OPTIONS })
-    .get('/health', () => ({ status: 'ok', ready: deps.isReady() }))
+    .get('/health', () => ({
+      status: 'ok',
+      ready: deps.isReady(),
+      warnings: buildHealthWarnings(deps.imps.readRebootReason()),
+    }))
     .post('/auth/login', (context) => sessionRoutes.login(context.request), { parse: 'none' })
     .post('/auth/logout', (context) => sessionRoutes.logout(context.request), { parse: 'none' })
 
@@ -559,6 +563,11 @@ export function buildApp(deps: AppDeps) {
 
 // A browser names the page a request comes from in Sec-Fetch-Site or
 // Origin; on the public route only the route's own origin may call
+// what /health tells an operator beside `ready`; empty while all is well
+function buildHealthWarnings(rebootReason: string | null): string[] {
+  return rebootReason === null ? [] : [`host needs a reboot: ${rebootReason}`];
+}
+
 function isPublicCrossOrigin(request: Request, origin: string): boolean {
   const site = request.headers.get('sec-fetch-site');
   const from = request.headers.get('origin');

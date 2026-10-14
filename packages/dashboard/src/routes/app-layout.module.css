@@ -42,6 +42,14 @@
   font-weight: 700;
 }
 
+.warning {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+
 .main {
   flex: 1;
   min-height: 0;

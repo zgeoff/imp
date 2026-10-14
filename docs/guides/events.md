@@ -152,6 +152,7 @@ nothing. The exporters read the standard variables themselves, such as `OTEL_EXP
 | `imp.network.io`            | counter   | `direction` | Bytes the guests received and sent.         |
 | `imp.awake.time`            | counter   |             | Time imps spent running, in s.              |
 | `imp.disk.used`             | gauge     |             | Disk the imps take on their own, in bytes.  |
+| `imp.host.reboot_needed`    | gauge     |             | 1 while a kernel oops needs a reboot.       |
 | `imp.events.dropped`        | counter   | `ev`        | Events left out of the stream as invalid.   |
 
 The CPU, network and awake metrics come from impd's 5 s sample ([CPU limits](./cpu-limits.md)).

@@ -19,6 +19,7 @@ import { listApiCalls } from './db/api-audit';
 import { createImage } from './db/images';
 import { findImpByName } from './db/imps';
 import { openDatabase } from './db/open-database';
+import { createKernelOopsWatch } from './imps/kernel-oops-watch';
 import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
 import { buildMockNewImage } from './test-utils/build-mock-new-image';
@@ -45,6 +46,13 @@ async function setupTest(options: SetupOptions) {
   const dataDir = await mkdtemp(join(tmpdir(), 'build-app-'));
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));
+
+  // the host's taint mask, as /proc/sys/kernel/tainted; a test writes it
+  const taintDir = await mkdtemp(join(tmpdir(), 'build-app-taint-'));
+
+  stack.defer(() => rm(taintDir, { recursive: true, force: true }));
+
+  const taintPath = join(taintDir, 'tainted');
 
   const db = await openDatabase(':memory:');
 
@@ -149,6 +157,7 @@ async function setupTest(options: SetupOptions) {
       readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
       growFilesystem: () => Promise.resolve(false),
       hostCpus: 8,
+      kernelOops: createKernelOopsWatch(taintPath),
     },
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
@@ -188,6 +197,7 @@ async function setupTest(options: SetupOptions) {
     clock,
     taps,
     client,
+    taintPath,
     port: String(server.server?.port),
   };
 }
@@ -218,6 +228,7 @@ test('it serves system.info from config and the database', async () => {
 
     // the stub cgroup tree has a cpu controller
     cpu: { hostCpus: 8, limitsEnforced: true },
+    rebootReason: null,
     defaults: { memoryMib: 2048, image: null },
     egress: { isEnforced: true },
     public: null,
@@ -328,7 +339,32 @@ test('it answers /health without a token, not ready before the default image is 
   const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
   const body: unknown = await response.json();
 
-  expect(body).toStrictEqual({ status: 'ok', ready: false });
+  expect(body).toStrictEqual({ status: 'ok', ready: false, warnings: [] });
+});
+
+test('it answers /health with the reboot a kernel oops needs', async () => {
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
+
+  await writeFile(ctx.taintPath, '128\n');
+
+  const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
+    status: 'ok',
+    ready: false,
+    warnings: ['host needs a reboot: a kernel oops'],
+  });
+});
+
+test('it serves the reboot a kernel oops needs in system.info', async () => {
+  const ctx = await setupTest({ cgroups: buildStubCpuCgroups().cgroups });
+
+  await writeFile(ctx.taintPath, '128\n');
+
+  const info = await ctx.client.system.info();
+
+  expect(info.rebootReason).toBe('a kernel oops');
 });
 
 test('it answers /health as ready once impd marks itself ready', async () => {
@@ -340,7 +376,7 @@ test('it answers /health as ready once impd marks itself ready', async () => {
   const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
   const body: unknown = await response.json();
 
-  expect(body).toStrictEqual({ status: 'ok', ready: true });
+  expect(body).toStrictEqual({ status: 'ok', ready: true, warnings: [] });
 });
 
 test('it creates a running imp on the first slot with its own tap', async () => {

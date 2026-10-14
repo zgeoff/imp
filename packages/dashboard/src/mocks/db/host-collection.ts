@@ -71,6 +71,9 @@ const HostRowSchema = z.object({
     .nullable()
     .default(null),
   https: info.https.unwrap().default(null),
+
+  // why the host needs a reboot, such as a kernel oops; none by default
+  rebootReason: z.string().nullable().default(null),
 });
 
 export const hostCollection = new Collection({ schema: HostRowSchema });

@@ -6,7 +6,7 @@ import { ORPCError } from '@orpc/server';
 import { sendActivity } from '../agent-client/agent-requests';
 import { isAgentError } from '../agent-client/is-agent-error';
 import { sendServicesList } from '../agent-client/service-requests';
-import { buildAgentOutdatedApiError } from '../api-errors';
+import { buildAgentOutdatedApiError, buildRebootNeededError } from '../api-errors';
 import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
 import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
@@ -39,6 +39,7 @@ import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
+import { KERNEL_OOPS_TRIGGER } from './kernel-oops-watch';
 import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
 import type { ShutdownGate } from './shutdown-gate';
@@ -313,6 +314,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     try {
       gate.requireOpen();
+
+      requireNoOopsHold(context, imp);
     } catch (error) {
       // a create cut short by impd stopping shows why; any other imp keeps
       // the state it had
@@ -639,6 +642,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   const wakeImpVm = async (imp: LockedImp): Promise<LockedImp> => {
     gate.requireOpen();
 
+    requireNoOopsHold(context, imp);
+
     const paths = context.findPaths(imp.id);
     const meta = readSnapshotMeta(paths);
 
@@ -909,6 +914,14 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 }
 
 // allocated size: the mem file is sparse after --dig-holes
+// The task an oops killed keeps its hold on the imp's disk until the host
+// reboots, which clears the taint flag: no VM boots or wakes on it before.
+function requireNoOopsHold(context: ImpContext, imp: Readonly<LockedImp>): void {
+  if (imp.error === KERNEL_OOPS_TRIGGER && context.kernelOops.isOopsed()) {
+    throw buildRebootNeededError(imp.name);
+  }
+}
+
 function readDiskMib(path: string): number {
   try {
     return Math.round((statSync(path).blocks * 512) / 1_048_576);

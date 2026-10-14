@@ -9,6 +9,7 @@ import { ENFORCE_INTERVAL_MS } from './governor/ram-governor';
 import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { readSetfcapWarning } from './images/unpack-export';
+import { createKernelOopsWatch } from './imps/kernel-oops-watch';
 import { startPublicListener } from './oauth/public-listener';
 import { getImpdLogger } from './process/get-impd-logger';
 import { printLog } from './process/print-log';
@@ -97,9 +98,18 @@ async function main(): Promise<void> {
   const db = await openDatabase(join(config.dataDir, 'db', 'imp.sqlite'));
 
   const token = loadOrCreateToken(config.dataDir);
-  const storage = createStorageBackend(config);
 
-  const impd = await createImpd(config, { db, rootToken: token, storage, systemFiles });
+  // one watch of the taint flag: the imps' hold and storage's reclaim log
+  const kernelOops = createKernelOopsWatch();
+  const storage = createStorageBackend(config, { zfs: { isKernelOopsed: kernelOops.isOopsed } });
+
+  const impd = await createImpd(config, {
+    db,
+    rootToken: token,
+    storage,
+    systemFiles,
+    imps: { kernelOops },
+  });
 
   const app = impd.api.app.listen(buildApiListenOptions(config));
 

@@ -17,7 +17,13 @@ import { openAccept, openListener } from '../agent-client/listener-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
 import { buildBuilderError, buildInvalidStateError, isDiskFullError } from '../api-errors';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
-import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
+import {
+  findImpById,
+  findImpByName,
+  listImps,
+  updateImpActivity,
+  updateImpState,
+} from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { checkBrokerAttach, checkOpenedSession } from '../exec/broker-sessions';
 import { buildBrokerNotReadyError, checkBrokerReady, isBrokerRequired } from '../exec/exec-require';
@@ -34,6 +40,7 @@ import { checkAdoptedMergeFlag } from './check-merge-flag';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
+import { KERNEL_OOPS_TRIGGER } from './kernel-oops-watch';
 import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import { startCounting } from './read-running-imp-usage';
@@ -625,7 +632,22 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     // the lock's liveness check marks an imp whose VM died with impd stopped
     reconcileImps: async () => {
+      // the first read sets what a lost VM's oops is judged against
+      const isOopsed = context.kernelOops.isOopsed();
+
+      if (isOopsed) {
+        context.log(
+          'impd: the kernel oopsed since the host booted (taint flag D); the host needs a reboot',
+        );
+      }
+
       const imps = await listImps(context.db);
+
+      // only a reboot clears the flag, so a hold impd finds with it clear came
+      // from an earlier boot, and that reboot freed the disk
+      if (!isOopsed) {
+        await removeStaleOopsHolds(context, imps);
+      }
 
       // cgroups of imps destroyed while impd was down, or whose remove failed
       const impIds = new Set(imps.map((imp) => imp.id));
@@ -860,5 +882,18 @@ function startNewLogTap(
       executionGeneration: output.executionGeneration,
       bootId: output.bootId,
     });
+  }
+}
+
+// Clears the hold an oops of an earlier boot left on an imp, so a new oops
+// in another task never holds it again; the imp keeps its state.
+async function removeStaleOopsHolds(
+  context: ImpContext,
+  imps: readonly ImpRecord[],
+): Promise<void> {
+  for (const imp of imps.filter((listed) => listed.error === KERNEL_OOPS_TRIGGER)) {
+    await updateImpState(context.db, imp.id, { reason: 'repaired', state: imp.state, error: null });
+
+    context.log(`impd: ${imp.name}: the host rebooted since a kernel oops held its disk`);
   }
 }

@@ -52,6 +52,8 @@ import type { MergeFlags } from './check-merge-flag';
 import { growFilesystem } from './imp-disk';
 import { createInnerCache } from './inner-cache';
 import type { InnerCache } from './inner-cache';
+import { NO_KERNEL_OOPS } from './kernel-oops-watch';
+import type { KernelOopsWatch } from './kernel-oops-watch';
 import { createResourceSampler } from './resource-sampler';
 import type { ResourceSampler } from './resource-sampler';
 
@@ -164,6 +166,10 @@ export interface ImpServiceDeps {
   // what each awake elastic guest holds plugged, which the memory controller
   // writes; a store of its own by default
   readonly pluggedSizes?: PluggedSizes;
+
+  // whether the host's kernel has oopsed (kernel-oops-watch.ts); never by
+  // default
+  readonly kernelOops?: KernelOopsWatch;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -220,6 +226,7 @@ export interface ImpContext {
 
   // what each awake elastic guest holds plugged, as impd last saw it
   readonly pluggedSizes: PluggedSizes;
+  readonly kernelOops: KernelOopsWatch;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
@@ -309,6 +316,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     }),
     memoryLimit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
     pluggedSizes: deps.pluggedSizes ?? createPluggedSizes(),
+    kernelOops: deps.kernelOops ?? NO_KERNEL_OOPS,
   };
 }
 

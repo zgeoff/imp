@@ -495,6 +495,7 @@ async function readSystemInfo(): Promise<SystemInfo> {
     },
     tailscale: host.tailscale,
     cpu: host.cpu,
+    rebootReason: host.rebootReason,
     defaults: { memoryMib: host.defaultMemoryMib, image: defaultImage?.name ?? null },
     egress: { isEnforced: host.isEgressEnforced },
     ksm: host.ksm === null ? null : { ...host.ksm, unmergeable: 0 },

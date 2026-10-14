@@ -91,6 +91,13 @@ export function buildBuilderError(name: string) {
   });
 }
 
+// a kernel oops kept its hold on the imp's disk (docs/guides/operations.md#a-kernel-oops)
+export function buildRebootNeededError(name: string) {
+  return new ORPCError('PRECONDITION_FAILED', {
+    message: `the host needs a reboot: a kernel oops holds the disk of ${name}; reboot the host, then start it`,
+  });
+}
+
 export function buildStoppingError() {
   return new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is stopping' });
 }
