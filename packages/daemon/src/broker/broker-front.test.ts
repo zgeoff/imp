@@ -512,6 +512,38 @@ test('it records a refused audit row with the method of a head that is not a CON
   });
 });
 
+test('it cuts the host of a refused audit row at 253 characters', async () => {
+  const ctx = setupTest();
+  const recordAudit = mock<(entry: NewAuditEntry) => void>();
+
+  const front = await startBrokerFront(0, {
+    subnet: parseSubnet('127.0.0.0/16'),
+    recordAudit,
+    findPeer: () =>
+      Promise.resolve({ id: 'imp-1', name: 'dev', egress: { mode: 'none', allow: [] } }),
+    isGranted: () => Promise.resolve(false),
+    openTerminator: () => Promise.reject(new Error('no terminator in this test')),
+    resolveTunnelTarget: () => Promise.reject(new Error('no tunnel in this test')),
+    log: () => {},
+  });
+
+  ctx.stack.defer(() => front.stop());
+
+  const guest = await startStubBrokerGuestSocket(ctx.stack, {
+    port: front.port,
+    address: '127.0.0.2',
+  });
+
+  // a bracketed host has no length bound in the head
+  guest.write(`CONNECT [${'a'.repeat(300)}]:443 HTTP/1.1\r\n\r\n`);
+
+  await guest.reply;
+
+  expect(recordAudit).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ host: 'a'.repeat(253), reason: 'egress-policy' }),
+  );
+});
+
 test('it records a refused audit row for a tunnel the egress policy does not allow', async () => {
   const ctx = setupTest();
   const recordAudit = mock<(entry: NewAuditEntry) => void>();

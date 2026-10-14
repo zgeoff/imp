@@ -27,6 +27,10 @@ const KEEPALIVE_MS = 60_000;
 // connections one imp may hold open through the broker at once
 const MAX_CONNECTIONS_PER_IMP = 256;
 
+// the longest host an audit row keeps, the API's bound: a bracketed host in a
+// head has none
+const MAX_AUDIT_HOST = 253;
+
 export interface BrokerFrontDeps {
   readonly subnet: Subnet;
   readonly findPeer: (slot: number) => Promise<BrokerPeer | undefined>;
@@ -236,7 +240,7 @@ async function runConnection(
       secretName: null,
       at: new Date(),
       method: refusal.method,
-      host: refusal.host,
+      host: refusal.host?.slice(0, MAX_AUDIT_HOST) ?? null,
       path: null,
       status: refusal.status,
       requestBytes: 0,
