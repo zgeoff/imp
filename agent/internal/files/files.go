@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -55,18 +56,18 @@ func (s *Store) Write(p string, data []byte) error {
 	if len(data) > MaxData {
 		return badRequest("data is %d bytes, over the %d byte cap", len(data), MaxData)
 	}
-	root, err := os.OpenRoot(s.dir)
+	root, err := fsroot.Open(s.dir)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	dir, name := path.Split(p)
-	if dir != "" {
+	dir, name := path.Split("/" + p)
+	if dir != "/" {
 		if err := root.MkdirAll(strings.TrimSuffix(dir, "/"), 0o755); err != nil {
 			return mapErr(err)
 		}
 	}
-	if fi, err := root.Lstat(p); err == nil && !fi.Mode().IsRegular() {
+	if fi, err := root.Lstat("/" + p); err == nil && !fi.Mode().IsRegular() {
 		return badRequest("%s is not a regular file", p)
 	}
 	staged, err := stagedName(dir, name)
@@ -77,7 +78,7 @@ func (s *Store) Write(p string, data []byte) error {
 		_ = root.Remove(staged)
 		return mapErr(err)
 	}
-	if err := root.Rename(staged, p); err != nil {
+	if err := root.Rename(staged, "/"+p); err != nil {
 		_ = root.Remove(staged)
 		return mapErr(err)
 	}
@@ -89,12 +90,12 @@ func (s *Store) Remove(p string) (bool, error) {
 	if err := checkPath(p); err != nil {
 		return false, err
 	}
-	root, err := os.OpenRoot(s.dir)
+	root, err := fsroot.Open(s.dir)
 	if err != nil {
 		return false, err
 	}
 	defer root.Close()
-	fi, err := root.Lstat(p)
+	fi, err := root.Lstat("/" + p)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return false, nil
 	}
@@ -104,7 +105,7 @@ func (s *Store) Remove(p string) (bool, error) {
 	if !fi.Mode().IsRegular() {
 		return false, badRequest("%s is not a regular file", p)
 	}
-	if err := root.Remove(p); err != nil {
+	if err := root.Remove("/" + p); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -135,7 +136,7 @@ func stagedName(dir, name string) (string, error) {
 	return dir + "." + name + "." + hex.EncodeToString(b), nil
 }
 
-func writeStaged(root *os.Root, staged string, data []byte) error {
+func writeStaged(root *fsroot.Root, staged string, data []byte) error {
 	f, err := root.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o444)
 	if err != nil {
 		return err
