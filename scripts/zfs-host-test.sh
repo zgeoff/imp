@@ -136,6 +136,23 @@ holders() {
   docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}' || true
   echo "-- firecracker/jailer/impd/zfs processes"
   ps -eo pid,ppid,stat,etimes,args | grep -E 'firecracker|jailer|impd|zfs |zpool |restic|containerd-shim' | grep -v grep | cut -c1-200 || true
+  echo "-- open objsets (kstat) mapped to datasets"
+  local ids
+  ids=$(ls "/proc/spl/kstat/zfs/$pool" 2>/dev/null | grep '^objset-' | sed 's/^objset-//' || true)
+  echo "kstat objsets: $(echo $ids)"
+  for id in $ids; do
+    echo "$id $(sudo grep -E '^dataset_name' "/proc/spl/kstat/zfs/$pool/objset-$id" | awk '{print $3}')"
+  done
+  echo "-- every zfs mount in any ns (detector check)"
+  sudo sh -c "cat /proc/[0-9]*/mountinfo" 2>/dev/null | grep ' - zfs ' | awk '{print $(NF-1)}' | sort | uniq -c | head -20 || true
+  echo "-- volumes, zd devices, loops"
+  sudo zfs list -H -r -t volume -o name "$pool" 2>&1 | head || true
+  ls /sys/block | grep '^zd' || true
+  sudo losetup -a || true
+  echo "-- newest processes"
+  ps -eo pid,ppid,stat,etimes,args --sort=etimes | cut -c1-200 | head -40
+  echo "-- dmesg"
+  sudo dmesg | tail -20 || true
   echo "-- spa"
   sudo cat "/proc/spl/kstat/zfs/$pool/state" 2>/dev/null || true
   sudo cat /proc/spl/kstat/zfs/dbgmsg 2>/dev/null | tail -30 || true
