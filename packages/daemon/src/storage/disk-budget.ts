@@ -29,9 +29,10 @@ export interface DiskBudget {
   readonly withRoom: <T>(bytes: number, task: () => Promise<T>) => Promise<T>;
 
   // withRoom for a write whose size shows only as it goes, such as a
-  // build's export: grow(total) holds up to total, or refuses as withRoom
+  // build's export: grow(total, written) holds up to total, or refuses as
+  // withRoom, with the bytes the disk shows it has written counted once
   readonly withGrowingRoom: <T>(
-    task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>,
+    task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
   ) => Promise<T>;
 
   // withRoom for a write the estimate cannot see, such as a thin clone
@@ -102,12 +103,13 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   };
 
   // the check and the hold run under one lock, so two writes never both
-  // pass on the same reading
-  const holdRoom = (bytes: number) =>
+  // pass on the same reading; readWrittenBytes counts back what the write
+  // has written already, gone from `available` and still held in `pending`
+  const holdRoom = (bytes: number, readWrittenBytes: () => number = () => 0) =>
     mutex.runExclusive('ledger', async () => {
       const status = await readStatus();
 
-      const free = status.availableBytes - status.pendingBytes;
+      const free = status.availableBytes - status.pendingBytes + readWrittenBytes();
 
       if (free - bytes < status.reserveBytes) {
         throw buildDiskFullError(Math.max(0, free), status.reserveBytes, bytes);
@@ -141,15 +143,22 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   };
 
   const withGrowingRoom = async <T>(
-    task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>,
+    task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
   ): Promise<T> => {
     const held = { bytes: 0 };
 
-    const grow = async (totalBytes: number) => {
+    // what the write has written, up to what it holds; the caller counts
+    // only bytes the disk shows as its own, which `available` has lost
+    const written = { bytes: 0 };
+    const readWrittenBytes = () => Math.min(held.bytes, written.bytes);
+
+    const grow = async (totalBytes: number, writtenBytes: number) => {
       const more = totalBytes - held.bytes;
 
+      written.bytes = writtenBytes;
+
       if (more > 0) {
-        await holdRoom(more);
+        await holdRoom(more, readWrittenBytes);
 
         held.bytes += more;
       }

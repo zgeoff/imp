@@ -1,6 +1,15 @@
 // oxlint-disable zgeoff/test-beside-module -- tests zfs-backend.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { runChecked, runCommand } from '../../process/run-command';
@@ -8,6 +17,7 @@ import type { CommandRunner } from '../../process/run-command';
 import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
 import { readZfsTestPool } from '../../test-utils/read-zfs-test-pool';
 import { writeSyncedFile } from '../../test-utils/write-synced-file';
+import { countTreeBytes } from '../count-tree-bytes';
 import { createZfsBackend } from './zfs-backend';
 
 // Against a real pool, as root: scripts/test-zfs.sh sets the pool, in the
@@ -989,6 +999,49 @@ test.skipIf(readZfsTestPool() === null)(
     expect(names.split('\n')).toSatisfyAll(
       (name: string) => !/\/(?:disks|images|retired)\//.test(name),
     );
+  },
+  120_000,
+);
+
+// the disk budget counts back a build tree's blocks against this reading
+test.skipIf(readZfsTestPool() === null)(
+  'it shows a tree no more blocks than the pool has taken from its available bytes',
+  async () => {
+    const ctx = await setupTest();
+
+    await ctx.backend.start({
+      impIds: new Set(),
+      checkpointIds: new Set(),
+      imageDigests: new Set(),
+    });
+
+    const tree = join(ctx.dataDir, 'build-tree');
+
+    mkdirSync(tree);
+
+    const before = await ctx.backend.readUsage();
+
+    const fd = openSync(join(tree, 'layer.bin'), 'w');
+
+    // closed before the dataset is unmounted
+    ctx.stack.defer(() => {
+      closeSync(fd);
+    });
+
+    // no sync between writes: each sample may fall inside an open txg; a
+    // margin is what the pool has taken less what the tree shows, in order
+    const margins: number[] = [];
+
+    for (let chunk = 0; chunk < 16; chunk += 1) {
+      writeSync(fd, randomBytes(16 * 1024 ** 2));
+
+      const treeBytes = await countTreeBytes(tree);
+      const usage = await ctx.backend.readUsage();
+
+      margins.push(before.availableBytes - usage.availableBytes - treeBytes);
+    }
+
+    expect(margins).toSatisfyAll((margin: number) => margin >= 0);
   },
   120_000,
 );

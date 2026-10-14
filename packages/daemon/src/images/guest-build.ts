@@ -3,6 +3,7 @@ import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import type { StartTimer } from '../process/clock';
 import { startRealTimer } from '../process/start-real-timer';
+import { countTreeBytes } from '../storage/count-tree-bytes';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
@@ -223,7 +224,7 @@ export async function writeGuestTree(
   root: string,
   limits: Readonly<ExportLimits>,
   signal: AbortSignal,
-  grow: (totalBytes: number) => Promise<void> = () => Promise.resolve(),
+  grow: (totalBytes: number, writtenBytes: number) => Promise<void> = () => Promise.resolve(),
   startTimer: StartTimer = startRealTimer,
 ): Promise<ExportedImage> {
   const maxBytes = limits.maxBytes;
@@ -272,7 +273,7 @@ export async function writeGuestTree(
 
   // twice the larger of the archive and the disk its entries take: the tree,
   // then its ext4 file, with the ext4 file's journal; in steps, ahead of what
-  // tar has listed
+  // tar has listed, with the tree the disk shows written so far
   const growHold = async () => {
     const tree = Math.max(sent.bytes, listed.bytes);
     const needed = 2 * tree + planRootfsOverhead(tree);
@@ -280,7 +281,9 @@ export async function writeGuestTree(
     if (needed > held.bytes) {
       held.bytes = (Math.floor(needed / GROW_STEP_BYTES) + 1) * GROW_STEP_BYTES;
 
-      await grow(held.bytes);
+      const writtenBytes = await countTreeBytes(root);
+
+      await grow(held.bytes, writtenBytes);
     }
   };
 
