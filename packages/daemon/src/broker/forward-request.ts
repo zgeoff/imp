@@ -1,3 +1,4 @@
+import type { AuditRefusal } from '@imp/api';
 import type { NewAuditEntry } from '../db/broker-audit';
 
 // One terminated request, sent on to the real host with the credential.
@@ -71,22 +72,44 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
 
     const url = new URL(request.url);
 
+    // answered before any credential is read, with an audit row that keeps
+    // nothing from the request's headers or body
+    const sendRefusal = (status: number, message: string, reason: AuditRefusal): Response => {
+      deps.recordAudit({
+        impId: deps.impId,
+        secretName: null,
+        at: new Date(),
+        method: request.method,
+        host: deps.host,
+        path: url.pathname.slice(0, MAX_AUDIT_PATH),
+        status,
+        requestBytes: 0,
+        responseBytes: 0,
+        durationMs: Math.round(performance.now() - started),
+        reason,
+      });
+
+      return new Response(`${message}\n`, { status });
+    };
+
     if (readHostName(request.headers.get('host')) !== deps.host) {
-      return new Response(`this connection is for ${deps.host}\n`, { status: 421 });
+      return sendRefusal(421, `this connection is for ${deps.host}`, 'wrong-host');
     }
 
     // answered at once, so a client that tries a WebSocket first falls back to
     // HTTPS without waiting on a stripped upgrade
     if (isWebSocketUpgrade(request.headers)) {
-      return new Response('websocket upgrades are not supported through the broker\n', {
-        status: 426,
-      });
+      return sendRefusal(
+        426,
+        'websocket upgrades are not supported through the broker',
+        'websocket',
+      );
     }
 
     const credential = await deps.findCredential(deps.impId, deps.host);
 
     if (credential === null) {
-      return new Response(`no credential is granted for ${deps.host}\n`, { status: 403 });
+      return sendRefusal(403, `no credential is granted for ${deps.host}`, 'no-grant');
     }
 
     const counts = { requestBytes: 0, responseBytes: 0 };
@@ -103,6 +126,7 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
         requestBytes: counts.requestBytes,
         responseBytes: counts.responseBytes,
         durationMs: Math.round(performance.now() - started),
+        reason: null,
       });
     };
 

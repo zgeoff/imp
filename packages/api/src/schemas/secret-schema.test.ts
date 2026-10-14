@@ -4,6 +4,7 @@ import {
   BrokerHostSchema,
   BrokerRuleSchema,
   OAuthConfigSchema,
+  RefusedRequestSchema,
   SecretAddedSchema,
   SecretKindSchema,
   SecretNameSchema,
@@ -529,3 +530,67 @@ test.each(['requestBytes', 'responseBytes', 'durationMs'])(
     expect(result.error?.issues).toPartiallyContain({ path: [field], code: 'too_small' });
   },
 );
+
+test('#RefusedRequestSchema accepts a tunnel the broker refused, to an IP address', () => {
+  const payload = {
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'CONNECT',
+    host: '10.0.0.1',
+    path: null,
+    status: 403,
+    durationMs: 3,
+    reason: 'address-refused',
+  } as const;
+
+  const result = RefusedRequestSchema.safeParse(payload);
+
+  expect(result.data).toStrictEqual(payload);
+});
+
+test('#RefusedRequestSchema accepts a refused head that named no method or host', () => {
+  const payload = {
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: null,
+    host: null,
+    path: null,
+    status: 400,
+    durationMs: 1,
+    reason: 'not-http',
+  } as const;
+
+  const result = RefusedRequestSchema.safeParse(payload);
+
+  expect(result.data).toStrictEqual(payload);
+});
+
+test('#RefusedRequestSchema rejects a reason it does not know', () => {
+  const result = RefusedRequestSchema.safeParse({
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'CONNECT',
+    host: 'example.com',
+    path: null,
+    status: 403,
+    durationMs: 3,
+    reason: 'because',
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['reason'], code: 'invalid_value' });
+});
+
+test('#RefusedRequestSchema rejects a host longer than 253 characters', () => {
+  const result = RefusedRequestSchema.safeParse({
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'CONNECT',
+    host: 'a'.repeat(254),
+    path: null,
+    status: 403,
+    durationMs: 3,
+    reason: 'egress-policy',
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['host'], code: 'too_big' });
+});

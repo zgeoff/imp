@@ -79,7 +79,7 @@ every change reconnects and takes the new snapshot; the dashboard reconnects and
 The audit log writes one row per call that changes something, refused or not, and per exec, console,
 SSH, tunnel and reverse-forward open: the procedure, who called, the imp, the outcome and the time,
 never the input. The table is bounded, and its oldest rows go. The broker keeps an audit of its own,
-of each request it sent with a credential.
+of each request it sent with a credential and each it refused.
 
 Telemetry is OpenTelemetry, loaded only when the owner names an OTLP endpoint. It exports lifecycle
 transition counts and durations, governor decisions, RAM, disk, CPU and network use, and spans for

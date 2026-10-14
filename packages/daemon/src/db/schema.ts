@@ -1,7 +1,7 @@
 // Written by kysely-codegen from the migrated database: run
 // `bun run render:db-schema` after a migration, never edit it by hand.
 
-import type { ApiActor, ColdBootCause, ImageSource, ImpKind, ImpState, MoveState, Scope } from "@imp/api";
+import type { ApiActor, AuditRefusal, ColdBootCause, ImageSource, ImpKind, ImpState, MoveState, Scope } from "@imp/api";
 import type { ColumnType } from "kysely";
 
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
@@ -23,14 +23,15 @@ export interface ApiAudit {
 export interface BrokerAudit {
   at: number;
   duration_ms: number;
-  host: string;
+  host: string | null;
   id: Generated<number>;
   imp_id: string;
-  method: string;
-  path: string;
+  method: string | null;
+  path: string | null;
+  reason: AuditRefusal | null;
   request_bytes: number;
   response_bytes: number;
-  secret_name: string;
+  secret_name: string | null;
   status: number;
 }
 

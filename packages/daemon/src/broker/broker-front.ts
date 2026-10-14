@@ -1,7 +1,8 @@
 import { createConnection, createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import { pipeline } from 'node:stream';
-import type { EgressMode } from '@imp/api';
+import type { AuditRefusal, EgressMode } from '@imp/api';
+import type { NewAuditEntry } from '../db/broker-audit';
 import type { BrokerPeer } from '../db/secrets';
 import { isTunnelAllowed } from '../egress/egress-rules';
 import { findPeerSlot } from '../net/addressing';
@@ -26,6 +27,10 @@ const KEEPALIVE_MS = 60_000;
 // connections one imp may hold open through the broker at once
 const MAX_CONNECTIONS_PER_IMP = 256;
 
+// the longest host an audit row keeps, the API's bound: a bracketed host in a
+// head has none
+const MAX_AUDIT_HOST = 253;
+
 export interface BrokerFrontDeps {
   readonly subnet: Subnet;
   readonly findPeer: (slot: number) => Promise<BrokerPeer | undefined>;
@@ -35,6 +40,9 @@ export interface BrokerFrontDeps {
   // the address to dial for a host, checked against what the imp's policy
   // refuses beyond every tunnel's ranges
   readonly resolveTunnelTarget: (host: string, mode: EgressMode) => Promise<string>;
+
+  // an audit row for each request of a known imp that the front refuses
+  readonly recordAudit: (entry: NewAuditEntry) => void;
   readonly log: (message: string) => void;
 
   // opens a plain tunnel's upstream socket; tests point it at a local server
@@ -191,12 +199,22 @@ async function handleConnection(
   }
 }
 
+// a reply the front refuses with, and what its audit row records
+interface FrontRefusal {
+  readonly status: number;
+  readonly message: string;
+  readonly reason: AuditRefusal;
+  readonly method: string | null;
+  readonly host: string | null;
+}
+
 async function runConnection(
   socket: Socket,
   deps: BrokerFrontDeps,
   open: CountedLimit,
   tunnels: TunnelRegistry,
 ): Promise<void> {
+  const started = performance.now();
   const slot = findPeerSlot(socket.remoteAddress ?? '', socket.localAddress ?? '', deps.subnet);
 
   // not a guest, or a guest on another imp's gateway
@@ -214,10 +232,34 @@ async function runConnection(
     return;
   }
 
+  const sendRefusal = (refusal: Readonly<FrontRefusal>): void => {
+    sendReply(socket, refusal.status, refusal.message);
+
+    deps.recordAudit({
+      impId: peer.id,
+      secretName: null,
+      at: new Date(),
+      method: refusal.method,
+      host: refusal.host?.slice(0, MAX_AUDIT_HOST) ?? null,
+      path: null,
+      status: refusal.status,
+      requestBytes: 0,
+      responseBytes: 0,
+      durationMs: Math.round(performance.now() - started),
+      reason: refusal.reason,
+    });
+  };
+
   const release = open.tryClaim(peer.id);
 
   if (release === null) {
-    sendReply(socket, 503, 'too many broker connections from this imp');
+    sendRefusal({
+      status: 503,
+      message: 'too many broker connections from this imp',
+      reason: 'connection-limit',
+      method: null,
+      host: null,
+    });
 
     return;
   }
@@ -240,7 +282,13 @@ async function runConnection(
   const head = parseConnectHead(read.head);
 
   if (head.kind === 'refused') {
-    sendReply(socket, head.status, head.reason);
+    sendRefusal({
+      status: head.status,
+      message: head.reason,
+      reason: head.refusal,
+      method: head.method,
+      host: null,
+    });
 
     return;
   }
@@ -268,8 +316,16 @@ async function runConnection(
     return;
   }
 
+  const egressRefusal: FrontRefusal = {
+    status: 403,
+    message: `egress to ${head.host} is not allowed by the imp's egress policy`,
+    reason: 'egress-policy',
+    method: 'CONNECT',
+    host: head.host,
+  };
+
   if (!isTunnelAllowed(current.egress, head.host)) {
-    sendReply(socket, 403, `egress to ${head.host} is not allowed by the imp's egress policy`);
+    sendRefusal(egressRefusal);
 
     return;
   }
@@ -279,16 +335,25 @@ async function runConnection(
   try {
     address = await deps.resolveTunnelTarget(head.host, current.egress.mode);
   } catch (error) {
-    const status = error instanceof TunnelRefusedError ? 403 : 502;
-
-    sendReply(socket, status, readErrorMessage(error));
+    // a lookup that failed is no refusal, and gets no audit row
+    if (error instanceof TunnelRefusedError) {
+      sendRefusal({
+        status: 403,
+        message: readErrorMessage(error),
+        reason: 'address-refused',
+        method: 'CONNECT',
+        host: head.host,
+      });
+    } else {
+      sendReply(socket, 502, readErrorMessage(error));
+    }
 
     return;
   }
 
   if (!tunnels.isKept(peer.id, socket, head.host)) {
     if (!socket.destroyed) {
-      sendReply(socket, 403, `egress to ${head.host} is not allowed by the imp's egress policy`);
+      sendRefusal(egressRefusal);
     }
 
     return;

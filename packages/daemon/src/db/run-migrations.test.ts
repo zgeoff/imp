@@ -53,6 +53,7 @@ test('#runMigrations keeps the name of each migration a released impd ran', () =
     '026_add_secret_oauth',
     '027_add_imp_backup',
     '028_cascade_oauth_tokens',
+    '029_add_token_image_ref_prefix',
   ]);
 });
 
@@ -459,6 +460,91 @@ test('#runMigrations keeps the OAuth token indexes in the token cascade migratio
     {
       name: 'oauth_tokens_grant_id',
       sql: 'CREATE INDEX "oauth_tokens_grant_id" on "oauth_tokens" ("grant_id")',
+    },
+  ]);
+});
+
+test('#runMigrations keeps every broker audit row as a sent request in the refusals migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '029_add_token_image_ref_prefix');
+
+  // rows as an impd at 029 wrote them
+  await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
+    VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
+
+  await sql`INSERT INTO imps (id, name, image_id, state, vcpus, memory_mib, slot, ip,
+    created_at, last_active_at)
+    VALUES ('imp', 'dev', 'img', 'stopped', 1, 512, 0, 'ip', 0, 0)`.execute(db);
+
+  await sql`INSERT INTO broker_audit (id, imp_id, secret_name, at, method, host, path, status,
+    request_bytes, response_bytes, duration_ms)
+    VALUES (7, 'imp', 'gh', 1, 'GET', 'api.github.com', '/user', 200, 2, 3, 4)`.execute(db);
+
+  await runMigrations(db);
+
+  const rows = await db.selectFrom('broker_audit').selectAll().execute();
+
+  expect(rows).toStrictEqual([
+    {
+      id: 7,
+      imp_id: 'imp',
+      secret_name: 'gh',
+      at: 1,
+      method: 'GET',
+      host: 'api.github.com',
+      path: '/user',
+      status: 200,
+      request_bytes: 2,
+      response_bytes: 3,
+      duration_ms: 4,
+      reason: null,
+    },
+  ]);
+});
+
+test('#runMigrations makes an imp’s delete remove its broker audit rows in the refusals migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '029_add_token_image_ref_prefix');
+
+  // rows as an impd at 029 wrote them
+  await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
+    VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
+
+  await sql`INSERT INTO imps (id, name, image_id, state, vcpus, memory_mib, slot, ip,
+    created_at, last_active_at)
+    VALUES ('gone', 'dev', 'img', 'stopped', 1, 512, 0, 'ip-1', 0, 0),
+      ('kept', 'ops', 'img', 'stopped', 1, 512, 1, 'ip-2', 0, 0)`.execute(db);
+
+  await sql`INSERT INTO broker_audit (imp_id, secret_name, at, method, host, path, status,
+    request_bytes, response_bytes, duration_ms)
+    VALUES ('gone', 'gh', 1, 'GET', 'api.github.com', '/user', 200, 0, 0, 0),
+      ('kept', 'gh', 1, 'GET', 'api.github.com', '/user', 200, 0, 0, 0)`.execute(db);
+
+  await runMigrations(db);
+
+  await db.deleteFrom('imps').where('id', '=', 'gone').execute();
+
+  const rows = await db.selectFrom('broker_audit').select('imp_id').execute();
+
+  expect(rows).toStrictEqual([{ imp_id: 'kept' }]);
+});
+
+test('#runMigrations keeps the broker audit index in the refusals migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrations(db);
+
+  const indexes = await sql<{ name: string; sql: string }>`
+    SELECT name, sql FROM sqlite_master
+    WHERE type = 'index' AND tbl_name = 'broker_audit' AND sql IS NOT NULL
+  `.execute(db);
+
+  expect(indexes.rows).toStrictEqual([
+    {
+      name: 'broker_audit_imp_id',
+      sql: 'CREATE INDEX "broker_audit_imp_id" on "broker_audit" ("imp_id", "id")',
     },
   ]);
 });

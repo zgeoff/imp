@@ -13,6 +13,7 @@ import type {
   OAuthClient,
   OAuthGrant,
   OrphanStorage,
+  RefusedRequest,
   Secret,
   Service,
   Session,
@@ -604,6 +605,22 @@ export function formatAudit(entries: readonly AuditEntry[]): string {
       String(entry.status),
       `${String(entry.requestBytes)}/${String(entry.responseBytes)}`,
       String(entry.durationMs),
+    ]),
+  );
+}
+
+export function formatRefusedRequests(refused: readonly RefusedRequest[]): string {
+  return formatTable(
+    ['TIME', 'IMP', 'METHOD', 'HOST', 'PATH', 'STATUS', 'MS', 'REASON'],
+    refused.map((entry) => [
+      entry.at.toISOString(),
+      entry.imp,
+      entry.method ?? '-',
+      entry.host ?? '-',
+      entry.path ?? '-',
+      String(entry.status),
+      String(entry.durationMs),
+      entry.reason,
     ]),
   );
 }

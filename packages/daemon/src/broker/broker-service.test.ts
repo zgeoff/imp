@@ -26,7 +26,12 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { HttpResponse, http } from 'msw';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
-import { AUDIT_ROWS_PER_IMP, listAuditEntries, writeAuditEntry } from '../db/broker-audit';
+import {
+  AUDIT_ROWS_PER_IMP,
+  listAuditEntries,
+  listRefusedRequests,
+  writeAuditEntry,
+} from '../db/broker-audit';
 import { createImage } from '../db/images';
 import { findImpByName, updateImpMove } from '../db/imps';
 import { openDatabase } from '../db/open-database';
@@ -720,6 +725,97 @@ test('it keeps the newest audit rows of each imp', async () => {
 
   expect(rows).toHaveLength(AUDIT_ROWS_PER_IMP);
   expect(rows[0]?.path).toBe(`/${String(AUDIT_ROWS_PER_IMP + 4)}`);
+});
+
+test('it keeps the sent rows of an imp whose refused rows pass the cap', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId: dev.id, path: '/sent' }));
+
+  // a full cap of refusals after it, and one past
+  for (let index = 0; index < AUDIT_ROWS_PER_IMP + 1; index += 1) {
+    await writeAuditEntry(
+      ctx.db,
+      buildMockNewAuditEntry({
+        impId: dev.id,
+        secretName: null,
+        method: 'CONNECT',
+        path: null,
+        status: 403,
+        reason: 'egress-policy',
+      }),
+    );
+  }
+
+  const rows = await listAuditEntries(ctx.db, dev.id, 2000, null);
+
+  expect(rows.map((row) => row.path)).toStrictEqual(['/sent']);
+});
+
+test('it keeps the newest refused rows of each imp', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  // one past the cap, oldest first
+  for (let index = 0; index < AUDIT_ROWS_PER_IMP + 1; index += 1) {
+    await writeAuditEntry(
+      ctx.db,
+      buildMockNewAuditEntry({
+        impId: dev.id,
+        secretName: null,
+        method: 'CONNECT',
+        host: `h${String(index)}.test`,
+        path: null,
+        status: 403,
+        reason: 'egress-policy',
+      }),
+    );
+  }
+
+  const rows = await listRefusedRequests(ctx.db, dev.id, 2000, null);
+
+  expect(rows).toHaveLength(AUDIT_ROWS_PER_IMP);
+  expect(rows[0]?.host).toBe(`h${String(AUDIT_ROWS_PER_IMP)}.test`);
+});
+
+test('it lists only the sent requests in the audit, and only the refused ones as refused', async () => {
+  const ctx = await setupTest();
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  await writeAuditEntry(ctx.db, buildMockNewAuditEntry({ impId: dev.id, path: '/sent' }));
+
+  await writeAuditEntry(
+    ctx.db,
+    buildMockNewAuditEntry({
+      impId: dev.id,
+      secretName: null,
+      method: 'CONNECT',
+      host: 'exfil.test',
+      path: null,
+      status: 403,
+      durationMs: 2,
+      reason: 'egress-policy',
+    }),
+  );
+
+  const sent = await ctx.client.audit.list({ name: 'dev' });
+  const refused: unknown = await ctx.client.audit.refused({ name: 'dev' });
+
+  expect(sent.map((entry) => entry.path)).toStrictEqual(['/sent']);
+
+  expect(refused).toStrictEqual([
+    {
+      at: expect.toBeValidDate() as unknown,
+      imp: 'dev',
+      method: 'CONNECT',
+      host: 'exfil.test',
+      path: null,
+      status: 403,
+      durationMs: 2,
+      reason: 'egress-policy',
+    },
+  ]);
 });
 
 test('it lists the audit rows of an imp newest first, up to the limit', async () => {

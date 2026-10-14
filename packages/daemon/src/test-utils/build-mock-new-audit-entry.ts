@@ -16,6 +16,7 @@ export function buildMockNewAuditEntry(overrides: Partial<NewAuditEntry> = {}): 
     requestBytes: faker.number.int({ min: 0, max: 1024 ** 2 }),
     responseBytes: faker.number.int({ min: 0, max: 1024 ** 2 }),
     durationMs: faker.number.int({ min: 0, max: 60_000 }),
+    reason: null,
     ...overrides,
   };
 }

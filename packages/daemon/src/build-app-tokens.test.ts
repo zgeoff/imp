@@ -16,11 +16,13 @@ import { runWhois } from './auth/tailnet-identity';
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
 import { listApiCalls } from './db/api-audit';
+import { writeAuditEntry } from './db/broker-audit';
 import { createImage } from './db/images';
 import { openDatabase } from './db/open-database';
 import { PEER_HEADER } from './proxy/forwarded-peers';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
 import { createXfsBackend } from './storage/xfs-backend';
+import { buildMockNewAuditEntry } from './test-utils/build-mock-new-audit-entry';
 import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from './test-utils/build-stub-exec-guest';
@@ -507,6 +509,62 @@ test('it refuses a token limited to dev-* another imp’s API calls', async () =
   });
 
   expect(dev.audit.calls({ name: 'prod' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it refuses a token limited to dev-* another imp’s refused broker requests', async () => {
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
+
+  await ctx.client.imps.create({ name: 'prod' });
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  expect(dev.audit.refused({ name: 'prod' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('it lists a token limited to dev-* only the refused broker requests of its imps', async () => {
+  const ctx = await setupTest({ tailscale: buildStubTailscale() });
+  const devA = await ctx.client.imps.create({ name: 'dev-a' });
+  const prod = await ctx.client.imps.create({ name: 'prod' });
+
+  await writeAuditEntry(
+    ctx.db,
+    buildMockNewAuditEntry({
+      impId: devA.id,
+      secretName: null,
+      path: null,
+      status: 403,
+      reason: 'egress-policy',
+    }),
+  );
+
+  await writeAuditEntry(
+    ctx.db,
+    buildMockNewAuditEntry({
+      impId: prod.id,
+      secretName: null,
+      path: null,
+      status: 403,
+      reason: 'egress-policy',
+    }),
+  );
+
+  const made = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const dev = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  const seen = await dev.audit.refused({});
+
+  expect(seen.map((entry) => entry.imp)).toStrictEqual(['dev-a']);
 });
 
 test('it lists a token limited to dev-* only the API calls on its imps', async () => {

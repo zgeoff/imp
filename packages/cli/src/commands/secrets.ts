@@ -1,7 +1,13 @@
 import { BrokerRuleSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
 import type { BrokerRule, OAuthConfig, Secret, SecretKind } from '@imp/api';
 import { defineCommand } from '../define-command';
-import { formatApiCalls, formatAudit, formatOutput, formatSecrets } from '../format-output';
+import {
+  formatApiCalls,
+  formatAudit,
+  formatOutput,
+  formatRefusedRequests,
+  formatSecrets,
+} from '../format-output';
 import { readToken } from '../read-token';
 import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
@@ -339,13 +345,15 @@ export const grantsCommand = defineCommand({
 export const auditCommand = defineCommand({
   meta: {
     name: 'audit',
-    description: 'Show requests the broker sent with a credential, or calls to impd, newest first',
+    description:
+      'Show requests the broker sent with a credential or refused, or calls to impd, newest first',
   },
   args: {
     name: { type: 'positional', description: 'imp name (default: every imp)', required: false },
     kind: {
       type: 'string',
-      description: 'broker: requests with a credential (default); api: calls that changed impd',
+      description:
+        'broker: requests with a credential (default); refused: requests the broker refused; api: calls that changed impd',
     },
     limit: { type: 'string', description: 'how many rows (default 100, at most 1000)' },
     json: jsonArg,
@@ -360,8 +368,8 @@ export const auditCommand = defineCommand({
 
       const kind = context.args.kind ?? 'broker';
 
-      if (kind !== 'broker' && kind !== 'api') {
-        throw new UsageError('--kind is broker or api');
+      if (kind !== 'broker' && kind !== 'refused' && kind !== 'api') {
+        throw new UsageError('--kind is broker, refused or api');
       }
 
       const input = {
@@ -373,6 +381,16 @@ export const auditCommand = defineCommand({
         const calls = await client.audit.calls(input);
 
         console.log(formatOutput(calls, context.args.json, formatApiCalls));
+
+        return;
+      }
+
+      if (kind === 'refused') {
+        await requireFeature(client, 'brokerRefusals', 'not know the call');
+
+        const refused = await client.audit.refused(input);
+
+        console.log(formatOutput(refused, context.args.json, formatRefusedRequests));
 
         return;
       }

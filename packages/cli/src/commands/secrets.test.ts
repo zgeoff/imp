@@ -712,11 +712,48 @@ test('it stores nothing when stdin gives an empty value', async () => {
   expect(secrets).toBeEmpty();
 });
 
-test('it refuses an audit kind other than broker or api', async () => {
+test('it lists the refused broker requests as JSON, none on a new impd', async () => {
+  const ctx = await setupTest();
+
+  const result = await runCli({
+    args: ['audit', '--kind', 'refused', '--json'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  expect(result).toStrictEqual({ stdout: '[]\n', stderr: '', code: 0 });
+});
+
+test('it lists no refused broker requests from an impd without them', async () => {
+  const ctx = await setupTest();
+
+  const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, {
+    withoutFeatures: ['brokerRefusals'],
+  });
+
+  const result = await runCli({
+    args: ['audit', '--kind', 'refused'],
+    env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      'imp: this impd has no audit of refused broker requests and would not know the call; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+    code: 1,
+  });
+
+  expect(older.calls).toStrictEqual(['system/info']);
+});
+
+test('it refuses an audit kind other than broker, refused or api', async () => {
   const result = await runCli({
     args: ['audit', '--kind', 'tokens'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
-  expect(result).toStrictEqual({ stdout: '', stderr: 'imp: --kind is broker or api\n', code: 2 });
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'imp: --kind is broker, refused or api\n',
+    code: 2,
+  });
 });

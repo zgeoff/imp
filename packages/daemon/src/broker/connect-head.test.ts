@@ -15,11 +15,26 @@ test('it reads a bracketed IPv6 host without its brackets', () => {
   });
 });
 
-test('it refuses a method other than CONNECT with a 405', () => {
+test('it refuses a method other than CONNECT with a 405 that names the method', () => {
   expect(parseConnectHead('GET http://github.com/ HTTP/1.1\r\n\r\n')).toStrictEqual({
     kind: 'refused',
     status: 405,
     reason: 'only CONNECT is served',
+    refusal: 'not-connect',
+    method: 'GET',
+  });
+});
+
+test.each([
+  ['a method past 16 characters', 'A'.repeat(17)],
+  ['a character no method holds', 'GE"T'],
+])('it keeps no method for %s', (_what, method) => {
+  expect(parseConnectHead(`${method} http://github.com/ HTTP/1.1\r\n\r\n`)).toStrictEqual({
+    kind: 'refused',
+    status: 405,
+    reason: 'only CONNECT is served',
+    refusal: 'not-connect',
+    method: null,
   });
 });
 
@@ -33,6 +48,8 @@ test.each([
     kind: 'refused',
     status: 400,
     reason: 'the target is not host:port',
+    refusal: 'bad-target',
+    method: 'CONNECT',
   });
 });
 
@@ -44,6 +61,8 @@ test.each([
     kind: 'refused',
     status: 400,
     reason: 'not an HTTP/1 request',
+    refusal: 'not-http',
+    method: null,
   });
 });
 

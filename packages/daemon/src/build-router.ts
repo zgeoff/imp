@@ -794,6 +794,17 @@ export function buildRouter(deps: RouterDeps) {
           caller.imps,
         );
       }),
+      refused: os.audit.refused.handler((context) => {
+        const caller = context.context.caller;
+
+        requireNamedImp(caller, context.input.name);
+
+        return deps.broker.listRefused(
+          context.input.name ?? null,
+          context.input.limit ?? AUDIT_LIMIT,
+          caller.imps,
+        );
+      }),
       calls: os.audit.calls.handler((context) => {
         const caller = context.context.caller;
 

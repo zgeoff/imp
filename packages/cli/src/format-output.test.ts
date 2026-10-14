@@ -4,6 +4,7 @@ import { buildMockCheckpoint } from '@imp/api/test-utils/build-mock-checkpoint';
 import { buildMockIdentity } from '@imp/api/test-utils/build-mock-identity';
 import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
 import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
+import { buildMockRefusedRequest } from '@imp/api/test-utils/build-mock-refused-request';
 import { buildMockSession } from '@imp/api/test-utils/build-mock-session';
 import { buildMockToken } from '@imp/api/test-utils/build-mock-token';
 import {
@@ -18,6 +19,7 @@ import {
   formatImages,
   formatImpInfo,
   formatImps,
+  formatRefusedRequests,
   formatSessions,
   formatSshKey,
   formatTable,
@@ -580,6 +582,37 @@ test('#formatIdentity names a caller from an impd that sends no grantable list',
   });
 
   expect(formatIdentity(identity)).toBe('token ci: read on every imp');
+});
+
+test('#formatRefusedRequests lists each refusal with its reason, and a dash for what it lacks', () => {
+  const text = formatRefusedRequests([
+    buildMockRefusedRequest({
+      at: new Date(0),
+      imp: 'dev',
+      method: 'CONNECT',
+      host: 'exfil.test',
+      path: null,
+      status: 403,
+      durationMs: 1,
+      reason: 'egress-policy',
+    }),
+    buildMockRefusedRequest({
+      at: new Date(0),
+      imp: 'dev',
+      method: null,
+      host: null,
+      path: null,
+      status: 400,
+      durationMs: 0,
+      reason: 'not-http',
+    }),
+  ]);
+
+  expect(text.split('\n')).toStrictEqual([
+    'TIME                      IMP  METHOD   HOST        PATH  STATUS  MS  REASON',
+    '1970-01-01T00:00:00.000Z  dev  CONNECT  exfil.test  -     403     1   egress-policy',
+    '1970-01-01T00:00:00.000Z  dev  -        -           -     400     0   not-http',
+  ]);
 });
 
 test('#formatApiCalls names who made each api call', () => {

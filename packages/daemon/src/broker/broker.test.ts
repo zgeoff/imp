@@ -458,6 +458,105 @@ test('it refuses a tunnel to a host a box policy does not list', async () => {
   );
 });
 
+test('it audits a tunnel the egress policy refuses, with the imp, the host and the reason', async () => {
+  const ctx = await setupTest();
+  const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.egress.setPolicy('dev', { mode: 'box', allow: ['other.test'] });
+
+  const guest = await startStubBrokerGuestSocket(ctx.stack, {
+    port: ctx.proxyPort,
+    address: '127.0.0.2',
+  });
+
+  guest.write(`CONNECT plain.test:${String(target.port)} HTTP/1.1\r\n\r\n`);
+
+  await guest.reply;
+
+  const audit: unknown = await waitFor(async () => {
+    const entries = await ctx.client.audit.refused({ name: 'dev' });
+
+    expect(entries).toHaveLength(1);
+
+    return entries;
+  });
+
+  expect(audit).toStrictEqual([
+    {
+      at: expect.toBeValidDate() as unknown,
+      imp: 'dev',
+      method: 'CONNECT',
+      host: 'plain.test',
+      path: null,
+      status: 403,
+      durationMs: expect.toBeNumber() as unknown,
+      reason: 'egress-policy',
+    },
+  ]);
+});
+
+test('it keeps no credential, header, query or body in the audit row of a refused request', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  const dev = await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.impd.broker.addGrant('dev', 'gh');
+
+  // a granted connection, then a request on it for another name
+  const result = await ctx.guest.curl('https://api.github.com/repos/x?token=query-secret', [
+    '-X',
+    'POST',
+    '--data',
+    'body-secret',
+    '-H',
+    'Host: evil.test',
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
+  ]);
+
+  const rows: unknown = await waitFor(async () => {
+    const written = await ctx.db.selectFrom('broker_audit').selectAll().execute();
+
+    expect(written).toHaveLength(1);
+
+    return written;
+  });
+
+  expect(result.stdout).toBe('this connection is for api.github.com\n');
+  expect(ctx.seen).toStrictEqual([]);
+
+  expect(rows).toStrictEqual([
+    {
+      id: expect.toBeNumber() as unknown,
+      imp_id: dev.id,
+      secret_name: null,
+      at: expect.toBeNumber() as unknown,
+      method: 'POST',
+      host: 'api.github.com',
+      path: '/repos/x',
+      status: 421,
+      request_bytes: 0,
+      response_bytes: 0,
+      duration_ms: expect.toBeNumber() as unknown,
+      reason: 'wrong-host',
+    },
+  ]);
+
+  // every value the guest sent or the broker holds, none of them in the row
+  expect(
+    ['ghp_real', 'imp-broker-placeholder', 'query-secret', 'body-secret', 'evil.test'].filter(
+      (secret) => JSON.stringify(rows).includes(secret),
+    ),
+  ).toStrictEqual([]);
+});
+
 test('it refuses every tunnel under a closed egress policy', async () => {
   const ctx = await setupTest();
   const target = await startStubBrokerReplyTarget(ctx.stack, 'tunnel');

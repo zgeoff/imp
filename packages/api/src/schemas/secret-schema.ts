@@ -125,6 +125,34 @@ export const SecretAddedSchema = SecretSchema.extend({
 
 export type SecretAdded = z.infer<typeof SecretAddedSchema>;
 
+// Why the broker refused a request, before any credential was added.
+const AuditRefusalSchema = z.enum([
+  // the front port's head was not HTTP/1, not a CONNECT, or not to host:port
+  'not-http',
+  'not-connect',
+  'bad-target',
+
+  // the imp held its most connections through the broker
+  'connection-limit',
+
+  // the imp's egress policy does not allow the host
+  'egress-policy',
+
+  // the host resolves only to an address no tunnel may reach
+  'address-refused',
+
+  // a Host header for another name than the connection's
+  'wrong-host',
+
+  // an upgrade to a WebSocket, which the broker does not carry
+  'websocket',
+
+  // the grant for the host was gone when the request came
+  'no-grant',
+]);
+
+export type AuditRefusal = z.infer<typeof AuditRefusalSchema>;
+
 // One request the broker sent upstream with a credential. The path has no
 // query string, and no header is kept.
 export const AuditEntrySchema = z.object({
@@ -143,3 +171,27 @@ export const AuditEntrySchema = z.object({
 });
 
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+
+// One request the broker refused, which got no credential. Nothing from a
+// header, the query or a body is kept.
+export const RefusedRequestSchema = z.object({
+  at: z.date(),
+  imp: NameSchema,
+
+  // null when the head named none
+  method: z.string().nullable(),
+
+  // the host as the guest named it, an IP address included; null when the
+  // head named none
+  host: z.string().max(253).nullable(),
+
+  // null for a CONNECT, which has none
+  path: z.string().nullable(),
+
+  // the status the guest got
+  status: z.int(),
+  durationMs: z.int().nonnegative(),
+  reason: AuditRefusalSchema,
+});
+
+export type RefusedRequest = z.infer<typeof RefusedRequestSchema>;

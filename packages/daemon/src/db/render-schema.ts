@@ -22,6 +22,7 @@ const SCHEMA_FILE = join(import.meta.dir, 'schema.ts');
 // with a default keeps Generated
 const CUSTOM_IMPORTS = {
   ApiActor: '@imp/api',
+  AuditRefusal: '@imp/api',
   ColdBootCause: '@imp/api',
   ImageSource: '@imp/api',
   ImpKind: '@imp/api',
@@ -35,6 +36,7 @@ const CUSTOM_IMPORTS = {
 // `| null` added.
 const COLUMN_OVERRIDES = {
   'api_audit.actor': new IdentifierNode('ApiActor'),
+  'broker_audit.reason': new IdentifierNode('AuditRefusal'),
   'images.source': new GenericExpressionNode('Generated', [new IdentifierNode('ImageSource')]),
   'imp_cold_boots.cause': new IdentifierNode('ColdBootCause'),
   'imps.kind': new GenericExpressionNode('Generated', [new IdentifierNode('ImpKind')]),

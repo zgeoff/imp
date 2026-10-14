@@ -14,6 +14,7 @@ const FEATURES = {
   secretUpstream: 'has no secret upstreams',
   backupOptOut: 'has no backup opt-out',
   tokenImageAdd: 'has no token image adds',
+  brokerRefusals: 'has no audit of refused broker requests',
 } as const;
 
 type Feature = keyof typeof FEATURES;
