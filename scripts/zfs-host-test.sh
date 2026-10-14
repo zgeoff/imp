@@ -149,12 +149,12 @@ img_use() {
     return 1
   fi
   out=$(sudo zpool status -P "$@" 2>/dev/null) || return 2
-  # a vdev line is the path, two spaces, then the state and the counts; the
-  # path is all before the first state column, and only an equal path counts
+  # a vdev line is the path, two spaces, then the state and the counts, so
+  # the path equals this run's file only when the state column follows it
   awk -v img="$img" '{
     sub(/^[ \t]+/, "")
-    if (!sub(/[ \t][ \t]+(ONLINE|DEGRADED|FAULTED|OFFLINE|UNAVAIL|REMOVED|SPLIT|AVAIL|INUSE)([ \t].*)?$/, "")) next
-    if ($0 == img) found = 1
+    rest = substr($0, length(img) + 1)
+    if (index($0, img) == 1 && rest ~ /^[ \t][ \t]+(ONLINE|DEGRADED|FAULTED|OFFLINE|UNAVAIL|REMOVED|SPLIT|AVAIL|INUSE)([ \t]|$)/) found = 1
   } END { exit !found }' <<<"$out"
 }
 

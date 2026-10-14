@@ -642,6 +642,34 @@ test('it destroys its pool and removes the file when the work dir path holds spa
   expect(existsSync(join(work, 'pool.img'))).toBeFalse();
 });
 
+test('it destroys its pool and removes the file when the work dir path holds a state word', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work  ONLINE dir');
+
+  mkdirSync(work);
+
+  const zpool = createStubZpool(ctx.stubs);
+
+  createStubBin(ctx.stubs, 'id', 'echo 0');
+  createStubZfs(ctx.stubs);
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe('');
+  expect(existsSync(join(work, 'pool.img'))).toBeFalse();
+});
+
 test('it keeps the pool file and fails when zpool cannot say what uses it', () => {
   const ctx = setupTest();
   const work = join(ctx.dir, 'work');
