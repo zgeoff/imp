@@ -118,7 +118,13 @@ jobs:
         run: bun scripts/dockerfile-difftest/run.ts --seed 1
 
       # the agent protocol's generated code and reference against its schema;
-      # protoc-gen-go runs from the agent's go.mod, whose toolchain Go fetches
+      # protoc-gen-go runs from the agent's go.mod, on that module's Go
+      - name: Setup Go for the agent
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
       - name: Generated Protocol Code
         run: |
           bun run gen:proto
