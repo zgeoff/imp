@@ -246,37 +246,21 @@ export interface ResolverServerOptions {
 // back as ICMP: Bun marks it `errqueue`, and the guest just asked again
 const ROUTINE_SOCKET_ERRORS = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']);
 
-// one line per minute at most, with a count of the ones it held back
-const SOCKET_ERROR_LOG_MS = 60_000;
-
-// Bun 1.4.2 passes the error alone, not after the socket its types name
+// Bun 1.4.2 passes the error alone, not after the socket its types name.
+// A routine error has a log limit of its own, so a burst of refused replies
+// never holds back the line of another error.
 export function createSocketErrorReport(
   log: (message: string) => void,
   now: () => number,
 ): (...args: readonly unknown[]) => void {
-  const state = { loggedAt: null as number | null, held: 0 };
+  const logRoutine = makeLimitedLog(log, now);
+  const logOther = makeLimitedLog(log, now);
 
   return (...args) => {
     const error = args.at(-1);
+    const write = checkRoutineSocketError(error) ? logRoutine : logOther;
 
-    if (checkRoutineSocketError(error)) {
-      return;
-    }
-
-    const at = now();
-
-    if (state.loggedAt !== null && at - state.loggedAt < SOCKET_ERROR_LOG_MS) {
-      state.held += 1;
-
-      return;
-    }
-
-    const held = state.held === 0 ? '' : ` (${String(state.held)} more since the last)`;
-
-    log(`impd: egress: resolver socket: ${readErrorMessage(error)}${held}`);
-
-    state.loggedAt = at;
-    state.held = 0;
+    write(`impd: egress: resolver socket: ${readErrorMessage(error)}`);
   };
 }
 
@@ -288,6 +272,33 @@ function checkRoutineSocketError(error: unknown): boolean {
   const fields: { readonly errqueue?: unknown; readonly code?: unknown } = error;
 
   return fields.errqueue === true || ROUTINE_SOCKET_ERRORS.has(String(fields.code));
+}
+
+// one line per minute at most, with a count of the ones it held back
+const SOCKET_ERROR_LOG_MS = 60_000;
+
+function makeLimitedLog(
+  log: (message: string) => void,
+  now: () => number,
+): (message: string) => void {
+  const state = { loggedAt: null as number | null, held: 0 };
+
+  return (message) => {
+    const at = now();
+
+    if (state.loggedAt !== null && at - state.loggedAt < SOCKET_ERROR_LOG_MS) {
+      state.held += 1;
+
+      return;
+    }
+
+    const held = state.held === 0 ? '' : ` (${String(state.held)} more since the last)`;
+
+    log(`${message}${held}`);
+
+    state.loggedAt = at;
+    state.held = 0;
+  };
 }
 
 export interface ResolverServer {
@@ -307,8 +318,8 @@ export async function startResolverServer(
   const limits = options.limits ?? DEFAULT_TCP_LIMITS;
   const open = createCountedLimit(limits.maxPerSlot);
 
-  // an unhandled error would end impd; the ICMP error of a reply to a guest
-  // that went is routine, anything else is logged
+  // an unhandled error would end impd, so every socket error and failed
+  // reply is logged, rate-limited, and the resolver carries on
   const reportError =
     options.reportError ?? createSocketErrorReport(options.log, options.now ?? Date.now);
 
