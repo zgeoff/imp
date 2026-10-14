@@ -839,7 +839,7 @@ test('#startResolverServer closes a TCP client idle past idleS', async () => {
   expect(dnsPacket.decode(answered.subarray(2))).toMatchObject({ id: 7, rcode: 'NOERROR' });
 }, 15_000);
 
-test('#startResolverServer stays up when a guest goes before its reply, and logs nothing of the ICMP error', async () => {
+test('#startResolverServer stays up when a guest goes before its reply, and logs the ICMP error', async () => {
   const ports = findFreePorts(1);
   const logs: string[] = [];
   const errors: unknown[] = [];
@@ -919,22 +919,17 @@ test('#startResolverServer stays up when a guest goes before its reply, and logs
   const answered = await reply.promise;
 
   expect(answered).toStrictEqual(query);
-  expect(logs).toStrictEqual([]);
+
+  expect(logs).toStrictEqual([
+    'impd: egress: resolver socket: ECONNREFUSED: connection refused, recv',
+  ]);
 });
 
-test('#startResolverServer reports a reply that the kernel refuses after a guest went, logs nothing, and answers the next query', async () => {
+test('#startResolverServer logs a reply that the kernel refuses after a guest went, and answers the next query', async () => {
   const ports = findFreePorts(1);
   const logs: string[] = [];
-  const errors: unknown[] = [];
   const reached: string[] = [];
   const released = Promise.withResolvers<void>();
-
-  const report = createSocketErrorReport(
-    (message) => {
-      logs.push(message);
-    },
-    () => 0,
-  );
 
   // holds the first two replies until the first guest has closed its port,
   // so both go out in one burst, before the loop reads the ICMP error
@@ -956,11 +951,7 @@ test('#startResolverServer reports a reply that the kernel refuses after a guest
       log: (message) => {
         logs.push(message);
       },
-      reportError: (...args) => {
-        errors.push(args.at(-1));
-
-        report(...args);
-      },
+      now: () => 0,
     },
   );
 
@@ -1005,7 +996,9 @@ test('#startResolverServer reports a reply that the kernel refuses after a guest
   released.resolve();
 
   await waitFor(() => {
-    expect(errors).toPartiallyContain({ code: 'ECONNREFUSED', syscall: 'send' });
+    expect(logs).toStrictEqual([
+      'impd: egress: resolver socket: ECONNREFUSED: connection refused, send',
+    ]);
   });
 
   const query = buildMockDnsQuery({ name: 'c.example', type: 'A' });
@@ -1016,8 +1009,6 @@ test('#startResolverServer reports a reply that the kernel refuses after a guest
   await waitFor(() => {
     expect(replies).toStrictEqual([query]);
   });
-
-  expect(logs).toStrictEqual([]);
 });
 
 test('#startResolverServer reports a TCP query whose handler fails, and answers the next one', async () => {
@@ -1082,36 +1073,63 @@ test('#startResolverServer reports a TCP query whose handler fails, and answers 
   expect(errors).toStrictEqual([new Error('the policy store is gone')]);
 });
 
-test('#createSocketErrorReport logs nothing of an ICMP error or an unreachable guest', () => {
+test.each([
+  ['ECONNREFUSED: connection refused, send', 'ECONNREFUSED', false],
+  ['EHOSTUNREACH: no route to host, send', 'EHOSTUNREACH', false],
+  ['ENETUNREACH: network is unreachable, send', 'ENETUNREACH', false],
+  ['EHOSTDOWN: host is down, recv', 'EHOSTDOWN', true],
+])(
+  '#createSocketErrorReport logs %p in the same minute as another socket error',
+  (message, code, errqueue) => {
+    const logs: string[] = [];
+
+    const report = createSocketErrorReport(
+      (line) => {
+        logs.push(line);
+      },
+      () => 0,
+    );
+
+    report(Object.assign(new Error(message), { code, errqueue }));
+
+    report(
+      Object.assign(new Error('ENOBUFS: no buffer space available, send'), { code: 'ENOBUFS' }),
+    );
+
+    expect(logs).toStrictEqual([
+      `impd: egress: resolver socket: ${message}`,
+      'impd: egress: resolver socket: ENOBUFS: no buffer space available, send',
+    ]);
+  },
+);
+
+test('#createSocketErrorReport logs a refused reply once a minute at most, with a count of the rest', () => {
   const logs: string[] = [];
+  const clock = { now: 0 };
 
   const report = createSocketErrorReport(
     (message) => {
       logs.push(message);
     },
-    () => 0,
+    () => clock.now,
   );
 
-  report(
-    Object.assign(new Error('EHOSTDOWN: host is down, recv'), {
-      code: 'EHOSTDOWN',
-      errqueue: true,
-    }),
-  );
+  const refused = Object.assign(new Error('ECONNREFUSED: connection refused, send'), {
+    code: 'ECONNREFUSED',
+  });
 
-  report(
-    Object.assign(new Error('ECONNREFUSED: connection refused, recv'), { code: 'ECONNREFUSED' }),
-  );
+  report(refused);
+  report(refused);
+  report(refused);
 
-  report(
-    Object.assign(new Error('EHOSTUNREACH: no route to host, send'), { code: 'EHOSTUNREACH' }),
-  );
+  clock.now = 60_000;
 
-  report(
-    Object.assign(new Error('ENETUNREACH: network is unreachable, send'), { code: 'ENETUNREACH' }),
-  );
+  report(refused);
 
-  expect(logs).toStrictEqual([]);
+  expect(logs).toStrictEqual([
+    'impd: egress: resolver socket: ECONNREFUSED: connection refused, send',
+    'impd: egress: resolver socket: ECONNREFUSED: connection refused, send (2 more since the last)',
+  ]);
 });
 
 test('#createSocketErrorReport logs another socket error once a minute at most, with a count of the rest', () => {
