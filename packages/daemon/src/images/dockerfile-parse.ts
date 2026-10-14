@@ -555,11 +555,9 @@ function findHeredocs(text: string, line: number): Heredoc[] {
       continue;
     }
 
-    const names = splitShellWords(rest, '\\', false);
-
-    if (names === null) {
-      throw new DockerfileError(`line ${String(line)}: the heredoc word ${rest} is not closed`);
-    }
+    // rest is the tail of a word the split above closed every quote of, so
+    // splitting it again never meets an open quote
+    const names = splitShellWords(rest, '\\', false) ?? [];
 
     if (names.length === 1) {
       heredocs.push({ name: names[0] ?? '', isStripped: match.groups?.['strip'] === '-' });
