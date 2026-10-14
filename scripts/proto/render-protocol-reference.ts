@@ -72,21 +72,19 @@ function renderComment(comment: string): string[] {
 }
 
 function formatType(field: DescField): string {
-  switch (field.fieldKind) {
-    case 'scalar': {
-      return formatScalar(field.scalar);
-    }
-    case 'message': {
-      return formatMessageLink(field.message);
-    }
-    case 'list': {
-      return `list of ${field.listKind === 'scalar' ? formatScalar(field.scalar) : formatListMember(field)}`;
-    }
-    case 'enum':
-    case 'map': {
-      throw new Error(`render-protocol-reference: ${field.name} is a ${field.fieldKind} field`);
-    }
+  if (field.fieldKind === 'scalar') {
+    return formatScalar(field.scalar);
   }
+
+  if (field.fieldKind === 'message') {
+    return formatMessageLink(field.message);
+  }
+
+  if (field.fieldKind === 'list') {
+    return `list of ${field.listKind === 'scalar' ? formatScalar(field.scalar) : formatListMember(field)}`;
+  }
+
+  throw new Error(`render-protocol-reference: ${field.name} is a ${field.fieldKind} field`);
 }
 
 function formatScalar(scalar: ScalarType): string {
