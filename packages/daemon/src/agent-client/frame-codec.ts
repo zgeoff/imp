@@ -1,4 +1,5 @@
 import type { JsonValue } from '@bufbuild/protobuf';
+import * as z from 'zod';
 
 // The agent wire format (docs/architecture/protocol.md#frames):
 // `[u8 type][u32 BE length][payload]`.
@@ -116,9 +117,7 @@ export function createFrameDecoder(): FrameDecoder {
 }
 
 export function decodeJsonPayload(frame: AgentFrame): JsonValue {
-  const value: JsonValue = JSON.parse(new TextDecoder().decode(frame.payload));
-
-  return value;
+  return z.json().parse(JSON.parse(new TextDecoder().decode(frame.payload)));
 }
 
 function mergeBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

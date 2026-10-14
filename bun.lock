@@ -209,6 +209,7 @@
         "@opentelemetry/api": "catalog:",
         "@opentelemetry/sdk-trace-base": "catalog:",
         "msw": "catalog:",
+        "zod": "catalog:",
       },
     },
   },

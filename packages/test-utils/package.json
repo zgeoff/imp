@@ -13,6 +13,7 @@
     "@mswjs/interceptors": "catalog:",
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/sdk-trace-base": "catalog:",
-    "msw": "catalog:"
+    "msw": "catalog:",
+    "zod": "catalog:"
   }
 }
