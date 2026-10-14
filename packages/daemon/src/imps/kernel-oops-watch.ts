@@ -11,7 +11,7 @@ const OOPS_TAINT = 128;
 
 // What a read of taint flag D found: unknown when impd could not read or
 // parse the taint mask, so the read proves neither an oops nor a reboot
-export type OopsFlag = 'clear' | 'set' | 'unknown';
+type OopsFlag = 'clear' | 'set' | 'unknown';
 
 // Whether the host's kernel has oopsed. An oops kills its task inside the
 // kernel and keeps the locks and holds that task had, such as a ZFS hold on
