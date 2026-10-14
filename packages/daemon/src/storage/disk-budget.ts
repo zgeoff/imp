@@ -102,12 +102,13 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   };
 
   // the check and the hold run under one lock, so two writes never both
-  // pass on the same reading
-  const holdRoom = (bytes: number) =>
+  // pass on the same reading; readWrittenBytes counts back what the write
+  // has written already, gone from `available` and still held in `pending`
+  const holdRoom = (bytes: number, readWrittenBytes: (usedBytes: number) => number = () => 0) =>
     mutex.runExclusive('ledger', async () => {
       const status = await readStatus();
 
-      const free = status.availableBytes - status.pendingBytes;
+      const free = status.availableBytes - status.pendingBytes + readWrittenBytes(status.usedBytes);
 
       if (free - bytes < status.reserveBytes) {
         throw buildDiskFullError(Math.max(0, free), status.reserveBytes, bytes);
@@ -145,11 +146,19 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   ): Promise<T> => {
     const held = { bytes: 0 };
 
+    // what the write has written is the growth in used bytes since it began,
+    // up to what it holds; another write in that time counts too, which is
+    // right while that write's own hold still counts its bytes twice
+    const start = await deps.storage.readUsage();
+
+    const readWrittenBytes = (usedBytes: number) =>
+      Math.min(held.bytes, Math.max(0, usedBytes - start.usedBytes));
+
     const grow = async (totalBytes: number) => {
       const more = totalBytes - held.bytes;
 
       if (more > 0) {
-        await holdRoom(more);
+        await holdRoom(more, readWrittenBytes);
 
         held.bytes += more;
       }

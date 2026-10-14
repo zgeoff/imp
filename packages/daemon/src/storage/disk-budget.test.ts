@@ -222,6 +222,87 @@ test('it refuses a growing write that grows past the reserve and frees what it h
   expect(status.pendingBytes).toBe(0);
 });
 
+test('it counts the bytes a growing write has written once', () => {
+  const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
+
+  const budget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ ...disk }) },
+    reserveBytes: 4 * 1024 ** 3,
+    log: mock<(message: string) => void>(),
+  });
+
+  const growing = budget.withGrowingRoom(async (grow) => {
+    await grow(4 * 1024 ** 3);
+
+    disk.usedBytes += 3 * 1024 ** 3;
+    disk.availableBytes -= 3 * 1024 ** 3;
+
+    // 7 GiB free and 1 GiB of the hold still to write: 1 GiB more leaves 5
+    await grow(5 * 1024 ** 3);
+
+    const grown = await budget.readStatus();
+
+    return grown.pendingBytes;
+  });
+
+  expect(growing).resolves.toBe(5 * 1024 ** 3);
+});
+
+test('it refuses a growing write that has written part of its hold and grows past the reserve', () => {
+  const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
+
+  const budget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ ...disk }) },
+    reserveBytes: 4 * 1024 ** 3,
+    log: mock<(message: string) => void>(),
+  });
+
+  const growing = budget.withGrowingRoom(async (grow) => {
+    await grow(4 * 1024 ** 3);
+
+    disk.usedBytes += 3 * 1024 ** 3;
+    disk.availableBytes -= 3 * 1024 ** 3;
+
+    // 7 GiB free and 1 GiB of the hold still to write: 3 GiB more leaves 3
+    await grow(7 * 1024 ** 3);
+  });
+
+  expect(growing).rejects.toMatchObject({
+    code: 'DISK_FULL',
+    data: {
+      availableBytes: 6 * 1024 ** 3,
+      reserveBytes: 4 * 1024 ** 3,
+      requestedBytes: 3 * 1024 ** 3,
+    },
+  });
+});
+
+test('it counts back no more than a growing write holds', () => {
+  const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
+
+  const budget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ ...disk }) },
+    reserveBytes: 4 * 1024 ** 3,
+    log: mock<(message: string) => void>(),
+  });
+
+  const growing = budget.withGrowingRoom(async (grow) => {
+    await grow(1024 ** 3);
+
+    // the growing write writes its 1 GiB, and a write that holds nothing 3 GiB
+    disk.usedBytes += 4 * 1024 ** 3;
+    disk.availableBytes -= 4 * 1024 ** 3;
+
+    // 6 GiB free and the hold all written: 4 GiB more leaves 2
+    await grow(5 * 1024 ** 3);
+  });
+
+  expect(growing).rejects.toMatchObject({
+    code: 'DISK_FULL',
+    data: { availableBytes: 6 * 1024 ** 3, requestedBytes: 4 * 1024 ** 3 },
+  });
+});
+
 test('it frees all a growing write held when its task throws', async () => {
   const budget = createDiskBudget({
     storage: {
