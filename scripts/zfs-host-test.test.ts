@@ -911,12 +911,97 @@ test('it keeps the pool file and fails while a pool still uses it', () => {
   expect(existsSync(join(work, 'bench.img'))).toBeTrue();
 });
 
+test('it removes its pool file while another pool uses a vdev path that only starts with it', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+
+  // another pool, whose vdev path is this run's bench.img with more after a space
+  writeFileSync(join(ctx.stubs, 'pools'), `tank ${work}/bench.img old\n`);
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr.toString()).not.toContain('it stays');
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe(`tank ${work}/bench.img old\n`);
+  expect(existsSync(join(work, 'bench.img'))).toBeFalse();
+});
+
+test('it keeps the pool file and fails while another pool uses a vdev path equal to it', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+  writeFileSync(join(ctx.stubs, 'pools'), `tank ${work}/bench.img\n`);
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    `zfs-host-test: a pool still uses ${work}/bench.img; it stays\n`,
+  );
+
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe(`tank ${work}/bench.img\n`);
+  expect(existsSync(join(work, 'bench.img'))).toBeTrue();
+});
+
 test('it destroys its pool and removes the file when the work dir path holds spaces', () => {
   const ctx = setupTest();
 
   createStubInstanceDocker(ctx.stubs, { containers: [] });
 
   const work = join(ctx.dir, 'work dir');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs);
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe('');
+  expect(existsSync(join(work, 'bench.img'))).toBeFalse();
+});
+
+test('it destroys its pool and removes the file when the work dir path holds a state word', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work  ONLINE dir');
 
   mkdirSync(work);
   createStubZpool(ctx.stubs);

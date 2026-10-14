@@ -525,6 +525,70 @@ test('it keeps the pool file and fails while a pool still uses it', () => {
   expect(existsSync(join(work, 'pool.img'))).toBeTrue();
 });
 
+test('it removes its pool file while another pool uses a vdev path that only starts with it', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+
+  const zpool = createStubZpool(ctx.stubs);
+
+  // another pool, whose vdev path is this run's pool.img with more after a space
+  writeFileSync(join(ctx.stubs, 'pools'), `tank ${work}/pool.img old\n`);
+  createStubBin(ctx.stubs, 'id', 'echo 0');
+  createStubZfs(ctx.stubs);
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect({ exitCode: result.exitCode, stderr: result.stderr.toString() }).toStrictEqual({
+    exitCode: 0,
+    stderr: '',
+  });
+
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe(`tank ${work}/pool.img old\n`);
+  expect(existsSync(join(work, 'pool.img'))).toBeFalse();
+});
+
+test('it keeps the pool file and fails while another pool uses a vdev path equal to it', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+
+  const zpool = createStubZpool(ctx.stubs);
+
+  writeFileSync(join(ctx.stubs, 'pools'), `tank ${work}/pool.img\n`);
+  createStubBin(ctx.stubs, 'id', 'echo 0');
+  createStubZfs(ctx.stubs);
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString()).toBe(`test-zfs: a pool still uses ${work}/pool.img; it stays\n`);
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe(`tank ${work}/pool.img\n`);
+  expect(existsSync(join(work, 'pool.img'))).toBeTrue();
+});
+
 test('it makes a work dir that does not exist yet, parents included', () => {
   const ctx = setupTest();
   const work = join(ctx.dir, 'not', 'yet', 'work');
@@ -553,6 +617,34 @@ test('it makes a work dir that does not exist yet, parents included', () => {
 test('it destroys its pool and removes the file when the work dir path holds spaces', () => {
   const ctx = setupTest();
   const work = join(ctx.dir, 'work dir');
+
+  mkdirSync(work);
+
+  const zpool = createStubZpool(ctx.stubs);
+
+  createStubBin(ctx.stubs, 'id', 'echo 0');
+  createStubZfs(ctx.stubs);
+  createStubBin(ctx.stubs, 'mount');
+  createStubBin(ctx.stubs, 'umount');
+  createStubBin(ctx.stubs, 'bun');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: `${zpool.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_TEST_GIB: '1',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(join(ctx.stubs, 'pools'), 'utf8')).toBe('');
+  expect(existsSync(join(work, 'pool.img'))).toBeFalse();
+});
+
+test('it destroys its pool and removes the file when the work dir path holds a state word', () => {
+  const ctx = setupTest();
+  const work = join(ctx.dir, 'work  ONLINE dir');
 
   mkdirSync(work);
 
