@@ -186,6 +186,41 @@ test('#createImpClient rejects a call with a wrong token as UNAUTHORIZED', async
   expect(client.system.info()).rejects.toMatchObject({ code: 'UNAUTHORIZED', status: 401 });
 });
 
+test('#createImpClient rejects a procedure impd does not have as an unknown procedure', async () => {
+  const ctx = await setupTest();
+  const impd = await ctx.startImpd();
+
+  // an impd from before the stream: the call reaches a path impd has no
+  // procedure for, which it answers with its own plain-text not-found
+  server.use(
+    http.all('http://impd.test/*', (info) =>
+      impd.api.app.handle(
+        new Request(
+          info.request.url.replace('/rpc/events/stream', '/rpc/events/retired'),
+          info.request,
+        ),
+      ),
+    ),
+  );
+
+  expect(ctx.client.events.stream()).rejects.toMatchObject({
+    name: 'UnknownProcedureError',
+    procedure: 'events.stream',
+    message: 'impd has no procedure events.stream',
+  });
+});
+
+test('#createImpClient keeps impd’s NOT_FOUND for an imp it does not have', async () => {
+  const ctx = await setupTest();
+
+  await ctx.startImpd();
+
+  expect(ctx.client.imps.get({ name: 'ghost' })).rejects.toMatchObject({
+    code: 'NOT_FOUND',
+    status: 404,
+  });
+});
+
 test('#requireAwake wakes a sleeping imp', async () => {
   const ctx = await setupTest();
 

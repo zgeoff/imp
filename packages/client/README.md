@@ -166,7 +166,8 @@ after the start it ends the session as `CLOSED`.
 
 ## Errors
 
-A failed call throws an `ORPCError`. impd's errors carry a `code` and typed `data`:
+A failed call throws an `ORPCError`, or an `UnknownProcedureError` for a procedure that an older
+impd lacks. impd's errors carry a `code` and typed `data`:
 
 | Code                  | When                                                 | `data`                                 |
 | --------------------- | ---------------------------------------------------- | -------------------------------------- |
