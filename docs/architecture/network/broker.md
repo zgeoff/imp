@@ -26,8 +26,9 @@ socket in the data directory, with a leaf certificate from the broker's own CA. 
 that CA, because impd writes it into the guest's trust bundle. The terminator reads the grant, the
 rule and the value for each request as it arrives, not when the connection opens, so a revoke takes
 effect on the next request, and an audit row records each request it sent with a credential. The
-front port and the terminator also record each request they refuse, with the imp, the host and the
-reason. Both refuse before they read any credential, so a refused row never holds one.
+front port and the terminator also record each request they refuse, with the imp, the reason and the
+host when the request names one. Both refuse before they read any credential, so a refused row never
+holds one.
 
 Any other host gets a plain tunnel. A tunnel starts inside the host container, past the firewall
 that holds the guests in, so the broker refuses it every private, shared, loopback and link-local
