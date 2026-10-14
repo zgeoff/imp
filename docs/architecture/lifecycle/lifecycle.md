@@ -61,7 +61,10 @@ each repair of a lost VM. It blames the oops only after it saw the flag go from 
 because a VM that ran when impd started had already outlived any earlier oops. It also blames it
 only for a VM that was running when impd first read the flag set, because a VM that booted or woke
 later never met the oops. Until the flag clears, impd refuses a start or a wake of that imp with an
-error that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)).
+error that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold
+lives in the imp's record, so it outlasts the reboot that freed the disk. impd therefore clears
+every hold at a start that reads the flag clear, because only a reboot clears the flag, and a later
+oops in another task never holds the imp again.
 
 Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
 controller try the lock and skip the imp when anything holds it or waits for it. The governor holds

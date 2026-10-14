@@ -331,3 +331,50 @@ test('it starts an imp a kernel oops killed once the host has rebooted', async (
   expect(started.state).toBe('running');
   expect(record?.error).toBeNull();
 });
+
+test('it starts an imp held by an oops of an earlier boot after a new oops in another task', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops left before the reboot, which cleared the flag
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+  });
+
+  writeFileSync(ctx.taintPath, '0\n');
+
+  // impd's start after the reboot reads the flag clear; then another task oopses
+  await ctx.imps.reconcileImps();
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  const started = await ctx.imps.startImp('dev');
+
+  expect(started.state).toBe('running');
+});
+
+test('it keeps the hold of an imp a kernel oops killed when impd starts with the flag still set', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops of this boot left before impd restarted
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+  });
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  await ctx.imps.reconcileImps();
+
+  expect(ctx.imps.startImp('dev')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+});

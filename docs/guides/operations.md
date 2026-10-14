@@ -360,8 +360,10 @@ To recover:
 3. Reboot the host.
 4. Check that impd sees a clear flag: `curl -s http://127.0.0.1:7070/health`. Expect
    `"warnings":[]`.
-5. Start each imp that shows `a kernel oops killed firecracker`: `imp start <name>`. It boots cold
-   from its disk, and a successful boot clears the error.
+5. Start each imp that the oops held: `imp start <name>`. impd cleared its hold at start, when it
+   read the flag clear, and logged
+   `impd: <name>: the host rebooted since a kernel oops held its disk`. The imp boots cold from its
+   disk.
 
 ## Troubleshooting
 
