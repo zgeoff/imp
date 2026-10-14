@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { ImageSourceSchema } from '@imp/api';
+import { GrantFilterSchema, ImageSourceSchema } from '@imp/api';
 import * as z from 'zod';
 import { writeConsistentCopy } from '../db/database-copy';
 import type { ImpDatabase } from '../db/open-database';
@@ -24,7 +24,16 @@ const CopyImpSchema = z.object({
   backup: z.int(),
 });
 
-const CopyGrantSchema = z.object({ impId: z.string(), secretName: z.string() });
+// the filter as the grants row keeps it, JSON or null
+const CopyGrantSchema = z.object({
+  impId: z.string(),
+  secretName: z.string(),
+  filter: z
+    .string()
+    .nullable()
+    .transform((json) => (json === null ? null : GrantFilterSchema.parse(JSON.parse(json)))),
+});
+
 const CopyMemberSchema = z.object({ impId: z.string(), network: z.string() });
 
 const CopyCheckpointSchema = z.object({
@@ -106,7 +115,9 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
       .all();
 
     const grants = copy
-      .query('SELECT imp_id AS impId, secret_name AS secretName FROM grants ORDER BY secret_name')
+      .query(
+        'SELECT imp_id AS impId, secret_name AS secretName, filter FROM grants ORDER BY secret_name',
+      )
       .all();
 
     const members = copy

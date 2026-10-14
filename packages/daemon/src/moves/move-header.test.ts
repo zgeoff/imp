@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { MoveHeaderSchema } from './move-header';
 
-test('it fills the defaults of a cold header from a source before boots, leases or warm moves', () => {
+test('it fills the defaults of a cold header from a source before boots, leases, warm moves or grant filters', () => {
   const result = MoveHeaderSchema.safeParse({
     version: 1,
     imp: {
@@ -41,6 +41,7 @@ test('it fills the defaults of a cold header from a source before boots, leases 
       cpu: { limit: null, weight: 100 },
       egress: { mode: 'open', allow: [] },
       grants: [],
+      filteredGrants: [],
       isIdentityResetPending: false,
       isDiskGrowPending: false,
       isBackedUp: true,
@@ -75,6 +76,7 @@ test('it reads the dates of a ZFS warm header with boots, leases and checkpoints
       cpu: { limit: 1.5, weight: 200 },
       egress: { mode: 'box', allow: ['github.com'] },
       grants: ['gh-token'],
+      filteredGrants: [{ secret: 'model', filter: { methods: ['POST'], paths: ['/v1/messages'] } }],
       isIdentityResetPending: true,
       isDiskGrowPending: true,
       isBackedUp: false,
@@ -158,6 +160,7 @@ test('it reads the dates of a ZFS warm header with boots, leases and checkpoints
       cpu: { limit: 1.5, weight: 200 },
       egress: { mode: 'box', allow: ['github.com'] },
       grants: ['gh-token'],
+      filteredGrants: [{ secret: 'model', filter: { methods: ['POST'], paths: ['/v1/messages'] } }],
       isIdentityResetPending: true,
       isDiskGrowPending: true,
       isBackedUp: false,

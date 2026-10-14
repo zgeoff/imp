@@ -765,6 +765,7 @@ export function buildRouter(deps: RouterDeps) {
           input.name,
           input.secret,
           findGrantAuthority(context.context.caller, input.secret),
+          input.filter,
         );
 
         return {};
@@ -781,6 +782,9 @@ export function buildRouter(deps: RouterDeps) {
         return {};
       }),
       list: os.grants.list.handler((context) => deps.broker.listGrants(context.input.name)),
+      details: os.grants.details.handler((context) =>
+        deps.broker.listGrantDetails(context.input.name),
+      ),
     },
     audit: {
       list: os.audit.list.handler((context) => {

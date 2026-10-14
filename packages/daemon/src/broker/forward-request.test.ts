@@ -1012,3 +1012,158 @@ test('it passes gzip bytes through unchanged, without decompressing them', async
 
   expect(new Uint8Array(body)).toStrictEqual(new Uint8Array(gzipped));
 });
+
+test('it sends a request inside the grant’s filter with the real credential', async () => {
+  const received =
+    mock<(sent: Readonly<{ method: string; authorization: string | null }>) => void>();
+
+  server.use(
+    http.get('https://api.github.com/repos/a/b/issues', (info) => {
+      received({
+        method: info.request.method,
+        authorization: info.request.headers.get('authorization'),
+      });
+
+      return HttpResponse.text('upstream body');
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () =>
+      Promise.resolve(
+        buildMockCredential({
+          secretName: 'gh',
+          header: 'authorization',
+          value: 'Bearer real',
+          filter: { methods: ['GET', 'HEAD'], paths: ['/repos/*/*/issues'] },
+        }),
+      ),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+  });
+
+  const response = await forward(
+    new Request('https://api.github.com/repos/a/b/issues', {
+      headers: { host: 'api.github.com', authorization: 'Bearer imp-broker-placeholder' },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    method: 'GET',
+    authorization: 'Bearer real',
+  });
+});
+
+test('it refuses a method outside the grant’s filter with 403 and sends nothing upstream', async () => {
+  const received = mock();
+
+  server.use(
+    http.all('https://api.github.com/*', () => {
+      received();
+
+      return HttpResponse.text('upstream body');
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () =>
+      Promise.resolve(
+        buildMockCredential({ filter: { methods: ['GET'], paths: ['/repos/*/*/issues'] } }),
+      ),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+  });
+
+  const response = await forward(
+    new Request('https://api.github.com/repos/a/b/issues', {
+      method: 'POST',
+      headers: { host: 'api.github.com' },
+      body: 'payload',
+    }),
+  );
+
+  const text = await response.text();
+
+  expect(response.status).toBe(403);
+  expect(text).toBe('the grant for api.github.com does not cover POST /repos/a/b/issues\n');
+  expect(received).not.toHaveBeenCalled();
+});
+
+test('it refuses a path outside the grant’s filter with 403 and sends nothing upstream', async () => {
+  const received = mock();
+
+  server.use(
+    http.all('https://api.github.com/*', () => {
+      received();
+
+      return HttpResponse.text('upstream body');
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () =>
+      Promise.resolve(
+        buildMockCredential({ filter: { methods: ['GET'], paths: ['/repos/*/*/issues'] } }),
+      ),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+  });
+
+  const response = await forward(
+    new Request('https://api.github.com/repos/a/b/collaborators', {
+      headers: { host: 'api.github.com' },
+    }),
+  );
+
+  const text = await response.text();
+
+  expect(response.status).toBe(403);
+  expect(text).toBe('the grant for api.github.com does not cover GET /repos/a/b/collaborators\n');
+  expect(received).not.toHaveBeenCalled();
+});
+
+test('it records a refused audit row with no secret, header or body for a request outside the filter', async () => {
+  const recordAudit = mock<(entry: NewAuditEntry) => void>();
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () =>
+      Promise.resolve(buildMockCredential({ secretName: 'gh', filter: { methods: ['GET'] } })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit,
+  });
+
+  await forward(
+    new Request('https://api.github.com/repos/x/issues?token=query-secret', {
+      method: 'DELETE',
+      headers: {
+        host: 'api.github.com',
+        authorization: 'Bearer imp-broker-placeholder',
+        cookie: 'session=cookie-secret',
+      },
+    }),
+  );
+
+  expect(recordAudit).toHaveBeenCalledExactlyOnceWith({
+    impId: 'imp-1',
+    secretName: null,
+    at: expect.toBeValidDate(),
+    method: 'DELETE',
+    host: 'api.github.com',
+    path: '/repos/x/issues',
+    status: 403,
+    requestBytes: 0,
+    responseBytes: 0,
+    durationMs: expect.toBeNumber(),
+    reason: 'outside-filter',
+  });
+});

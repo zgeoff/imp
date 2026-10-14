@@ -5,6 +5,7 @@ import type {
   BackupStatus,
   Checkpoint,
   ExposeResult,
+  Grant,
   Identity,
   Image,
   Imp,
@@ -621,6 +622,18 @@ export function formatRefusedRequests(refused: readonly RefusedRequest[]): strin
       String(entry.status),
       String(entry.durationMs),
       entry.reason,
+    ]),
+  );
+}
+
+// a list a filter leaves out allows any method or any path: `*`
+export function formatGrants(grants: readonly Grant[]): string {
+  return formatTable(
+    ['SECRET', 'METHODS', 'PATHS'],
+    grants.map((grant) => [
+      grant.secret,
+      grant.filter?.methods?.join(',') ?? '*',
+      grant.filter?.paths?.join(',') ?? '*',
     ]),
   );
 }

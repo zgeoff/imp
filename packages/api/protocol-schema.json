@@ -9811,6 +9811,32 @@
           "secret": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "methods": {
+                "readOnly": true,
+                "minItems": 1,
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{1,16}$"
+                }
+              },
+              "paths": {
+                "readOnly": true,
+                "minItems": 1,
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "pattern": "^(?:\\/(?:\\*|[A-Za-z0-9._~!$&'()+,;=:@-]*))*(?:\\/\\*\\*)?$"
+                }
+              }
+            }
           }
         },
         "required": [
@@ -9868,6 +9894,72 @@
         "items": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]{0,30}$"
+        }
+      },
+      "stream": false
+    },
+    "grants.details": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "output": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "secret": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,30}$"
+            },
+            "filter": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "methods": {
+                      "readOnly": true,
+                      "minItems": 1,
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{1,16}$"
+                      }
+                    },
+                    "paths": {
+                      "readOnly": true,
+                      "minItems": 1,
+                      "maxItems": 64,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 512,
+                        "pattern": "^(?:\\/(?:\\*|[A-Za-z0-9._~!$&'()+,;=:@-]*))*(?:\\/\\*\\*)?$"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "secret",
+            "filter"
+          ],
+          "additionalProperties": false
         }
       },
       "stream": false
@@ -10033,7 +10125,8 @@
                 "address-refused",
                 "wrong-host",
                 "websocket",
-                "no-grant"
+                "no-grant",
+                "outside-filter"
               ]
             }
           },
@@ -12222,6 +12315,9 @@
                 "type": "boolean"
               },
               "brokerRefusals": {
+                "type": "boolean"
+              },
+              "grantFilters": {
                 "type": "boolean"
               }
             },

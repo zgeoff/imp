@@ -504,6 +504,96 @@ test('it copies the grants of the source to a fork', async () => {
   expect(copied).toStrictEqual(['claude', 'gh']);
 });
 
+test('it copies each grant’s filter to a fork', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'npm_SECRETVALUE0123456789' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: { methods: ['GET'] } });
+  await ctx.client.grants.add({ name: 'dev', secret: 'npm' });
+  await ctx.client.imps.fork({ source: 'dev', name: 'copy' });
+
+  const copied = await ctx.client.grants.details({ name: 'copy' });
+
+  expect(copied).toStrictEqual([
+    { secret: 'gh', filter: { methods: ['GET'] } },
+    { secret: 'npm', filter: null },
+  ]);
+});
+
+test('it lists each grant with its filter, and null for a grant of the whole host', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'npm_SECRETVALUE0123456789' });
+
+  await ctx.client.grants.add({
+    name: 'dev',
+    secret: 'gh',
+    filter: { methods: ['GET', 'HEAD'], paths: ['/repos/*/*/issues', '/user'] },
+  });
+
+  await ctx.client.grants.add({ name: 'dev', secret: 'npm' });
+
+  const grants = await ctx.client.grants.details({ name: 'dev' });
+
+  expect(grants).toStrictEqual([
+    { secret: 'gh', filter: { methods: ['GET', 'HEAD'], paths: ['/repos/*/*/issues', '/user'] } },
+    { secret: 'npm', filter: null },
+  ]);
+});
+
+test('it lists a filtered grant by name alone, as an older client reads grants', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: { methods: ['GET'] } });
+
+  const names = await ctx.client.grants.list({ name: 'dev' });
+
+  expect(names).toStrictEqual(['gh']);
+});
+
+test('it keeps a grant’s filter when the grant is made again without one', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: { methods: ['GET'] } });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+
+  const grants = await ctx.client.grants.details({ name: 'dev' });
+
+  expect(grants).toStrictEqual([{ secret: 'gh', filter: { methods: ['GET'] } }]);
+});
+
+test('it replaces a grant’s filter with the one a new grant call gives', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: { methods: ['GET'] } });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: { paths: ['/user'] } });
+
+  const grants = await ctx.client.grants.details({ name: 'dev' });
+
+  expect(grants).toStrictEqual([{ secret: 'gh', filter: { paths: ['/user'] } }]);
+});
+
+test('it refuses a grant whose filter names neither methods nor paths', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_SECRETVALUE0123456789' });
+
+  expect(ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: {} })).rejects.toMatchObject({
+    code: 'BAD_REQUEST',
+  });
+});
+
 test('it takes the grants and the value file of a deleted secret along', async () => {
   const ctx = await setupTest();
 

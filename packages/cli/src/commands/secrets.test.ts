@@ -5,9 +5,15 @@ import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildStubBrokerTokenEndpoint } from '@imp/daemon/src/test-utils/build-stub-broker-token-endpoint';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
@@ -130,6 +136,13 @@ async function setupTest() {
     impd.egress.stop();
     impd.diskUsage.stop();
   });
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  // the default image, which every imp the tests create boots
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
 
   const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
 
@@ -743,6 +756,108 @@ test('it lists no refused broker requests from an impd without them', async () =
   });
 
   expect(older.calls).toStrictEqual(['system/info']);
+});
+
+test('it grants a secret for the methods and paths given', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
+
+  const result = await runCli({
+    args: ['grant', 'dev', 'gh', '--methods', 'GET,HEAD', '--paths', '/repos/*/*/issues,/user'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  const grants = await ctx.client.grants.details({ name: 'dev' });
+
+  expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0 });
+
+  expect(grants).toStrictEqual([
+    { secret: 'gh', filter: { methods: ['GET', 'HEAD'], paths: ['/repos/*/*/issues', '/user'] } },
+  ]);
+});
+
+test('it grants a secret for the whole host without --methods or --paths', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
+
+  const result = await runCli({
+    args: ['grant', 'dev', 'gh'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  const grants = await ctx.client.grants.details({ name: 'dev' });
+
+  expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0 });
+  expect(grants).toStrictEqual([{ secret: 'gh', filter: null }]);
+});
+
+test('it refuses a path pattern that is not one, before it calls impd', async () => {
+  const result = await runCli({
+    args: ['grant', 'dev', 'gh', '--paths', '/v1/**/x'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      'imp: --paths: must be a path such as /v1/messages, with * for one segment and a last /** for the rest\n',
+    code: 2,
+  });
+});
+
+test('it makes no filtered grant on an impd from before grant filters', async () => {
+  const ctx = await setupTest();
+
+  const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, {
+    withoutFeatures: ['grantFilters'],
+  });
+
+  const result = await runCli({
+    args: ['grant', 'dev', 'gh', '--methods', 'GET'],
+    env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr:
+      'imp: this impd has no grant filters and would grant the whole host; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+    code: 1,
+  });
+
+  expect(older.calls).toStrictEqual(['system/info']);
+});
+
+test('it lists each grant with the methods and paths it covers', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.client.secrets.add({ name: 'npm', kind: 'npm', value: 'npm_value' });
+
+  await ctx.client.grants.add({
+    name: 'dev',
+    secret: 'gh',
+    filter: { methods: ['GET'], paths: ['/repos/**'] },
+  });
+
+  await ctx.client.grants.add({ name: 'dev', secret: 'npm' });
+
+  const result = await runCli({
+    args: ['grants', 'dev', '--filters'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: ['SECRET  METHODS  PATHS', 'gh      GET      /repos/**', 'npm     *        *', ''].join(
+      '\n',
+    ),
+    stderr: '',
+    code: 0,
+  });
 });
 
 test('it refuses an audit kind other than broker, refused or api', async () => {

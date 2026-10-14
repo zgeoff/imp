@@ -241,6 +241,7 @@ test('it serves system.info from config and the database', async () => {
       secretUpstream: true,
       backupOptOut: true,
       brokerRefusals: true,
+      grantFilters: true,
     },
     ksm: null,
   });

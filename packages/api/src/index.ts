@@ -122,6 +122,7 @@ export type { Network, NetworkJoin } from './schemas/network-schema';
 
 export {
   BrokerRuleSchema,
+  GrantFilterSchema,
   OAuthConfigSchema,
   SecretKindSchema,
   SecretNameSchema,
@@ -131,6 +132,8 @@ export type {
   AuditEntry,
   AuditRefusal,
   BrokerRule,
+  Grant,
+  GrantFilter,
   OAuthConfig,
   RefusedRequest,
   Secret,

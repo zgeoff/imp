@@ -125,6 +125,46 @@ export const SecretAddedSchema = SecretSchema.extend({
 
 export type SecretAdded = z.infer<typeof SecretAddedSchema>;
 
+// An HTTP method as a request line names it: an uppercase token such as GET
+const GrantMethodSchema = z
+  .string()
+  .regex(/^[A-Z]{1,16}$/, 'must be an uppercase method such as GET');
+
+// Matched segment by segment: `*` is any one non-empty segment, a last `**`
+// the rest of the path, none included. No `%`: a pattern names a path only as
+// the URL parser leaves it (docs/guides/connectors.md#narrow-a-grant).
+const GrantPathSchema = z
+  .string()
+  .max(512)
+  .regex(
+    /^(?:\/(?:\*|[A-Za-z0-9._~!$&'()+,;=:@-]*))*(?:\/\*\*)?$/,
+    'must be a path such as /v1/messages, with * for one segment and a last /** for the rest',
+  )
+  .refine((path) => path.startsWith('/'), 'must start with /');
+
+// What a grant limits its credential to (docs/guides/connectors.md#narrow-a-grant):
+// a request gets it only when its method is one of `methods` and its path
+// matches one of `paths`. A list left out allows any method or any path.
+export const GrantFilterSchema = z
+  .object({
+    methods: z.array(GrantMethodSchema).min(1).max(16).readonly().optional(),
+    paths: z.array(GrantPathSchema).min(1).max(64).readonly().optional(),
+  })
+  .refine(
+    (filter) => filter.methods !== undefined || filter.paths !== undefined,
+    'must name methods, paths or both',
+  );
+
+export type GrantFilter = z.infer<typeof GrantFilterSchema>;
+
+// One secret granted to an imp, with its filter; null for the whole host
+export const GrantSchema = z.object({
+  secret: SecretNameSchema,
+  filter: GrantFilterSchema.nullable(),
+});
+
+export type Grant = z.infer<typeof GrantSchema>;
+
 // Why the broker refused a request, before any credential was added.
 const AuditRefusalSchema = z.enum([
   // the front port's head was not HTTP/1, not a CONNECT, or not to host:port
@@ -149,6 +189,9 @@ const AuditRefusalSchema = z.enum([
 
   // the grant for the host was gone when the request came
   'no-grant',
+
+  // the request's method or path is outside the grant's filter
+  'outside-filter',
 ]);
 
 export type AuditRefusal = z.infer<typeof AuditRefusalSchema>;

@@ -107,6 +107,10 @@ const SystemFeaturesSchema = z.object({
 
   // audit.refused, the requests the broker refused
   brokerRefusals: z.boolean().optional(),
+
+  // grants.add takes `filter` and grants.details lists it; an older impd
+  // drops the filter unread and would grant the whole host
+  grantFilters: z.boolean().optional(),
 });
 
 export const SystemInfoSchema = z.object({

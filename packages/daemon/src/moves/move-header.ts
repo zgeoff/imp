@@ -1,4 +1,10 @@
-import { ColdBootCauseSchema, ImageSourceSchema, LeaseLabelSchema, WarmMoveSchema } from '@imp/api';
+import {
+  ColdBootCauseSchema,
+  GrantFilterSchema,
+  ImageSourceSchema,
+  LeaseLabelSchema,
+  WarmMoveSchema,
+} from '@imp/api';
 import * as z from 'zod';
 import { SnapshotMetaSchema } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
@@ -52,6 +58,9 @@ const MovedLeaseSchema = MovedLeaseOwnerSchema.extend({
 
 export type MovedLease = z.infer<typeof MovedLeaseSchema>;
 
+// a grant with its method and path filter
+const FilteredGrantSchema = z.object({ secret: z.string(), filter: GrantFilterSchema }).readonly();
+
 const ImpSchema = z
   .object({
     // it names the target's datasets and paths, so only a UUID
@@ -68,8 +77,14 @@ const ImpSchema = z
     cpu: CpuSchema,
     egress: EgressSchema,
 
-    // the names of the secrets granted to it; a value never leaves its host
+    // the names of the secrets granted to it for the whole host; a value
+    // never leaves its host
     grants: z.array(z.string()).readonly(),
+
+    // the grants with a method and path filter, apart from `grants` so that
+    // a target from before filters drops them rather than grant the whole
+    // host; left out by an older source, which had none
+    filteredGrants: z.array(FilteredGrantSchema).readonly().default([]),
 
     // a template copy whose first boot has not reset its identity yet
     isIdentityResetPending: z.boolean(),

@@ -1122,3 +1122,167 @@ test('it refuses a test upstream whose certificate the file’s CA did not sign'
   expect(result).toStrictEqual({ code: 0, stdout: 'could not reach api.github.com\n', stderr: '' });
   expect(ctx.seen).toStrictEqual([]);
 });
+
+test('it sends the real credential with a request inside the grant’s filter', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/repos/a/b/issues', () => new Response('the issues'));
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+
+  await ctx.client.grants.add({
+    name: 'dev',
+    secret: 'gh',
+    filter: { methods: ['GET'], paths: ['/repos/*/*/issues'] },
+  });
+
+  const result = await ctx.guest.curl('https://api.github.com/repos/a/b/issues?state=open', [
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
+  ]);
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'the issues', stderr: '' });
+
+  expect(ctx.seen).toStrictEqual([
+    { method: 'GET', path: '/repos/a/b/issues', authorization: 'Bearer ghp_real', bodyBytes: 0 },
+  ]);
+});
+
+test('it refuses a method outside the grant’s filter and audits it with the reason', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+
+  await ctx.client.grants.add({
+    name: 'dev',
+    secret: 'gh',
+    filter: { methods: ['GET'], paths: ['/repos/*/*/issues'] },
+  });
+
+  const result = await ctx.guest.curl('https://api.github.com/repos/a/b/issues', [
+    '-X',
+    'POST',
+    '--data',
+    'body-secret',
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
+  ]);
+
+  const audit: unknown = await waitFor(async () => {
+    const entries = await ctx.client.audit.refused({ name: 'dev' });
+
+    expect(entries).toHaveLength(1);
+
+    return entries;
+  });
+
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: 'the grant for api.github.com does not cover POST /repos/a/b/issues\n',
+    stderr: '',
+  });
+
+  expect(ctx.seen).toStrictEqual([]);
+
+  expect(audit).toStrictEqual([
+    {
+      at: expect.toBeValidDate() as unknown,
+      imp: 'dev',
+      method: 'POST',
+      host: 'api.github.com',
+      path: '/repos/a/b/issues',
+      status: 403,
+      durationMs: expect.toBeNumber() as unknown,
+      reason: 'outside-filter',
+    },
+  ]);
+});
+
+test('it refuses a path outside the grant’s filter and audits it with the reason', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+
+  await ctx.client.grants.add({
+    name: 'dev',
+    secret: 'gh',
+    filter: { methods: ['GET'], paths: ['/repos/*/*/issues'] },
+  });
+
+  const result = await ctx.guest.curl('https://api.github.com/repos/a/b/collaborators?x=1', [
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
+  ]);
+
+  const audit: unknown = await waitFor(async () => {
+    const entries = await ctx.client.audit.refused({ name: 'dev' });
+
+    expect(entries).toHaveLength(1);
+
+    return entries;
+  });
+
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: 'the grant for api.github.com does not cover GET /repos/a/b/collaborators\n',
+    stderr: '',
+  });
+
+  expect(ctx.seen).toStrictEqual([]);
+
+  expect(audit).toStrictEqual([
+    {
+      at: expect.toBeValidDate() as unknown,
+      imp: 'dev',
+      method: 'GET',
+      host: 'api.github.com',
+      path: '/repos/a/b/collaborators',
+      status: 403,
+      durationMs: expect.toBeNumber() as unknown,
+      reason: 'outside-filter',
+    },
+  ]);
+});
+
+test('it applies a filter given to an existing grant from the next request on', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.github.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/user', () => new Response('from upstream'));
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.impd.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+  await ctx.guest.curl('https://api.github.com/user');
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh', filter: { paths: ['/repos/**'] } });
+
+  const result = await ctx.guest.curl('https://api.github.com/user');
+
+  expect(result.stdout).toBe('the grant for api.github.com does not cover GET /user\n');
+
+  expect(ctx.seen).toStrictEqual([
+    { method: 'GET', path: '/user', authorization: 'Bearer ghp_real', bodyBytes: 0 },
+  ]);
+});

@@ -42,10 +42,10 @@ imp backup restore --all --merge               # add every imp to a host that ha
 - A name in use stops the restore with a conflict that names the imp; `--as` picks another name.
 - `--all` refuses a host that has imps, unless `--merge`. With `--merge`, every name is checked
   first, and a clash names the imp; nothing is restored then.
-- Each grant comes back when a secret of that name exists on this host. The rest are listed, and
-  `imp backup restore` prints them. Secret values are never in a backup: add the secrets first, with
-  `imp secret add`, or restore every imp from a backup with the database copy, which brings the
-  secrets back without their values.
+- Each grant comes back, with its method and path filter, when a secret of that name exists on this
+  host. The rest are listed, and `imp backup restore` prints them. Secret values are never in a
+  backup: add the secrets first, with `imp secret add`, or restore every imp from a backup with the
+  database copy, which brings the secrets back without their values.
 
 ## Whole-host restore
 

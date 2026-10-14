@@ -62,6 +62,7 @@ test('it builds a default system info', () => {
       secretUpstream: true,
       backupOptOut: true,
       brokerRefusals: true,
+      grantFilters: true,
     },
   });
 
@@ -131,6 +132,7 @@ test('it applies overrides on top of the defaults', () => {
       secretUpstream: true,
       backupOptOut: true,
       brokerRefusals: true,
+      grantFilters: true,
     },
   });
 });

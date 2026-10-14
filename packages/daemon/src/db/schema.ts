@@ -51,6 +51,7 @@ export interface Checkpoints {
 }
 
 export interface Grants {
+  filter: string | null;
   imp_id: string;
   secret_generation: Generated<string>;
   secret_name: string;

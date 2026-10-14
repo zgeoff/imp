@@ -409,7 +409,14 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     const known = new Set(secrets.map((secret) => secret.name));
 
-    for (const secretName of header.imp.grants) {
+    const grants = [
+      ...header.imp.grants.map((secret) => ({ secret, filter: undefined })),
+      ...header.imp.filteredGrants,
+    ];
+
+    for (const grant of grants) {
+      const secretName = grant.secret;
+
       if (!known.has(secretName)) {
         deps.log(
           `impd: move: ${header.imp.name}: grant ${secretName} dropped: no such secret here`,
@@ -419,7 +426,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       }
 
       try {
-        await deps.grants.addGrant(header.imp.name, secretName);
+        await deps.grants.addGrant(header.imp.name, secretName, null, grant.filter);
       } catch (error) {
         deps.log(
           `impd: move: ${header.imp.name}: grant ${secretName} not kept: ${readErrorMessage(error)}`,

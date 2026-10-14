@@ -9,6 +9,7 @@ test('it builds a default credential', () => {
     header: 'authorization',
     value: expect.stringMatching(/^Bearer [A-Za-z0-9]{24}$/) as unknown,
     upstream: null,
+    filter: null,
   });
 });
 
@@ -16,6 +17,7 @@ test('it applies overrides on top of the defaults', () => {
   const credential: unknown = buildMockCredential({
     secretName: 'op',
     upstream: 'http://172.17.0.1:18081',
+    filter: { methods: ['GET'] },
   });
 
   expect(credential).toStrictEqual({
@@ -23,5 +25,6 @@ test('it applies overrides on top of the defaults', () => {
     header: 'authorization',
     value: expect.stringMatching(/^Bearer /) as unknown,
     upstream: 'http://172.17.0.1:18081',
+    filter: { methods: ['GET'] },
   });
 });

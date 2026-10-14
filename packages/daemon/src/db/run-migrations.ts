@@ -839,6 +839,19 @@ export const MIGRATIONS: Record<string, Migration> = {
       });
     },
   },
+
+  // a method and path filter on each grant (GEO-283)
+  '031_add_grant_filter': {
+    async up(db: Kysely<NoTables>) {
+      await db.schema
+        .alterTable('grants')
+
+        // the GrantFilter as JSON; null for the whole host, as every grant
+        // made before this was
+        .addColumn('filter', 'text')
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {
