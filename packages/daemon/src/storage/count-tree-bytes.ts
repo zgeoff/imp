@@ -1,4 +1,4 @@
-import type { Dirent } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -20,9 +20,7 @@ export async function countTreeBytes(root: string): Promise<number> {
 
     const files = entries.filter((entry) => entry.isFile());
 
-    const stats = await Promise.all(
-      files.map((entry) => lstat(join(dir, entry.name)).catch(readMissingAsUndefined)),
-    );
+    const stats = await Promise.all(files.map((entry) => readFileStats(join(dir, entry.name))));
 
     for (const stat of stats) {
       if (stat !== undefined) {
@@ -39,15 +37,27 @@ async function readEntries(dir: string): Promise<Dirent[]> {
   try {
     return await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    return readMissingAsUndefined(error) ?? [];
+    if (isMissing(error)) {
+      return [];
+    }
+
+    throw error;
   }
 }
 
-// an entry gone since its listing counts nothing
-function readMissingAsUndefined(error: unknown): undefined {
-  if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-    return undefined;
-  }
+// a file gone since its listing counts nothing
+async function readFileStats(path: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (isMissing(error)) {
+      return undefined;
+    }
 
-  throw error;
+    throw error;
+  }
+}
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
