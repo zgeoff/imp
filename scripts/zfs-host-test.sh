@@ -201,6 +201,9 @@ watch_pool() {
 # fails.
 cleanup() {
   local status=$?
+  echo "::group::kernel oopses"
+  sudo dmesg -T | grep -B4 -A70 -E 'usercopy|BUG:|Oops|kernel BUG' | sed -n 1,200p || true
+  echo "::endgroup::"
   if [ -n "${watcher:-}" ]; then
     kill "$watcher" 2>/dev/null || true
     echo "::group::pool watch"
