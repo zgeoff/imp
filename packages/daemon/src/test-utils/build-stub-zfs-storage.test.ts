@@ -32,6 +32,28 @@ test('it makes the storage on a pool under the root it was given', async () => {
   expect(zfs.readPool().listDatasets()).toContain('tank/imp');
 });
 
+test('it starts on the kernel module version it was given', async () => {
+  const ctx = await setupTest();
+
+  const storage = buildStubZfsStorage('tank/imp', { moduleVersion: '2.4.4' }).createStorage(
+    ctx.dataDir,
+  );
+
+  await storage.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  expect(storage.readWarnings()).toStrictEqual([]);
+});
+
+test('it starts on an Ubuntu 24.04 kernel module by default', async () => {
+  const ctx = await setupTest();
+
+  const storage = buildStubZfsStorage('tank/imp').createStorage(ctx.dataDir);
+
+  await storage.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  expect(storage.readWarnings()).toStrictEqual([expect.toInclude('module 2.2.2-0ubuntu9 ')]);
+});
+
 test('it writes a disk file where a clone of an image lands', async () => {
   const ctx = await setupTest();
 

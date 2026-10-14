@@ -234,6 +234,10 @@ export interface StorageBackend {
 
   readonly readUsage: () => Promise<StorageUsage>;
 
+  // what /health tells an operator about the storage host, such as a kernel
+  // module with a known bug; read once start has run, empty while all is well
+  readonly readWarnings: () => readonly string[];
+
   // each imp's usage; slow on XFS, so a cache calls it now and then
   readonly measureUsage: (
     imps: readonly { readonly impId: string; readonly checkpointIds: readonly string[] }[],

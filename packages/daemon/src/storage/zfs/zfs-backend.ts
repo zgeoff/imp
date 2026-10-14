@@ -149,6 +149,9 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
   const runSnapshot = <T>(task: () => Promise<T>) => mutex.runExclusive('snapshot', task);
   const reclaim = { running: null as Promise<void> | null, isWanted: false };
 
+  // what /health tells an operator about this host's ZFS, set at start
+  const host = { warnings: [] as string[] };
+
   const datasets = {
     mem: `${deps.root}/mem`,
     disks: `${deps.root}/disks`,
@@ -319,6 +322,13 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     // (docs/architecture/storage.md#versions), so a minor skew only warns
     if (userRelease.minor !== kernelRelease.minor) {
       log(`impd: zfs: warning: the userland is ${userland} but the kernel module is ${kernel}`);
+    }
+
+    // impd still starts: the bug needs a kill during a disk read to strike
+    host.warnings = hasUiomoveBug(kernel) ? [formatUiomoveWarning(kernel)] : [];
+
+    for (const warning of host.warnings) {
+      log(`impd: zfs: warning: ${warning}`);
     }
   };
 
@@ -1384,7 +1394,51 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
       return { usedBytes: usage.used, availableBytes: usage.available };
     },
+
+    readWarnings: () => host.warnings,
   };
+}
+
+// The patch release of each minor line that first fixes zfs_uiomove's short
+// copy (openzfs/zfs#15918, fixed by openzfs/zfs#18408). A line before 2.3 has
+// no fix, and one after 2.4 starts with it.
+const UIOMOVE_FIXED_PATCHES = new Map([
+  [3, 7],
+  [4, 2],
+]);
+
+// Whether this module overruns a buffer when a kill lands during
+// Firecracker's read() of a disk, which oopses a hardened-usercopy kernel
+// (docs/architecture/storage/storage.md#zfs). An unread version passes.
+function hasUiomoveBug(version: string): boolean {
+  const found = /^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)/v.exec(version)?.groups;
+
+  if (found === undefined) {
+    return false;
+  }
+
+  const major = Number(found['major']);
+  const minor = Number(found['minor']);
+
+  if (major !== 2) {
+    return major < 2;
+  }
+
+  if (minor < 3) {
+    return true;
+  }
+
+  const fixedPatch = UIOMOVE_FIXED_PATCHES.get(minor);
+
+  return fixedPatch !== undefined && Number(found['patch']) < fixedPatch;
+}
+
+function formatUiomoveWarning(version: string): string {
+  return (
+    `the zfs kernel module ${version} has the zfs_uiomove short-copy bug (openzfs/zfs#15918): ` +
+    'a VM killed during a disk read can oops the kernel and hold its disk until a reboot; ' +
+    'modules 2.3.7, 2.4.2 and later fix it'
+  );
 }
 
 function readAllocatedBytes(path: string): number {

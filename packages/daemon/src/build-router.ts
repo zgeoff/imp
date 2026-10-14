@@ -102,7 +102,7 @@ export interface RouterDeps {
   // reads the DNS API token now; null for a provider without one
   readonly checkDnsToken: (() => Promise<DnsTokenStatus>) | null;
   readonly execTickets: ExecTickets;
-  readonly storage: Pick<StorageBackend, 'kind'>;
+  readonly storage: Pick<StorageBackend, 'kind' | 'readWarnings'>;
   readonly diskBudget: Pick<DiskBudget, 'readStatus' | 'withRoom'>;
   readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
