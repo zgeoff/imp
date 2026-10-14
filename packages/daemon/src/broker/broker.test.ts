@@ -525,7 +525,7 @@ test('it keeps no credential, header, query or body in the audit row of a refuse
     'Authorization: Bearer imp-broker-placeholder',
   ]);
 
-  const rows = await waitFor(async () => {
+  const rows: unknown = await waitFor(async () => {
     const written = await ctx.db.selectFrom('broker_audit').selectAll().execute();
 
     expect(written).toHaveLength(1);
