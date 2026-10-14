@@ -473,10 +473,11 @@ this checkout whatever its `-C` says.
   file exists (`create-stub-instance-docker.ts`), a `dmesg` that prints the log a test gives it, and
   the stateful `zpool` on `PATH`: the refusal for a missing module, a normal release with its owner
   files, a work dir made with its parents, the pool, file, symlink, data dir, container and network
-  collisions, a failed `zpool create`, a failed destroy with no oops, a busy pool with a ZFS oops, a
-  busy pool with an oops outside ZFS beside a ZFS warning, a destroy that fails another way after a
-  ZFS oops, a pool that still uses the file, a failed `zpool` query, a work dir path with spaces,
-  and SIGTERM during the held create and during an e2e run that has B up.
+  collisions, a failed `zpool create`, a failed destroy with no oops, a busy pool with a ZFS oops or
+  a page-fault oops in ZFS, a busy pool with an oops outside ZFS beside a ZFS warning or after a ZFS
+  soft lockup, a destroy that fails another way after a ZFS oops, a pool that still uses the file, a
+  failed `zpool` query, a work dir path with spaces, and SIGTERM during the held create and during
+  an e2e run that has B up.
 
 ## NixOS
 
