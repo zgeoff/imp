@@ -101,6 +101,15 @@ test('it reads the flag unknown from a malformed taint file', () => {
   expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('unknown');
 });
 
+test('it reads the flag unknown from a taint mask too large to hold its low bits', () => {
+  const ctx = setupTest();
+
+  // 2^60 + 128: as a double, the low bits and flag D among them round away
+  writeFileSync(ctx.taintPath, '1152921504606847104\n');
+
+  expect(createKernelOopsWatch(ctx.taintPath).readFlag()).toBe('unknown');
+});
+
 test('it reads the flag clear once the file reads clear after an unknown read', () => {
   const ctx = setupTest();
   const watch = createKernelOopsWatch(ctx.taintPath);

@@ -83,5 +83,8 @@ function readTaint(path: string): number | null {
     return null;
   }
 
-  return /^\d+$/v.test(text) ? Number(text) : null;
+  // past 2^53 a number loses its low bits, flag D among them
+  const taint = /^\d+$/v.test(text) ? Number(text) : null;
+
+  return taint !== null && Number.isSafeInteger(taint) ? taint : null;
 }

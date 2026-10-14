@@ -64,10 +64,10 @@ later never met the oops. Until the flag clears, impd refuses a start or a wake 
 error that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold
 lives in the imp's record, so it outlasts the reboot that freed the disk. impd therefore clears
 every hold at a start that reads the flag clear, because only a reboot clears the flag, and a later
-oops in another task never holds the imp again. A read that fails or finds no taint mask proves no
-reboot, so impd keeps every hold and refuses a start or a wake of a held imp until a read finds the
-flag clear. impd records no boot with a hold, so an oops between a reboot and impd's start keeps the
-earlier boot's holds until the next reboot.
+oops in another task never holds the imp again. A read that fails or finds no taint mask does not
+prove a reboot, so impd keeps every hold and refuses a start or a wake of a held imp until a read
+finds the flag clear. impd records no boot with a hold, so an oops between a reboot and impd's start
+keeps the earlier boot's holds until the next reboot.
 
 Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
 controller try the lock and skip the imp when anything holds it or waits for it. The governor holds

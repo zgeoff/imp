@@ -649,7 +649,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       // only a reboot clears the flag, so a hold impd finds with it clear came
       // from an earlier boot, and that reboot freed the disk. An unknown read
-      // proves no reboot, so the holds stay
+      // does not prove a reboot, so the holds stay
       if (flag === 'clear') {
         await removeStaleOopsHolds(context, imps);
       }
