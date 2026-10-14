@@ -15,7 +15,7 @@ linters:
       # own read or close reports the failure
       exclude-functions:
         - (*github.com/zgeoff/imp/agent/internal/proto.Writer).Write
-        - (*github.com/zgeoff/imp/agent/internal/proto.Writer).WriteJSON
+        - (*github.com/zgeoff/imp/agent/internal/proto.Writer).WriteMessage
     gosec:
       excludes:
         # errcheck checks unhandled errors
@@ -45,6 +45,7 @@ linters:
             - github.com/vishvananda/netlink
             - golang.org/x/sys
             - golang.org/x/term
+            - google.golang.org/protobuf
             - gotest.tools/v3
   exclusions:
     presets:
