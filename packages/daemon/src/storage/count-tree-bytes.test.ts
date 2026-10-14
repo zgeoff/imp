@@ -13,7 +13,7 @@ async function setupTest() {
   return { dir };
 }
 
-test('it counts the blocks of every file in the tree', async () => {
+test('it counts the blocks of every file in the tree, less a 512-byte block each', async () => {
   const ctx = await setupTest();
 
   mkdirSync(join(ctx.dir, 'etc', 'apt'), { recursive: true });
@@ -25,7 +25,15 @@ test('it counts the blocks of every file in the tree', async () => {
 
   expect(motd).toBeGreaterThanOrEqual(10_000);
   expect(sources).toBeGreaterThanOrEqual(70_000);
-  expect(countTreeBytes(ctx.dir)).toBe(motd + sources);
+  expect(countTreeBytes(ctx.dir)).toBe(motd + sources - 2 * 512);
+});
+
+test('it counts an empty file as 0', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'empty'), '');
+
+  expect(countTreeBytes(ctx.dir)).toBe(0);
 });
 
 test('it counts a hard-linked file once', async () => {
@@ -34,7 +42,7 @@ test('it counts a hard-linked file once', async () => {
   writeFileSync(join(ctx.dir, 'busybox'), 'z'.repeat(50_000));
   linkSync(join(ctx.dir, 'busybox'), join(ctx.dir, 'sh'));
 
-  expect(countTreeBytes(ctx.dir)).toBe(statSync(join(ctx.dir, 'busybox')).blocks * 512);
+  expect(countTreeBytes(ctx.dir)).toBe(statSync(join(ctx.dir, 'busybox')).blocks * 512 - 512);
 });
 
 test('it never counts the target of a symlink', async () => {

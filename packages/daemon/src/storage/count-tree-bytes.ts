@@ -2,9 +2,9 @@ import { lstatSync, readdirSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { join } from 'node:path';
 
-// The disk a tree's files take, as the filesystem shows it now: a hard link
-// counts once, a symlink is never followed (Bun's recursive readdir follows
-// one to a directory), and an entry gone since its listing counts nothing
+// The disk a tree's files take, less the 512-byte dnode slot ZFS shows in a
+// file's blocks before its free space drops; a hard link counts once, and a
+// symlink is never followed, as Bun's recursive readdir follows one
 export function countTreeBytes(root: string): number {
   const inodes = new Map<string, number>();
 
@@ -20,7 +20,10 @@ export function countTreeBytes(root: string): number {
         const stats = lstatSync(path, { throwIfNoEntry: false });
 
         if (stats !== undefined) {
-          inodes.set(`${String(stats.dev)}:${String(stats.ino)}`, stats.blocks * 512);
+          inodes.set(
+            `${String(stats.dev)}:${String(stats.ino)}`,
+            Math.max(0, stats.blocks - 1) * 512,
+          );
         }
       }
     }
