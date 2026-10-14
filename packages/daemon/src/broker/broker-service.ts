@@ -4,6 +4,8 @@ import type {
   AuditEntry,
   BrokerRule,
   EgressMode,
+  Grant,
+  GrantFilter,
   GrantNotCopied,
   OAuthConfig,
   RefusedRequest,
@@ -34,6 +36,7 @@ import {
   listFileRemovals,
   listGrantNames,
   listGrantedRules,
+  listGrants,
   listSecrets,
   listValueFiles,
   removeCheckedGrant,
@@ -131,11 +134,13 @@ export interface Broker {
   readonly deleteSecret: (name: string) => Promise<void>;
 
   // with an authority, the token must still exist and the secret still be
-  // the one its list named (docs/guides/tokens.md#granting-secrets)
+  // the one its list named (docs/guides/tokens.md#granting-secrets); a
+  // filter replaces the grant's own, and none keeps it
   readonly addGrant: (
     impName: string,
     secretName: string,
     authority?: Readonly<GrantAuthority> | null,
+    filter?: GrantFilter,
   ) => Promise<void>;
   readonly removeGrant: (
     impName: string,
@@ -143,6 +148,9 @@ export interface Broker {
     authority?: Readonly<GrantAuthority> | null,
   ) => Promise<void>;
   readonly listGrants: (impName: string) => Promise<string[]>;
+
+  // the same, each with its filter
+  readonly listGrantDetails: (impName: string) => Promise<Grant[]>;
 
   // one imp's, or every imp's; only imps within the patterns when there
   // are any
@@ -376,6 +384,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       header: granted.rule.header,
       value: renderCredential(granted.rule, value),
       upstream: granted.rule.upstream ?? null,
+      filter: granted.filter,
     };
   };
 
@@ -647,7 +656,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       });
     },
 
-    addGrant: async (impName, secretName, authority = null) => {
+    addGrant: async (impName, secretName, authority, filter) => {
       const imp = await requireImp(impName);
 
       // a send carries the grants it read at its start; a target's staged
@@ -660,7 +669,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         await deps.beforeGrantWrite();
       }
 
-      const outcome = await createCheckedGrant(db, imp.id, secretName, authority);
+      const outcome = await createCheckedGrant(db, imp.id, secretName, authority ?? null, filter);
 
       switch (outcome.kind) {
         case 'granted': {
@@ -713,6 +722,12 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       const imp = await requireImp(impName);
 
       return listGrantNames(db, imp.id);
+    },
+
+    listGrantDetails: async (impName) => {
+      const imp = await requireImp(impName);
+
+      return listGrants(db, imp.id);
     },
 
     listAudit: async (impName, limit, patterns) => {

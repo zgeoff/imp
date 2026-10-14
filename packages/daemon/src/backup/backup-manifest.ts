@@ -1,4 +1,4 @@
-import { ImageSourceSchema } from '@imp/api';
+import { GrantFilterSchema, ImageSourceSchema } from '@imp/api';
 import * as z from 'zod';
 import { LEGACY_DISK_BYTES } from '../process/legacy-disk-bytes';
 
@@ -16,6 +16,9 @@ const ManifestCheckpointSchema = z
     usedBytes: z.int().nonnegative().optional(),
   })
   .readonly();
+
+// a grant with its method and path filter
+const FilteredGrantSchema = z.object({ secret: z.string(), filter: GrantFilterSchema }).readonly();
 
 const ManifestImpSchema = z
   .object({
@@ -46,6 +49,11 @@ const ManifestImpSchema = z
     egressPolicy: z.string().default('open'),
     egressAllow: z.array(z.string()).readonly().default([]),
     grants: z.array(z.string()).readonly().default([]),
+
+    // the grants with a method and path filter, apart from `grants` so that
+    // an impd from before filters restores none of them rather than grant
+    // the whole host; a manifest from before filters has none
+    filteredGrants: z.array(FilteredGrantSchema).readonly().default([]),
 
     // a template copy whose first boot has not reset its identity yet
     identityResetPending: z.boolean().default(false),

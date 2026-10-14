@@ -803,6 +803,32 @@ test('it carries only the grants of secrets the target has', async () => {
   expect(grants).toStrictEqual(['gh']);
 });
 
+test('it carries each grant’s filter to the target', async () => {
+  const ctx = await setupTest();
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.source.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.source.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_real' });
+  await ctx.source.broker.addGrant('dev', 'gh', null, { methods: ['GET'], paths: ['/user'] });
+  await ctx.source.broker.addGrant('dev', 'npm');
+  await ctx.target.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_other' });
+  await ctx.target.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_other' });
+
+  const status = await ctx.runMove('dev');
+  const grants = await ctx.target.broker.listGrantDetails('dev');
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+
+  expect(grants).toStrictEqual([
+    { secret: 'gh', filter: { methods: ['GET'], paths: ['/user'] } },
+    { secret: 'npm', filter: null },
+  ]);
+});
+
 test('it keeps the owed identity reset of a template copy, and its template stays a template', async () => {
   const ctx = await setupTest();
 

@@ -37,6 +37,8 @@ import {
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
+  GrantFilterSchema,
+  GrantSchema,
   OAuthConfigSchema,
   RefusedRequestSchema,
   SecretAddedSchema,
@@ -527,8 +529,18 @@ export const impContract = {
   },
 
   grants: {
-    // the broker adds the secret to the imp's requests to its hosts
-    add: base.input(z.object({ name: NameSchema, secret: SecretNameSchema })).output(EmptySchema),
+    // the broker adds the secret to the imp's requests to its hosts, those a
+    // filter allows; a call without one keeps the grant's. An older impd
+    // drops `filter` and grants the whole host: check features.grantFilters
+    add: base
+      .input(
+        z.object({
+          name: NameSchema,
+          secret: SecretNameSchema,
+          filter: GrantFilterSchema.optional(),
+        }),
+      )
+      .output(EmptySchema),
 
     delete: base
       .input(z.object({ name: NameSchema, secret: SecretNameSchema }))
@@ -536,6 +548,9 @@ export const impContract = {
 
     // the secrets granted to the imp
     list: base.input(NameInputSchema).output(z.array(SecretNameSchema)),
+
+    // the same, each with its filter, by secret name
+    details: base.input(NameInputSchema).output(z.array(GrantSchema)),
   },
 
   audit: {

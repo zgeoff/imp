@@ -1,9 +1,10 @@
-import { BrokerRuleSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, OAuthConfig, Secret, SecretKind } from '@imp/api';
+import { BrokerRuleSchema, GrantFilterSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
+import type { BrokerRule, GrantFilter, OAuthConfig, Secret, SecretKind } from '@imp/api';
 import { defineCommand } from '../define-command';
 import {
   formatApiCalls,
   formatAudit,
+  formatGrants,
   formatOutput,
   formatRefusedRequests,
   formatSecrets,
@@ -315,12 +316,62 @@ export const grantCommand = defineCommand({
     name: 'grant',
     description: "Let an imp use a secret: the broker adds it to the imp's requests to its hosts",
   },
-  args: { name: nameArg, secret: secretArg },
+  args: {
+    name: nameArg,
+    secret: secretArg,
+    methods: {
+      type: 'string',
+      description:
+        'only requests with one of these methods get the secret, comma-separated (GET,HEAD)',
+    },
+    paths: {
+      type: 'string',
+      description:
+        'only requests to one of these paths get it, comma-separated; * is one segment, a last /** the rest',
+    },
+  },
   run: (context) =>
     runAction(context.host, async (client) => {
-      await client.grants.add({ name: context.args.name, secret: context.args.secret });
+      const filter = buildGrantFilter(context.args);
+
+      // an older impd drops the filter unread and would grant the whole host
+      if (filter !== undefined) {
+        await requireFeature(client, 'grantFilters', 'grant the whole host');
+      }
+
+      await client.grants.add({
+        name: context.args.name,
+        secret: context.args.secret,
+        ...(filter !== undefined && { filter }),
+      });
     }),
 });
+
+interface GrantFilterArgs {
+  readonly methods?: string | undefined;
+  readonly paths?: string | undefined;
+}
+
+// --methods GET,HEAD --paths '/repos/*/*/issues,/user': undefined for neither
+function buildGrantFilter(args: GrantFilterArgs): GrantFilter | undefined {
+  if (args.methods === undefined && args.paths === undefined) {
+    return undefined;
+  }
+
+  const result = GrantFilterSchema.safeParse({
+    ...(args.methods !== undefined && { methods: args.methods.split(',') }),
+    ...(args.paths !== undefined && { paths: args.paths.split(',') }),
+  });
+
+  if (!result.success) {
+    const [issue] = result.error.issues;
+    const flag = issue?.path[0] === 'methods' ? '--methods' : '--paths';
+
+    throw new UsageError(`${flag}: ${issue?.message ?? 'not a filter'}`);
+  }
+
+  return result.data;
+}
 
 export const revokeCommand = defineCommand({
   meta: { name: 'revoke', description: 'Take a secret away from an imp' },
@@ -333,9 +384,23 @@ export const revokeCommand = defineCommand({
 
 export const grantsCommand = defineCommand({
   meta: { name: 'grants', description: 'List the secrets granted to an imp' },
-  args: { name: nameArg, json: jsonArg },
+  args: {
+    name: nameArg,
+    json: jsonArg,
+    filters: { type: 'boolean', description: 'show the methods and paths each grant covers' },
+  },
   run: (context) =>
     runAction(context.host, async (client) => {
+      if (context.args.filters === true) {
+        await requireFeature(client, 'grantFilters', 'not know the call');
+
+        const grants = await client.grants.details({ name: context.args.name });
+
+        console.log(formatOutput(grants, context.args.json, formatGrants));
+
+        return;
+      }
+
       const names = await client.grants.list({ name: context.args.name });
 
       console.log(formatOutput(names, context.args.json, (list) => list.join('\n')));

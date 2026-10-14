@@ -265,8 +265,13 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           egressPolicy: parseStoredPolicy(imp.egressPolicy, imp.egressAllow).mode,
           egressAllow: parseStoredPolicy(imp.egressPolicy, imp.egressAllow).allow,
           grants: copy.grants
-            .filter((grant) => grant.impId === imp.id)
+            .filter((grant) => grant.impId === imp.id && grant.filter === null)
             .map((grant) => grant.secretName),
+          filteredGrants: copy.grants.flatMap((grant) =>
+            grant.impId === imp.id && grant.filter !== null
+              ? [{ secret: grant.secretName, filter: grant.filter }]
+              : [],
+          ),
           identityResetPending: imp.identityResetPending === 1,
           networks: copy.members
             .filter((member) => member.impId === imp.id)
@@ -692,9 +697,16 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   const createRestoredGrants = async (impName: string, imp: ManifestImp) => {
     const skipped: SkippedGrant[] = [];
 
-    for (const secret of imp.grants) {
+    const grants = [
+      ...imp.grants.map((secret) => ({ secret, filter: undefined })),
+      ...imp.filteredGrants,
+    ];
+
+    for (const grant of grants) {
+      const secret = grant.secret;
+
       try {
-        await deps.grants.addGrant(impName, secret);
+        await deps.grants.addGrant(impName, secret, null, grant.filter);
       } catch (error) {
         skipped.push({ imp: impName, secret, reason: readErrorMessage(error) });
       }

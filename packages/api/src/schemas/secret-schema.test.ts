@@ -3,6 +3,8 @@ import {
   AuditEntrySchema,
   BrokerHostSchema,
   BrokerRuleSchema,
+  GrantFilterSchema,
+  GrantSchema,
   OAuthConfigSchema,
   RefusedRequestSchema,
   SecretAddedSchema,
@@ -593,4 +595,100 @@ test('#RefusedRequestSchema rejects a host longer than 253 characters', () => {
   });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['host'], code: 'too_big' });
+});
+
+test('#RefusedRequestSchema accepts a request refused outside a grant’s filter', () => {
+  const payload = {
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'DELETE',
+    host: 'api.github.com',
+    path: '/repos/a/b',
+    status: 403,
+    durationMs: 3,
+    reason: 'outside-filter',
+  } as const;
+
+  expect(RefusedRequestSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
+test('#GrantFilterSchema accepts methods and paths', () => {
+  const payload = {
+    methods: ['GET', 'HEAD'],
+    paths: ['/', '/v1/messages', '/repos/*/*/issues', '/v1/**', '/**', "/a-b_c.d~e!$&'()+,;=:@"],
+  };
+
+  expect(GrantFilterSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
+test('#GrantFilterSchema accepts methods alone', () => {
+  expect(GrantFilterSchema.safeParse({ methods: ['GET'] }).data).toStrictEqual({
+    methods: ['GET'],
+  });
+});
+
+test('#GrantFilterSchema accepts paths alone', () => {
+  expect(GrantFilterSchema.safeParse({ paths: ['/v1/**'] }).data).toStrictEqual({
+    paths: ['/v1/**'],
+  });
+});
+
+test('#GrantFilterSchema rejects a filter that names neither methods nor paths', () => {
+  const result = GrantFilterSchema.safeParse({});
+
+  expect(result.error?.issues).toPartiallyContain({
+    path: [],
+    message: 'must name methods, paths or both',
+  });
+});
+
+test.each([['get'], ['G E T'], [''], ['ABCDEFGHIJKLMNOPQ']])(
+  '#GrantFilterSchema rejects the method %p',
+  (method) => {
+    const result = GrantFilterSchema.safeParse({ methods: [method], paths: ['/v1/**'] });
+
+    expect(result.error?.issues).toPartiallyContain({ path: ['methods', 0] });
+  },
+);
+
+test.each([
+  ['v1/messages'],
+  [''],
+  ['/v1/**/messages'],
+  ['/v1/mess*ges'],
+  ['/v1/***'],
+  ['/v1/%2F'],
+  ['/v1/messages?x=1'],
+  ['/v1/messages#top'],
+  ['/v1/a b'],
+])('#GrantFilterSchema rejects the path pattern %p', (path) => {
+  const result = GrantFilterSchema.safeParse({ methods: ['GET'], paths: [path] });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['paths', 0] });
+});
+
+test('#GrantFilterSchema rejects a path pattern longer than 512 characters', () => {
+  const result = GrantFilterSchema.safeParse({ paths: [`/${'a'.repeat(512)}`] });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['paths', 0], code: 'too_big' });
+});
+
+test('#GrantFilterSchema rejects an empty list of methods', () => {
+  const result = GrantFilterSchema.safeParse({ methods: [], paths: ['/v1/**'] });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['methods'], code: 'too_small' });
+});
+
+test('#GrantFilterSchema rejects more than 64 path patterns', () => {
+  const result = GrantFilterSchema.safeParse({
+    paths: Array.from({ length: 65 }, (_, index) => `/p${index}`),
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['paths'], code: 'too_big' });
+});
+
+test('#GrantSchema accepts a grant without a filter', () => {
+  const payload = { secret: 'gh', filter: null };
+
+  expect(GrantSchema.safeParse(payload).data).toStrictEqual(payload);
 });

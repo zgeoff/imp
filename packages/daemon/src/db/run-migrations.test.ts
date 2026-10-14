@@ -54,6 +54,7 @@ test('#runMigrations keeps the name of each migration a released impd ran', () =
     '027_add_imp_backup',
     '028_cascade_oauth_tokens',
     '029_add_token_image_ref_prefix',
+    '030_add_broker_audit_refusals',
   ]);
 });
 
@@ -265,7 +266,7 @@ test('#runMigrations gives a grant its secret’s generation in the grantable mi
   const grants = await db.selectFrom('grants').selectAll().execute();
 
   expect(grants).toStrictEqual([
-    { imp_id: 'imp', secret_name: 'gh', secret_generation: secret.generation },
+    { imp_id: 'imp', secret_name: 'gh', secret_generation: secret.generation, filter: null },
   ]);
 });
 
@@ -307,6 +308,34 @@ test('#runMigrations lets an existing token add no image in the image ref prefix
     .executeTakeFirstOrThrow();
 
   expect(token.image_ref_prefix).toBeNull();
+});
+
+test('#runMigrations leaves every existing grant on the whole host in the grant filter migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '030_add_broker_audit_refusals');
+
+  // rows as an impd at 030 wrote them
+  await sql`INSERT INTO secrets (name, kind, rules, created_at, generation, value_file)
+    VALUES ('gh', 'custom', '[]', 0, 'g1', 'gh-file')`.execute(db);
+
+  await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
+    VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
+
+  await sql`INSERT INTO imps (id, name, image_id, state, vcpus, memory_mib, slot, ip,
+    created_at, last_active_at)
+    VALUES ('imp', 'dev', 'img', 'stopped', 1, 512, 0, 'ip', 0, 0)`.execute(db);
+
+  await sql`INSERT INTO grants (imp_id, secret_name, secret_generation)
+    VALUES ('imp', 'gh', 'g1')`.execute(db);
+
+  await runMigrations(db);
+
+  const grants = await db.selectFrom('grants').selectAll().execute();
+
+  expect(grants).toStrictEqual([
+    { imp_id: 'imp', secret_name: 'gh', secret_generation: 'g1', filter: null },
+  ]);
 });
 
 test('#runMigrations leaves the broker reading the old value file in the grantable migration', async () => {

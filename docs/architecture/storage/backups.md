@@ -18,10 +18,10 @@ and checkpoints, and each image. The paths are the same every run, so restic fin
 the run before and uploads only the chunks that changed.
 
 The manifest is everything a restore reads: each imp's settings, its egress policy, the names of the
-secrets granted to it and of the networks it is on, its checkpoints in order, and each image with
-its source. It holds no tokens or secret values, and no slots or addresses, since a restore takes
-new ones. Each run copies the database with `VACUUM INTO`, one consistent read, and backs up only
-what that copy names. The copy stays out of the snapshot unless the owner turns on the
+secrets granted to it with each grant's filter, the networks it is on, its checkpoints in order, and
+each image with its source. It holds no tokens or secret values, and no slots or addresses, since a
+restore takes new ones. Each run copies the database with `VACUUM INTO`, one consistent read, and
+backs up only what that copy names. The copy stays out of the snapshot unless the owner turns on the
 [database copy](#the-database-copy), so a table added later never reaches a backup by accident. The
 root token, the connector secrets' values, the broker's CA, the TLS account and the restic password
 never reach a backup, and a test lists a snapshot to check it.

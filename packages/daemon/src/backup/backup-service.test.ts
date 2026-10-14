@@ -1230,6 +1230,58 @@ test('#runBackup records an imp’s grants by secret name only', async () => {
   expect(manifest.imps[0]?.grants).toStrictEqual(['gh']);
 });
 
+test('#runBackup records a filtered grant apart from the grants of the whole host', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_value' });
+  await ctx.broker.addGrant('dev', 'gh', null, { methods: ['GET'], paths: ['/repos/**'] });
+  await ctx.broker.addGrant('dev', 'npm');
+
+  const run = await backups.runBackup();
+
+  const manifestText = readFileSync(join(ctx.repoDir, run.snapshotId, 'manifest.json'), 'utf8');
+  const manifest = BackupManifestSchema.parse(JSON.parse(manifestText));
+
+  expect(manifest.imps[0]?.grants).toStrictEqual(['npm']);
+
+  expect(manifest.imps[0]?.filteredGrants).toStrictEqual([
+    { secret: 'gh', filter: { methods: ['GET'], paths: ['/repos/**'] } },
+  ]);
+});
+
+test('#restoreBackup restores a filtered grant with its filter', async () => {
+  const ctx = await setupTest();
+
+  const backups = createBackupService({ ...ctx.deps, backup: buildMockBackupConfig() });
+
+  await ctx.createTestImage('base');
+
+  writeFileSync(join(ctx.dataDir, 'images', 'base', 'config.json'), '{}');
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_value' });
+  await ctx.broker.addGrant('dev', 'gh', null, { methods: ['GET'] });
+  await ctx.broker.addGrant('dev', 'npm');
+  await backups.runBackup();
+  await backups.restoreBackup({ name: 'dev', as: 'back' });
+
+  const grants = await ctx.broker.listGrantDetails('back');
+
+  expect(grants).toStrictEqual([
+    { secret: 'gh', filter: { methods: ['GET'] } },
+    { secret: 'npm', filter: null },
+  ]);
+});
+
 test('#restoreBackup regrants a restored imp by name and skips a secret that is gone', async () => {
   const ctx = await setupTest();
 
@@ -1636,7 +1688,7 @@ test('#restoreBackup grants a restored imp against the secret as it is now', asy
   const isGranted = await ctx.broker.isGranted(back.id, 'api.github.com');
 
   expect(rows).toStrictEqual([
-    { imp_id: back.id, secret_name: 'gh', secret_generation: secret.generation },
+    { imp_id: back.id, secret_name: 'gh', secret_generation: secret.generation, filter: null },
   ]);
 
   expect(isGranted).toBeTrue();

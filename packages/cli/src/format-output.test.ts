@@ -14,6 +14,7 @@ import {
   formatCpuUse,
   formatExposeResult,
   formatGc,
+  formatGrants,
   formatHttps,
   formatIdentity,
   formatImages,
@@ -612,6 +613,21 @@ test('#formatRefusedRequests lists each refusal with its reason, and a dash for 
     'TIME                      IMP  METHOD   HOST        PATH  STATUS  MS  REASON',
     '1970-01-01T00:00:00.000Z  dev  CONNECT  exfil.test  -     403     1   egress-policy',
     '1970-01-01T00:00:00.000Z  dev  -        -           -     400     0   not-http',
+  ]);
+});
+
+test('#formatGrants lists each grant’s methods and paths, and a star for a list it leaves out', () => {
+  const text = formatGrants([
+    { secret: 'gh', filter: { methods: ['GET', 'HEAD'], paths: ['/repos/**', '/user'] } },
+    { secret: 'model', filter: { paths: ['/v1/messages'] } },
+    { secret: 'npm', filter: null },
+  ]);
+
+  expect(text.split('\n')).toStrictEqual([
+    'SECRET  METHODS   PATHS',
+    'gh      GET,HEAD  /repos/**,/user',
+    'model   *         /v1/messages',
+    'npm     *         *',
   ]);
 });
 

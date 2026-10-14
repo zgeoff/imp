@@ -199,6 +199,7 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'grants.add': manageGrant,
   'grants.delete': manageGrant,
   'grants.list': readImp,
+  'grants.details': readImp,
 
   'audit.list': readAny,
   'audit.refused': readAny,

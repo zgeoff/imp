@@ -1,6 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import { BrokerRuleSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, EgressPolicy, GrantNotCopied, OAuthConfig, SecretKind } from '@imp/api';
+import { BrokerRuleSchema, GrantFilterSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
+import type {
+  BrokerRule,
+  EgressPolicy,
+  Grant,
+  GrantFilter,
+  GrantNotCopied,
+  OAuthConfig,
+  SecretKind,
+} from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { parseStoredPolicy } from './egress';
@@ -50,6 +58,9 @@ export interface GrantedRule {
   readonly kind: SecretKind;
   readonly rule: BrokerRule;
   readonly valueFile: string;
+
+  // the grant's method and path filter; null for the whole host
+  readonly filter: GrantFilter | null;
 }
 
 // another secret that already gives the imp a credential for the host
@@ -279,14 +290,15 @@ export async function removeFileRemoval(db: ImpDatabase, valueFile: string): Pro
   await db.deleteFrom('secret_file_removals').where('value_file', '=', valueFile).execute();
 }
 
-// A no-op when the grant exists. The clash check and the insert are one
-// transaction, so two clashing grants cannot both pass. The grant carries
-// the secret's generation now.
+// The clash check and the insert are one transaction, so two clashing
+// grants cannot both pass. A grant made again takes the secret's generation
+// now, and the filter when one is given (writeGrant).
 export function createCheckedGrant(
   db: ImpDatabase,
   impId: string,
   secretName: string,
   authority: Readonly<GrantAuthority> | null,
+  filter?: GrantFilter,
 ): Promise<GrantOutcome> {
   return db.transaction().execute(async (trx) => {
     const secret = await findSecret(trx, secretName);
@@ -306,7 +318,7 @@ export function createCheckedGrant(
       return { kind: 'clash', clash };
     }
 
-    await writeGrant(trx, impId, secret);
+    await writeGrant(trx, impId, secret, filter);
 
     return { kind: 'granted' };
   });
@@ -347,6 +359,17 @@ export async function listGrantNames(db: ImpQueries, impId: string): Promise<str
   return rows.map((row) => row.secret_name);
 }
 
+// each live grant of the imp with its filter, by secret name
+export async function listGrants(db: ImpQueries, impId: string): Promise<Grant[]> {
+  const rows = await useLiveGrants(db)
+    .select(['grants.secret_name', 'grants.filter'])
+    .where('grants.imp_id', '=', impId)
+    .orderBy('grants.secret_name')
+    .execute();
+
+  return rows.map((row) => ({ secret: row.secret_name, filter: parseFilter(row.filter) }));
+}
+
 // every file a secret's row names, for impd to remove the rest at start
 export async function listValueFiles(db: ImpDatabase): Promise<Set<string>> {
   const rows = await db.selectFrom('secrets').select('value_file').execute();
@@ -378,7 +401,7 @@ export function createForkGrants(
   authority: Readonly<ForkAuthority> | null,
 ): Promise<ForkGrantsOutcome> {
   return db.transaction().execute(async (trx) => {
-    const names = await listGrantNames(trx, fromImpId);
+    const grants = await listGrants(trx, fromImpId);
 
     // an empty list copies nothing whatever the token, so it needs no read
     // and never reports no-token: each grant is not-grantable instead
@@ -393,7 +416,9 @@ export function createForkGrants(
 
     const notCopied: GrantNotCopied[] = [];
 
-    for (const name of names) {
+    for (const grant of grants) {
+      const name = grant.secret;
+
       const secret = await findSecret(trx, name);
 
       // on the caller's list and on the token's now: a tokens.update since
@@ -407,11 +432,12 @@ export function createForkGrants(
       if (authority !== null && (entry === undefined || secret?.generation !== entry.generation)) {
         notCopied.push({ secret: name, reason: 'not-grantable' });
       } else if (secret === undefined) {
-        // listGrantNames joins the live secret in this transaction, so none
+        // listGrants joins the live secret in this transaction, so none
         // is gone today; the reason stays in the contract all the same
         notCopied.push({ secret: name, reason: 'no-secret' });
       } else if ((await findClash(trx, toImpId, name, secret.rules)) === null) {
-        await writeGrant(trx, toImpId, secret);
+        // the fork's grant is as narrow as its source's
+        await writeGrant(trx, toImpId, secret, grant.filter ?? undefined);
       } else {
         notCopied.push({ secret: name, reason: 'clash' });
       }
@@ -424,7 +450,13 @@ export function createForkGrants(
 // every rule of every secret granted to the imp
 export async function listGrantedRules(db: ImpQueries, impId: string): Promise<GrantedRule[]> {
   const rows = await useLiveGrants(db)
-    .select(['secrets.name', 'secrets.kind', 'secrets.rules', 'secrets.value_file'])
+    .select([
+      'secrets.name',
+      'secrets.kind',
+      'secrets.rules',
+      'secrets.value_file',
+      'grants.filter',
+    ])
     .where('grants.imp_id', '=', impId)
     .orderBy('secrets.name')
     .execute();
@@ -435,6 +467,7 @@ export async function listGrantedRules(db: ImpQueries, impId: string): Promise<G
       kind: parseKind(row.kind),
       rule,
       valueFile: row.value_file,
+      filter: parseFilter(row.filter),
     })),
   );
 }
@@ -524,19 +557,29 @@ async function checkAuthority(
   return listed && secret?.generation === authority.generation ? null : 'not-grantable';
 }
 
-// a grant made again takes the secret's generation now
+// A grant made again takes the secret's generation now, and the filter
+// when one is given; without one it keeps its own.
 async function writeGrant(
   db: ImpQueries,
   impId: string,
   secret: Readonly<SecretRecord>,
+  filter: GrantFilter | undefined,
 ): Promise<void> {
+  const stored = filter === undefined ? null : JSON.stringify(filter);
+
   await db
     .insertInto('grants')
-    .values({ imp_id: impId, secret_name: secret.name, secret_generation: secret.generation })
+    .values({
+      imp_id: impId,
+      secret_name: secret.name,
+      secret_generation: secret.generation,
+      filter: stored,
+    })
     .onConflict((conflict) =>
-      conflict
-        .columns(['imp_id', 'secret_name'])
-        .doUpdateSet({ secret_generation: secret.generation }),
+      conflict.columns(['imp_id', 'secret_name']).doUpdateSet({
+        secret_generation: secret.generation,
+        ...(filter !== undefined && { filter: stored }),
+      }),
     )
     .execute();
 }
@@ -606,6 +649,10 @@ function toSecretRecord(row: Readonly<SecretRow>): SecretRecord {
 
 function parseRules(json: string): BrokerRule[] {
   return RulesSchema.parse(JSON.parse(json));
+}
+
+function parseFilter(json: string | null): GrantFilter | null {
+  return json === null ? null : GrantFilterSchema.parse(JSON.parse(json));
 }
 
 function parseKind(kind: string): SecretKind {

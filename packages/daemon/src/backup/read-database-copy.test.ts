@@ -155,8 +155,8 @@ test('it copies the grants by secret name', async () => {
   const copy = await readDatabaseCopy(ctx.db, join(ctx.dir, 'copy.sqlite'));
 
   expect(copy.grants).toStrictEqual([
-    { impId: imp.id, secretName: 'gh' },
-    { impId: imp.id, secretName: 'npm' },
+    { impId: imp.id, secretName: 'gh', filter: null },
+    { impId: imp.id, secretName: 'npm', filter: null },
   ]);
 });
 

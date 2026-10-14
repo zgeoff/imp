@@ -92,7 +92,7 @@ export interface MoveSenderDeps {
     | 'requireUnleased'
     | 'endForcedLeases'
   >;
-  readonly grants: Pick<Broker, 'listGrants'>;
+  readonly grants: Pick<Broker, 'listGrantDetails'>;
   readonly egress: Pick<EgressService, 'readPolicy' | 'readAnswers'>;
   readonly ranges: PeerRanges;
 
@@ -485,7 +485,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     const checkpoints = listed.toReversed();
 
     const egress = await deps.egress.readPolicy(imp.name);
-    const grants = await deps.grants.listGrants(imp.name);
+    const grants = await deps.grants.listGrantDetails(imp.name);
     const leases = await buildMovedLeases(imp);
 
     return {
@@ -500,7 +500,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         diskBytes: imp.diskBytes,
         cpu: imp.cpu,
         egress: { mode: egress.mode, allow: [...egress.allow] },
-        grants,
+        grants: grants.filter((grant) => grant.filter === null).map((grant) => grant.secret),
+        filteredGrants: grants.flatMap((grant) =>
+          grant.filter === null ? [] : [{ secret: grant.secret, filter: grant.filter }],
+        ),
         isIdentityResetPending: imp.isIdentityResetPending,
         isDiskGrowPending: imp.isDiskGrowPending,
         isBackedUp: imp.isBackedUp,

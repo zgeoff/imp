@@ -1,5 +1,6 @@
-import type { AuditRefusal } from '@imp/api';
+import type { AuditRefusal, GrantFilter } from '@imp/api';
 import type { NewAuditEntry } from '../db/broker-audit';
+import { isRequestInFilter } from './is-request-in-filter';
 
 // One terminated request, sent on to the real host with the credential.
 
@@ -11,6 +12,9 @@ export interface Credential {
 
   // the rule's own origin (http or https), or null for https://<host>
   readonly upstream: string | null;
+
+  // the grant's method and path filter, or null for the whole host
+  readonly filter: GrantFilter | null;
 }
 
 // where requests for a host go: the rule's upstream, else a test upstream
@@ -110,6 +114,19 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
 
     if (credential === null) {
       return sendRefusal(403, `no credential is granted for ${deps.host}`, 'no-grant');
+    }
+
+    // read with the credential, so a grant changed since applies to this
+    // request; refused before the credential goes into any header
+    if (
+      credential.filter !== null &&
+      !isRequestInFilter(credential.filter, request.method, url.pathname)
+    ) {
+      return sendRefusal(
+        403,
+        `the grant for ${deps.host} does not cover ${request.method} ${url.pathname}`,
+        'outside-filter',
+      );
     }
 
     const counts = { requestBytes: 0, responseBytes: 0 };
