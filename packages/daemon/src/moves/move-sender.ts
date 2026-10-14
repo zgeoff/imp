@@ -19,7 +19,7 @@ import { deriveSlotAddress } from '../net/addressing';
 import { readTapMac } from '../net/tap-devices';
 import type { StreamedCommand } from '../process/run-stream';
 import { readErrorMessage } from '../read-error-message';
-import { readSnapshotMeta } from '../sleep/snapshot-meta';
+import { encodeSnapshotMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImagePaths } from '../storage/data-layout';
@@ -225,7 +225,7 @@ async function* encodeStream(
   onData: (bytes: number) => void,
   onFile: (file: SentFile) => void,
 ): AsyncGenerator<Uint8Array, void, undefined> {
-  yield encodeJsonFrame(MOVE_FRAMES.header, header);
+  yield encodeJsonFrame(MOVE_FRAMES.header, encodeHeader(header));
 
   for (const part of parts) {
     let bytes = 0;
@@ -251,6 +251,16 @@ async function* encodeStream(
   }
 
   yield encodeJsonFrame(MOVE_FRAMES.end, {});
+}
+
+// The header as JSON: a warm move's snapshot record goes as meta.json holds
+// it, its sessions and services in the agent's own JSON form
+function encodeHeader(header: Readonly<MoveHeader>): unknown {
+  if (header.warm === null) {
+    return header;
+  }
+
+  return { ...header, warm: { ...header.warm, meta: encodeSnapshotMeta(header.warm.meta) } };
 }
 
 // a public imp's credential and DNS record belong to this host's domain
