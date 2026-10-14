@@ -33,6 +33,14 @@
 # its vdev is this run's bench.img, and never removes a bench.img a pool
 # still uses. The work dir holds the results, so it stays, and a second run
 # in the same dir is refused for its data dir.
+#
+# A pool that will not go fails the run, with one exception: zpool says the
+# pool is busy, and a kernel oops since the pool's create has ZFS in its own
+# trace. The oops kills its task inside ZFS, such as a
+# Firecracker read() of an imp's disk that trips the kernel's usercopy check,
+# and the hold that task had on a dataset never goes; no mount, process or
+# retry releases it before a reboot. The run then keeps the pool and its file,
+# prints the oops, and exits with the suites' status.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -96,8 +104,41 @@ export IMP_ZFS_ROOT=$pool/imp
 made_img=
 started_instance=
 
+# the local time just before the pool's create, for dmesg --since
+created_at=
+
 # the e2e run, while it runs, so a signal can stop it first
 child=
+
+# read_zfs_oops: the key lines of each kernel oops since the pool's create
+# whose own trace runs through ZFS; nothing when there is none, or dmesg
+# cannot say. A record runs from its first report line to its end-trace line,
+# so a ZFS warning beside an oops elsewhere is no ZFS oops. A generic `BUG:`
+# report, such as a soft lockup, has no end-trace line: it closes any open
+# record and opens none, so its frames never join a later oops.
+read_zfs_oops() {
+  local log
+  [ -n "$created_at" ] || return 0
+  log=$(sudo dmesg --since "$created_at" 2>/dev/null) || return 0
+  awk '
+    function end_record() {
+      if (oops && zfs) printf "%s", kept
+      inside = oops = zfs = 0
+      kept = ""
+    }
+    /BUG: / && !/kernel BUG/ {
+      if (inside) end_record()
+      next
+    }
+    !inside && /usercopy: |cut here|kernel BUG|Oops: / { inside = 1 }
+    !inside { next }
+    /kernel BUG|Oops: / { oops = 1 }
+    /\[zfs\]/ { zfs = 1 }
+    /usercopy: |kernel BUG|Oops: |Comm: |\[zfs\]/ { kept = kept $0 "\n" }
+    /end trace/ { end_record() }
+    END { end_record() }
+  ' <<<"$log"
+}
 
 # img_use [POOL]: 0 when POOL, or any pool, lists this run's file as a vdev,
 # 1 when none does, 2 when zpool cannot say; a vdev path may hold spaces
@@ -117,7 +158,7 @@ img_use() {
 
 # In reverse order; the results stay in $work. A pool that will not go keeps
 # its file, so it can still be imported and destroyed by hand, and the run
-# fails.
+# fails, unless a ZFS oops holds it (see the top).
 cleanup() {
   local status=$?
   if [ -n "$child" ]; then
@@ -138,9 +179,18 @@ cleanup() {
     docker network rm "$IMP_DEV_NAME-mv" >/dev/null 2>&1 || true
   fi
   if [ -n "$made_img" ]; then
-    local use=0
+    local use=0 err='' oops=''
     img_use "$pool" || use=$?
-    if [ "$use" = 0 ] && ! sudo zpool destroy -f "$pool"; then
+    if [ "$use" = 0 ] && ! err=$(sudo zpool destroy -f "$pool" 2>&1); then
+      [ -z "$err" ] || printf '%s\n' "$err" >&2
+      if [[ $err == *"pool is busy"* ]]; then
+        oops=$(read_zfs_oops)
+      fi
+      if [ -n "$oops" ]; then
+        echo "zfs-host-test: a kernel oops in ZFS holds $pool until a reboot; its file stays at $img" >&2
+        printf '%s\n' "$oops" >&2
+        exit "$status"
+      fi
       echo "zfs-host-test: could not destroy $pool; its file stays at $img" >&2
       [ "$status" != 0 ] || status=1
       exit "$status"
@@ -174,6 +224,7 @@ made_img=1
 truncate -s "${gib}G" "$img"
 # what deploy/bootstrap.sh gives the root dataset; impd sets recordsize=16K
 # on the datasets that hold disks
+created_at=$(date '+%Y-%m-%d %H:%M:%S')
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"

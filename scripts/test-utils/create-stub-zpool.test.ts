@@ -130,6 +130,7 @@ test('it makes the pool of a held create once released', async () => {
 
 test.each([
   ['fails', 1],
+  ['busy', 1],
   ['ignored', 0],
 ] as const)('it answers a destroy that is %s with exit code %d', (destroy, exitCode) => {
   const ctx = setupTest();
@@ -140,7 +141,18 @@ test.each([
   expect(Bun.spawnSync([join(stub.bin, 'zpool'), 'destroy', '-f', 'tank']).exitCode).toBe(exitCode);
 });
 
-test.each([['fails'], ['ignored']] as const)(
+test('it says the pool is busy when a busy destroy fails', () => {
+  const ctx = setupTest();
+  const stub = createStubZpool(ctx.dir, { destroy: 'busy' });
+
+  Bun.spawnSync([join(stub.bin, 'zpool'), 'create', 'tank', '/work/pool.img']);
+
+  expect(Bun.spawnSync([join(stub.bin, 'zpool'), 'destroy', '-f', 'tank']).stderr.toString()).toBe(
+    "cannot destroy 'tank': pool is busy\n",
+  );
+});
+
+test.each([['fails'], ['busy'], ['ignored']] as const)(
   'it keeps the pool when a destroy is %s',
   (destroy) => {
     const ctx = setupTest();
