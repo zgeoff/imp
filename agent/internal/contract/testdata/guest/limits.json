@@ -1,4 +1,6 @@
 {
+  "file_segment_pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$",
+  "max_file_data": 524288,
   "max_kill_grace_ms": 60000,
   "max_log_lines": 100000,
   "max_payload": 1048576,

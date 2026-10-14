@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zgeoff/imp/agent/internal/disk"
+	"github.com/zgeoff/imp/agent/internal/files"
 	"github.com/zgeoff/imp/agent/internal/inner"
 )
 
@@ -51,6 +52,13 @@ func setupAgentWorld() error {
 	// the agent's own ptys, for an exec in its world
 	if err := mkdirMount("devpts", "/dev/pts", "devpts", unix.MS_NOSUID|unix.MS_NOEXEC,
 		"newinstance,ptmxmode=0666,mode=0620,gid=5"); err != nil {
+		return err
+	}
+	// the read-only files, kept in memory beside the agent's /run so a full
+	// tree never takes the agent's sockets' room; each inner container binds
+	// it read-only
+	if err := mkdirMount("tmpfs", files.Dir, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC,
+		"mode=0755,size="+files.Size); err != nil {
 		return err
 	}
 	return nil

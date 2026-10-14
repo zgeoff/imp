@@ -29,7 +29,8 @@ message Request {
   // The operation: ping, exec, exec.outer, freeze, thaw, activity, resumed,
   // shutdown, grow, claim, dial, listen, agent.listen, agent.accept,
   // session.attach, session.kill, session.tap, services.list, services.add,
-  // services.remove, services.restart or services.logs.
+  // services.remove, services.restart, services.logs, files.write or
+  // files.remove.
   string op = 1;
 
   // exec, exec.outer: the command and its arguments.
@@ -101,6 +102,12 @@ message Request {
   optional bool follow = 25;
   // services.logs: send everything after this place, in place of lines.
   LogCursor cursor = 26;
+
+  // files.write, files.remove: the file's path under the read-only files
+  // root, 1 to 8 segments joined by "/" (docs/architecture/guest/agent.md#read-only-files).
+  optional string path = 27;
+  // files.write: the file's content, at most 512 KiB.
+  optional bytes data = 28;
 }
 
 // A session's generation, and the offset of the first output byte the client
@@ -147,8 +154,9 @@ message Error {
   // where every process runs, is down), FROZEN, POWERING_OFF, INTERNAL,
   // NO_SESSION, INVALID_RESUME (a resume named an offset past the end of the
   // generation it names), SESSION_LIMIT, DIAL_FAILED, NO_CONNECTION,
-  // LISTEN_FAILED, NO_SERVICE or SERVICE_EXISTS. A reader keeps it a string:
-  // a newer agent may send a code it does not know.
+  // LISTEN_FAILED, NO_SERVICE, SERVICE_EXISTS or NO_SPACE (the read-only
+  // files have no room for a write). A reader keeps it a string: a newer
+  // agent may send a code it does not know.
   string code = 1;
   string message = 2;
   // the code's detail, for NO_SESSION and INVALID_RESUME
@@ -196,6 +204,12 @@ message InnerStatus {
 // The RESPONSE to a unary request that has nothing more to say.
 message OK {
   bool ok = 1;
+}
+
+// The RESPONSE to files.remove.
+message FilesRemoved {
+  // whether a file was there to remove
+  bool removed = 1;
 }
 
 // The RESPONSE to agent.listen and listen.

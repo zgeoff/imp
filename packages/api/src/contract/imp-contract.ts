@@ -12,6 +12,7 @@ import { CheckpointSchema } from '../schemas/checkpoint-schema';
 import { EgressPolicySchema } from '../schemas/egress-schema';
 import { ImpEventSchema } from '../schemas/event-schema';
 import { ExposeInputSchema, ExposeResultSchema } from '../schemas/exposure-schema';
+import { FileContentSchema, FilePathSchema } from '../schemas/file-schema';
 import { ImageRefSchema } from '../schemas/image-ref-schema';
 import { ImageSchema } from '../schemas/image-schema';
 import { ForkResultSchema, ImpSchema } from '../schemas/imp-schema';
@@ -476,6 +477,22 @@ export const impContract = {
         }),
       )
       .output(eventIterator(ServiceLogSchema)),
+  },
+
+  // files the guest sees read-only under /run/imp/files, root included
+  // (docs/architecture/guest/agent.md#read-only-files); each call wakes or
+  // boots the imp, as an exec does. Check features.readOnlyFiles first
+  files: {
+    // replaces the file at `path` with `content` through a rename, so a
+    // reader sees the old file or the new; answers the guest path
+    write: base
+      .input(z.object({ name: NameSchema, path: FilePathSchema, content: FileContentSchema }))
+      .output(z.object({ path: z.string() })),
+
+    // deletes the file at `path`; `removed` is false when there was none
+    remove: base
+      .input(z.object({ name: NameSchema, path: FilePathSchema }))
+      .output(z.object({ removed: z.boolean() })),
   },
 
   // credentials the broker adds to an imp's requests (docs/guides/connectors.md)

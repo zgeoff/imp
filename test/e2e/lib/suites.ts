@@ -150,7 +150,7 @@ export const SUITES: readonly Suite[] = [
     name: 'inner',
     prefix: 'e2e-in-',
     images: ['e2e-tiny'],
-    journeys: ['inner-isolation', 'inner-restart', 'inner-agent', 'inner-wipe'],
+    journeys: ['inner-isolation', 'inner-restart', 'inner-agent', 'inner-wipe', 'inner-files'],
   },
 
   // root in the container reaches Docker only through imp-docker-proxy; it

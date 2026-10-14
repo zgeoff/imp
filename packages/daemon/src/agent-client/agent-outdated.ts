@@ -41,6 +41,9 @@ const FEATURES = {
   // session.tap, for impd's session logs; an older agent ignores `log` on a
   // start and answers the tap UNKNOWN_OP
   'session-log': { since: [0, 18], missing: 'no session logs' },
+
+  // files.write and files.remove; an older agent answers UNKNOWN_OP
+  files: { since: [0, 19], missing: 'no read-only files' },
 } as const satisfies Record<string, Feature>;
 
 export type AgentFeature = keyof typeof FEATURES;

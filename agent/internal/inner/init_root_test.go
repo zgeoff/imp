@@ -41,3 +41,22 @@ func TestCopyDevKeepsNodesLinksAndModes(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(link, "/proc/self/fd"))
 }
+
+func TestBindReadOnlyRefusesRootsWritesAndShowsTheSourcesOwn(t *testing.T) {
+	src, target := t.TempDir(), filepath.Join(t.TempDir(), "run/imp/files")
+	assert.NilError(t, os.WriteFile(filepath.Join(src, "record.json"), []byte(`{"revision":1}`), 0o444))
+
+	err := bindReadOnly(src, target)
+
+	assert.NilError(t, err)
+	t.Cleanup(func() { unix.Unmount(target, unix.MNT_DETACH) })
+	assert.Check(t, cmp.ErrorIs(os.WriteFile(filepath.Join(target, "record.json"), []byte("{}"), 0o644), unix.EROFS))
+	assert.Check(t, cmp.ErrorIs(os.WriteFile(filepath.Join(target, "other.json"), []byte("{}"), 0o644), unix.EROFS))
+	assert.Check(t, cmp.ErrorIs(os.Remove(filepath.Join(target, "record.json")), unix.EROFS))
+	assert.Check(t, cmp.ErrorIs(os.Chmod(filepath.Join(target, "record.json"), 0o644), unix.EROFS))
+	assert.NilError(t, os.WriteFile(filepath.Join(src, ".staged"), []byte(`{"revision":2}`), 0o444))
+	assert.NilError(t, os.Rename(filepath.Join(src, ".staged"), filepath.Join(src, "record.json")))
+	b, err := os.ReadFile(filepath.Join(target, "record.json"))
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(string(b), `{"revision":2}`))
+}

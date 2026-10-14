@@ -18,7 +18,8 @@ Every message is a frame: a type byte, a length, and a payload that is JSON or r
 has a size cap, and larger data goes as several frames. The kinds of request fall in a few families:
 
 - **Unary requests**, one answer each: `ping` and the activity report, freeze and thaw, the clock
-  after a wake, a disk grow, `claim` for a boot template, shutdown, and the service changes.
+  after a wake, a disk grow, `claim` for a boot template, shutdown, the service changes, and the
+  writes and removes of the [read-only files](./agent.md#read-only-files).
 - **Exec streams**: a process's stdin, resizes and signals one way, its output and exit the other.
   An outer exec and a session start or attach are exec streams too ([sessions](./sessions.md)).
 - **Relays**: a dial to an address or a socket in the guest, which then carries raw bytes both ways,

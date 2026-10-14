@@ -79,6 +79,7 @@ test('it accepts the system info of a host with every part turned on', () => {
       backupOptOut: true,
       brokerRefusals: true,
       grantFilters: true,
+      readOnlyFiles: true,
     },
   } as const;
 

@@ -18,6 +18,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
+	"github.com/zgeoff/imp/agent/internal/files"
 	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/inner"
@@ -142,6 +143,7 @@ func Run() error {
 		Services: sup,
 		Listen:   listener,
 		Dial:     dialer,
+		Files:    files.New(files.Dir),
 		Inner: func() *proto.InnerStatus {
 			st := mgr.Status()
 			status := &proto.InnerStatus{Up: st.Up, Restarts: uint32(st.Restarts)}

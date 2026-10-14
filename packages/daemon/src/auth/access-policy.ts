@@ -179,6 +179,10 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'services.restart': execImp,
   'services.logs': execImp,
 
+  // whoever may run a command in the imp may write a file there as root
+  'files.write': execImp,
+  'files.remove': execImp,
+
   // secrets belong to the host: a grant hands one to an imp, so a token
   // limited to some imps could grant itself any secret
   'secrets.add': manageHost,

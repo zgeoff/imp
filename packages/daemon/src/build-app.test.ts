@@ -242,6 +242,7 @@ test('it serves system.info from config and the database', async () => {
       backupOptOut: true,
       brokerRefusals: true,
       grantFilters: true,
+      readOnlyFiles: true,
     },
     ksm: null,
   });
