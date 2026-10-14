@@ -323,7 +323,7 @@ test('it keeps the pool file, prints the oops and passes when a kernel oops in Z
   const work = join(ctx.dir, 'work');
 
   mkdirSync(work);
-  createStubZpool(ctx.stubs, { destroy: 'fails' });
+  createStubZpool(ctx.stubs, { destroy: 'busy' });
 
   createStubBin(
     ctx.stubs,
@@ -331,6 +331,7 @@ test('it keeps the pool file, prints the oops and passes when a kernel oops in Z
     `cat <<'EOF'
 [  80.100000] eth0: link up
 [  90.200000] usercopy: Kernel memory exposure attempt detected from SLUB object 'zio_buf_comb_16384' (offset 12288, size 20480)!
+[  90.200050] ------------[ cut here ]------------
 [  90.200100] kernel BUG at mm/usercopy.c:102!
 [  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
 [  90.200300] CPU: 0 UID: 900000 PID: 4242 Comm: firecracker Tainted: P O 6.17.0-1-azure
@@ -338,6 +339,8 @@ test('it keeps the pool file, prints the oops and passes when a kernel oops in Z
 [  90.200500]  zfs_uiomove_iter+0x47/0xc0 [zfs]
 [  90.200600]  zfs_read+0x3c8/0x500 [zfs]
 [  90.200700]  vfs_read+0x24d/0x370
+[  90.200800] ---[ end trace 0000000000000000 ]---
+[  90.200900] RIP: 0010:usercopy_abort+0x6c/0x80
 EOF`,
   );
 
@@ -356,7 +359,8 @@ EOF`,
   expect(result.exitCode).toBe(0);
 
   expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
-    `zfs-host-test: a kernel oops in ZFS holds impbenchPID until a reboot; its file stays at ${work}/bench.img
+    `cannot destroy 'impbenchPID': pool is busy
+zfs-host-test: a kernel oops in ZFS holds impbenchPID until a reboot; its file stays at ${work}/bench.img
 [  90.200000] usercopy: Kernel memory exposure attempt detected from SLUB object 'zio_buf_comb_16384' (offset 12288, size 20480)!
 [  90.200100] kernel BUG at mm/usercopy.c:102!
 [  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
@@ -370,7 +374,54 @@ EOF`,
   expect(existsSync(join(work, 'bench.img'))).toBeTrue();
 });
 
-test('it fails and keeps the pool file when the pool will not go after a kernel oops outside ZFS', () => {
+test('it fails and keeps the pool file when an oops outside ZFS sits beside a ZFS warning', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs, { destroy: 'busy' });
+
+  createStubBin(
+    ctx.stubs,
+    'dmesg',
+    `cat <<'EOF'
+[  90.200050] ------------[ cut here ]------------
+[  90.200100] kernel BUG at mm/slub.c:500!
+[  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
+[  90.200500]  kmem_cache_free+0x10/0x40
+[  90.200600] ---[ end trace 0000000000000000 ]---
+[  95.300000] ------------[ cut here ]------------
+[  95.300100] WARNING: CPU: 1 PID: 77 at module/zfs/txg.c:600 txg_wait_synced+0x20/0x40 [zfs]
+[  95.300200]  txg_wait_synced+0x20/0x40 [zfs]
+[  95.300300] ---[ end trace 0000000000000000 ]---
+EOF`,
+  );
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+    `cannot destroy 'impbenchPID': pool is busy
+zfs-host-test: could not destroy impbenchPID; its file stays at ${work}/bench.img
+`,
+  );
+
+  expect(existsSync(join(work, 'bench.img'))).toBeTrue();
+});
+
+test('it fails and keeps the pool file when a destroy fails for a reason other than a busy pool after a ZFS oops', () => {
   const ctx = setupTest();
 
   createStubInstanceDocker(ctx.stubs, { containers: [] });
@@ -384,9 +435,10 @@ test('it fails and keeps the pool file when the pool will not go after a kernel 
     ctx.stubs,
     'dmesg',
     `cat <<'EOF'
-[  90.200100] kernel BUG at mm/slub.c:500!
+[  90.200100] kernel BUG at mm/usercopy.c:102!
 [  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
-[  90.200500]  kmem_cache_free+0x10/0x40
+[  90.200500]  zfs_uiomove_iter+0x47/0xc0 [zfs]
+[  90.200600] ---[ end trace 0000000000000000 ]---
 EOF`,
   );
 

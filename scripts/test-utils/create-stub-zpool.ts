@@ -9,8 +9,10 @@ export interface ZpoolStubOptions {
   // without a pool when no release comes within 30 s
   readonly create?: 'fails' | { readonly startedMarker: string; readonly release: string };
 
-  // fails: the destroy fails; ignored: it exits 0 and the pool stays
-  readonly destroy?: 'fails' | 'ignored';
+  // fails: the destroy fails; busy: it fails saying the pool is busy, as
+  // zpool does for a pool a dataset hold keeps; ignored: it exits 0 and the
+  // pool stays
+  readonly destroy?: 'fails' | 'busy' | 'ignored';
 
   // fail: once a pool exists, list -H and status fail, as when zpool or
   // sudo cannot reach the kernel

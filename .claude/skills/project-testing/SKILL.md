@@ -461,21 +461,22 @@ this checkout whatever its `-C` says.
   the impd log, stops the instance and removes the move network, destroys the pool only when
   `zpool status -P` lists this run's `bench.img` (the whole path), and removes that file only when
   no pool lists it and `zpool` could say so. A pool that will not go keeps its file and fails the
-  run. One exception: when `dmesg --since` the pool's create shows a kernel oops whose trace runs
-  through ZFS, the run prints the oops, keeps the pool and its file, and exits with the suites'
-  status. Such an oops kills its task inside ZFS, as the kernel's usercopy check does to a
-  Firecracker `read()` of an imp's disk on Ubuntu's 6.17 kernel with OpenZFS 2.3.4, and the hold
-  that task had on the disk's dataset lasts until a reboot, so no unmount or retry frees the pool.
-  `IMP_ZFS_MODULE_VERSION_FILE` is read as in `test-zfs.sh`. `scripts/zfs-host-test.test.ts` runs a
-  copy of the script beside the real `lib.sh` and stand-in `dev.sh`, `test-e2e.sh` and `test-zfs.sh`
-  (`create-stub-repo-script.ts`), with stub `sudo`, the `zfs` stub, a `docker` that knows only the
-  containers a test lists, some of them once a marker file exists
-  (`create-stub-instance-docker.ts`), a `dmesg` that prints the log a test gives it, and the
-  stateful `zpool` on `PATH`: the refusal for a missing module, a normal release with its owner
+  run. One exception: when `zpool` says the pool is busy and `dmesg --since` the pool's create shows
+  a kernel oops with a ZFS frame in that oops's own trace, the run prints the oops, keeps the pool
+  and its file, and exits with the suites' status. Such an oops kills its task inside ZFS, as the
+  kernel's usercopy check does to a Firecracker `read()` of an imp's disk on Ubuntu's 6.17 kernel
+  with OpenZFS 2.3.4, and the hold that task had on the disk's dataset lasts until a reboot, so no
+  unmount or retry frees the pool. `IMP_ZFS_MODULE_VERSION_FILE` is read as in `test-zfs.sh`.
+  `scripts/zfs-host-test.test.ts` runs a copy of the script beside the real `lib.sh` and stand-in
+  `dev.sh`, `test-e2e.sh` and `test-zfs.sh` (`create-stub-repo-script.ts`), with stub `sudo`, the
+  `zfs` stub, a `docker` that knows only the containers a test lists, some of them once a marker
+  file exists (`create-stub-instance-docker.ts`), a `dmesg` that prints the log a test gives it, and
+  the stateful `zpool` on `PATH`: the refusal for a missing module, a normal release with its owner
   files, a work dir made with its parents, the pool, file, symlink, data dir, container and network
-  collisions, a failed `zpool create`, a failed destroy with no oops, with a ZFS oops and with an
-  oops outside ZFS, a pool that still uses the file, a failed `zpool` query, a work dir path with
-  spaces, and SIGTERM during the held create and during an e2e run that has B up.
+  collisions, a failed `zpool create`, a failed destroy with no oops, a busy pool with a ZFS oops, a
+  busy pool with an oops outside ZFS beside a ZFS warning, a destroy that fails another way after a
+  ZFS oops, a pool that still uses the file, a failed `zpool` query, a work dir path with spaces,
+  and SIGTERM during the held create and during an e2e run that has B up.
 
 ## NixOS
 

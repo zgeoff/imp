@@ -34,8 +34,9 @@
 # still uses. The work dir holds the results, so it stays, and a second run
 # in the same dir is refused for its data dir.
 #
-# A pool that will not go fails the run, with one exception: a kernel oops in
-# ZFS since the pool's create. The oops kills its task inside ZFS, such as a
+# A pool that will not go fails the run, with one exception: zpool says the
+# pool is busy, and a kernel oops since the pool's create has ZFS in its own
+# trace. The oops kills its task inside ZFS, such as a
 # Firecracker read() of an imp's disk that trips the kernel's usercopy check,
 # and the hold that task had on a dataset never goes; no mount, process or
 # retry releases it before a reboot. The run then keeps the pool and its file,
@@ -109,15 +110,28 @@ created_at=
 # the e2e run, while it runs, so a signal can stop it first
 child=
 
-# read_zfs_oops: the kernel's oops lines since the pool's create when one of
-# its traces runs through ZFS; nothing when there is none, or dmesg cannot say
+# read_zfs_oops: the key lines of each kernel oops since the pool's create
+# whose own trace runs through ZFS; nothing when there is none, or dmesg
+# cannot say. A record runs from its first report line to its end-trace line,
+# so a ZFS warning beside an oops elsewhere is no ZFS oops.
 read_zfs_oops() {
   local log
   [ -n "$created_at" ] || return 0
   log=$(sudo dmesg --since "$created_at" 2>/dev/null) || return 0
-  if grep -qE 'Oops:|kernel BUG' <<<"$log" && grep -qF '[zfs]' <<<"$log"; then
-    grep -E 'usercopy:|kernel BUG|Oops:|Comm:|\[zfs\]' <<<"$log" | sed -n 1,40p
-  fi
+  awk '
+    function end_record() {
+      if (oops && zfs) printf "%s", kept
+      inside = oops = zfs = 0
+      kept = ""
+    }
+    !inside && /usercopy: |cut here|kernel BUG|Oops: |BUG: / { inside = 1 }
+    !inside { next }
+    /kernel BUG|Oops: / { oops = 1 }
+    /\[zfs\]/ { zfs = 1 }
+    /usercopy: |kernel BUG|Oops: |Comm: |\[zfs\]/ { kept = kept $0 "\n" }
+    /end trace/ { end_record() }
+    END { end_record() }
+  ' <<<"$log"
 }
 
 # img_use [POOL]: 0 when POOL, or any pool, lists this run's file as a vdev,
@@ -159,11 +173,13 @@ cleanup() {
     docker network rm "$IMP_DEV_NAME-mv" >/dev/null 2>&1 || true
   fi
   if [ -n "$made_img" ]; then
-    local use=0
+    local use=0 err='' oops=''
     img_use "$pool" || use=$?
-    if [ "$use" = 0 ] && ! sudo zpool destroy -f "$pool"; then
-      local oops
-      oops=$(read_zfs_oops)
+    if [ "$use" = 0 ] && ! err=$(sudo zpool destroy -f "$pool" 2>&1); then
+      [ -z "$err" ] || printf '%s\n' "$err" >&2
+      if [[ $err == *"pool is busy"* ]]; then
+        oops=$(read_zfs_oops)
+      fi
       if [ -n "$oops" ]; then
         echo "zfs-host-test: a kernel oops in ZFS holds $pool until a reboot; its file stays at $img" >&2
         printf '%s\n' "$oops" >&2

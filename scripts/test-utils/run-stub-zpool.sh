@@ -6,7 +6,8 @@
 # - zpool.create: `fails`, `held` or empty; a held create writes the path in
 #   zpool.create-started, then waits for the path in zpool.create-release
 #   before the pool exists, and fails without a pool after 30 s
-# - zpool.destroy: `fails`, `ignored` (it exits 0 and the pool stays) or empty
+# - zpool.destroy: `fails`, `busy` (it fails as zpool does for a held pool),
+#   `ignored` (it exits 0 and the pool stays) or empty
 # - zpool.queries: `fail` makes list -H and status fail once a pool exists
 stubs=${STUB_CALLS%/*}
 pools=$stubs/pools
@@ -73,6 +74,9 @@ case "$1" in
     ;;
   destroy)
     if [ "$destroy" = fails ]; then
+      exit 1
+    elif [ "$destroy" = busy ]; then
+      echo "cannot destroy '$last': pool is busy" >&2
       exit 1
     elif [ "$destroy" = ignored ]; then
       exit 0
