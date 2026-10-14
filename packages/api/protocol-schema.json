@@ -8918,6 +8918,76 @@
       },
       "stream": true
     },
+    "files.write": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "content"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "stream": false
+    },
+    "files.remove": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      },
+      "stream": false
+    },
     "secrets.add": {
       "input": {
         "type": "object",
@@ -12318,6 +12388,9 @@
                 "type": "boolean"
               },
               "grantFilters": {
+                "type": "boolean"
+              },
+              "readOnlyFiles": {
                 "type": "boolean"
               }
             },
