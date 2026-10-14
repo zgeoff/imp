@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.4](https://github.com/zgeoff/imp/compare/v1.4.3...v1.4.4) (2026-10-14)
+
+
+### Bug Fixes
+
+* **geo-460:** wait for a killed vm that is still exiting ([#380](https://github.com/zgeoff/imp/issues/380)) ([de5abf4](https://github.com/zgeoff/imp/commit/de5abf470021041166172afff276c6922f03af11))
+
 ## [1.4.3](https://github.com/zgeoff/imp/compare/v1.4.2...v1.4.3) (2026-10-14)
 
 ### Bug Fixes
