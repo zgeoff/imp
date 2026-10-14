@@ -1,0 +1,7 @@
+# actionlint 1.7.12, the release CI pins and the newest there is, does not know GitHub's concurrency
+# queue key (rhysd/actionlint#657, fix in #654). Remove this file once a release that accepts it
+# reaches the pin.
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
