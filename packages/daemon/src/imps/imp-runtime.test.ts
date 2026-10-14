@@ -1,5 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
@@ -8,8 +10,11 @@ import { writeLease } from '../db/leases';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
+import { buildStubMounts } from '../test-utils/build-stub-mounts';
+import { buildStubUidProcesses } from '../test-utils/build-stub-uid-processes';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { startStubInnerAgent } from '../test-utils/start-stub-inner-agent';
+import { createJails } from '../vmm/jail';
 import { createImpTest, waitForOutcome } from './test-imps';
 import type { ImpTestOptions } from './test-imps';
 
@@ -19,12 +24,33 @@ async function setupTest(options: Pick<ImpTestOptions, 'env' | 'frozenClockMs'> 
 
   onTestFinished(() => stack.disposeAsync());
 
-  const harness = await createImpTest(stack, options);
+  const chrootBase = mkdtempSync(join(tmpdir(), 'imp-runtime-jail-'));
+
+  stack.defer(() => {
+    rmSync(chrootBase, { recursive: true, force: true });
+  });
+
+  // the real jailer over the host's processes and mounts, so a stopped VM's
+  // jail goes as on a host
+  const processes = buildStubUidProcesses();
+  const mounts = buildStubMounts();
+
+  const jails = createJails({
+    jailerBin: 'jailer',
+    firecrackerBin: '/usr/local/bin/firecracker',
+    chrootBase,
+    run: mounts.run,
+    readMounts: mounts.readMounts,
+    log: () => {},
+    ...processes.deps,
+  });
+
+  const harness = await createImpTest(stack, { ...options, jails });
 
   // every imp boots from an image row
   await harness.createTestImage('ubuntu');
 
-  return { ...harness, stack };
+  return { ...harness, stack, chrootBase, processes };
 }
 
 test('it skips an idle sleep of an imp held after the idle loop looked', async () => {
@@ -435,6 +461,48 @@ test('it removes the imp once a create under way when its destroy was issued has
   expect(created.state).toBe('running');
   expect(left).toBeUndefined();
   expect(ctx.fake.alive.size).toBe(0);
+});
+
+test('it removes a running imp whose VM takes long to exit on the first call', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.processes.ownRoot(join(ctx.chrootBase, 'firecracker', imp.id, 'root'), 900_001);
+  ctx.processes.start(900_001, 4242);
+
+  // as Firecracker frees many GiB of guest memory: past the scans in which a
+  // process that still runs counts as surviving its kills
+  ctx.processes.exitSlowly(4242, 200);
+
+  await ctx.imps.destroyImp('dev');
+
+  const left = await findImpByName(ctx.db, 'dev');
+
+  expect(left).toBeUndefined();
+});
+
+test('it lists the imps while a removal waits for its VM to exit', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.processes.ownRoot(join(ctx.chrootBase, 'firecracker', imp.id, 'root'), 900_001);
+  ctx.processes.start(900_001, 4242);
+  ctx.processes.exitSlowly(4242, 200);
+
+  // past the scans in which a process that still runs counts as surviving
+  const pause = ctx.processes.holdPause(100);
+  const removing = ctx.imps.destroyImp('dev');
+
+  await Promise.race([pause.reached, removing]);
+
+  const listed = await ctx.imps.listImps();
+
+  // the removal ends before the harness closes the database under it
+  pause.release();
+
+  await removing;
+
+  expect(listed).toPartiallyContain({ name: 'dev', state: 'running' });
 });
 
 test('it refuses a session exec on an agent from before sessions before it connects', async () => {

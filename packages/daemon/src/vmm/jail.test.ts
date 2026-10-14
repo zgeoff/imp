@@ -432,6 +432,47 @@ test('#prepare refuses a start while a process of the jail uid survives the kill
   expect(ctx.mounts.mounted).toStrictEqual([]);
 });
 
+test('#remove waits for a killed VM of the jail uid that takes long to exit, then removes the jail', async () => {
+  const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
+
+  writeFileSync(imp.paths.disk, '');
+
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
+
+  ctx.processes.ownRoot(imp.root, 900_001);
+  ctx.processes.start(900_001, 4242);
+
+  // as Firecracker frees many GiB of guest memory: past the scans in which a
+  // process that still runs counts as surviving its kills
+  ctx.processes.exitSlowly(4242, 200);
+
+  await ctx.jails.remove('i1');
+
+  expect(ctx.mounts.mounted).toStrictEqual([]);
+  expect(existsSync(join(ctx.dataDir, 'jail', 'firecracker', 'i1'))).toBeFalse();
+});
+
+test('#remove refuses a jail whose killed VM never finishes its exit, and keeps its mounts', async () => {
+  const ctx = setupTest();
+  const imp = ctx.createImpDir('i1');
+
+  writeFileSync(imp.paths.disk, '');
+
+  await ctx.jails.prepare({ impId: 'i1', user: ctx.user, paths: imp.paths, readOnlyFiles: [] });
+
+  ctx.processes.ownRoot(imp.root, 900_001);
+  ctx.processes.start(900_001, 4242);
+  ctx.processes.exitSlowly(4242, Infinity);
+
+  expect(ctx.jails.remove('i1')).rejects.toThrowWithMessage(
+    Error,
+    'jail i1: uid 900001 still runs processes',
+  );
+
+  expect(ctx.mounts.mounted).toIncludeAllMembers([imp.root]);
+});
+
 test('#prepare refuses a scratch file inside a bound dir, where it would land in the real one', () => {
   const ctx = setupTest();
   const imp = ctx.createImpDir('i1');

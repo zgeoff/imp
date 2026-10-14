@@ -48,6 +48,7 @@ import { createXfsBackend } from '../storage/xfs-backend';
 import { buildStubVmm } from '../test-utils/build-stub-vmm'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
+import type { Jails } from '../vmm/jail';
 import type { KsmHostStats } from '../vmm/ksm';
 import type { ImpService } from './imp-service';
 import { NO_KERNEL_OOPS, createKernelOopsWatch } from './kernel-oops-watch';
@@ -193,6 +194,10 @@ export interface ImpTestOptions {
   readonly checkGuestMerge?: (pid: number) => Promise<boolean | null>;
   readonly readKsmProfitMib?: (pid: number) => Promise<number | null>;
   readonly readKsmHostStats?: () => KsmHostStats | null;
+
+  // the jailer that releases and removes a stopped VM's jail, as
+  // createVmRunner wires it; nothing to release by default
+  readonly jails?: Jails;
 }
 
 // A shim over createImpd's parts, each release in `stack`, which the caller
@@ -452,7 +457,18 @@ export async function createImpTest(
     host.identity = identity;
 
     const runner = fake.startGeneration();
-    const started = startGovernedImps(config, deps, governedParts, identity, runner);
+    const jails = options.jails;
+
+    const vms =
+      jails === undefined
+        ? runner
+        : {
+            ...runner,
+            releaseVm: (paths: ImpPaths) => jails.release(paths.impId),
+            removeJail: (paths: ImpPaths) => jails.remove(paths.impId),
+          };
+
+    const started = startGovernedImps(config, deps, governedParts, identity, vms);
 
     // as main.ts stops them: a template build still running would write
     // into the data dir after its removal. A hung build is released first;

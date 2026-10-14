@@ -14,7 +14,7 @@ import {
 import { basename, dirname, join } from 'node:path';
 import { IMPD_USER } from '../process/impd-user';
 import { parseMounts, readMounts as readHostMounts } from '../process/mounts';
-import { listPids } from '../process/proc';
+import { listPids, readStatFields } from '../process/proc';
 import type { CommandRunner } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths } from '../storage/data-layout';
@@ -122,12 +122,23 @@ export interface JailDeps {
   readonly listUidPids?: (uid: number) => readonly number[];
   readonly killUidPid?: (pid: number, uid: number) => void;
 
+  // whether a pid is past its SIGKILL and only exits now (from /proc by
+  // default), and the uid that owns a chroot, if it exists (lstat by default)
+  readonly isPidExiting?: (pid: number) => boolean;
+  readonly readRootOwner?: (root: string) => number | undefined;
+
   // the pause between two kill scans; Bun.sleep by default
   readonly wait?: (ms: number) => Promise<void>;
 }
 
-const KILL_TRIES = 50;
 const KILL_WAIT_MS = 20;
+
+// a process that still runs after this long survived its kills
+const KILL_TRIES = 50;
+
+// A killed Firecracker frees its guest's memory before it leaves /proc, and
+// keeps the jail uid while it does: seconds for a guest of many GiB.
+const EXIT_TRIES = 3000;
 
 export function createJails(deps: Readonly<JailDeps>): Jails {
   const execName = basename(deps.firecrackerBin);
@@ -136,6 +147,8 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
   const readMounts = deps.readMounts ?? readHostMounts;
   const listUidPids = deps.listUidPids ?? listProcessesOfUid;
   const killUidPid = deps.killUidPid ?? stopProcessOfUid;
+  const isPidExiting = deps.isPidExiting ?? isProcessExiting;
+  const readRootOwner = deps.readRootOwner ?? readOwnerUid;
   const wait = deps.wait ?? Bun.sleep;
 
   // Nothing of the jail's uid may outlive its Firecracker: root deletes,
@@ -147,11 +160,18 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
 
     deps.killCgroup?.(impId);
 
-    for (let attempt = 1; attempt <= KILL_TRIES; attempt += 1) {
+    for (let attempt = 1; ; attempt += 1) {
       const pids = listUidPids(uid);
 
       if (pids.length === 0) {
         return;
+      }
+
+      // one process that still runs ends the wait sooner than ones that exit
+      const tries = pids.every((pid) => isPidExiting(pid)) ? EXIT_TRIES : KILL_TRIES;
+
+      if (attempt > tries) {
+        throw new Error(`jail ${impId}: uid ${String(uid)} still runs processes`);
       }
 
       for (const pid of pids) {
@@ -160,8 +180,6 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
 
       await wait(KILL_WAIT_MS);
     }
-
-    throw new Error(`jail ${impId}: uid ${String(uid)} still runs processes`);
   };
 
   const runMount = async (argv: readonly string[]): Promise<void> => {
@@ -174,10 +192,10 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
 
   // deepest first, so a bind inside another goes before it
   const removeMounts = async (impId: string): Promise<void> => {
-    const owner = lstatSync(findRoot(impId), { throwIfNoEntry: false });
+    const owner = readRootOwner(findRoot(impId));
 
     if (owner !== undefined) {
-      await stopJailProcesses(impId, owner.uid);
+      await stopJailProcesses(impId, owner);
     }
 
     const mounted = listMountsUnder(readMounts(), findRoot(impId)).toReversed();
@@ -508,4 +526,26 @@ function setupRealDir(dir: string): void {
 // every live process whose real or effective uid is `uid`
 function listProcessesOfUid(uid: number): number[] {
   return listPids().filter((pid) => isProcessOfUid(pid, uid));
+}
+
+// the kernel's PF_EXITING, which a task sets as it starts to exit
+const PF_EXITING = 0x4;
+
+// A zombie, or a task in its exit (the 9th field of /proc/<pid>/stat holds
+// its flags); a pid that is gone exits too.
+function isProcessExiting(pid: number): boolean {
+  const fields = readStatFields(pid);
+
+  if (fields === null) {
+    return true;
+  }
+
+  const [state] = fields;
+  const flags = Number(fields[6]);
+
+  return state === 'Z' || state === 'X' || (flags & PF_EXITING) !== 0;
+}
+
+function readOwnerUid(path: string): number | undefined {
+  return lstatSync(path, { throwIfNoEntry: false })?.uid;
 }
