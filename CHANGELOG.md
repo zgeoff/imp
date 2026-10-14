@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/zgeoff/imp/compare/v1.1.0...v1.2.0) (2026-10-14)
+
+### Features
+
+- **geo-286:** audit the requests the broker refuses
+  ([#360](https://github.com/zgeoff/imp/issues/360))
+  ([e22db93](https://github.com/zgeoff/imp/commit/e22db93242332b22e696367ba4706a7b5c1fa76c))
+
 ## [1.1.0](https://github.com/zgeoff/imp/compare/v1.0.4...v1.1.0) (2026-10-14)
 
 ### Features
