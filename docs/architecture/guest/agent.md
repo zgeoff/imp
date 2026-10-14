@@ -89,11 +89,12 @@ the same tmpfs again, so both find them in place. A cold boot ends them, and no 
 template or backup carries them, since none of those copies memory. A caller that needs a file after
 a boot writes it again before it starts what reads it.
 
-The bind refuses writes; it is no boundary. Root in the container may unmount it with the
-`CAP_SYS_ADMIN` it holds, and then sees the container's own `/run` at that path, where it can put a
-file of its own. The agent's copy stays as impd wrote it, and impd's next write still lands there. A
-reader that must hold against a process willing to remount reads the value from its source over the
-API instead.
+The bind refuses writes, and it is no boundary. Root in the container holds `CAP_SYS_ADMIN` in the
+agent's own user namespace, so it can remount the bind writable and change the files, or unmount it
+and put files of its own at the path. A changed file lasts until impd writes it again, because each
+write replaces the file with a new one; an unmount lasts until the container starts again. A process
+that only writes gets `EROFS`; a reader that must hold against a process willing to remount reads
+the value from its source over the API instead.
 
 ## Execs and services
 
