@@ -2,10 +2,11 @@
 
 ## [1.4.2](https://github.com/zgeoff/imp/compare/v1.4.1...v1.4.2) (2026-10-14)
 
-
 ### Bug Fixes
 
-* **geo-455:** show the upgrade hint for an impd without the stream ([#376](https://github.com/zgeoff/imp/issues/376)) ([ec54752](https://github.com/zgeoff/imp/commit/ec5475296e9a4fda742a95c0c576f37bd7a33de1))
+- **geo-455:** show the upgrade hint for an impd without the stream
+  ([#376](https://github.com/zgeoff/imp/issues/376))
+  ([ec54752](https://github.com/zgeoff/imp/commit/ec5475296e9a4fda742a95c0c576f37bd7a33de1))
 
 ## [1.4.1](https://github.com/zgeoff/imp/compare/v1.4.0...v1.4.1) (2026-10-14)
 
