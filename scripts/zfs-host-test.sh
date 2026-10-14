@@ -115,6 +115,33 @@ img_use() {
   } END { exit !found }' <<<"$out"
 }
 
+
+# DIAGNOSTIC (GEO-832, not for merge): what holds the pool, at time $SECONDS
+holders() {
+  echo "::group::holders of $pool: $1 at ${SECONDS}s"
+  echo "-- host-ns mounted datasets"
+  sudo zfs list -H -r -o name,mounted "$pool" 2>&1 | awk '$2 != "no"' || true
+  echo "-- processes whose mount ns holds a dataset of $pool"
+  local f pid seen=""
+  for f in /proc/[0-9]*/mountinfo; do
+    pid=${f#/proc/}
+    pid=${pid%/mountinfo}
+    n=$(sudo grep -cE " - zfs $pool(/| )" "$f" 2>/dev/null) || n=0
+    [ "$n" -gt 0 ] || continue
+    ns=$(sudo readlink "/proc/$pid/ns/mnt" 2>/dev/null)
+    echo "pid=$pid ns=$ns mounts=$n $(ps -o ppid=,stat=,etimes=,args= -p "$pid" 2>/dev/null | cut -c1-200)"
+    case " $seen " in *" $ns "*) ;; *) seen="$seen $ns"; sudo grep -E " - zfs $pool(/| )" "$f" | head -20 ;; esac
+  done
+  echo "-- containers"
+  docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}' || true
+  echo "-- firecracker/jailer/impd/zfs processes"
+  ps -eo pid,ppid,stat,etimes,args | grep -E 'firecracker|jailer|impd|zfs |zpool |restic|containerd-shim' | grep -v grep | cut -c1-200 || true
+  echo "-- spa"
+  sudo cat "/proc/spl/kstat/zfs/$pool/state" 2>/dev/null || true
+  sudo cat /proc/spl/kstat/zfs/dbgmsg 2>/dev/null | tail -30 || true
+  echo "::endgroup::"
+}
+
 # In reverse order; the results stay in $work. A pool that will not go keeps
 # its file, so it can still be imported and destroyed by hand, and the run
 # fails.
@@ -140,7 +167,18 @@ cleanup() {
   if [ -n "$made_img" ]; then
     local use=0
     img_use "$pool" || use=$?
-    if [ "$use" = 0 ] && ! sudo zpool destroy -f "$pool"; then
+    holders "after dev.sh down"
+    local try
+    for try in $(seq 1 60); do
+      if sudo zpool destroy -f "$pool"; then
+        echo "zfs-host-test DIAG: destroyed $pool on try $try at ${SECONDS}s"
+        break
+      fi
+      [ "$try" != 1 ] || holders "first busy"
+      [ $((try % 10)) != 0 ] || holders "try $try"
+      sleep 1
+    done
+    if [ "$use" = 0 ] && sudo zpool list "$pool" >/dev/null 2>&1; then
       echo "zfs-host-test: could not destroy $pool; its file stays at $img" >&2
       [ "$status" != 0 ] || status=1
       exit "$status"
