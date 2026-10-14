@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import { invariant } from '@imp/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
+import { openAgentConnection } from './agent-connection';
 import { ErrorDataSchema, PingSchema, SessionInfoSchema } from './agent-protocol';
 import {
+  readFrameWithin,
   sendActivity,
   sendAgentRequest,
   sendFreeze,
@@ -79,13 +81,19 @@ test('#sendAgentRequest rejects when the agent answers with a frame that is not 
   );
 });
 
-test('#sendAgentRequest rejects when the agent does not answer within the timeout', async () => {
+test('#readFrameWithin rejects when the agent does not answer within the timeout', async () => {
   const ctx = setupTest();
 
   // an agent that never answers, so the deadline alone decides
   await startStubAgent(ctx.vsockPath, () => {});
 
-  expect(sendAgentRequest(ctx.vsockPath, { op: 'ping' }, 1)).rejects.toThrowWithMessage(
+  const connection = await openAgentConnection(ctx.vsockPath);
+
+  onTestFinished(() => {
+    connection.close();
+  });
+
+  expect(readFrameWithin(connection, 1)).rejects.toThrowWithMessage(
     Error,
     'agent did not answer within 1 ms',
   );
