@@ -72,12 +72,14 @@ async function setupTest() {
   // the budget the image service holds disk through, which records each hold
   const recordedBudget = {
     withRoom: diskBudget.withRoom,
-    withGrowingRoom: <T>(task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>) =>
+    withGrowingRoom: <T>(
+      task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
+    ) =>
       diskBudget.withGrowingRoom((grow) =>
-        task(async (totalBytes) => {
+        task(async (totalBytes, writtenBytes) => {
           grows.push(totalBytes);
 
-          await grow(totalBytes);
+          await grow(totalBytes, writtenBytes);
         }),
       ),
   };
@@ -1239,10 +1241,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },
@@ -1336,10 +1338,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },
@@ -1431,10 +1433,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },
@@ -1527,10 +1529,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },
@@ -1626,10 +1628,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },
@@ -1723,10 +1725,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },
@@ -1825,10 +1827,10 @@ test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
         withRoom: diskBudget.withRoom,
         withGrowingRoom: (task) =>
           diskBudget.withGrowingRoom((grow) =>
-            task(async (totalBytes) => {
+            task(async (totalBytes, writtenBytes) => {
               grows.push(totalBytes);
 
-              await grow(totalBytes);
+              await grow(totalBytes, writtenBytes);
             }),
           ),
       },

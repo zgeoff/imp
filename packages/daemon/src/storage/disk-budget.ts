@@ -29,9 +29,10 @@ export interface DiskBudget {
   readonly withRoom: <T>(bytes: number, task: () => Promise<T>) => Promise<T>;
 
   // withRoom for a write whose size shows only as it goes, such as a
-  // build's export: grow(total) holds up to total, or refuses as withRoom
+  // build's export: grow(total, written) holds up to total, or refuses as
+  // withRoom, with the bytes the write says it has written counted once
   readonly withGrowingRoom: <T>(
-    task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>,
+    task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
   ) => Promise<T>;
 
   // withRoom for a write the estimate cannot see, such as a thin clone
@@ -142,20 +143,23 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
   };
 
   const withGrowingRoom = async <T>(
-    task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>,
+    task: (grow: (totalBytes: number, writtenBytes: number) => Promise<void>) => Promise<T>,
   ): Promise<T> => {
     const held = { bytes: 0 };
+    const written = { bytes: 0 };
 
-    // what the write has written is the growth in used bytes since it began,
-    // up to what it holds; another write in that time counts too, which is
-    // right while that write's own hold still counts its bytes twice
+    // what the write says it has written, up to what it holds and to the
+    // growth in used bytes since it began, so neither a count ahead of the
+    // disk nor another write's bytes are counted back
     const start = await deps.storage.readUsage();
 
     const readWrittenBytes = (usedBytes: number) =>
-      Math.min(held.bytes, Math.max(0, usedBytes - start.usedBytes));
+      Math.min(held.bytes, written.bytes, Math.max(0, usedBytes - start.usedBytes));
 
-    const grow = async (totalBytes: number) => {
+    const grow = async (totalBytes: number, writtenBytes: number) => {
       const more = totalBytes - held.bytes;
+
+      written.bytes = Math.max(written.bytes, writtenBytes);
 
       if (more > 0) {
         await holdRoom(more, readWrittenBytes);

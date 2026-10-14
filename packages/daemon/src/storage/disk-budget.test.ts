@@ -173,14 +173,14 @@ test('it holds the largest total a growing write has asked for', async () => {
   const seen: number[] = [];
 
   await budget.withGrowingRoom(async (grow) => {
-    await grow(1024 ** 3);
-    await grow(1024 ** 3 / 2);
+    await grow(1024 ** 3, 0);
+    await grow(1024 ** 3 / 2, 0);
 
     const grown = await budget.readStatus();
 
     seen.push(grown.pendingBytes);
 
-    await grow(5 * 1024 ** 3);
+    await grow(5 * 1024 ** 3, 0);
 
     const regrown = await budget.readStatus();
 
@@ -204,8 +204,8 @@ test('it refuses a growing write that grows past the reserve and frees what it h
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(5 * 1024 ** 3);
-    await grow(7 * 1024 ** 3);
+    await grow(5 * 1024 ** 3, 0);
+    await grow(7 * 1024 ** 3, 0);
   });
 
   expect(growing).rejects.toMatchObject({
@@ -232,13 +232,13 @@ test('it counts the bytes a growing write has written once', () => {
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(4 * 1024 ** 3);
+    await grow(4 * 1024 ** 3, 0);
 
     disk.usedBytes += 3 * 1024 ** 3;
     disk.availableBytes -= 3 * 1024 ** 3;
 
     // 7 GiB free and 1 GiB of the hold still to write: 1 GiB more leaves 5
-    await grow(5 * 1024 ** 3);
+    await grow(5 * 1024 ** 3, 3 * 1024 ** 3);
 
     const grown = await budget.readStatus();
 
@@ -258,13 +258,13 @@ test('it refuses a growing write that has written part of its hold and grows pas
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(4 * 1024 ** 3);
+    await grow(4 * 1024 ** 3, 0);
 
     disk.usedBytes += 3 * 1024 ** 3;
     disk.availableBytes -= 3 * 1024 ** 3;
 
     // 7 GiB free and 1 GiB of the hold still to write: 3 GiB more leaves 3
-    await grow(7 * 1024 ** 3);
+    await grow(7 * 1024 ** 3, 3 * 1024 ** 3);
   });
 
   expect(growing).rejects.toMatchObject({
@@ -277,7 +277,7 @@ test('it refuses a growing write that has written part of its hold and grows pas
   });
 });
 
-test('it counts back no more than a growing write holds', () => {
+test('it counts another write as no part of a growing write', () => {
   const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
 
   const budget = createDiskBudget({
@@ -287,19 +287,45 @@ test('it counts back no more than a growing write holds', () => {
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(1024 ** 3);
+    await grow(4 * 1024 ** 3, 0);
 
-    // the growing write writes its 1 GiB, and a write that holds nothing 3 GiB
-    disk.usedBytes += 4 * 1024 ** 3;
-    disk.availableBytes -= 4 * 1024 ** 3;
+    // a write that holds nothing takes 2 GiB
+    disk.usedBytes += 2 * 1024 ** 3;
+    disk.availableBytes -= 2 * 1024 ** 3;
 
-    // 6 GiB free and the hold all written: 4 GiB more leaves 2
-    await grow(5 * 1024 ** 3);
+    // 8 GiB free and all 4 GiB of the hold still to write: 2 GiB more leaves 2
+    await grow(6 * 1024 ** 3, 0);
   });
 
   expect(growing).rejects.toMatchObject({
     code: 'DISK_FULL',
-    data: { availableBytes: 6 * 1024 ** 3, requestedBytes: 4 * 1024 ** 3 },
+    data: { availableBytes: 4 * 1024 ** 3, requestedBytes: 2 * 1024 ** 3 },
+  });
+});
+
+test('it counts back no more than the disk shows a growing write has written', () => {
+  const disk = { usedBytes: 90 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 };
+
+  const budget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ ...disk }) },
+    reserveBytes: 4 * 1024 ** 3,
+    log: mock<(message: string) => void>(),
+  });
+
+  const growing = budget.withGrowingRoom(async (grow) => {
+    await grow(4 * 1024 ** 3, 0);
+
+    // the write says 3 GiB, and the disk shows 1 GiB of it so far
+    disk.usedBytes += 1024 ** 3;
+    disk.availableBytes -= 1024 ** 3;
+
+    // 9 GiB free and 3 GiB of the hold still to write: 3 GiB more leaves 3
+    await grow(7 * 1024 ** 3, 3 * 1024 ** 3);
+  });
+
+  expect(growing).rejects.toMatchObject({
+    code: 'DISK_FULL',
+    data: { availableBytes: 6 * 1024 ** 3, requestedBytes: 3 * 1024 ** 3 },
   });
 });
 
@@ -314,7 +340,7 @@ test('it frees all a growing write held when its task throws', async () => {
   });
 
   const growing = budget.withGrowingRoom(async (grow) => {
-    await grow(4 * 1024 ** 3);
+    await grow(4 * 1024 ** 3, 0);
 
     throw new Error('the export hit its limit');
   });
@@ -341,7 +367,7 @@ test('it counts one growing write against another and frees only the refused one
   const firstEnds = Promise.withResolvers<void>();
 
   const first = budget.withGrowingRoom(async (grow) => {
-    await grow(4 * 1024 ** 3);
+    await grow(4 * 1024 ** 3, 0);
 
     firstGrown.resolve();
 
@@ -355,8 +381,8 @@ test('it counts one growing write against another and frees only the refused one
   await firstGrown.promise;
 
   const second = budget.withGrowingRoom(async (grow) => {
-    await grow(2 * 1024 ** 3);
-    await grow(3 * 1024 ** 3);
+    await grow(2 * 1024 ** 3, 0);
+    await grow(3 * 1024 ** 3, 0);
   });
 
   expect(second).rejects.toMatchObject({
