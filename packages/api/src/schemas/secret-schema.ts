@@ -126,7 +126,7 @@ export const SecretAddedSchema = SecretSchema.extend({
 export type SecretAdded = z.infer<typeof SecretAddedSchema>;
 
 // Why the broker refused a request, before any credential was added.
-export const AuditRefusalSchema = z.enum([
+const AuditRefusalSchema = z.enum([
   // the front port's head was not HTTP/1, not a CONNECT, or not to host:port
   'not-http',
   'not-connect',
