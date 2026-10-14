@@ -220,8 +220,7 @@ test('it boots no VM on the disk of an imp a kernel oops killed', async () => {
 
   const bootsBefore = ctx.fake.boots.length;
 
-  await expect(ctx.imps.startImp('dev')).toReject();
-
+  expect(ctx.imps.startImp('dev')).toReject();
   expect(ctx.fake.boots).toHaveLength(bootsBefore);
 });
 
@@ -453,8 +452,8 @@ test('it keeps every hold when impd starts without the taint file', async () => 
     'a kernel oops killed firecracker',
   ]);
 
-  await expect(ctx.imps.startImp('dev')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
-  await expect(ctx.imps.startImp('build')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(ctx.imps.startImp('dev')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(ctx.imps.startImp('build')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
 });
 
 test('it keeps the hold when impd starts with a taint file it cannot read', async () => {
@@ -479,8 +478,7 @@ test('it keeps the hold when impd starts with a taint file it cannot read', asyn
   const record = await findImpByName(ctx.db, 'dev');
 
   expect(record?.error).toBe('a kernel oops killed firecracker');
-
-  await expect(ctx.imps.startImp('dev')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(ctx.imps.startImp('dev')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
 });
 
 test('it keeps the hold when impd starts with a malformed taint file', async () => {
