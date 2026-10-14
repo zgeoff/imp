@@ -294,6 +294,101 @@ test('it fails and keeps the pool file, saying so, when the pool will not go', (
 
   mkdirSync(work);
   createStubZpool(ctx.stubs, { destroy: 'fails' });
+  createStubBin(ctx.stubs, 'dmesg', 'echo "[  12.000000] eth0: link up"');
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+    `zfs-host-test: could not destroy impbenchPID; its file stays at ${work}/bench.img\n`,
+  );
+
+  expect(existsSync(join(work, 'bench.img'))).toBeTrue();
+});
+
+test('it keeps the pool file, prints the oops and passes when a kernel oops in ZFS holds the pool', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs, { destroy: 'fails' });
+
+  createStubBin(
+    ctx.stubs,
+    'dmesg',
+    `cat <<'EOF'
+[  80.100000] eth0: link up
+[  90.200000] usercopy: Kernel memory exposure attempt detected from SLUB object 'zio_buf_comb_16384' (offset 12288, size 20480)!
+[  90.200100] kernel BUG at mm/usercopy.c:102!
+[  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
+[  90.200300] CPU: 0 UID: 900000 PID: 4242 Comm: firecracker Tainted: P O 6.17.0-1-azure
+[  90.200400] RIP: 0010:usercopy_abort+0x6c/0x80
+[  90.200500]  zfs_uiomove_iter+0x47/0xc0 [zfs]
+[  90.200600]  zfs_read+0x3c8/0x500 [zfs]
+[  90.200700]  vfs_read+0x24d/0x370
+EOF`,
+  );
+
+  const result = Bun.spawnSync([ctx.script], {
+    env: {
+      PATH: ctx.path,
+      IMP_ZFS_TEST_DIR: work,
+      IMP_ZFS_BENCH_GIB: '1',
+      IMP_ZFS_TEST_UNIT: '0',
+      IMP_ZFS_MODULE_VERSION_FILE: ctx.moduleVersion,
+    },
+  });
+
+  const calls = readFileSync(ctx.calls, 'utf8');
+
+  expect(result.exitCode).toBe(0);
+
+  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+    `zfs-host-test: a kernel oops in ZFS holds impbenchPID until a reboot; its file stays at ${work}/bench.img
+[  90.200000] usercopy: Kernel memory exposure attempt detected from SLUB object 'zio_buf_comb_16384' (offset 12288, size 20480)!
+[  90.200100] kernel BUG at mm/usercopy.c:102!
+[  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
+[  90.200300] CPU: 0 UID: 900000 PID: 4242 Comm: firecracker Tainted: P O 6.17.0-1-azure
+[  90.200500]  zfs_uiomove_iter+0x47/0xc0 [zfs]
+[  90.200600]  zfs_read+0x3c8/0x500 [zfs]
+`,
+  );
+
+  expect(calls).toMatch(/^dmesg --since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/m);
+  expect(existsSync(join(work, 'bench.img'))).toBeTrue();
+});
+
+test('it fails and keeps the pool file when the pool will not go after a kernel oops outside ZFS', () => {
+  const ctx = setupTest();
+
+  createStubInstanceDocker(ctx.stubs, { containers: [] });
+
+  const work = join(ctx.dir, 'work');
+
+  mkdirSync(work);
+  createStubZpool(ctx.stubs, { destroy: 'fails' });
+
+  createStubBin(
+    ctx.stubs,
+    'dmesg',
+    `cat <<'EOF'
+[  90.200100] kernel BUG at mm/slub.c:500!
+[  90.200200] Oops: invalid opcode: 0000 [#1] SMP NOPTI
+[  90.200500]  kmem_cache_free+0x10/0x40
+EOF`,
+  );
 
   const result = Bun.spawnSync([ctx.script], {
     env: {
