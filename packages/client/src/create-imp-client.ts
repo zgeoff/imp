@@ -88,7 +88,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
       const response =
         customFetch === undefined ? await fetch(request, init) : await customFetch(request);
 
-      if (isUnknownProcedure(response)) {
+      if (isUnknownProcedure(response.status, response.headers.get('content-type'))) {
         await response.body?.cancel();
 
         throw new UnknownProcedureError(path.join('.'));
@@ -146,9 +146,6 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
 
 // oRPC answers every error, a missing imp's NOT_FOUND among them, as JSON;
 // impd's own 404 for a path no procedure matches is plain text
-function isUnknownProcedure(response: Readonly<Response>): boolean {
-  return (
-    response.status === 404 &&
-    !(response.headers.get('content-type') ?? '').startsWith('application/json')
-  );
+function isUnknownProcedure(status: number, contentType: string | null): boolean {
+  return status === 404 && !(contentType ?? '').startsWith('application/json');
 }
