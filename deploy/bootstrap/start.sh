@@ -32,7 +32,7 @@ readonly SECCOMP_IN_IMAGE=/usr/local/share/imp/deploy/imp-host.seccomp.json
 readonly DATA_DIR=/var/lib/imp
 # The image of this script's release, as the units name it; release-please
 # bumps it.
-readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:1.3.0 # x-release-please-version
+readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:1.4.0 # x-release-please-version
 # The image line every env file had before the units named their release.
 # A file still holding it gets the commented pin; any other value is the
 # operator's pin and stays.

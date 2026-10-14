@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/zgeoff/imp/compare/v1.3.0...v1.4.0) (2026-10-14)
+
+
+### Features
+
+* **geo-179:** give impd read-only files in the guest ([#369](https://github.com/zgeoff/imp/issues/369)) ([89b194c](https://github.com/zgeoff/imp/commit/89b194c3f7de63efc4415e2cd614f1a655d590dd))
+
 ## [1.3.0](https://github.com/zgeoff/imp/compare/v1.2.0...v1.3.0) (2026-10-14)
 
 ### Features
